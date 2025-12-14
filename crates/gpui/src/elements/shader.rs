@@ -83,21 +83,17 @@ trait ShaderPass {
     fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>);
 }
 
-#[doc(hidden)]
-pub struct ShaderInstance<T: ShaderUniform> {
-    shader: FragmentShader<T>,
-    data: T,
-}
-
-impl<T: ShaderUniform> ShaderPass for ShaderInstance<T> {
+impl<T: ShaderUniform> ShaderPass for (FragmentShader<T>, T) {
     fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>) {
+        let (shader, data) = &self;
+
         match window.register_shader::<T>(
-            self.shader.main_body.clone(),
-            self.shader.extra_items.clone(),
-            self.shader.read_access.is_some(),
+            shader.main_body.clone(),
+            shader.extra_items.clone(),
+            shader.read_access.is_some(),
         ) {
             Ok(shader_id) => {
-                let read_bounds = match self.shader.read_access {
+                let read_bounds = match shader.read_access {
                     Some(ShaderReadAccess::Under) => Some(bounds),
                     Some(ShaderReadAccess::Around(edges)) => Some(bounds.extend(edges)),
                     Some(ShaderReadAccess::Window) => Some(Bounds {
@@ -107,7 +103,7 @@ impl<T: ShaderUniform> ShaderPass for ShaderInstance<T> {
                     None => None,
                 };
 
-                window.paint_shader(shader_id, bounds, read_bounds, &self.data);
+                window.paint_shader(shader_id, bounds, read_bounds, data);
             }
             Err((msg, first_err)) => {
                 paint_error_texture(bounds, window);
@@ -120,16 +116,11 @@ impl<T: ShaderUniform> ShaderPass for ShaderInstance<T> {
     }
 }
 
-#[doc(hidden)]
-pub struct ChainedShaderInstance<T: ShaderUniform, P> {
-    this: ShaderInstance<T>,
-    prev: P,
-}
-
-impl<T: ShaderUniform, P: ShaderPass> ShaderPass for ChainedShaderInstance<T, P> {
+impl<T: ShaderUniform, P: ShaderPass> ShaderPass for (P, (FragmentShader<T>, T)) {
     fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>) {
-        self.prev.paint(window, bounds);
-        self.this.paint(window, bounds);
+        let (prev, this) = &self;
+        prev.paint(window, bounds);
+        this.paint(window, bounds);
     }
 }
 
@@ -143,7 +134,7 @@ pub struct ShaderElement<P> {
 impl<P> ShaderElement<P> {
     /// Runs another shader after this one using the same bounds. To pass data
     /// to this shader, use [ShaderElement::chain_with_data] instead.
-    pub fn chain(self, shader: FragmentShader<()>) -> ShaderElement<ChainedShaderInstance<(), P>> {
+    pub fn chain(self, shader: FragmentShader<()>) -> ShaderElement<(P, (FragmentShader<()>, ()))> {
         self.chain_with_data(shader, ())
     }
 
@@ -152,12 +143,9 @@ impl<P> ShaderElement<P> {
         self,
         shader: FragmentShader<T>,
         data: T,
-    ) -> ShaderElement<ChainedShaderInstance<T, P>> {
+    ) -> ShaderElement<(P, (FragmentShader<T>, T))> {
         ShaderElement {
-            pass: ChainedShaderInstance {
-                this: ShaderInstance { shader, data },
-                prev: self.pass,
-            },
+            pass: (self.pass, (shader, data)),
             interactivity: self.interactivity,
         }
     }
@@ -195,9 +183,9 @@ impl<P: ShaderPass> InteractiveElement for ShaderElement<P> {
 
 /// Constructs a [ShaderElement] which renders a shader which *doesn't* take
 /// instance data. If you need to pass data to your shader, use [shader_element_with_data].
-pub fn shader_element(shader: FragmentShader<()>) -> ShaderElement<ShaderInstance<()>> {
+pub fn shader_element(shader: FragmentShader<()>) -> ShaderElement<(FragmentShader<()>, ())> {
     ShaderElement {
-        pass: ShaderInstance { shader, data: () },
+        pass: (shader, ()),
         interactivity: Interactivity::new(),
     }
 }
@@ -209,9 +197,9 @@ pub fn shader_element(shader: FragmentShader<()>) -> ShaderElement<ShaderInstanc
 pub fn shader_element_with_data<T: ShaderUniform>(
     shader: FragmentShader<T>,
     data: T,
-) -> ShaderElement<ShaderInstance<T>> {
+) -> ShaderElement<(FragmentShader<T>, T)> {
     ShaderElement {
-        pass: ShaderInstance { shader, data },
+        pass: (shader, data),
         interactivity: Interactivity::new(),
     }
 }
