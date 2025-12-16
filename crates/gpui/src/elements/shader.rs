@@ -221,7 +221,7 @@ impl<P: ShaderPass + 'static> Element for ShaderElement<P> {
     }
 
     fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        self.interactivity.source_location
+        self.interactivity.source_location()
     }
 
     fn request_layout(
