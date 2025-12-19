@@ -128,7 +128,7 @@ async fn extract_tar_gz(
     from: impl AsyncRead + Unpin,
 ) -> Result<(), anyhow::Error> {
     let decompressed_bytes = GzipDecoder::new(BufReader::new(from));
-    let archive = async_tar::Archive::new(decompressed_bytes);
+    let archive = tar::Archive::new(decompressed_bytes);
     archive
         .unpack(&destination_path)
         .await
