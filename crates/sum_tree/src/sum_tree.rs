@@ -1236,11 +1236,6 @@ mod tests {
     use rand::{distr::StandardUniform, prelude::*};
     use std::cmp;
 
-    #[ctor::ctor]
-    fn init_logger() {
-        zlog::init_test();
-    }
-
     #[test]
     fn test_extend_and_push_tree() {
         let mut tree1 = SumTree::default();
