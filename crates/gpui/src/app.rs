@@ -42,6 +42,8 @@ pub use visual_test_context::*;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::InspectorElementRegistry;
+#[cfg(target_os = "macos")]
+use crate::MacActivationPolicy;
 use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
     ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
@@ -218,6 +220,28 @@ impl Application {
     /// By default, [`QuitMode::Default`] is used.
     pub fn with_quit_mode(self, mode: QuitMode) -> Self {
         self.0.borrow_mut().quit_mode = mode;
+        self
+    }
+
+    /// Sets the activation policy for the application (macOS only).
+    ///
+    /// This determines how the application appears in the system:
+    /// - `Regular`: Normal app with Dock icon and menu bar
+    /// - `Accessory`: Background app without Dock icon (LSUIElement)
+    /// - `Prohibited`: Runs in background, no UI allowed
+    ///
+    /// This must be called before the application finishes launching to take effect.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use gpui::Application;
+    /// # fn configure(app: Application) -> Application {
+    /// app.with_activation_policy(gpui::MacActivationPolicy::Accessory)
+    /// # }
+    /// ```
+    #[cfg(target_os = "macos")]
+    pub fn with_activation_policy(self, policy: MacActivationPolicy) -> Self {
+        self.0.borrow().platform.set_mac_activation_policy(policy);
         self
     }
 

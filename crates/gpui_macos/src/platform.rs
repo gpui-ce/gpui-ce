@@ -8,9 +8,12 @@ use block::ConcreteBlock;
 use cocoa::{
     appkit::{
         NSAppearanceNameVibrantDark, NSAppearanceNameVibrantLight, NSApplication,
-        NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular, NSControl as _,
-        NSEventModifierFlags, NSMenu, NSMenuItem, NSModalResponse, NSOpenPanel, NSSavePanel,
-        NSVisualEffectState, NSVisualEffectView, NSWindow,
+        NSApplicationActivationPolicy::{
+            NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyProhibited,
+            NSApplicationActivationPolicyRegular,
+        },
+        NSControl as _, NSEventModifierFlags, NSMenu, NSMenuItem, NSModalResponse, NSOpenPanel,
+        NSSavePanel, NSVisualEffectState, NSVisualEffectView, NSWindow,
     },
     base::{BOOL, NO, YES, id, nil, selector},
     foundation::{
@@ -30,8 +33,8 @@ use dispatch2::DispatchQueue;
 use futures::channel::oneshot;
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, ForegroundExecutor,
-    KeyContext, Keymap, Menu, MenuItem, OsMenu, OwnedMenu, PathPromptOptions, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
+    KeyContext, Keymap, MacActivationPolicy, Menu, MenuItem, OsMenu, OwnedMenu, PathPromptOptions,
+    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
     PlatformWindow, Result, SystemMenuType, Task, ThermalState, WindowAppearance, WindowKind,
     WindowParams, popup::PopupNotSupportedError,
 };
@@ -171,6 +174,7 @@ pub(crate) struct MacPlatformState {
     text_system: Arc<dyn PlatformTextSystem>,
     renderer_context: renderer::Context,
     headless: bool,
+    activation_policy: Option<MacActivationPolicy>,
     general_pasteboard: Pasteboard,
     find_pasteboard: Pasteboard,
     reopen: Option<Box<dyn FnMut()>>,
@@ -221,6 +225,7 @@ impl MacPlatform {
             background_executor: BackgroundExecutor::new(dispatcher.clone()),
             foreground_executor: ForegroundExecutor::new(dispatcher),
             renderer_context: renderer::Context::default(),
+            activation_policy: None,
             general_pasteboard: Pasteboard::general(),
             find_pasteboard: Pasteboard::find(),
             reopen: None,
@@ -489,6 +494,10 @@ impl Platform for MacPlatform {
 
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
         self.0.lock().text_system.clone()
+    }
+
+    fn set_mac_activation_policy(&self, policy: MacActivationPolicy) {
+        self.0.lock().activation_policy = Some(policy);
     }
 
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
@@ -1265,7 +1274,7 @@ unsafe fn get_mac_platform(object: &mut Object) -> &MacPlatform {
     }
 }
 
-extern "C" fn will_finish_launching(_this: &mut Object, _: Sel, _: id) {
+extern "C" fn will_finish_launching(this: &mut Object, _: Sel, _: id) {
     unsafe {
         let user_defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
 
@@ -1279,13 +1288,30 @@ extern "C" fn will_finish_launching(_this: &mut Object, _: Sel, _: id) {
             let false_value: id = msg_send![class!(NSNumber), numberWithBool:false];
             let _: () = msg_send![user_defaults, setObject: false_value forKey: name];
         }
+
+        let platform = get_mac_platform(this);
+        let state = platform.0.lock();
+        if let Some(policy) = state.activation_policy {
+            let app: id = msg_send![APP_CLASS, sharedApplication];
+            let ns_policy = match policy {
+                MacActivationPolicy::Regular => NSApplicationActivationPolicyRegular,
+                MacActivationPolicy::Accessory => NSApplicationActivationPolicyAccessory,
+                MacActivationPolicy::Prohibited => NSApplicationActivationPolicyProhibited,
+            };
+            app.setActivationPolicy_(ns_policy);
+        }
     }
 }
 
 extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
     unsafe {
-        let app: id = msg_send![APP_CLASS, sharedApplication];
-        app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+        let platform = get_mac_platform(this);
+        let state = platform.0.lock();
+        if state.activation_policy.is_none() {
+            let app: id = msg_send![APP_CLASS, sharedApplication];
+            app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+        }
+        drop(state);
 
         let notification_center: *mut Object =
             msg_send![class!(NSNotificationCenter), defaultCenter];
