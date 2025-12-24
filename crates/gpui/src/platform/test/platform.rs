@@ -246,7 +246,7 @@ impl Platform for TestPlatform {
 
     fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
 
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(&self, _options: crate::PlatformOptions, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!()
     }
 
