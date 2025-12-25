@@ -1,8 +1,12 @@
 use super::metal_atlas::MetalAtlas;
 use crate::{
-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, MonochromeSprite, PaintSurface,
-    Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
-    Surface, Underline, point, size,
+    AtlasTextureId, Background, Bounds, ContentMask, CustomShaderId, DevicePixels,
+    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, ShaderPrimitive, Shadow, Size, Surface, Underline,
+    platform::shader::{CustomShaderGlobalParams, naga_validate_custom_shader},
+    point,
+    shader::CustomShaderInfo,
+    size,
 };
 use anyhow::Result;
 use block::ConcreteBlock;
@@ -25,7 +29,7 @@ use metal::{
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+use std::{cell::Cell, collections::HashMap, ffi::c_void, mem, ptr, sync::Arc};
 
 // Exported to metal
 pub(crate) type PointF = crate::Point<f32>;
@@ -108,6 +112,8 @@ pub(crate) struct MetalRenderer {
     underlines_pipeline_state: metal::RenderPipelineState,
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
+    custom_shader_ids: HashMap<CustomShaderInfo, Result<CustomShaderId, String>>,
+    custom_shaders_pipeline_states: Vec<(metal::RenderPipelineState, usize, usize)>,
     surfaces_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
@@ -117,6 +123,7 @@ pub(crate) struct MetalRenderer {
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
     path_sample_count: u32,
+    backdrop_texture: Option<metal::Texture>,
 }
 
 #[repr(C)]
@@ -276,6 +283,8 @@ impl MetalRenderer {
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
+            custom_shader_ids: HashMap::new(),
+            custom_shaders_pipeline_states: Vec::new(),
             surfaces_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
@@ -284,6 +293,7 @@ impl MetalRenderer {
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
+            backdrop_texture: None,
         }
     }
 
@@ -321,6 +331,7 @@ impl MetalRenderer {
             height: DevicePixels(size.height as i32),
         };
         self.update_path_intermediate_textures(device_pixels_size);
+        self.backdrop_texture = None;
     }
 
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
@@ -426,6 +437,72 @@ impl MetalRenderer {
         }
     }
 
+    pub fn register_custom_shader(
+        &mut self,
+        info: CustomShaderInfo,
+    ) -> Result<CustomShaderId, (String, bool)> {
+        if let Some(id) = self.custom_shader_ids.get(&info).cloned() {
+            return id.map_err(|err| (err, false));
+        }
+
+        let id = CustomShaderId(self.custom_shaders_pipeline_states.len() as u32);
+        let source = info.to_string();
+
+        let result: Result<CustomShaderId, String> = (|| {
+            let (mut module, module_info, bindings, _) = naga_validate_custom_shader(
+                &source,
+                info.data_definition.map(|_| info.data_name),
+                info.data_size,
+                info.data_align,
+            )?;
+
+            let mut msl = String::new();
+            naga::back::msl::Writer::new(&mut msl)
+                .write(
+                    &module,
+                    &module_info,
+                    &naga::back::msl::Options {
+                        lang_version: (2, 0),
+                        per_entry_point_map: ["vs", "fs"]
+                            .into_iter()
+                            .map(|entry| {
+                                (
+                                    entry.to_string(),
+                                    naga::back::msl::EntryPointResources {
+                                        resources: bindings.clone(),
+                                        push_constant_buffer: None,
+                                        sizes_buffer: Some(ShaderInputIndex::BufferSizes as u8),
+                                    },
+                                )
+                            })
+                            .collect(),
+                        fake_missing_bindings: false,
+                        ..Default::default()
+                    },
+                    &naga::back::msl::PipelineOptions::default(),
+                )
+                .map_err(|err| format!("Translation of WGSL to MSL failed: {err}"))?;
+
+            let library = self
+                .device
+                .new_library_with_source(&msl, &metal::CompileOptions::new())?;
+
+            let pipeline = build_pipeline_state(
+                &self.device,
+                &library,
+                &format!("custom{}", id.0),
+                "vs",
+                "fs",
+                MTLPixelFormat::BGRA8Unorm,
+            );
+            self.custom_shaders_pipeline_states
+                .push((pipeline, info.data_size, info.data_align));
+            Ok(id)
+        })();
+        self.custom_shader_ids.insert(info, result.clone());
+        result.map_err(|err| (err, true))
+    }
+
     fn draw_primitives(
         &mut self,
         scene: &Scene,
@@ -525,6 +602,35 @@ impl MetalRenderer {
                     viewport_size,
                     command_encoder,
                 ),
+                PrimitiveBatch::Shaders(shaders, read_bounds) => {
+                    if let Some(read_bounds) = read_bounds {
+                        command_encoder.end_encoding();
+                        self.copy_backdrop(
+                            drawable.texture(),
+                            read_bounds,
+                            viewport_size,
+                            command_buffer,
+                        );
+                        command_encoder = new_command_encoder(
+                            command_buffer,
+                            drawable,
+                            viewport_size,
+                            |color_attachment| {
+                                color_attachment.set_load_action(metal::MTLLoadAction::Load);
+                            },
+                        );
+                    }
+
+                    self.draw_custom_shaders(
+                        shaders,
+                        &scene.shader_data,
+                        read_bounds.is_some(),
+                        instance_buffer,
+                        &mut instance_offset,
+                        viewport_size,
+                        command_encoder,
+                    )
+                }
                 PrimitiveBatch::Surfaces(surfaces) => self.draw_surfaces(
                     surfaces,
                     instance_buffer,
@@ -1066,6 +1172,152 @@ impl MetalRenderer {
         true
     }
 
+    fn copy_backdrop(
+        &mut self,
+        src_texture: &metal::TextureRef,
+        read_bounds: Bounds<u32>,
+        viewport_size: Size<DevicePixels>,
+        command_buffer: &metal::CommandBufferRef,
+    ) {
+        if self.backdrop_texture.is_none() {
+            let desc = metal::TextureDescriptor::new();
+            desc.set_width(viewport_size.width.0 as u64);
+            desc.set_height(viewport_size.height.0 as u64);
+            desc.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+            desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+            self.backdrop_texture = Some(self.device.new_texture(&desc));
+        }
+
+        let bounds = read_bounds.intersect(&Bounds {
+            origin: Point { x: 0, y: 0 },
+            size: Size {
+                width: viewport_size.width.0 as u32,
+                height: viewport_size.height.0 as u32,
+            },
+        });
+
+        let blit_encoder = command_buffer.new_blit_command_encoder();
+        blit_encoder.copy_from_texture(
+            src_texture,
+            0,
+            0,
+            metal::MTLOrigin {
+                x: bounds.origin.x as u64,
+                y: bounds.origin.y as u64,
+                z: 0,
+            },
+            metal::MTLSize {
+                width: bounds.size.width as u64,
+                height: bounds.size.height as u64,
+                depth: 1,
+            },
+            self.backdrop_texture.as_ref().unwrap(),
+            0,
+            0,
+            metal::MTLOrigin {
+                x: bounds.origin.x as u64,
+                y: bounds.origin.y as u64,
+                z: 0,
+            },
+        );
+        blit_encoder.end_encoding();
+    }
+
+    fn draw_custom_shaders(
+        &mut self,
+        instances: &[ShaderPrimitive],
+        shader_data: &[u8],
+        read_backdrop: bool,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        viewport_size: Size<DevicePixels>,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        if instances.is_empty() {
+            return true;
+        }
+        align_offset(instance_offset);
+
+        let (pipeline, instance_data_size, instance_data_align) = self
+            .custom_shaders_pipeline_states
+            .get(instances[0].shader_id.0 as usize)
+            .expect("shader not registered");
+
+        let globals = CustomShaderGlobalParams {
+            viewport_size: [viewport_size.width.0 as f32, viewport_size.height.0 as f32],
+            premultiplied_alpha: 0,
+            pad: 0,
+        };
+
+        command_encoder.set_render_pipeline_state(&pipeline);
+        command_encoder.set_vertex_bytes(
+            ShaderInputIndex::Globals as u64,
+            size_of::<CustomShaderGlobalParams>() as u64,
+            &globals as *const CustomShaderGlobalParams as *const _,
+        );
+        command_encoder.set_fragment_bytes(
+            ShaderInputIndex::Globals as u64,
+            size_of::<CustomShaderGlobalParams>() as u64,
+            &globals as *const CustomShaderGlobalParams as *const _,
+        );
+        command_encoder.set_vertex_buffer(
+            ShaderInputIndex::Instances as u64,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        command_encoder.set_fragment_buffer(
+            ShaderInputIndex::Instances as u64,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        command_encoder.set_vertex_bytes(
+            ShaderInputIndex::BufferSizes as u64,
+            size_of::<u32>() as u64,
+            &(instances.len() as u32) as *const u32 as *const _,
+        );
+        command_encoder.set_fragment_bytes(
+            ShaderInputIndex::BufferSizes as u64,
+            size_of::<u32>() as u64,
+            &(instances.len() as u32) as *const u32 as *const _,
+        );
+
+        let (_, instance_size) =
+            ShaderPrimitive::size_info(*instance_data_size, *instance_data_align);
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
+        let next_offset = *instance_offset + instance_size * instances.len();
+        if next_offset > instance_buffer.size {
+            return false;
+        }
+
+        unsafe {
+            ShaderPrimitive::pack_instances(
+                buffer_contents,
+                instances,
+                shader_data,
+                *instance_data_size,
+                *instance_data_align,
+            );
+        }
+
+        if read_backdrop {
+            command_encoder.set_fragment_texture(
+                ShaderInputIndex::BackdropTexture as u64,
+                self.backdrop_texture.as_deref(),
+            );
+        }
+
+        command_encoder.draw_primitives_instanced(
+            metal::MTLPrimitiveType::TriangleStrip,
+            0,
+            4,
+            instances.len() as u64,
+        );
+        *instance_offset = next_offset;
+        true
+    }
+
     fn draw_surfaces(
         &mut self,
         surfaces: &[PaintSurface],
@@ -1333,6 +1585,15 @@ enum SpriteInputIndex {
     ViewportSize = 2,
     AtlasTextureSize = 3,
     AtlasTexture = 4,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+enum ShaderInputIndex {
+    Globals = 0,
+    Instances = 1,
+    BackdropTexture = 2,
+    BufferSizes = 3,
 }
 
 #[repr(C)]

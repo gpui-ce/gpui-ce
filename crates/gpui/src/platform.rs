@@ -1,6 +1,7 @@
 mod app_menu;
 mod keyboard;
 mod keystroke;
+pub(crate) mod shader;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
@@ -35,6 +36,7 @@ mod windows;
 ))]
 pub(crate) mod scap_screen_capture;
 
+use crate::shader::CustomShaderInfo;
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Font, FontId, FontMetrics, FontRun,
@@ -510,6 +512,7 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn draw(&self, scene: &Scene);
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+    fn register_shader(&self, info: CustomShaderInfo) -> Result<CustomShaderId, (String, bool)>;
 
     // macOS specific methods
     fn get_title(&self) -> String {
@@ -913,6 +916,10 @@ impl From<TileId> for etagere::AllocId {
         Self::deserialize(id.0)
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// An identifier for a custom shader which can be drawn using [Window::paint_shader]
+pub struct CustomShaderId(pub(crate) u32);
 
 pub(crate) struct PlatformInputHandler {
     cx: AsyncWindowContext,

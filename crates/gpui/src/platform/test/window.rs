@@ -3,6 +3,7 @@ use crate::{
     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
     Point, PromptButton, RequestFrameOptions, Size, TestPlatform, TileId, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
+    shader::CustomShaderInfo,
 };
 use collections::HashMap;
 use parking_lot::Mutex;
@@ -267,6 +268,13 @@ impl PlatformWindow for TestWindow {
     fn on_appearance_changed(&self, _callback: Box<dyn FnMut()>) {}
 
     fn draw(&self, _scene: &crate::Scene) {}
+
+    fn register_shader(
+        &self,
+        _info: CustomShaderInfo,
+    ) -> Result<crate::CustomShaderId, (String, bool)> {
+        unimplemented!()
+    }
 
     fn sprite_atlas(&self) -> sync::Arc<dyn crate::PlatformAtlas> {
         self.0.lock().sprite_atlas.clone()

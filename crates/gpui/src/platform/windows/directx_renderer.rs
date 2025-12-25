@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     slice,
     sync::{Arc, OnceLock},
 };
@@ -20,9 +21,11 @@ use windows::{
 };
 
 use crate::{
-    platform::windows::directx_renderer::shader_resources::{
-        RawShaderBytes, ShaderModule, ShaderTarget,
+    platform::{
+        shader::{CustomShaderGlobalParams, naga_validate_custom_shader},
+        windows::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget},
     },
+    shader::CustomShaderInfo,
     *,
 };
 
@@ -41,7 +44,8 @@ pub(crate) struct DirectXRenderer {
     atlas: Arc<DirectXAtlas>,
     devices: Option<DirectXRendererDevices>,
     resources: Option<DirectXResources>,
-    globals: DirectXGlobalElements,
+    globals: DirectXGlobalElements<GlobalParams>,
+    custom_shader_globals: DirectXGlobalElements<CustomShaderGlobalParams>,
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
@@ -78,6 +82,10 @@ struct DirectXResources {
     path_intermediate_msaa_texture: ID3D11Texture2D,
     path_intermediate_msaa_view: Option<ID3D11RenderTargetView>,
 
+    // Backdrop texture for custom shaders
+    backdrop_texture: Option<ID3D11Texture2D>,
+    backdrop_view: Option<ID3D11ShaderResourceView>,
+
     // Cached viewport
     viewport: D3D11_VIEWPORT,
 }
@@ -90,11 +98,15 @@ struct DirectXRenderPipelines {
     underline_pipeline: PipelineState<Underline>,
     mono_sprites: PipelineState<MonochromeSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
+
+    custom: Vec<(PipelineState<ShaderPrimitive>, usize, usize)>,
+    custom_ids: HashMap<CustomShaderInfo, Result<CustomShaderId, String>>,
 }
 
-struct DirectXGlobalElements {
+struct DirectXGlobalElements<T> {
     global_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
+    _marker: std::marker::PhantomData<T>,
 }
 
 struct DirectComposition {
@@ -148,6 +160,8 @@ impl DirectXRenderer {
             .context("Creating DirectX resources")?;
         let globals = DirectXGlobalElements::new(&devices.device)
             .context("Creating DirectX global elements")?;
+        let custom_shader_globals = DirectXGlobalElements::new(&devices.device)
+            .context("Creating DirectX custom shader global elements")?;
         let pipelines = DirectXRenderPipelines::new(&devices.device)
             .context("Creating DirectX render pipelines")?;
 
@@ -168,6 +182,7 @@ impl DirectXRenderer {
             devices: Some(devices),
             resources: Some(resources),
             globals,
+            custom_shader_globals,
             pipelines,
             direct_composition,
             font_info: Self::get_font_info(),
@@ -196,6 +211,18 @@ impl DirectXRenderer {
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
                 grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
                 _pad: 0,
+            }],
+        )?;
+        update_buffer(
+            device_context,
+            self.custom_shader_globals
+                .global_params_buffer
+                .as_ref()
+                .unwrap(),
+            &[CustomShaderGlobalParams {
+                viewport_size: [resources.viewport.Width, resources.viewport.Height],
+                premultiplied_alpha: 0,
+                pad: 0,
             }],
         )?;
         unsafe {
@@ -270,6 +297,8 @@ impl DirectXRenderer {
         .context("Creating DirectX resources")?;
         let globals = DirectXGlobalElements::new(&devices.device)
             .context("Creating DirectXGlobalElements")?;
+        let custom_shader_globals = DirectXGlobalElements::new(&devices.device)
+            .context("Creating DirectXGlobalElements")?;
         let pipelines = DirectXRenderPipelines::new(&devices.device)
             .context("Creating DirectXRenderPipelines")?;
 
@@ -293,6 +322,7 @@ impl DirectXRenderer {
         self.devices = Some(devices);
         self.resources = Some(resources);
         self.globals = globals;
+        self.custom_shader_globals = custom_shader_globals;
         self.pipelines = pipelines;
         self.direct_composition = direct_composition;
         self.skip_draws = true;
@@ -323,17 +353,19 @@ impl DirectXRenderer {
                     texture_id,
                     sprites,
                 } => self.draw_polychrome_sprites(texture_id, sprites),
+                PrimitiveBatch::Shaders(shaders, read_bounds) => self.draw_custom_shaders(shaders, read_bounds, &scene.shader_data),
                 PrimitiveBatch::Surfaces(surfaces) => self.draw_surfaces(surfaces),
             }
             .context(format!(
                 "scene too large:\
-                {} paths, {} shadows, {} quads, {} underlines, {} mono, {} poly, {} surfaces",
+                {} paths, {} shadows, {} quads, {} underlines, {} mono, {} poly, {} custom, {} surfaces",
                 scene.paths.len(),
                 scene.shadows.len(),
                 scene.quads.len(),
                 scene.underlines.len(),
                 scene.monochrome_sprites.len(),
                 scene.polychrome_sprites.len(),
+                scene.shaders.len(),
                 scene.surfaces.len(),
             ))?;
         }
@@ -621,6 +653,139 @@ impl DirectXRenderer {
         )
     }
 
+    fn draw_custom_shaders(
+        &mut self,
+        shaders: &[ShaderPrimitive],
+        read_bounds: Option<Bounds<u32>>,
+        shader_data: &[u8],
+    ) -> Result<()> {
+        if shaders.is_empty() {
+            return Ok(());
+        }
+
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_mut().context("resources missing")?;
+        let (pipeline, instance_data_size, instance_data_align) = self
+            .pipelines
+            .custom
+            .get_mut(shaders[0].shader_id.0 as usize)
+            .unwrap();
+
+        let (_, instance_size) =
+            ShaderPrimitive::size_info(*instance_data_size, *instance_data_align);
+
+        if pipeline.buffer_size < shaders.len() {
+            let new_buffer_size = shaders.len().next_power_of_two();
+            log::info!(
+                "Updating {} buffer size from {} to {}",
+                pipeline.label,
+                pipeline.buffer_size,
+                new_buffer_size
+            );
+            let buffer = create_buffer(&devices.device, instance_size, new_buffer_size)?;
+            let view = create_buffer_view(&devices.device, &buffer)?;
+            pipeline.buffer = buffer;
+            pipeline.view = view;
+            pipeline.buffer_size = new_buffer_size;
+        }
+
+        unsafe {
+            let mut dst = std::mem::zeroed();
+            devices
+                .device_context
+                .Map(
+                    &pipeline.buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut dst),
+                )
+                .unwrap();
+            ShaderPrimitive::pack_instances(
+                dst.pData as _,
+                shaders,
+                shader_data,
+                *instance_data_size,
+                *instance_data_align,
+            );
+            devices.device_context.Unmap(&pipeline.buffer, 0);
+        }
+
+        if let Some(read_bounds) = read_bounds {
+            if resources.backdrop_texture.is_none() {
+                unsafe {
+                    let desc = D3D11_TEXTURE2D_DESC {
+                        Width: self.width,
+                        Height: self.height,
+                        MipLevels: 1,
+                        ArraySize: 1,
+                        Format: RENDER_TARGET_FORMAT,
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
+                        },
+                        Usage: D3D11_USAGE_DEFAULT,
+                        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                        CPUAccessFlags: 0,
+                        MiscFlags: 0,
+                    };
+                    devices
+                        .device
+                        .CreateTexture2D(&desc, None, Some(&mut resources.backdrop_texture))
+                        .unwrap();
+                    devices
+                        .device
+                        .CreateShaderResourceView(
+                            resources.backdrop_texture.as_ref().unwrap(),
+                            None,
+                            Some(&mut resources.backdrop_view),
+                        )
+                        .unwrap();
+                }
+            }
+
+            unsafe {
+                devices
+                    .device_context
+                    .PSSetShaderResources(2, Some(slice::from_ref(&resources.backdrop_view)));
+
+                let bounds = read_bounds.intersect(&Bounds {
+                    origin: Point::default(),
+                    size: Size {
+                        width: self.width,
+                        height: self.height,
+                    },
+                });
+                devices.device_context.CopySubresourceRegion(
+                    resources.backdrop_texture.as_ref().unwrap(),
+                    0,
+                    bounds.origin.x,
+                    bounds.origin.y,
+                    0,
+                    resources.render_target.as_ref().unwrap(),
+                    0,
+                    Some(&D3D11_BOX {
+                        left: bounds.origin.x,
+                        top: bounds.origin.y,
+                        front: 0,
+                        right: bounds.origin.x + bounds.size.width,
+                        bottom: bounds.origin.y + bounds.size.height,
+                        back: 1,
+                    }),
+                );
+            }
+        }
+
+        pipeline.draw(
+            &devices.device_context,
+            slice::from_ref(&resources.viewport),
+            slice::from_ref(&self.custom_shader_globals.global_params_buffer),
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            4,
+            shaders.len() as u32,
+        )
+    }
+
     fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
         if surfaces.is_empty() {
             return Ok(());
@@ -674,6 +839,14 @@ impl DirectXRenderer {
     pub(crate) fn mark_drawable(&mut self) {
         self.skip_draws = false;
     }
+
+    pub(crate) fn register_shader(
+        &mut self,
+        info: CustomShaderInfo,
+    ) -> Result<CustomShaderId, (String, bool)> {
+        self.pipelines
+            .register_custom_shader(&self.devices.as_ref().unwrap().device, info)
+    }
 }
 
 impl DirectXResources {
@@ -714,6 +887,8 @@ impl DirectXResources {
             path_intermediate_msaa_texture,
             path_intermediate_msaa_view,
             path_intermediate_srv,
+            backdrop_texture: None,
+            backdrop_view: None,
             viewport,
         })
     }
@@ -740,6 +915,8 @@ impl DirectXResources {
         self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
         self.path_intermediate_msaa_view = path_intermediate_msaa_view;
         self.path_intermediate_srv = path_intermediate_srv;
+        self.backdrop_texture = None;
+        self.backdrop_view = None;
         self.viewport = viewport;
         Ok(())
     }
@@ -805,7 +982,81 @@ impl DirectXRenderPipelines {
             underline_pipeline,
             mono_sprites,
             poly_sprites,
+            custom: Vec::new(),
+            custom_ids: HashMap::new(),
         })
+    }
+
+    fn register_custom_shader(
+        &mut self,
+        device: &ID3D11Device,
+        info: CustomShaderInfo,
+    ) -> Result<CustomShaderId, (String, bool)> {
+        if let Some(id) = self.custom_ids.get(&info) {
+            return id.clone().map_err(|err| (err, false));
+        }
+
+        let source = info.to_string();
+        let result: Result<CustomShaderId, String> = (|| {
+            let (module, module_info, bindings, instance_size) = naga_validate_custom_shader(
+                &source,
+                info.data_definition.map(|_| info.data_name),
+                info.data_size,
+                info.data_align,
+            )?;
+
+            let mut hlsl = String::new();
+            naga::back::hlsl::Writer::new(
+                &mut hlsl,
+                &naga::back::hlsl::Options {
+                    shader_model: naga::back::hlsl::ShaderModel::V5_0,
+                    binding_map: bindings,
+                    fake_missing_bindings: true,
+                    ..Default::default()
+                },
+            )
+            .write(&module, &module_info, None)
+            .map_err(|err| err.to_string())?;
+
+            if info.backdrop_read {
+                // Replace naga's sampler heap, since naga doesn't properly support SM 5.0,
+                // but the shaders we are using only use a well known set of bindings, so we
+                // know we only have a single sampler. https://github.com/gfx-rs/wgpu/issues/8120
+                hlsl = hlsl
+                    .lines()
+                    .filter_map(|line| {
+                        if line.contains("SamplerHeap") || line.contains("SamplerIndexArray") {
+                            if line.contains("s_backdrop") {
+                                Some("SamplerState s_backdrop : register(s2);")
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(line)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+
+            let id = CustomShaderId(self.custom.len() as u32);
+            self.custom.push((
+                PipelineState::new_custom(
+                    device,
+                    &hlsl,
+                    4,
+                    instance_size,
+                    create_blend_state(device).unwrap(),
+                )
+                .map_err(|err| err.to_string())?,
+                info.data_size,
+                info.data_align,
+            ));
+            Ok(id)
+        })();
+
+        self.custom_ids.insert(info, result.clone());
+        result.map_err(|err| (err, true))
     }
 }
 
@@ -832,11 +1083,11 @@ impl DirectComposition {
     }
 }
 
-impl DirectXGlobalElements {
+impl<T> DirectXGlobalElements<T> {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
         let global_params_buffer = unsafe {
             let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                ByteWidth: std::mem::size_of::<T>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -868,6 +1119,7 @@ impl DirectXGlobalElements {
         Ok(Self {
             global_params_buffer,
             sampler,
+            _marker: std::marker::PhantomData,
         })
     }
 }
@@ -913,6 +1165,37 @@ impl<T> PipelineState<T> {
 
         Ok(PipelineState {
             label,
+            vertex,
+            fragment,
+            buffer,
+            buffer_size,
+            view,
+            blend_state,
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    fn new_custom(
+        device: &ID3D11Device,
+        hlsl: &str,
+        buffer_size: usize,
+        element_size: usize,
+        blend_state: ID3D11BlendState,
+    ) -> Result<Self> {
+        let vertex = {
+            let raw_shader = RawShaderBytes::new_custom(&hlsl, ShaderTarget::Vertex)?;
+            create_vertex_shader(device, raw_shader.as_bytes())?
+        };
+        let fragment = {
+            let raw_shader = RawShaderBytes::new_custom(&hlsl, ShaderTarget::Fragment)?;
+            create_fragment_shader(device, raw_shader.as_bytes())?
+        };
+
+        let buffer = create_buffer(device, element_size, buffer_size)?;
+        let view = create_buffer_view(device, &buffer)?;
+
+        Ok(PipelineState {
+            label: "custom",
             vertex,
             fragment,
             buffer,
@@ -1393,13 +1676,15 @@ const BUFFER_COUNT: usize = 3;
 pub(crate) mod shader_resources {
     use anyhow::Result;
 
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
     #[cfg(debug_assertions)]
+    use windows::{Win32::Graphics::Direct3D::Fxc::D3DCompileFromFile, core::HSTRING};
     use windows::{
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
+            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
             ID3DBlob,
         },
-        core::{HSTRING, PCSTR},
+        core::PCSTR,
     };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1422,9 +1707,7 @@ pub(crate) mod shader_resources {
 
     pub(crate) struct RawShaderBytes<'t> {
         inner: &'t [u8],
-
-        #[cfg(debug_assertions)]
-        _blob: ID3DBlob,
+        _blob: Option<ID3DBlob>,
     }
 
     impl<'t> RawShaderBytes<'t> {
@@ -1442,7 +1725,67 @@ pub(crate) mod shader_resources {
                         blob.GetBufferSize(),
                     )
                 };
-                Ok(Self { inner, _blob: blob })
+                Ok(Self {
+                    inner,
+                    _blob: Some(blob),
+                })
+            }
+        }
+
+        pub(crate) fn new_custom(hlsl: &str, target: ShaderTarget) -> Result<Self> {
+            let mut compile_blob = None;
+            let mut error_blob = None;
+
+            unsafe {
+                let ret = D3DCompile(
+                    hlsl.as_ptr() as *const _,
+                    hlsl.len(),
+                    PCSTR::null(),
+                    None,
+                    None,
+                    PCSTR::from_raw(
+                        match target {
+                            ShaderTarget::Fragment => "fs\0",
+                            ShaderTarget::Vertex => "vs\0",
+                        }
+                        .as_ptr(),
+                    ),
+                    PCSTR::from_raw(
+                        match target {
+                            ShaderTarget::Vertex => "vs_5_0\0",
+                            ShaderTarget::Fragment => "ps_5_0\0",
+                        }
+                        .as_ptr(),
+                    ),
+                    if cfg!(debug_assertions) {
+                        D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION
+                    } else {
+                        0
+                    },
+                    0,
+                    &mut compile_blob,
+                    Some(&mut error_blob),
+                );
+
+                if ret.is_err() {
+                    let Some(error_blob) = error_blob else {
+                        return Err(anyhow::anyhow!("{ret:?}"));
+                    };
+
+                    let error_string =
+                        std::ffi::CStr::from_ptr(error_blob.GetBufferPointer() as *const i8)
+                            .to_string_lossy();
+                    log::error!("Shader compile error: {}", error_string);
+                    return Err(anyhow::anyhow!("Compile error: {}", error_string));
+                }
+                let inner = std::slice::from_raw_parts(
+                    compile_blob.as_ref().unwrap().GetBufferPointer() as *const u8,
+                    compile_blob.as_ref().unwrap().GetBufferSize(),
+                );
+                Ok(Self {
+                    inner,
+                    _blob: compile_blob,
+                })
             }
         }
 
@@ -1486,7 +1829,10 @@ pub(crate) mod shader_resources {
                     ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
                 },
             };
-            Self { inner: bytes }
+            Self {
+                inner: bytes,
+                _blob: None,
+            }
         }
     }
 

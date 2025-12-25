@@ -2,16 +2,19 @@
 #![allow(irrefutable_let_patterns)]
 
 use super::{BladeAtlas, BladeContext};
+use crate::platform::shader::CustomShaderGlobalParams;
+use crate::shader::CustomShaderInfo;
 use crate::{
-    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
-    get_gamma_correction_ratios,
+    Background, Bounds, CustomShaderId, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
+    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, ShaderPrimitive, Shadow, Size,
+    Underline, get_gamma_correction_ratios,
 };
-use blade_graphics as gpu;
+use blade_graphics::{self as gpu, ShaderData, TexturePiece};
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use bytemuck::{Pod, Zeroable};
 #[cfg(target_os = "macos")]
 use media::core_video::CVMetalTextureCache;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const MAX_FRAME_TIME_MS: u32 = 10000;
@@ -100,6 +103,20 @@ struct ShaderPolySpritesData {
 }
 
 #[derive(blade_macros::ShaderData)]
+struct ShaderCustomShaderData {
+    globals: CustomShaderGlobalParams,
+    b_instances: gpu::BufferPiece,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct ShaderFilterShaderData {
+    globals: CustomShaderGlobalParams,
+    b_instances: gpu::BufferPiece,
+    t_backdrop: gpu::TextureView,
+    s_backdrop: gpu::Sampler,
+}
+
+#[derive(blade_macros::ShaderData)]
 struct ShaderSurfacesData {
     globals: GlobalParams,
     surface_locals: SurfaceParams,
@@ -132,6 +149,9 @@ struct BladePipelines {
     mono_sprites: gpu::RenderPipeline,
     poly_sprites: gpu::RenderPipeline,
     surfaces: gpu::RenderPipeline,
+
+    custom: Vec<(gpu::RenderPipeline, usize, usize)>,
+    custom_ids: HashMap<CustomShaderInfo, Result<CustomShaderId, String>>,
 }
 
 impl BladePipelines {
@@ -301,7 +321,83 @@ impl BladePipelines {
                 color_targets,
                 multisample_state: gpu::MultisampleState::default(),
             }),
+            custom: Vec::new(),
+            custom_ids: HashMap::new(),
         }
+    }
+
+    fn register_custom_shader(
+        &mut self,
+        gpu: &gpu::Context,
+        surface_info: gpu::SurfaceInfo,
+        info: CustomShaderInfo,
+    ) -> Result<CustomShaderId, (String, bool)> {
+        if let Some(id) = self.custom_ids.get(&info) {
+            return id.clone().map_err(|err| (err, false));
+        }
+
+        let id = CustomShaderId(self.custom.len() as u32);
+        let source = info.to_string();
+        let shader = match gpu
+            .try_create_shader(gpu::ShaderDesc { source: &source })
+            .map_err(|err| err.to_string())
+        {
+            Ok(shader) => shader,
+            Err(err) => {
+                self.custom_ids.insert(info, Err(err.clone()));
+                return Err((err, true));
+            }
+        };
+        shader.check_struct_size::<GlobalParams>();
+
+        if info.data_definition.is_some() {
+            assert_eq!(
+                shader.get_struct_size(info.data_name) as usize,
+                info.data_size.next_multiple_of(info.data_align)
+            );
+        }
+
+        let (_, instance_size) = ShaderPrimitive::size_info(info.data_size, info.data_align);
+        assert_eq!(shader.get_struct_size("Instance") as usize, instance_size);
+
+        let blend_mode = match surface_info.alpha {
+            gpu::AlphaMode::Ignored => gpu::BlendState::ALPHA_BLENDING,
+            gpu::AlphaMode::PreMultiplied => gpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            gpu::AlphaMode::PostMultiplied => gpu::BlendState::ALPHA_BLENDING,
+        };
+        let color_targets = &[gpu::ColorTargetState {
+            format: surface_info.format,
+            blend: Some(blend_mode),
+            write_mask: gpu::ColorWrites::default(),
+        }];
+
+        let layout = if info.backdrop_read {
+            ShaderFilterShaderData::layout()
+        } else {
+            ShaderCustomShaderData::layout()
+        };
+
+        self.custom.push((
+            gpu.create_render_pipeline(gpu::RenderPipelineDesc {
+                name: &format!("custom{}", id.0),
+                data_layouts: &[&layout],
+                vertex: shader.at("vs"),
+                vertex_fetches: &[],
+                primitive: gpu::PrimitiveState {
+                    topology: gpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                fragment: Some(shader.at("fs")),
+                color_targets,
+                multisample_state: gpu::MultisampleState::default(),
+            }),
+            info.data_size,
+            info.data_align,
+        ));
+
+        self.custom_ids.insert(info, Ok(id));
+        Ok(id)
     }
 
     fn destroy(&mut self, gpu: &gpu::Context) {
@@ -313,6 +409,10 @@ impl BladePipelines {
         gpu.destroy_render_pipeline(&mut self.mono_sprites);
         gpu.destroy_render_pipeline(&mut self.poly_sprites);
         gpu.destroy_render_pipeline(&mut self.surfaces);
+
+        for (pipeline, _, _) in self.custom.iter_mut() {
+            gpu.destroy_render_pipeline(pipeline);
+        }
     }
 }
 
@@ -341,6 +441,8 @@ pub struct BladeRenderer {
     path_intermediate_texture_view: gpu::TextureView,
     path_intermediate_msaa_texture: Option<gpu::Texture>,
     path_intermediate_msaa_texture_view: Option<gpu::TextureView>,
+    backdrop_texture: Option<gpu::Texture>,
+    backdrop_texture_view: Option<gpu::TextureView>,
     rendering_parameters: RenderingParameters,
 }
 
@@ -352,7 +454,7 @@ impl BladeRenderer {
     ) -> anyhow::Result<Self> {
         let surface_config = gpu::SurfaceConfig {
             size: config.size,
-            usage: gpu::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
             display_sync: gpu::DisplaySync::Recent,
             color_space: gpu::ColorSpace::Srgb,
             allow_exclusive_full_screen: false,
@@ -427,6 +529,8 @@ impl BladeRenderer {
             path_intermediate_texture_view,
             path_intermediate_msaa_texture,
             path_intermediate_msaa_texture_view,
+            backdrop_texture: None,
+            backdrop_texture_view: None,
             rendering_parameters,
         })
     }
@@ -509,6 +613,15 @@ impl BladeRenderer {
                 .unzip();
             self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
             self.path_intermediate_msaa_texture_view = path_intermediate_msaa_texture_view;
+
+            if let Some(backdrop_texture) = self.backdrop_texture {
+                self.gpu.destroy_texture(backdrop_texture);
+            }
+            if let Some(backdrop_texture_view) = self.backdrop_texture_view {
+                self.gpu.destroy_texture_view(backdrop_texture_view);
+            }
+            self.backdrop_texture = None;
+            self.backdrop_texture_view = None;
         }
     }
 
@@ -638,6 +751,12 @@ impl BladeRenderer {
         }
         if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
             self.gpu.destroy_texture_view(msaa_view);
+        }
+        if let Some(backdrop_texture) = self.backdrop_texture {
+            self.gpu.destroy_texture(backdrop_texture);
+        }
+        if let Some(backdrop_texture_view) = self.backdrop_texture_view {
+            self.gpu.destroy_texture_view(backdrop_texture_view);
         }
     }
 
@@ -814,6 +933,121 @@ impl BladeRenderer {
                     );
                     encoder.draw(0, 4, 0, sprites.len() as u32);
                 }
+                PrimitiveBatch::Shaders(instances, read_bounds) => {
+                    let (pipeline, instance_data_size, instance_data_align) = self
+                        .pipelines
+                        .custom
+                        .get(instances[0].shader_id.0 as usize)
+                        .expect("Shader not registered");
+
+                    let backdrop = read_bounds.map(|_| {
+                        if self.backdrop_texture.is_none() {
+                            let (texture, view) = create_backdrop_texture(
+                                &self.gpu,
+                                self.surface.info().format,
+                                self.surface_config.size.width,
+                                self.surface_config.size.height,
+                            );
+                            self.backdrop_texture = Some(texture);
+                            self.backdrop_texture_view = Some(view);
+                        }
+
+                        (
+                            self.backdrop_texture.unwrap(),
+                            self.backdrop_texture_view.unwrap(),
+                        )
+                    });
+
+                    if let Some(((backdrop, _), copy_bounds)) = backdrop.zip(read_bounds) {
+                        let bounds = copy_bounds.intersect(&Bounds {
+                            origin: Point::default(),
+                            size: Size {
+                                width: self.surface_config.size.width,
+                                height: self.surface_config.size.height,
+                            },
+                        });
+
+                        drop(pass);
+                        self.command_encoder
+                            .transfer("backdrop-copy")
+                            .copy_texture_to_texture(
+                                TexturePiece {
+                                    texture: frame.texture(),
+                                    mip_level: 0,
+                                    array_layer: 0,
+                                    origin: [bounds.origin.x, bounds.origin.y, 0],
+                                },
+                                TexturePiece {
+                                    texture: backdrop,
+                                    mip_level: 0,
+                                    array_layer: 0,
+                                    origin: [bounds.origin.x, bounds.origin.y, 0],
+                                },
+                                gpu::Extent {
+                                    width: bounds.size.width,
+                                    height: bounds.size.height,
+                                    depth: self.surface_config.size.depth,
+                                },
+                            );
+                        pass = self.command_encoder.render(
+                            "main",
+                            gpu::RenderTargetSet {
+                                colors: &[gpu::RenderTarget {
+                                    view: frame.texture_view(),
+                                    init_op: gpu::InitOp::Load,
+                                    finish_op: gpu::FinishOp::Store,
+                                }],
+                                depth_stencil: None,
+                            },
+                        );
+                    }
+
+                    let (_, instance_size) =
+                        ShaderPrimitive::size_info(*instance_data_size, *instance_data_align);
+                    let instance_buf = self
+                        .instance_belt
+                        .alloc((instance_size * instances.len()) as u64, &self.gpu);
+                    unsafe {
+                        ShaderPrimitive::pack_instances(
+                            instance_buf.data(),
+                            instances,
+                            &scene.shader_data,
+                            *instance_data_size,
+                            *instance_data_align,
+                        )
+                    };
+
+                    let globals = CustomShaderGlobalParams {
+                        viewport_size: globals.viewport_size,
+                        premultiplied_alpha: match self.surface.info().alpha {
+                            gpu::AlphaMode::Ignored | gpu::AlphaMode::PostMultiplied => 0,
+                            gpu::AlphaMode::PreMultiplied => 1,
+                        },
+                        pad: 0,
+                    };
+                    let mut encoder = pass.with(pipeline);
+                    if let Some((_, backdrop_view)) = backdrop {
+                        encoder.bind(
+                            0,
+                            &ShaderFilterShaderData {
+                                globals,
+                                b_instances: instance_buf,
+                                t_backdrop: backdrop_view,
+                                s_backdrop: self.atlas_sampler,
+                            },
+                        );
+                    } else {
+                        encoder.bind(
+                            0,
+                            &ShaderCustomShaderData {
+                                globals,
+                                b_instances: instance_buf,
+                            },
+                        );
+                    }
+
+                    encoder.draw(0, 4, 0, instances.len() as u32);
+                }
                 PrimitiveBatch::Surfaces(surfaces) => {
                     let mut _encoder = pass.with(&self.pipelines.surfaces);
 
@@ -917,6 +1151,14 @@ impl BladeRenderer {
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
     }
+
+    pub fn register_custom_shader(
+        &mut self,
+        info: CustomShaderInfo,
+    ) -> Result<CustomShaderId, (String, bool)> {
+        self.pipelines
+            .register_custom_shader(&self.gpu, self.surface.info(), info)
+    }
 }
 
 fn create_path_intermediate_texture(
@@ -988,6 +1230,39 @@ fn create_msaa_texture_if_needed(
     );
 
     Some((texture_msaa, texture_view_msaa))
+}
+
+fn create_backdrop_texture(
+    gpu: &gpu::Context,
+    format: gpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> (gpu::Texture, gpu::TextureView) {
+    let texture = gpu.create_texture(gpu::TextureDesc {
+        name: "backdrop",
+        format,
+        size: gpu::Extent {
+            width,
+            height,
+            depth: 1,
+        },
+        array_layer_count: 1,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: gpu::TextureDimension::D2,
+        usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+        external: None,
+    });
+    let texture_view = gpu.create_texture_view(
+        texture,
+        gpu::TextureViewDesc {
+            name: "backdrop view",
+            format,
+            dimension: gpu::ViewDimension::D2,
+            subresources: &Default::default(),
+        },
+    );
+    (texture, texture_view)
 }
 
 /// A set of parameters that can be set using a corresponding environment variable.

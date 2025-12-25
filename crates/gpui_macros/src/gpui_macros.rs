@@ -2,6 +2,7 @@ mod derive_action;
 mod derive_app_context;
 mod derive_into_element;
 mod derive_render;
+mod derive_shader_uniform;
 mod derive_visual_context;
 mod register_action;
 mod styles;
@@ -38,6 +39,33 @@ pub fn derive_into_element(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 pub fn derive_render(input: TokenStream) -> TokenStream {
     derive_render::derive_render(input)
+}
+
+/// #[derive(ShaderUniform)] is used to make a struct which can be sent to
+/// custom shaders as instance data.
+///
+/// Example:
+/// ```rust
+/// #[repr(C)]
+/// #[derive(gpui::ShaderUniform, Clone, Copy)]
+/// struct MyStruct {
+///     color: [f32; 4],
+///     something: u32,
+/// }
+/// ```
+///
+/// To derive this trait, your struct must be composed of fields which implement
+/// `ShaderUniform` and are [properly aligned](https://sotrh.github.io/learn-wgpu/showcase/alignment/#alignment-of-uniform-and-storage-buffers).
+/// If the alignment of a field is incorrect, then an error will indicate the issue.
+/// To fix any alignment issues, move types with larger alignments (such as `[f32; 4]`) to
+/// the start of the struct and insert padding fields if issues are still encountered.
+///
+/// Note: if a field within your struct is also a struct, then you may need to
+/// include the field type's definition within your fragment shader using
+/// `.with_item(MyOtherStruct::DEFINITION.unwrap())`, since it isn't included automatically.
+#[proc_macro_derive(ShaderUniform)]
+pub fn derive_shader_uniform(input: TokenStream) -> TokenStream {
+    derive_shader_uniform::derive_shader_uniform(input)
 }
 
 /// #[derive(AppContext)] is used to create a context out of anything that holds a `&mut App`
@@ -120,6 +148,12 @@ pub fn padding_style_methods(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn position_style_methods(input: TokenStream) -> TokenStream {
     styles::position_style_methods(input)
+}
+
+/// Generates methods for size styles.
+#[proc_macro]
+pub fn size_style_methods(input: TokenStream) -> TokenStream {
+    styles::size_style_methods(input)
 }
 
 /// Generates methods for overflow styles.

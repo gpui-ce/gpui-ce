@@ -26,7 +26,7 @@ use windows::{
     core::*,
 };
 
-use crate::*;
+use crate::{shader::CustomShaderInfo, *};
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -882,6 +882,10 @@ impl PlatformWindow for WindowsWindow {
 
     fn draw(&self, scene: &Scene) {
         self.state.renderer.borrow_mut().draw(scene).log_err();
+    }
+
+    fn register_shader(&self, info: CustomShaderInfo) -> Result<CustomShaderId, (String, bool)> {
+        self.0.state.renderer.borrow_mut().register_shader(info)
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {

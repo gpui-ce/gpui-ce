@@ -56,6 +56,7 @@ pub mod _ownership_and_data_flow;
 #[doc(hidden)]
 pub mod private {
     pub use anyhow;
+    pub use const_format;
     pub use inventory;
     pub use schemars;
     pub use serde;
@@ -81,7 +82,9 @@ pub use elements::*;
 pub use executor::*;
 pub use geometry::*;
 pub use global::*;
-pub use gpui_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
+pub use gpui_macros::{
+    AppContext, IntoElement, Render, ShaderUniform, VisualContext, register_action, test,
+};
 pub use http_client;
 pub use input::*;
 pub use inspector::*;

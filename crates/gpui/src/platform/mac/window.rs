@@ -1,12 +1,13 @@
 use super::{BoolExt, MacDisplay, NSRange, NSStringExt, ns_string, renderer};
 use crate::{
-    AnyWindowHandle, Bounds, Capslock, DisplayLink, ExternalPaths, FileDropEvent,
+    AnyWindowHandle, Bounds, Capslock, CustomShaderId, DisplayLink, ExternalPaths, FileDropEvent,
     ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformInput, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     SharedString, Size, SystemWindowTab, Timer, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowKind, WindowParams, dispatch_get_main_queue,
-    dispatch_sys::dispatch_async_f, platform::PlatformInputHandler, point, px, size,
+    dispatch_sys::dispatch_async_f, platform::PlatformInputHandler, point, px,
+    shader::CustomShaderInfo, size,
 };
 use block::ConcreteBlock;
 use cocoa::{
@@ -1472,6 +1473,11 @@ impl PlatformWindow for MacWindow {
     fn draw(&self, scene: &crate::Scene) {
         let mut this = self.0.lock();
         this.renderer.draw(scene);
+    }
+
+    fn register_shader(&self, info: CustomShaderInfo) -> Result<CustomShaderId, (String, bool)> {
+        let mut this = self.0.lock();
+        this.renderer.register_custom_shader(info)
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {

@@ -113,7 +113,7 @@ log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
 mach2 = "0.5"
 markup5ever_rcdom = "0.3.0"
 metal = "0.29"
-naga = { version = "25.0", features = ["wgsl-in"] }
+naga = { version = "25.0", features = ["wgsl-in", "hlsl-out-if-target-windows", "msl-out-if-target-apple"] }
 nix = "0.29"
 objc = "0.2"
 objc2-foundation = { version = "=0.3.1", default-features = false, features = [
