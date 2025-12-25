@@ -203,7 +203,7 @@ impl<P: LinuxClient + 'static> Platform for P {
         self.with_common(|common| common.callbacks.keyboard_layout_change = Some(callback));
     }
 
-    fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(&self, _options: crate::PlatformOptions, on_finish_launching: Box<dyn FnOnce()>) {
         on_finish_launching();
 
         LinuxClient::run(self);

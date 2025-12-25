@@ -163,12 +163,32 @@ pub fn guess_compositor() -> &'static str {
     }
 }
 
+/// The activation policy for a macOS application.
+/// This determines how the application appears in the Dock and whether it can become frontmost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MacActivationPolicy {
+    /// The application is an ordinary app that appears in the Dock and may have a user interface.
+    #[default]
+    Regular,
+    /// The application doesn't appear in the Dock and doesn't have a menu bar, but it may be activated programmatically or by clicking on one of its windows.
+    Accessory,
+    /// The application doesn't appear in the Dock and may not create windows or be activated.
+    Prohibited,
+}
+
+/// Platform-specific options for configuring the application.
+#[derive(Debug, Clone, Default)]
+pub struct PlatformOptions {
+    /// The activation policy for macOS. If `None`, the default policy (Regular) is used.
+    pub mac_activation_policy: Option<MacActivationPolicy>,
+}
+
 pub(crate) trait Platform: 'static {
     fn background_executor(&self) -> BackgroundExecutor;
     fn foreground_executor(&self) -> ForegroundExecutor;
     fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
 
-    fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>);
+    fn run(&self, options: PlatformOptions, on_finish_launching: Box<dyn 'static + FnOnce()>);
     fn quit(&self);
     fn restart(&self, binary_path: Option<PathBuf>);
     fn activate(&self, ignoring_other_apps: bool);

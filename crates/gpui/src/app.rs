@@ -38,11 +38,11 @@ use crate::{
     AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle, DispatchPhase, DisplayId,
     EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext,
     Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
-    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
+    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformOptions, Point,
+    Priority, PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
     Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
-    WindowInvalidator,
+    WindowInvalidator, MacActivationPolicy,
     colors::{Colors, GlobalColors},
     current_platform, hash, init_app_menus,
 };
@@ -177,6 +177,27 @@ impl Application {
         self
     }
 
+    /// Sets the activation policy for the application (macOS only).
+    ///
+    /// This determines how the application appears in the system:
+    /// - `Regular`: Normal app with Dock icon and menu bar
+    /// - `Accessory`: Background app without Dock icon (LSUIElement)
+    /// - `Prohibited`: Runs in background, no UI allowed
+    ///
+    /// This must be called before the application finishes launching to take effect.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use gpui::Application;
+    /// let app = Application::new()
+    ///     .with_activation_policy(gpui::ActivationPolicy::Accessory);
+    /// ```
+    #[cfg(target_os = "macos")]
+    pub fn with_activation_policy(self, policy: MacActivationPolicy) -> Self {
+        self.0.borrow_mut().activation_policy = Some(policy);
+        self
+    }
+
     /// Start the application. The provided callback will be called once the
     /// app is fully launched.
     pub fn run<F>(self, on_finish_launching: F)
@@ -185,7 +206,15 @@ impl Application {
     {
         let this = self.0.clone();
         let platform = self.0.borrow().platform.clone();
-        platform.run(Box::new(move || {
+
+        #[allow(unused_mut)]
+        let mut options = PlatformOptions::default();
+        #[cfg(target_os = "macos")]
+        {
+            options.mac_activation_policy = self.0.borrow().activation_policy;
+        }
+
+        platform.run(options, Box::new(move || {
             let cx = &mut *this.borrow_mut();
             on_finish_launching(cx);
         }));
@@ -637,6 +666,8 @@ pub struct App {
     pub(crate) name: Option<&'static str>,
     quit_mode: QuitMode,
     quitting: bool,
+    #[cfg(target_os = "macos")]
+    activation_policy: Option<MacActivationPolicy>,
 }
 
 impl App {
@@ -713,6 +744,8 @@ impl App {
 
                 #[cfg(any(test, feature = "test-support", debug_assertions))]
                 name: None,
+                #[cfg(target_os = "macos")]
+                activation_policy: None,
             }),
         });
 
