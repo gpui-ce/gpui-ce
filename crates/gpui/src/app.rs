@@ -2427,6 +2427,10 @@ pub struct KeystrokeEvent {
 struct NullHttpClient;
 
 impl HttpClient for NullHttpClient {
+    fn type_name(&self) -> &'static str {
+        "NullHttpClient"
+    }
+
     fn send(
         &self,
         _req: http_client::Request<http_client::AsyncBody>,
