@@ -1,13 +1,13 @@
 [package]
-name = "gpui"
-version = "0.2.2"
+name = "gpui-ce"
+version = "0.3.2"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
-description = "Zed's GPU-accelerated UI framework"
+description = "A community fork of Zed's GPU-accelerated UI framework"
 repository = "https://github.com/zed-industries/zed"
 publish = true
 license = "Apache-2.0"
-homepage = "https://gpui.rs"
+homepage = "https://gpui-ce.github.io/"
 readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
@@ -80,6 +80,7 @@ screen-capture = [
 windows-manifest = []
 
 [lib]
+name = "gpui"
 path = "src/gpui.rs"
 doctest = false
 
