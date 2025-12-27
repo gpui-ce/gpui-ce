@@ -1,6 +1,6 @@
 [package]
 name = "gpui-ce"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 authors = ["Nathan Sobo <nathan@zed.dev>"]
 description = "A community fork of Zed's GPU-accelerated UI framework"
