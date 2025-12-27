@@ -408,10 +408,6 @@ name = "grid_layout"
 path = "examples/grid_layout.rs"
 
 [[example]]
-name = "ownership_post"
-path = "examples/ownership_post.rs"
-
-[[example]]
 name = "painting"
 path = "examples/painting.rs"
 
