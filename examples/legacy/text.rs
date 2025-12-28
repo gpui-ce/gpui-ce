@@ -6,7 +6,7 @@ use std::{
 use gpui::{
     AbsoluteLength, App, Application, Context, DefiniteLength, ElementId, Global, Hsla, Menu,
     SharedString, TextStyle, TitlebarOptions, Window, WindowBounds, WindowOptions, bounds,
-    colors::DefaultColors, div, point, prelude::*, px, relative, rgb, size,
+    default_colors::DefaultColors, div, point, prelude::*, px, relative, rgb, size,
 };
 use std::iter;
 

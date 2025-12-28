@@ -7,10 +7,12 @@
 //! 3. `window.paint_*` methods - Drawing quads, paths, and more
 //! 4. Interactive drawing - Responding to mouse events
 
+use std::sync::Arc;
+
 use gpui::{
-    App, Application, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Window, WindowBounds, WindowOptions,
-    canvas, div, fill, point, prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, DefaultColors, GlobalColors, Hsla, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba,
+    Window, WindowBounds, WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 // ============================================================================
@@ -21,21 +23,21 @@ use gpui::{
 // - prepaint: Called during layout to prepare drawing state
 // - paint: Called during paint to actually draw
 
-fn basic_shapes_canvas() -> impl IntoElement {
-    canvas(
-        move |_bounds, _window, _cx| {
-            // Prepaint callback - prepare any state needed for painting
-        },
-        move |bounds, _prepaint_state, window, _cx| {
-            // Paint callback - do actual drawing
+fn basic_shapes_canvas(colors: &Arc<Colors>) -> impl IntoElement {
+    let error = colors.error;
+    let success = colors.success;
+    let accent = colors.accent;
 
+    canvas(
+        move |_bounds, _window, _cx| {},
+        move |bounds, _prepaint_state, window, _cx| {
             // Draw a filled rectangle
             window.paint_quad(fill(
                 Bounds {
                     origin: point(bounds.origin.x + px(10.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
                 },
-                rgb(0xef4444), // Red
+                error,
             ));
 
             // Draw another rectangle
@@ -44,7 +46,7 @@ fn basic_shapes_canvas() -> impl IntoElement {
                     origin: point(bounds.origin.x + px(80.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
                 },
-                rgb(0x22c55e), // Green
+                success,
             ));
 
             // Draw a third rectangle
@@ -53,7 +55,7 @@ fn basic_shapes_canvas() -> impl IntoElement {
                     origin: point(bounds.origin.x + px(150.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
                 },
-                rgb(0x3b82f6), // Blue
+                accent,
             ));
         },
     )
@@ -106,7 +108,10 @@ fn create_triangle(p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> P
     builder.build().unwrap()
 }
 
-fn custom_paths_canvas() -> impl IntoElement {
+fn custom_paths_canvas(colors: &Arc<Colors>) -> impl IntoElement {
+    let warning = colors.warning;
+    let accent = colors.accent;
+
     canvas(
         move |_bounds, _window, _cx| {},
         move |bounds, _, window, _cx| {
@@ -115,7 +120,7 @@ fn custom_paths_canvas() -> impl IntoElement {
             // Draw a star
             let star_center = point(bounds.origin.x + px(50.), center_y);
             let star = create_star(star_center, 30., 15.);
-            window.paint_path(star, rgb(0xeab308)); // Yellow
+            window.paint_path(star, warning);
 
             // Draw a triangle
             let tri_base_x = bounds.origin.x + px(120.);
@@ -138,7 +143,7 @@ fn custom_paths_canvas() -> impl IntoElement {
             arrow_builder.line_to(point(arrow_x + px(20.), center_y + px(20.)));
             arrow_builder.close();
             let arrow = arrow_builder.build().unwrap();
-            window.paint_path(arrow, rgb(0x06b6d4)); // Cyan
+            window.paint_path(arrow, accent);
         },
     )
     .size_full()
@@ -167,16 +172,25 @@ impl DrawingCanvas {
         }
     }
 
-    fn colors() -> &'static [u32] {
-        &[0xef4444, 0x22c55e, 0x3b82f6, 0xeab308, 0x8b5cf6, 0x06b6d4]
+    fn get_colors(colors: &Colors) -> Vec<Rgba> {
+        vec![
+            colors.error,
+            colors.success,
+            colors.accent,
+            colors.warning,
+            rgb(0x8b5cf6), // Purple
+            rgb(0x06b6d4), // Cyan
+        ]
     }
 
-    fn current_color(&self) -> u32 {
-        Self::colors()[self.color_index % Self::colors().len()]
+    fn current_color(&self, colors: &Colors) -> Rgba {
+        let palette = Self::get_colors(colors);
+        palette[self.color_index % palette.len()]
     }
 
-    fn next_color(&mut self) {
-        self.color_index += 1;
+    fn next_color(&mut self, colors: &Colors) {
+        let palette = Self::get_colors(colors);
+        self.color_index = (self.color_index + 1) % palette.len();
     }
 
     fn on_mouse_down(
@@ -207,7 +221,8 @@ impl DrawingCanvas {
     fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.is_drawing && self.current_line.len() > 1 {
             self.lines.push(std::mem::take(&mut self.current_line));
-            self.next_color();
+            let colors = cx.default_colors();
+            self.next_color(&colors);
         }
         self.is_drawing = false;
         self.current_line.clear();
@@ -221,7 +236,7 @@ impl DrawingCanvas {
         cx.notify();
     }
 
-    fn draw_line(window: &mut Window, points: &[Point<Pixels>], color: u32) {
+    fn draw_line(window: &mut Window, points: &[Point<Pixels>], color: Rgba) {
         if points.len() < 2 {
             return;
         }
@@ -230,11 +245,9 @@ impl DrawingCanvas {
             let start = pair[0];
             let end = pair[1];
 
-            // Draw line segment as a thin quad
             let dx = end.x - start.x;
             let dy = end.y - start.y;
 
-            // Convert to f32 for math operations
             let dx_f = f32::from(dx);
             let dy_f = f32::from(dy);
             let len = (dx_f * dx_f + dy_f * dy_f).sqrt();
@@ -243,7 +256,6 @@ impl DrawingCanvas {
                 continue;
             }
 
-            // Perpendicular offset for line thickness
             let thickness = 3.0_f32;
             let px_offset = px(-dy_f / len * thickness / 2.0);
             let py_offset = px(dx_f / len * thickness / 2.0);
@@ -256,7 +268,7 @@ impl DrawingCanvas {
             builder.close();
 
             if let Ok(path) = builder.build() {
-                window.paint_path(path, rgb(color));
+                window.paint_path(path, color);
             }
         }
     }
@@ -264,10 +276,18 @@ impl DrawingCanvas {
 
 impl Render for DrawingCanvas {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
         let lines = self.lines.clone();
         let current_line = self.current_line.clone();
-        let current_color = self.current_color();
-        let colors = Self::colors().to_vec();
+        let current_color = self.current_color(&colors);
+        let palette = Self::get_colors(&colors);
+
+        let surface = colors.surface;
+        let border = colors.border;
+        let error = colors.error;
+        let error_hover = colors.error_hover;
+        let text = colors.text;
+        let text_muted = colors.text_muted;
 
         div()
             .flex()
@@ -278,9 +298,9 @@ impl Render for DrawingCanvas {
                     .id("drawing-area")
                     .h_48()
                     .rounded_lg()
-                    .bg(rgb(0x1e293b))
+                    .bg(surface)
                     .border_1()
-                    .border_color(rgb(0x334155))
+                    .border_color(border)
                     .cursor_crosshair()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -290,13 +310,11 @@ impl Render for DrawingCanvas {
                         canvas(
                             move |_, _, _| {},
                             move |_bounds, _, window, _cx| {
-                                // Draw completed lines
                                 for (i, line) in lines.iter().enumerate() {
-                                    let color = colors[i % colors.len()];
+                                    let color = palette[i % palette.len()];
                                     DrawingCanvas::draw_line(window, line, color);
                                 }
 
-                                // Draw current line being drawn
                                 if !current_line.is_empty() {
                                     DrawingCanvas::draw_line(window, &current_line, current_color);
                                 }
@@ -315,11 +333,11 @@ impl Render for DrawingCanvas {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(rgb(0xef4444))
+                            .bg(error)
                             .text_sm()
-                            .text_color(gpui::white())
+                            .text_color(text)
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(0xdc2626)))
+                            .hover(move |s| s.bg(error_hover))
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clear(cx);
@@ -328,7 +346,7 @@ impl Render for DrawingCanvas {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(0x94a3b8))
+                            .text_color(text_muted)
                             .child("Click and drag to draw"),
                     ),
             )
@@ -352,12 +370,14 @@ impl CustomDrawingExample {
 }
 
 impl Render for CustomDrawingExample {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
+
         div()
             .id("main")
             .size_full()
             .p_6()
-            .bg(rgb(0x0f172a))
+            .bg(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -374,42 +394,45 @@ impl Render for CustomDrawingExample {
                                 div()
                                     .text_xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child("Custom Drawing"),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x94a3b8))
+                                    .text_color(colors.text_muted)
                                     .child("Canvas element, paths, and interactive painting"),
                             ),
                     )
                     .child(section(
+                        &colors,
                         "1. Basic Shapes (paint_quad)",
                         "Use window.paint_quad() to draw filled rectangles",
-                        basic_shapes_canvas(),
+                        basic_shapes_canvas(&colors),
                         px(70.),
                     ))
                     .child(section(
+                        &colors,
                         "2. Custom Paths (PathBuilder)",
                         "Create complex shapes with PathBuilder and paint_path()",
-                        custom_paths_canvas(),
+                        custom_paths_canvas(&colors),
                         px(80.),
                     ))
                     .child(section(
+                        &colors,
                         "3. Interactive Drawing",
                         "Combine canvas with mouse events for drawing",
                         self.drawing_canvas.clone(),
                         px(240.),
                     ))
                     .child(
-                        div().p_3().rounded_lg().bg(rgb(0x1e293b)).child(
+                        div().p_3().rounded_lg().bg(colors.surface).child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_1()
                                 .text_xs()
-                                .text_color(rgb(0x94a3b8))
+                                .text_color(colors.text_muted)
                                 .child("Key APIs:")
                                 .child("• canvas(prepaint, paint) - Custom drawing element")
                                 .child("• PathBuilder::fill() / stroke() - Create vector paths")
@@ -422,12 +445,13 @@ impl Render for CustomDrawingExample {
 }
 
 fn section(
+    colors: &Arc<Colors>,
     title: &'static str,
     description: &'static str,
     content: impl IntoElement,
     height: Pixels,
 ) -> impl IntoElement {
-    let surface: Hsla = rgb(0x1e293b).into();
+    let surface: Hsla = colors.surface.into();
 
     div()
         .flex()
@@ -437,7 +461,7 @@ fn section(
         .rounded_lg()
         .bg(surface.opacity(0.5))
         .border_1()
-        .border_color(rgb(0x334155))
+        .border_color(colors.border)
         .child(
             div()
                 .flex()
@@ -447,16 +471,23 @@ fn section(
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(gpui::white())
+                        .text_color(colors.text)
                         .child(title),
                 )
-                .child(div().text_xs().text_color(rgb(0x94a3b8)).child(description)),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.text_muted)
+                        .child(description),
+                ),
         )
         .child(div().h(height).child(content))
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
+
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
         cx.open_window(
             WindowOptions {

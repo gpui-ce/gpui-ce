@@ -6,58 +6,15 @@
 //! 2. Conditional styling - when, when_some, map
 //! 3. Theming patterns - using globals for consistent colors
 
+use std::sync::Arc;
+
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, Global, Hsla, KeyBinding, Render, Window,
-    WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, DefaultColors, FocusHandle, GlobalColors, Hsla,
+    KeyBinding, Render, Rgba, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px,
+    rgb, size,
 };
 
 actions!(styling_example, [Tab, TabPrev]);
-
-// ============================================================================
-// Theme System
-// ============================================================================
-//
-// A simple theme system using GPUI's Global trait.
-// This allows consistent colors throughout the application.
-
-#[derive(Clone)]
-struct Theme {
-    background: Hsla,
-    surface: Hsla,
-    surface_hover: Hsla,
-    text_primary: Hsla,
-    text_secondary: Hsla,
-    accent: Hsla,
-    accent_hover: Hsla,
-    accent_active: Hsla,
-    success: Hsla,
-    warning: Hsla,
-    error: Hsla,
-    border: Hsla,
-    focus_ring: Hsla,
-}
-
-impl Global for Theme {}
-
-impl Theme {
-    fn dark() -> Self {
-        Self {
-            background: rgb(0x0f172a).into(),
-            surface: rgb(0x1e293b).into(),
-            surface_hover: rgb(0x334155).into(),
-            text_primary: rgb(0xf8fafc).into(),
-            text_secondary: rgb(0x94a3b8).into(),
-            accent: rgb(0x3b82f6).into(),
-            accent_hover: rgb(0x2563eb).into(),
-            accent_active: rgb(0x1d4ed8).into(),
-            success: rgb(0x22c55e).into(),
-            warning: rgb(0xeab308).into(),
-            error: rgb(0xef4444).into(),
-            border: rgb(0x334155).into(),
-            focus_ring: rgb(0x60a5fa).into(),
-        }
-    }
-}
 
 // ============================================================================
 // Interactive States Example
@@ -66,19 +23,24 @@ impl Theme {
 fn interactive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
-    theme: &Theme,
+    colors: &Arc<Colors>,
 ) -> impl IntoElement {
+    let accent = colors.accent;
+    let accent_hover = colors.accent_hover;
+    let accent_active = colors.accent_active;
+    let text = colors.text;
+
     div()
         .id(id)
         .px_4()
         .py_2()
         .rounded_md()
         .cursor_pointer()
-        .bg(theme.accent)
-        .text_color(gpui::white())
+        .bg(accent)
+        .text_color(text)
         .text_sm()
-        .hover(|style| style.bg(theme.accent_hover))
-        .active(|style| style.bg(theme.accent_active))
+        .hover(move |style| style.bg(accent_hover))
+        .active(move |style| style.bg(accent_active))
         .child(label)
 }
 
@@ -86,8 +48,14 @@ fn focus_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     focus_handle: &FocusHandle,
-    theme: &Theme,
+    colors: &Arc<Colors>,
 ) -> impl IntoElement {
+    let surface = colors.surface;
+    let surface_hover = colors.surface_hover;
+    let text = colors.text;
+    let accent = colors.accent;
+    let focus_ring: Rgba = rgb(0x60a5fa);
+
     div()
         .id(id)
         .track_focus(focus_handle)
@@ -95,18 +63,18 @@ fn focus_button(
         .py_2()
         .rounded_md()
         .cursor_pointer()
-        .bg(theme.surface)
-        .text_color(theme.text_primary)
+        .bg(surface)
+        .text_color(text)
         .text_sm()
         .border_2()
         .border_color(gpui::transparent_black())
-        .hover(|style| style.bg(theme.surface_hover))
-        .focus(|style| style.border_color(theme.accent))
-        .focus_visible(|style| style.border_color(theme.focus_ring).shadow_sm())
+        .hover(move |style| style.bg(surface_hover))
+        .focus(move |style| style.border_color(accent))
+        .focus_visible(move |style| style.border_color(focus_ring).shadow_sm())
         .child(label)
 }
 
-fn interactive_states_section(theme: &Theme) -> impl IntoElement {
+fn interactive_states_section(colors: &Arc<Colors>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -114,15 +82,15 @@ fn interactive_states_section(theme: &Theme) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(theme.text_secondary)
+                .text_color(colors.text_muted)
                 .child("hover() / active() - Mouse interaction states"),
         )
         .child(
             div()
                 .flex()
                 .gap_2()
-                .child(interactive_button("btn-1", "Hover me", theme))
-                .child(interactive_button("btn-2", "Click me", theme)),
+                .child(interactive_button("btn-1", "Hover me", colors))
+                .child(interactive_button("btn-2", "Click me", colors)),
         )
 }
 
@@ -130,12 +98,16 @@ fn interactive_states_section(theme: &Theme) -> impl IntoElement {
 // Conditional Styling Example
 // ============================================================================
 
-fn status_badge(status: &'static str, variant: StatusVariant, theme: &Theme) -> impl IntoElement {
-    let (bg, text) = match variant {
-        StatusVariant::Success => (theme.success, gpui::white()),
-        StatusVariant::Warning => (theme.warning, rgb(0x000000).into()),
-        StatusVariant::Error => (theme.error, gpui::white()),
-        StatusVariant::Neutral => (theme.surface, theme.text_primary),
+fn status_badge(
+    status: &'static str,
+    variant: StatusVariant,
+    colors: &Arc<Colors>,
+) -> impl IntoElement {
+    let (bg, text): (Rgba, Rgba) = match variant {
+        StatusVariant::Success => (colors.success, colors.text),
+        StatusVariant::Warning => (colors.warning, rgb(0x000000)),
+        StatusVariant::Error => (colors.error, colors.text),
+        StatusVariant::Neutral => (colors.surface, colors.text),
     };
 
     div()
@@ -161,8 +133,14 @@ fn list_item(
     label: &'static str,
     is_selected: bool,
     is_disabled: bool,
-    theme: &Theme,
+    colors: &Arc<Colors>,
 ) -> impl IntoElement {
+    let surface = colors.surface;
+    let surface_hover = colors.surface_hover;
+    let text = colors.text;
+    let text_muted = colors.text_muted;
+    let accent = colors.accent;
+
     div()
         .id(id)
         .px_3()
@@ -175,23 +153,24 @@ fn list_item(
         .when(is_disabled, |el| {
             el.opacity(0.5)
                 .cursor_not_allowed()
-                .bg(theme.surface.opacity(0.5))
-                .text_color(theme.text_secondary)
+                .bg(surface)
+                .text_color(text_muted)
         })
-        .when(!is_disabled && is_selected, |el| {
-            el.bg(theme.accent.opacity(0.2))
-                .border_color(theme.accent)
-                .text_color(theme.text_primary)
+        .when(!is_disabled && is_selected, move |el| {
+            let accent_bg: Hsla = accent.into();
+            el.bg(accent_bg.opacity(0.2))
+                .border_color(accent)
+                .text_color(text)
         })
-        .when(!is_disabled && !is_selected, |el| {
-            el.bg(theme.surface)
-                .text_color(theme.text_primary)
-                .hover(|style| style.bg(theme.surface_hover))
+        .when(!is_disabled && !is_selected, move |el| {
+            el.bg(surface)
+                .text_color(text)
+                .hover(move |style| style.bg(surface_hover))
         })
         .child(label)
 }
 
-fn conditional_section(theme: &Theme) -> impl IntoElement {
+fn conditional_section(colors: &Arc<Colors>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -199,7 +178,7 @@ fn conditional_section(theme: &Theme) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(theme.text_secondary)
+                .text_color(colors.text_muted)
                 .child("when() - Apply styles conditionally"),
         )
         .child(
@@ -207,14 +186,14 @@ fn conditional_section(theme: &Theme) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(list_item("item-1", "Normal item", false, false, theme))
-                .child(list_item("item-2", "Selected item", true, false, theme))
-                .child(list_item("item-3", "Disabled item", false, true, theme)),
+                .child(list_item("item-1", "Normal item", false, false, colors))
+                .child(list_item("item-2", "Selected item", true, false, colors))
+                .child(list_item("item-3", "Disabled item", false, true, colors)),
         )
         .child(
             div()
                 .text_xs()
-                .text_color(theme.text_secondary)
+                .text_color(colors.text_muted)
                 .mt_2()
                 .child("Status badges with variant-based styling"),
         )
@@ -222,10 +201,10 @@ fn conditional_section(theme: &Theme) -> impl IntoElement {
             div()
                 .flex()
                 .gap_2()
-                .child(status_badge("Success", StatusVariant::Success, theme))
-                .child(status_badge("Warning", StatusVariant::Warning, theme))
-                .child(status_badge("Error", StatusVariant::Error, theme))
-                .child(status_badge("Neutral", StatusVariant::Neutral, theme)),
+                .child(status_badge("Success", StatusVariant::Success, colors))
+                .child(status_badge("Warning", StatusVariant::Warning, colors))
+                .child(status_badge("Error", StatusVariant::Error, colors))
+                .child(status_badge("Neutral", StatusVariant::Neutral, colors)),
         )
 }
 
@@ -237,18 +216,24 @@ fn card_with_group_hover(
     id: impl Into<gpui::ElementId>,
     title: &'static str,
     description: &'static str,
-    theme: &Theme,
+    colors: &Arc<Colors>,
 ) -> impl IntoElement {
+    let surface = colors.surface;
+    let border = colors.border;
+    let accent = colors.accent;
+    let text = colors.text;
+    let text_muted = colors.text_muted;
+
     div()
         .id(id)
         .group("card")
         .p_4()
         .rounded_lg()
-        .bg(theme.surface)
+        .bg(surface)
         .border_1()
-        .border_color(theme.border)
+        .border_color(border)
         .cursor_pointer()
-        .hover(|style| style.border_color(theme.accent))
+        .hover(move |style| style.border_color(accent))
         .child(
             div()
                 .flex()
@@ -258,13 +243,13 @@ fn card_with_group_hover(
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text_primary)
+                        .text_color(text)
                         .child(title),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.text_secondary)
+                        .text_color(text_muted)
                         .opacity(0.)
                         .group_hover("card", |style| style.opacity(1.))
                         .child("→"),
@@ -274,12 +259,12 @@ fn card_with_group_hover(
             div()
                 .mt_1()
                 .text_xs()
-                .text_color(theme.text_secondary)
+                .text_color(text_muted)
                 .child(description),
         )
 }
 
-fn group_hover_section(theme: &Theme) -> impl IntoElement {
+fn group_hover_section(colors: &Arc<Colors>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -287,7 +272,7 @@ fn group_hover_section(theme: &Theme) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(theme.text_secondary)
+                .text_color(colors.text_muted)
                 .child("group() / group_hover() - Parent hover affects children"),
         )
         .child(
@@ -299,13 +284,13 @@ fn group_hover_section(theme: &Theme) -> impl IntoElement {
                     "card-1",
                     "Documents",
                     "View and manage your documents",
-                    theme,
+                    colors,
                 ))
                 .child(card_with_group_hover(
                     "card-2",
                     "Settings",
                     "Configure application settings",
-                    theme,
+                    colors,
                 )),
         )
 }
@@ -347,7 +332,7 @@ impl StylingExample {
 
 impl Render for StylingExample {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.global::<Theme>().clone();
+        let colors = cx.default_colors().clone();
 
         div()
             .id("app")
@@ -356,7 +341,7 @@ impl Render for StylingExample {
             .on_action(cx.listener(Self::on_tab_prev))
             .size_full()
             .p_6()
-            .bg(theme.background)
+            .bg(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -373,22 +358,23 @@ impl Render for StylingExample {
                                 div()
                                     .text_xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(theme.text_primary)
+                                    .text_color(colors.text)
                                     .child("Styling Patterns"),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme.text_secondary)
+                                    .text_color(colors.text_muted)
                                     .child("Interactive states, conditional styling, and theming"),
                             ),
                     )
                     .child(section(
+                        &colors,
                         "Interactive States",
-                        interactive_states_section(&theme),
-                        &theme,
+                        interactive_states_section(&colors),
                     ))
                     .child(section(
+                        &colors,
                         "Focus States (Tab to navigate)",
                         div()
                             .flex()
@@ -397,7 +383,7 @@ impl Render for StylingExample {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.text_secondary)
+                                    .text_color(colors.text_muted)
                                     .child("focus() / focus_visible() - Keyboard navigation"),
                             )
                             .child(
@@ -408,31 +394,35 @@ impl Render for StylingExample {
                                         "focus-1",
                                         "Button 1",
                                         &self.buttons[0],
-                                        &theme,
+                                        &colors,
                                     ))
                                     .child(focus_button(
                                         "focus-2",
                                         "Button 2",
                                         &self.buttons[1],
-                                        &theme,
+                                        &colors,
                                     ))
                                     .child(focus_button(
                                         "focus-3",
                                         "Button 3",
                                         &self.buttons[2],
-                                        &theme,
+                                        &colors,
                                     )),
                             ),
-                        &theme,
                     ))
                     .child(section(
+                        &colors,
                         "Conditional Styling",
-                        conditional_section(&theme),
-                        &theme,
+                        conditional_section(&colors),
                     ))
-                    .child(section("Group Hover", group_hover_section(&theme), &theme))
                     .child(section(
-                        "Theme Colors",
+                        &colors,
+                        "Group Hover",
+                        group_hover_section(&colors),
+                    ))
+                    .child(section(
+                        &colors,
+                        "Default Colors",
                         div()
                             .flex()
                             .flex_col()
@@ -440,49 +430,57 @@ impl Render for StylingExample {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.text_secondary)
-                                    .child("Using Global<Theme> for consistent colors"),
+                                    .text_color(colors.text_muted)
+                                    .child("Using GlobalColors for consistent theming"),
                             )
                             .child(
                                 div()
                                     .flex()
                                     .flex_wrap()
                                     .gap_2()
-                                    .child(color_swatch("background", theme.background))
-                                    .child(color_swatch("surface", theme.surface))
-                                    .child(color_swatch("accent", theme.accent))
-                                    .child(color_swatch("success", theme.success))
-                                    .child(color_swatch("warning", theme.warning))
-                                    .child(color_swatch("error", theme.error))
-                                    .child(color_swatch("border", theme.border)),
+                                    .child(color_swatch(&colors, "background", colors.background))
+                                    .child(color_swatch(&colors, "surface", colors.surface))
+                                    .child(color_swatch(&colors, "accent", colors.accent))
+                                    .child(color_swatch(&colors, "success", colors.success))
+                                    .child(color_swatch(&colors, "warning", colors.warning))
+                                    .child(color_swatch(&colors, "error", colors.error))
+                                    .child(color_swatch(&colors, "border", colors.border)),
                             ),
-                        &theme,
                     )),
             )
     }
 }
 
-fn section(title: &'static str, content: impl IntoElement, theme: &Theme) -> impl IntoElement {
+fn section(
+    colors: &Arc<Colors>,
+    title: &'static str,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    let surface: Hsla = colors.surface.into();
+    let border: Hsla = colors.border.into();
+
     div()
         .flex()
         .flex_col()
         .gap_3()
         .p_4()
-        .bg(theme.surface.opacity(0.3))
+        .bg(surface.opacity(0.3))
         .rounded_lg()
         .border_1()
-        .border_color(theme.border.opacity(0.5))
+        .border_color(border.opacity(0.5))
         .child(
             div()
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme.text_primary)
+                .text_color(colors.text)
                 .child(title),
         )
         .child(content)
 }
 
-fn color_swatch(name: &'static str, color: Hsla) -> impl IntoElement {
+fn color_swatch(colors: &Arc<Colors>, name: &'static str, color: Rgba) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+
     div()
         .flex()
         .flex_col()
@@ -496,17 +494,12 @@ fn color_swatch(name: &'static str, color: Hsla) -> impl IntoElement {
                 .border_1()
                 .border_color(gpui::white().opacity(0.2)),
         )
-        .child(
-            div()
-                .text_xs()
-                .text_color(gpui::white().opacity(0.7))
-                .child(name),
-        )
+        .child(div().text_xs().text_color(text_muted).child(name))
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(Theme::dark());
+        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
 
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),

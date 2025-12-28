@@ -42,9 +42,9 @@ use crate::{
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
     Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
-    WindowInvalidator,
-    colors::{Colors, GlobalColors},
-    current_platform, hash, init_app_menus,
+    WindowInvalidator, current_platform,
+    default_colors::{Colors, GlobalColors},
+    hash, init_app_menus,
 };
 
 mod async_context;

@@ -7,11 +7,12 @@
 //! 3. Task management - Storing, canceling, and detaching tasks
 //! 4. Progress updates - Communicating from background to UI
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, Entity, Hsla, Render, Task, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, DefaultColors, Entity, GlobalColors, Render, Task,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
 // ============================================================================
@@ -29,7 +30,7 @@ struct ForegroundTaskDemo {
 impl ForegroundTaskDemo {
     fn new() -> Self {
         Self {
-            message: "Click to start".into(),
+            message: "Click to start a foreground task".into(),
             is_loading: false,
         }
     }
@@ -40,7 +41,10 @@ impl ForegroundTaskDemo {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            smol::Timer::after(Duration::from_secs(1)).await;
+            cx.background_spawn(async {
+                std::thread::sleep(Duration::from_secs(1));
+            })
+            .await;
 
             this.update(cx, |this, cx| {
                 this.message = "Task completed!".into();
@@ -57,8 +61,8 @@ impl ForegroundTaskDemo {
 // Example 2: Background Task with Progress
 // ============================================================================
 //
-// `cx.background_spawn` runs work on a background thread pool.
-// Results must be sent back to the foreground to update UI.
+// `cx.background_spawn` runs work off the UI thread.
+// Use it for heavy computation that shouldn't block the UI.
 
 struct BackgroundTaskDemo {
     progress: u32,
@@ -112,8 +116,8 @@ impl BackgroundTaskDemo {
 // Example 3: Cancellable Task
 // ============================================================================
 //
-// Store a Task<T> to keep it running. Drop it to cancel.
-// Use Option<Task<T>> for optional/cancellable operations.
+// Tasks can be cancelled by dropping them.
+// Store a task in a field to keep it running.
 
 struct CancellableTaskDemo {
     counter: u32,
@@ -135,19 +139,20 @@ impl CancellableTaskDemo {
     fn toggle(&mut self, cx: &mut Context<Self>) {
         if self.counting_task.is_some() {
             self.counting_task = None;
-        } else {
-            self.counter = 0;
             cx.notify();
-
+        } else {
             self.counting_task = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    smol::Timer::after(Duration::from_millis(100)).await;
+                    cx.background_spawn(async {
+                        std::thread::sleep(Duration::from_millis(100));
+                    })
+                    .await;
 
                     let should_continue = this
                         .update(cx, |this, cx| {
                             this.counter += 1;
                             cx.notify();
-                            this.counter < 100
+                            true
                         })
                         .unwrap_or(false);
 
@@ -156,6 +161,7 @@ impl CancellableTaskDemo {
                     }
                 }
             }));
+            cx.notify();
         }
     }
 }
@@ -164,18 +170,18 @@ impl CancellableTaskDemo {
 // Example 4: Task with Return Value
 // ============================================================================
 //
-// Tasks can return values that can be awaited.
+// Tasks can return values that you can await.
 
 struct ReturnValueDemo {
-    numbers: Vec<u32>,
-    sum: Option<u32>,
+    numbers: Vec<i32>,
+    sum: Option<i32>,
     is_calculating: bool,
 }
 
 impl ReturnValueDemo {
     fn new() -> Self {
         Self {
-            numbers: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            numbers: vec![1, 2, 3, 4, 5],
             sum: None,
             is_calculating: false,
         }
@@ -183,7 +189,6 @@ impl ReturnValueDemo {
 
     fn calculate_sum(&mut self, cx: &mut Context<Self>) {
         self.is_calculating = true;
-        self.sum = None;
         cx.notify();
 
         let numbers = self.numbers.clone();
@@ -192,7 +197,7 @@ impl ReturnValueDemo {
             let result = cx
                 .background_spawn(async move {
                     std::thread::sleep(Duration::from_millis(500));
-                    numbers.iter().sum::<u32>()
+                    numbers.iter().sum::<i32>()
                 })
                 .await;
 
@@ -207,16 +212,19 @@ impl ReturnValueDemo {
     }
 
     fn randomize(&mut self, cx: &mut Context<Self>) {
-        use rand::Rng;
-        let mut rng = rand::rng();
-        self.numbers = (0..10).map(|_| rng.random_range(1..100)).collect();
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let hasher = RandomState::new().build_hasher().finish();
+        self.numbers = (0..5)
+            .map(|i| ((hasher >> (i * 8)) & 0xFF) as i32 % 100)
+            .collect();
         self.sum = None;
         cx.notify();
     }
 }
 
 // ============================================================================
-// Main Application View
+// Main Application
 // ============================================================================
 
 struct AsyncTasksExample {
@@ -239,6 +247,7 @@ impl AsyncTasksExample {
 
 impl Render for AsyncTasksExample {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
         let foreground = self.foreground_demo.read(cx);
         let background = self.background_demo.read(cx);
         let cancellable = self.cancellable_demo.read(cx);
@@ -248,7 +257,7 @@ impl Render for AsyncTasksExample {
             .id("main")
             .size_full()
             .p_6()
-            .bg(rgb(0x0f172a))
+            .bg(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -265,17 +274,18 @@ impl Render for AsyncTasksExample {
                                 div()
                                     .text_xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child("Async Tasks"),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x94a3b8))
+                                    .text_color(colors.text_muted)
                                     .child("Spawning, background work, and task management"),
                             ),
                     )
                     .child(demo_section(
+                        &colors,
                         "1. Foreground Task (cx.spawn)",
                         "Runs async work on the UI thread. Good for sequential async operations.",
                         div()
@@ -285,11 +295,11 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child(foreground.message.clone()),
                             )
                             .child(
-                                button("foreground-btn", "Start Task", foreground.is_loading)
+                                button(&colors, "foreground-btn", "Start Task", foreground.is_loading)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.foreground_demo.update(cx, |demo, cx| {
                                             demo.start_task(cx);
@@ -298,17 +308,18 @@ impl Render for AsyncTasksExample {
                             ),
                     ))
                     .child(demo_section(
+                        &colors,
                         "2. Background Task (cx.background_spawn)",
                         "Runs heavy computation off the UI thread with progress updates.",
                         div()
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(progress_bar(background.progress))
+                            .child(progress_bar(&colors, background.progress))
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child(format!(
                                         "Progress: {}% | Result: {}",
                                         background.progress,
@@ -319,7 +330,7 @@ impl Render for AsyncTasksExample {
                                     )),
                             )
                             .child(
-                                button("background-btn", "Compute", background.is_computing)
+                                button(&colors, "background-btn", "Compute", background.is_computing)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.background_demo.update(cx, |demo, cx| {
                                             demo.start_computation(cx);
@@ -328,6 +339,7 @@ impl Render for AsyncTasksExample {
                             ),
                     ))
                     .child(demo_section(
+                        &colors,
                         "3. Cancellable Task",
                         "Store Task in a field to keep it running. Drop to cancel.",
                         div()
@@ -338,7 +350,7 @@ impl Render for AsyncTasksExample {
                                 div()
                                     .text_2xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child(format!("{}", cancellable.counter)),
                             )
                             .child({
@@ -349,15 +361,15 @@ impl Render for AsyncTasksExample {
                                     .py_1p5()
                                     .rounded_md()
                                     .text_sm()
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .cursor_pointer()
                                     .when(is_running, |el| {
-                                        el.bg(rgb(0xef4444))
-                                            .hover(|style| style.bg(rgb(0xdc2626)))
+                                        el.bg(colors.error)
+                                            .hover(|style| style.bg(colors.error_hover))
                                     })
                                     .when(!is_running, |el| {
-                                        el.bg(rgb(0x22c55e))
-                                            .hover(|style| style.bg(rgb(0x16a34a)))
+                                        el.bg(colors.success)
+                                            .hover(|style| style.bg(colors.success_hover))
                                     })
                                     .child(if is_running {
                                         "Stop"
@@ -372,6 +384,7 @@ impl Render for AsyncTasksExample {
                             }),
                     ))
                     .child(demo_section(
+                        &colors,
                         "4. Task with Return Value",
                         "Tasks can return values that can be awaited or used in chained operations.",
                         div()
@@ -381,13 +394,13 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x94a3b8))
+                                    .text_color(colors.text_muted)
                                     .child(format!("Numbers: {:?}", return_demo.numbers)),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child(format!(
                                         "Sum: {}",
                                         if return_demo.is_calculating {
@@ -406,6 +419,7 @@ impl Render for AsyncTasksExample {
                                     .gap_2()
                                     .child(
                                         button(
+                                            &colors,
                                             "sum-btn",
                                             "Calculate Sum",
                                             return_demo.is_calculating,
@@ -417,17 +431,7 @@ impl Render for AsyncTasksExample {
                                         })),
                                     )
                                     .child(
-                                        div()
-                                            .id("random-btn")
-                                            .px_3()
-                                            .py_1p5()
-                                            .rounded_md()
-                                            .text_sm()
-                                            .text_color(gpui::white())
-                                            .cursor_pointer()
-                                            .bg(rgb(0x6366f1))
-                                            .hover(|style| style.bg(rgb(0x4f46e5)))
-                                            .child("Randomize")
+                                        secondary_button(&colors, "random-btn", "Randomize")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.return_demo.update(cx, |demo, cx| {
                                                     demo.randomize(cx);
@@ -440,14 +444,14 @@ impl Render for AsyncTasksExample {
                         div()
                             .p_3()
                             .rounded_lg()
-                            .bg(rgb(0x1e293b))
+                            .bg(colors.surface)
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
                                     .text_xs()
-                                    .text_color(rgb(0x94a3b8))
+                                    .text_color(colors.text_muted)
                                     .child("Key Patterns:")
                                     .child("• cx.spawn(async move |this, cx| ...) - foreground async")
                                     .child("• cx.background_spawn(async { ... }) - off UI thread")
@@ -463,15 +467,11 @@ impl Render for AsyncTasksExample {
 }
 
 // ============================================================================
-// UI Components
+// Helper Components
 // ============================================================================
 
-fn surface_color() -> Hsla {
-    let base: Hsla = rgb(0x1e293b).into();
-    base.opacity(0.5)
-}
-
 fn demo_section(
+    colors: &Arc<Colors>,
     title: &'static str,
     description: &'static str,
     content: impl IntoElement,
@@ -482,9 +482,9 @@ fn demo_section(
         .gap_3()
         .p_4()
         .rounded_lg()
-        .bg(surface_color())
+        .bg(colors.surface)
         .border_1()
-        .border_color(rgb(0x334155))
+        .border_color(colors.border)
         .child(
             div()
                 .flex()
@@ -494,57 +494,96 @@ fn demo_section(
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(gpui::white())
+                        .text_color(colors.text)
                         .child(title),
                 )
-                .child(div().text_xs().text_color(rgb(0x94a3b8)).child(description)),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.text_muted)
+                        .child(description),
+                ),
         )
         .child(content)
 }
 
 fn button(
+    colors: &Arc<Colors>,
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let disabled_bg = colors.surface_hover;
+    let bg = colors.accent;
+    let bg_hover = colors.accent_hover;
+    let bg_active = colors.accent_active;
+    let text = colors.text;
+
     div()
         .id(id)
         .px_3()
         .py_1p5()
         .rounded_md()
         .text_sm()
-        .text_color(gpui::white())
+        .text_color(text)
         .when(disabled, |el| {
-            el.bg(rgb(0x475569)).cursor_not_allowed().opacity(0.6)
+            el.bg(disabled_bg).cursor_not_allowed().opacity(0.6)
         })
         .when(!disabled, |el| {
-            el.bg(rgb(0x3b82f6))
+            el.bg(bg)
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(0x2563eb)))
-                .active(|style| style.bg(rgb(0x1d4ed8)))
+                .hover(|style| style.bg(bg_hover))
+                .active(|style| style.bg(bg_active))
         })
         .child(label)
 }
 
-fn progress_bar(progress: u32) -> impl IntoElement {
+fn secondary_button(
+    colors: &Arc<Colors>,
+    id: impl Into<gpui::ElementId>,
+    label: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    let bg = colors.surface_hover;
+    let bg_hover = colors.border;
+    let text = colors.text;
+
+    div()
+        .id(id)
+        .px_3()
+        .py_1p5()
+        .rounded_md()
+        .text_sm()
+        .text_color(text)
+        .bg(bg)
+        .cursor_pointer()
+        .hover(|style| style.bg(bg_hover))
+        .child(label)
+}
+
+fn progress_bar(colors: &Arc<Colors>, progress: u32) -> impl IntoElement {
     let clamped = progress.min(100);
+    let bar_bg = colors.surface_hover;
+    let bar_fill = colors.success;
+
     div()
         .h_2()
         .w_full()
         .rounded_full()
-        .bg(rgb(0x334155))
+        .bg(bar_bg)
         .overflow_hidden()
         .child(
             div()
                 .h_full()
                 .rounded_full()
-                .bg(rgb(0x22c55e))
+                .bg(bar_fill)
                 .w(gpui::relative(clamped as f32 / 100.0)),
         )
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
+
         let bounds = Bounds::centered(None, size(px(550.), px(850.)), cx);
         cx.open_window(
             WindowOptions {

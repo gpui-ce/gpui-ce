@@ -6,16 +6,18 @@
 //! 2. Grid - Two-dimensional layouts with spans
 //! 3. Common patterns - Sidebar, header/footer, centering
 
+use std::sync::Arc;
+
 use gpui::{
-    App, Application, Bounds, Context, Div, Hsla, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, DefaultColors, Div, GlobalColors, Hsla, Render,
+    Rgba, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
 // ============================================================================
 // Helper: Colored block for visualization
 // ============================================================================
 
-fn block(label: &'static str, color: Hsla) -> Div {
+fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
     div()
         .flex()
         .items_center()
@@ -25,7 +27,7 @@ fn block(label: &'static str, color: Hsla) -> Div {
         .border_color(gpui::white().opacity(0.3))
         .rounded_md()
         .text_xs()
-        .text_color(gpui::white())
+        .text_color(text_color)
         .child(label)
 }
 
@@ -33,7 +35,10 @@ fn block(label: &'static str, color: Hsla) -> Div {
 // Flexbox Examples
 // ============================================================================
 
-fn flexbox_row_example() -> impl IntoElement {
+fn flexbox_row_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+
     div()
         .flex()
         .flex_col()
@@ -41,7 +46,7 @@ fn flexbox_row_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("flex().flex_row().gap_2()"),
         )
         .child(
@@ -49,13 +54,16 @@ fn flexbox_row_example() -> impl IntoElement {
                 .flex()
                 .flex_row()
                 .gap_2()
-                .child(block("A", gpui::red()).size_8())
-                .child(block("B", gpui::green()).size_8())
-                .child(block("C", gpui::blue()).size_8()),
+                .child(block("A", gpui::red(), text).size_8())
+                .child(block("B", gpui::green(), text).size_8())
+                .child(block("C", gpui::blue(), text).size_8()),
         )
 }
 
-fn flexbox_column_example() -> impl IntoElement {
+fn flexbox_column_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+
     div()
         .flex()
         .flex_col()
@@ -63,7 +71,7 @@ fn flexbox_column_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("flex().flex_col().gap_2()"),
         )
         .child(
@@ -72,13 +80,17 @@ fn flexbox_column_example() -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(block("A", gpui::red()).h_6())
-                .child(block("B", gpui::green()).h_6())
-                .child(block("C", gpui::blue()).h_6()),
+                .child(block("A", gpui::red(), text).h_6())
+                .child(block("B", gpui::green(), text).h_6())
+                .child(block("C", gpui::blue(), text).h_6()),
         )
 }
 
-fn flexbox_justify_example() -> impl IntoElement {
+fn flexbox_justify_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+    let surface = colors.surface;
+
     div()
         .flex()
         .flex_col()
@@ -86,7 +98,7 @@ fn flexbox_justify_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("justify_between / justify_center / justify_end"),
         )
         .child(
@@ -99,33 +111,36 @@ fn flexbox_justify_example() -> impl IntoElement {
                         .flex()
                         .justify_between()
                         .p_1()
-                        .bg(rgb(0x1e293b))
+                        .bg(surface)
                         .rounded_sm()
-                        .child(block("Start", gpui::red()).px_2().py_1())
-                        .child(block("End", gpui::blue()).px_2().py_1()),
+                        .child(block("Start", gpui::red(), text).px_2().py_1())
+                        .child(block("End", gpui::blue(), text).px_2().py_1()),
                 )
                 .child(
                     div()
                         .flex()
                         .justify_center()
                         .p_1()
-                        .bg(rgb(0x1e293b))
+                        .bg(surface)
                         .rounded_sm()
-                        .child(block("Center", gpui::green()).px_2().py_1()),
+                        .child(block("Center", gpui::green(), text).px_2().py_1()),
                 )
                 .child(
                     div()
                         .flex()
                         .justify_end()
                         .p_1()
-                        .bg(rgb(0x1e293b))
+                        .bg(surface)
                         .rounded_sm()
-                        .child(block("End", gpui::yellow()).px_2().py_1()),
+                        .child(block("End", gpui::yellow(), text).px_2().py_1()),
                 ),
         )
 }
 
-fn flexbox_grow_example() -> impl IntoElement {
+fn flexbox_grow_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+
     div()
         .flex()
         .flex_col()
@@ -133,16 +148,16 @@ fn flexbox_grow_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("flex_1 (grow) vs flex_none (fixed)"),
         )
         .child(
             div()
                 .flex()
                 .gap_2()
-                .child(block("fixed", gpui::red()).flex_none().w_16().h_8())
-                .child(block("flex_1 (grows)", gpui::green()).flex_1().h_8())
-                .child(block("fixed", gpui::blue()).flex_none().w_16().h_8()),
+                .child(block("fixed", gpui::red(), text).flex_none().w_16().h_8())
+                .child(block("flex_1 (grows)", gpui::green(), text).flex_1().h_8())
+                .child(block("fixed", gpui::blue(), text).flex_none().w_16().h_8()),
         )
 }
 
@@ -150,7 +165,10 @@ fn flexbox_grow_example() -> impl IntoElement {
 // Grid Examples
 // ============================================================================
 
-fn grid_basic_example() -> impl IntoElement {
+fn grid_basic_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+
     div()
         .flex()
         .flex_col()
@@ -158,7 +176,7 @@ fn grid_basic_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("grid().grid_cols(3).gap_1()"),
         )
         .child(
@@ -166,16 +184,19 @@ fn grid_basic_example() -> impl IntoElement {
                 .grid()
                 .grid_cols(3)
                 .gap_1()
-                .child(block("1", gpui::red()).h_8())
-                .child(block("2", gpui::green()).h_8())
-                .child(block("3", gpui::blue()).h_8())
-                .child(block("4", gpui::yellow()).h_8())
-                .child(block("5", gpui::red()).h_8())
-                .child(block("6", gpui::green()).h_8()),
+                .child(block("1", gpui::red(), text).h_8())
+                .child(block("2", gpui::green(), text).h_8())
+                .child(block("3", gpui::blue(), text).h_8())
+                .child(block("4", gpui::yellow(), text).h_8())
+                .child(block("5", gpui::red(), text).h_8())
+                .child(block("6", gpui::green(), text).h_8()),
         )
 }
 
-fn grid_span_example() -> impl IntoElement {
+fn grid_span_example(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+
     div()
         .flex()
         .flex_col()
@@ -183,7 +204,7 @@ fn grid_span_example() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("col_span / row_span"),
         )
         .child(
@@ -193,18 +214,18 @@ fn grid_span_example() -> impl IntoElement {
                 .grid_rows(3)
                 .gap_1()
                 .child(
-                    block("Header (col_span_full)", gpui::red())
+                    block("Header (col_span_full)", gpui::red(), text)
                         .col_span_full()
                         .h_6(),
                 )
                 .child(
-                    block("Side", gpui::green())
+                    block("Side", gpui::green(), text)
                         .col_span(1)
                         .row_span(2)
                         .h_full(),
                 )
                 .child(
-                    block("Content (col_span 3)", gpui::blue())
+                    block("Content (col_span 3)", gpui::blue(), text)
                         .col_span(3)
                         .row_span(2)
                         .h_full(),
@@ -216,7 +237,14 @@ fn grid_span_example() -> impl IntoElement {
 // Common Layout Patterns
 // ============================================================================
 
-fn app_shell_pattern() -> impl IntoElement {
+fn app_shell_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+    let surface = colors.surface;
+    let surface_hover = colors.surface_hover;
+    let background = colors.background;
+    let border = colors.border;
+
     div()
         .flex()
         .flex_col()
@@ -224,7 +252,7 @@ fn app_shell_pattern() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("App Shell: Header + Sidebar + Content"),
         )
         .child(
@@ -233,7 +261,7 @@ fn app_shell_pattern() -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .border_1()
-                .border_color(rgb(0x334155))
+                .border_color(border)
                 .rounded_md()
                 .overflow_hidden()
                 .child(
@@ -242,9 +270,9 @@ fn app_shell_pattern() -> impl IntoElement {
                         .flex()
                         .items_center()
                         .px_2()
-                        .bg(rgb(0x334155))
+                        .bg(surface_hover)
                         .text_xs()
-                        .text_color(gpui::white())
+                        .text_color(text)
                         .child("Header"),
                 )
                 .child(
@@ -254,30 +282,35 @@ fn app_shell_pattern() -> impl IntoElement {
                         .child(
                             div()
                                 .w_16()
-                                .bg(rgb(0x1e293b))
+                                .bg(surface)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .text_xs()
-                                .text_color(rgb(0x94a3b8))
+                                .text_color(text_muted)
                                 .child("Side"),
                         )
                         .child(
                             div()
                                 .flex_1()
-                                .bg(rgb(0x0f172a))
+                                .bg(background)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .text_xs()
-                                .text_color(rgb(0x94a3b8))
+                                .text_color(text_muted)
                                 .child("Content"),
                         ),
                 ),
         )
 }
 
-fn centered_pattern() -> impl IntoElement {
+fn centered_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let text = colors.text;
+    let surface = colors.surface;
+    let accent = colors.accent;
+
     div()
         .flex()
         .flex_col()
@@ -285,7 +318,7 @@ fn centered_pattern() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("Centering: items_center + justify_center"),
         )
         .child(
@@ -294,22 +327,25 @@ fn centered_pattern() -> impl IntoElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(rgb(0x1e293b))
+                .bg(surface)
                 .rounded_md()
                 .child(
                     div()
                         .px_4()
                         .py_2()
-                        .bg(gpui::blue())
+                        .bg(accent)
                         .rounded_md()
                         .text_xs()
-                        .text_color(gpui::white())
+                        .text_color(text)
                         .child("Perfectly Centered"),
                 ),
         )
 }
 
-fn stack_pattern() -> impl IntoElement {
+fn stack_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+    let text_muted = colors.text_muted;
+    let surface = colors.surface;
+
     div()
         .flex()
         .flex_col()
@@ -317,14 +353,14 @@ fn stack_pattern() -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_color(text_muted)
                 .child("Stack: Overlapping with absolute positioning"),
         )
         .child(
             div()
                 .h_20()
                 .relative()
-                .bg(rgb(0x1e293b))
+                .bg(surface)
                 .rounded_md()
                 .child(
                     div()
@@ -363,12 +399,14 @@ fn stack_pattern() -> impl IntoElement {
 struct LayoutExample;
 
 impl Render for LayoutExample {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
+
         div()
             .id("main")
             .size_full()
             .p_4()
-            .bg(rgb(0x0f172a))
+            .bg(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -385,34 +423,59 @@ impl Render for LayoutExample {
                                 div()
                                     .text_xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(gpui::white())
+                                    .text_color(colors.text)
                                     .child("Layout Patterns"),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x94a3b8))
+                                    .text_color(colors.text_muted)
                                     .child("Flexbox, Grid, and common layout patterns in GPUI"),
                             ),
                     )
-                    .child(section("Flexbox: Row", flexbox_row_example()))
-                    .child(section("Flexbox: Column", flexbox_column_example()))
                     .child(section(
-                        "Flexbox: Justify Content",
-                        flexbox_justify_example(),
+                        &colors,
+                        "Flexbox: Row",
+                        flexbox_row_example(&colors),
                     ))
-                    .child(section("Flexbox: Grow/Shrink", flexbox_grow_example()))
-                    .child(section("Grid: Basic", grid_basic_example()))
-                    .child(section("Grid: Spans", grid_span_example()))
-                    .child(section("Pattern: App Shell", app_shell_pattern()))
-                    .child(section("Pattern: Centering", centered_pattern()))
-                    .child(section("Pattern: Stack", stack_pattern())),
+                    .child(section(
+                        &colors,
+                        "Flexbox: Column",
+                        flexbox_column_example(&colors),
+                    ))
+                    .child(section(
+                        &colors,
+                        "Flexbox: Justify Content",
+                        flexbox_justify_example(&colors),
+                    ))
+                    .child(section(
+                        &colors,
+                        "Flexbox: Grow/Shrink",
+                        flexbox_grow_example(&colors),
+                    ))
+                    .child(section(&colors, "Grid: Basic", grid_basic_example(&colors)))
+                    .child(section(&colors, "Grid: Spans", grid_span_example(&colors)))
+                    .child(section(
+                        &colors,
+                        "Pattern: App Shell",
+                        app_shell_pattern(&colors),
+                    ))
+                    .child(section(
+                        &colors,
+                        "Pattern: Centering",
+                        centered_pattern(&colors),
+                    ))
+                    .child(section(&colors, "Pattern: Stack", stack_pattern(&colors))),
             )
     }
 }
 
-fn section(title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = rgb(0x1e293b).into();
+fn section(
+    colors: &Arc<Colors>,
+    title: &'static str,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    let surface: Hsla = colors.surface.into();
 
     div()
         .flex()
@@ -425,7 +488,7 @@ fn section(title: &'static str, content: impl IntoElement) -> impl IntoElement {
             div()
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(gpui::white())
+                .text_color(colors.text)
                 .child(title),
         )
         .child(content)
@@ -433,6 +496,8 @@ fn section(title: &'static str, content: impl IntoElement) -> impl IntoElement {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
+
         let bounds = Bounds::centered(None, size(px(650.), px(700.)), cx);
         cx.open_window(
             WindowOptions {

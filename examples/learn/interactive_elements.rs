@@ -7,14 +7,14 @@
 //! 2. `RenderOnce` - Stateless component that receives state from parent
 //! 3. `Render` - Entity-backed view with persistent internal state
 
+use std::sync::Arc;
+
 use gpui::{
-    App, Application, Bounds, Context, Entity, IntoElement, Render, RenderOnce, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Colors, Context, DefaultColors, Entity, GlobalColors, IntoElement,
+    Render, RenderOnce, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
-// ============================================================================
 // Approach 1: use_state
-// ============================================================================
 //
 // `use_state` creates element-scoped state that persists across renders.
 // It's similar to React's useState hook. The state is automatically tied
@@ -33,11 +33,16 @@ struct UseStateCounter {
     count: i32,
 }
 
-fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
+fn use_state_counter(colors: Arc<Colors>, window: &mut Window, cx: &mut App) -> impl IntoElement {
     let state: Entity<UseStateCounter> =
         window.use_state(cx, |_window, _cx| UseStateCounter { count: 0 });
 
     let count = state.read(cx).count;
+
+    let error = colors.error;
+    let error_hover = colors.error_hover;
+    let success = colors.success;
+    let success_hover = colors.success_hover;
 
     div()
         .id("use-state-counter")
@@ -46,17 +51,17 @@ fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
         .gap_2()
         .p_4()
         .rounded_lg()
-        .bg(gpui::rgb(0x1e293b))
+        .bg(colors.surface)
         .child(
             div()
                 .text_sm()
-                .text_color(gpui::rgb(0x94a3b8))
+                .text_color(colors.text_muted)
                 .child("use_state Counter"),
         )
         .child(
             div()
                 .text_2xl()
-                .text_color(gpui::white())
+                .text_color(colors.text)
                 .child(format!("{}", count)),
         )
         .child(
@@ -69,11 +74,10 @@ fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
                         .px_3()
                         .py_1()
                         .rounded_md()
-                        .bg(gpui::rgb(0xef4444))
-                        .text_color(gpui::white())
+                        .bg(error)
+                        .text_color(colors.text)
                         .cursor_pointer()
-                        .hover(|style| style.bg(gpui::rgb(0xdc2626)))
-                        .active(|style| style.bg(gpui::rgb(0xb91c1c)))
+                        .hover(move |style| style.bg(error_hover))
                         .child("−")
                         .on_click({
                             let state = state.clone();
@@ -91,11 +95,10 @@ fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
                         .px_3()
                         .py_1()
                         .rounded_md()
-                        .bg(gpui::rgb(0x22c55e))
-                        .text_color(gpui::white())
+                        .bg(success)
+                        .text_color(colors.text)
                         .cursor_pointer()
-                        .hover(|style| style.bg(gpui::rgb(0x16a34a)))
-                        .active(|style| style.bg(gpui::rgb(0x15803d)))
+                        .hover(move |style| style.bg(success_hover))
                         .child("+")
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| {
@@ -107,9 +110,7 @@ fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Approach 2: RenderOnce
-// ============================================================================
 //
 // `RenderOnce` components are stateless and consumed when rendered.
 // They receive all data as props and delegate state management to the parent.
@@ -127,14 +128,16 @@ fn use_state_counter(window: &mut Window, cx: &mut App) -> impl IntoElement {
 
 #[derive(IntoElement)]
 struct RenderOnceCounter {
+    colors: Arc<Colors>,
     count: i32,
     on_increment: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
     on_decrement: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
 }
 
 impl RenderOnceCounter {
-    fn new(count: i32) -> Self {
+    fn new(colors: Arc<Colors>, count: i32) -> Self {
         Self {
+            colors,
             count,
             on_increment: None,
             on_decrement: None,
@@ -154,6 +157,12 @@ impl RenderOnceCounter {
 
 impl RenderOnce for RenderOnceCounter {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let colors = self.colors;
+        let error = colors.error;
+        let error_hover = colors.error_hover;
+        let success = colors.success;
+        let success_hover = colors.success_hover;
+
         div()
             .id("render-once-counter")
             .flex()
@@ -161,17 +170,17 @@ impl RenderOnce for RenderOnceCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(gpui::rgb(0x1e293b))
+            .bg(colors.surface)
             .child(
                 div()
                     .text_sm()
-                    .text_color(gpui::rgb(0x94a3b8))
+                    .text_color(colors.text_muted)
                     .child("RenderOnce Counter"),
             )
             .child(
                 div()
                     .text_2xl()
-                    .text_color(gpui::white())
+                    .text_color(colors.text)
                     .child(format!("{}", self.count)),
             )
             .child(
@@ -184,11 +193,10 @@ impl RenderOnce for RenderOnceCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(gpui::rgb(0xef4444))
-                            .text_color(gpui::white())
+                            .bg(error)
+                            .text_color(colors.text)
                             .cursor_pointer()
-                            .hover(|style| style.bg(gpui::rgb(0xdc2626)))
-                            .active(|style| style.bg(gpui::rgb(0xb91c1c)))
+                            .hover(move |style| style.bg(error_hover))
                             .child("−")
                             .when_some(self.on_decrement, |element, callback| {
                                 element.on_click(move |_, window, cx| callback(window, cx))
@@ -200,11 +208,10 @@ impl RenderOnce for RenderOnceCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(gpui::rgb(0x22c55e))
-                            .text_color(gpui::white())
+                            .bg(success)
+                            .text_color(colors.text)
                             .cursor_pointer()
-                            .hover(|style| style.bg(gpui::rgb(0x16a34a)))
-                            .active(|style| style.bg(gpui::rgb(0x15803d)))
+                            .hover(move |style| style.bg(success_hover))
                             .child("+")
                             .when_some(self.on_increment, |element, callback| {
                                 element.on_click(move |_, window, cx| callback(window, cx))
@@ -214,9 +221,7 @@ impl RenderOnce for RenderOnceCounter {
     }
 }
 
-// ============================================================================
 // Approach 3: Render (Entity-backed)
-// ============================================================================
 //
 // `Render` components are backed by an `Entity<T>` and maintain their own
 // internal state. This is the recommended approach for complex components
@@ -255,6 +260,12 @@ impl RenderCounter {
 
 impl Render for RenderCounter {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
+        let error = colors.error;
+        let error_hover = colors.error_hover;
+        let success = colors.success;
+        let success_hover = colors.success_hover;
+
         div()
             .id("render-counter")
             .flex()
@@ -262,17 +273,17 @@ impl Render for RenderCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(gpui::rgb(0x1e293b))
+            .bg(colors.surface)
             .child(
                 div()
                     .text_sm()
-                    .text_color(gpui::rgb(0x94a3b8))
+                    .text_color(colors.text_muted)
                     .child("Render Counter"),
             )
             .child(
                 div()
                     .text_2xl()
-                    .text_color(gpui::white())
+                    .text_color(colors.text)
                     .child(format!("{}", self.count)),
             )
             .child(
@@ -285,11 +296,10 @@ impl Render for RenderCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(gpui::rgb(0xef4444))
-                            .text_color(gpui::white())
+                            .bg(error)
+                            .text_color(colors.text)
                             .cursor_pointer()
-                            .hover(|style| style.bg(gpui::rgb(0xdc2626)))
-                            .active(|style| style.bg(gpui::rgb(0xb91c1c)))
+                            .hover(move |style| style.bg(error_hover))
                             .child("−")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.decrement(window, cx);
@@ -301,11 +311,10 @@ impl Render for RenderCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(gpui::rgb(0x22c55e))
-                            .text_color(gpui::white())
+                            .bg(success)
+                            .text_color(colors.text)
                             .cursor_pointer()
-                            .hover(|style| style.bg(gpui::rgb(0x16a34a)))
-                            .active(|style| style.bg(gpui::rgb(0x15803d)))
+                            .hover(move |style| style.bg(success_hover))
                             .child("+")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.increment(window, cx);
@@ -315,9 +324,7 @@ impl Render for RenderCounter {
     }
 }
 
-// ============================================================================
 // Main Application View
-// ============================================================================
 
 struct InteractiveElementsExample {
     render_counter: Entity<RenderCounter>,
@@ -335,6 +342,7 @@ impl InteractiveElementsExample {
 
 impl Render for InteractiveElementsExample {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.default_colors().clone();
         let render_once_count = self.render_once_count;
         let handle = cx.entity().downgrade();
 
@@ -344,7 +352,7 @@ impl Render for InteractiveElementsExample {
             .flex_col()
             .gap_6()
             .p_8()
-            .bg(gpui::rgb(0x0f172a))
+            .bg(colors.background)
             .child(
                 div()
                     .flex()
@@ -354,13 +362,13 @@ impl Render for InteractiveElementsExample {
                         div()
                             .text_2xl()
                             .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(gpui::white())
+                            .text_color(colors.text)
                             .child("Interactive Elements"),
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(gpui::rgb(0x94a3b8))
+                            .text_color(colors.text_muted)
                             .child("Three approaches to stateful components in GPUI"),
                     ),
             )
@@ -369,9 +377,9 @@ impl Render for InteractiveElementsExample {
                     .flex()
                     .flex_row()
                     .gap_4()
-                    .child(use_state_counter(window, cx))
+                    .child(use_state_counter(colors.clone(), window, cx))
                     .child(
-                        RenderOnceCounter::new(render_once_count)
+                        RenderOnceCounter::new(colors.clone(), render_once_count)
                             .on_increment({
                                 let handle = handle.clone();
                                 move |_window, cx| {
@@ -395,28 +403,25 @@ impl Render for InteractiveElementsExample {
                     .child(self.render_counter.clone()),
             )
             .child(
-                div()
-                    .mt_4()
-                    .p_4()
-                    .rounded_lg()
-                    .bg(gpui::rgb(0x1e293b))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .text_sm()
-                            .text_color(gpui::rgb(0x94a3b8))
-                            .child("• use_state: Hook-like state scoped to element lifetime")
-                            .child("• RenderOnce: Stateless component, parent manages state")
-                            .child("• Render: Entity-backed view with internal state"),
-                    ),
+                div().mt_4().p_4().rounded_lg().bg(colors.surface).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(colors.text_muted)
+                        .child("• use_state: Hook-like state scoped to element lifetime")
+                        .child("• RenderOnce: Stateless component, parent manages state")
+                        .child("• Render: Entity-backed view with internal state"),
+                ),
             )
     }
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
+
         let bounds = Bounds::centered(None, size(px(600.), px(400.)), cx);
         cx.open_window(
             WindowOptions {
