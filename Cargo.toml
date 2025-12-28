@@ -311,6 +311,22 @@ calloop = { git = "https://github.com/zed-industries/calloop" }
 name = "interactive_elements"
 path = "examples/learn/interactive_elements.rs"
 
+[[example]]
+name = "layout"
+path = "examples/learn/layout.rs"
+
+[[example]]
+name = "styling"
+path = "examples/learn/styling.rs"
+
+[[example]]
+name = "async_tasks"
+path = "examples/learn/async_tasks.rs"
+
+[[example]]
+name = "custom_drawing"
+path = "examples/learn/custom_drawing.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
