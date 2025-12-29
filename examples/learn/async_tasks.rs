@@ -7,6 +7,9 @@
 //! 3. Task management - Storing, canceling, and detaching tasks
 //! 4. Progress updates - Communicating from background to UI
 
+#[path = "../prelude.rs"]
+mod example_prelude;
+
 use std::time::Duration;
 
 use gpui::{
@@ -574,6 +577,6 @@ fn main() {
         )
         .expect("Failed to open window");
 
-        cx.activate(true);
+        example_prelude::init_example(cx, "Async Tasks");
     });
 }

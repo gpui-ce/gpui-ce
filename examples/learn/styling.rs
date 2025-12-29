@@ -7,11 +7,11 @@
 //! 3. Theming patterns - using Colors for consistent styling
 
 use gpui::{
-    App, Application, Bounds, Colors, Context, FocusHandle, Hsla, KeyBinding, Render, Rgba, Window,
-    WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem,
+    Render, Rgba, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
-actions!(styling_example, [Tab, TabPrev]);
+actions!(styling_example, [Quit, Tab, TabPrev]);
 
 // Interactive States Example
 
@@ -480,10 +480,23 @@ fn color_swatch(colors: &Colors, name: &'static str, color: Rgba) -> impl IntoEl
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        cx.activate(true);
+        cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
         ]);
+        cx.set_menus(vec![Menu {
+            name: "Styling".into(),
+            items: vec![MenuItem::action("Quit", Quit)],
+        }]);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
         cx.open_window(
@@ -494,7 +507,5 @@ fn main() {
             |window, cx| cx.new(|cx| StylingExample::new(window, cx)),
         )
         .expect("Failed to open window");
-
-        cx.activate(true);
     });
 }

@@ -13,6 +13,9 @@ use gpui::{
     WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
+#[path = "../prelude.rs"]
+mod example_prelude;
+
 // Example 1: Basic Canvas Drawing
 //
 // The `canvas` element provides two callbacks:
@@ -486,6 +489,6 @@ fn main() {
         )
         .expect("Failed to open window");
 
-        cx.activate(true);
+        example_prelude::init_example(cx, "Custom Drawing");
     });
 }

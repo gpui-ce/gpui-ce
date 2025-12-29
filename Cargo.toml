@@ -327,6 +327,10 @@ path = "examples/learn/async_tasks.rs"
 name = "custom_drawing"
 path = "examples/learn/custom_drawing.rs"
 
+[[example]]
+name = "animation"
+path = "examples/learn/animation.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
@@ -342,10 +346,6 @@ path = "examples/bench/paths_bench.rs"
 # ============================================================================
 # Legacy Examples - Original examples (to be updated)
 # ============================================================================
-
-[[example]]
-name = "animation"
-path = "examples/legacy/animation.rs"
 
 [[example]]
 name = "drag_drop"
