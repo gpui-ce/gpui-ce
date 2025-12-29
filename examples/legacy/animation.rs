@@ -1,8 +1,5 @@
-mod _template;
-
 use std::time::Duration;
 
-use _template::base::example_template;
 use anyhow::Result;
 use gpui::{
     Animation, AnimationExt as _, App, Application, AssetSource, Bounds, Context, SharedString,
@@ -115,7 +112,6 @@ fn main() {
                 ))),
                 ..Default::default()
             };
-            example_template(cx, "Animation");
 
             cx.open_window(options, |window, cx| {
                 cx.new(|cx| {
