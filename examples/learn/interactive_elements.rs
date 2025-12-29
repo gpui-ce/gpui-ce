@@ -1,428 +1,558 @@
 //! Interactive Elements Example
 //!
-//! This example demonstrates three different approaches to creating interactive
-//! stateful components in GPUI:
+//! This example demonstrates interactive patterns in GPUI:
 //!
-//! 1. `use_state` - Hook-like state scoped to an element's lifetime
-//! 2. `RenderOnce` - Stateless component that receives state from parent
-//! 3. `Render` - Entity-backed view with persistent internal state
+//! 1. Click events - single click, double click, click count
+//! 2. Hover states - hover styling and on_hover callbacks
+//! 3. Mouse events - mouse down, mouse up, mouse move
+//! 4. Drag and drop - draggable elements and drop targets
 
 #[path = "../prelude.rs"]
 mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Colors, Context, Entity, IntoElement, Render, RenderOnce, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, ClickEvent, Colors, Context, Entity, Half, Hsla, IntoElement,
+    MouseButton, MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, size,
 };
 
-// Approach 1: use_state
+// ============================================================================
+// Click Events Demo
+// ============================================================================
 //
-// `use_state` creates element-scoped state that persists across renders.
-// It's similar to React's useState hook. The state is automatically tied
-// to the element's identity via caller location or a provided key.
-//
-// Pros:
-// - Simple, hook-like API
-// - State is scoped to element lifetime
-// - No boilerplate for simple state
-//
-// Cons:
-// - Less explicit than Entity-backed state
-// - State is tied to call site location
+// Demonstrates different click interactions:
+// - Single click
+// - Double click (click_count == 2)
+// - Click count tracking
 
-struct UseStateCounter {
-    count: i32,
+struct ClickDemo {
+    click_count: usize,
+    last_click_type: String,
 }
 
-fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl IntoElement {
-    let state: Entity<UseStateCounter> =
-        window.use_state(cx, |_window, _cx| UseStateCounter { count: 0 });
-
-    let count = state.read(cx).count;
-
-    let error = colors.error;
-    let error_hover = colors.error_hover;
-    let success = colors.success;
-    let success_hover = colors.success_hover;
-
-    div()
-        .id("use-state-counter")
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_4()
-        .rounded_lg()
-        .bg(colors.surface)
-        .child(
-            div()
-                .text_sm()
-                .text_color(colors.text_muted)
-                .child("use_state Counter"),
-        )
-        .child(
-            div()
-                .text_2xl()
-                .text_color(colors.text)
-                .child(format!("{}", count)),
-        )
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .child(
-                    div()
-                        .id("use-state-decrement")
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .bg(error)
-                        .text_color(colors.selected_text)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(error_hover))
-                        .child("−")
-                        .on_click({
-                            let state = state.clone();
-                            move |_, _, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.count -= 1;
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                )
-                .child(
-                    div()
-                        .id("use-state-increment")
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .bg(success)
-                        .text_color(colors.selected_text)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(success_hover))
-                        .child("+")
-                        .on_click(move |_, _, cx| {
-                            state.update(cx, |state, cx| {
-                                state.count += 1;
-                                cx.notify();
-                            });
-                        }),
-                ),
-        )
-}
-
-// Approach 2: RenderOnce
-//
-// `RenderOnce` components are stateless and consumed when rendered.
-// They receive all data as props and delegate state management to the parent.
-// This is the recommended approach for presentational components.
-//
-// Pros:
-// - Clear data flow (props down, events up)
-// - Lightweight (no Entity allocation)
-// - Easy to test
-// - Highly composable
-//
-// Cons:
-// - Cannot maintain internal state
-// - Parent must manage all state
-
-#[derive(IntoElement)]
-struct RenderOnceCounter {
-    colors: Colors,
-    count: i32,
-    on_increment: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
-    on_decrement: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
-}
-
-impl RenderOnceCounter {
-    fn new(colors: Colors, count: i32) -> Self {
+impl ClickDemo {
+    fn new() -> Self {
         Self {
-            colors,
-            count,
-            on_increment: None,
-            on_decrement: None,
+            click_count: 0,
+            last_click_type: "None".to_string(),
+        }
+    }
+}
+
+impl Render for ClickDemo {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .bg(colors.surface)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child("Click Events"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .child("Single click, double click, or triple click the button"),
+            )
+            .child(
+                div()
+                    .id("click-target")
+                    .px_4()
+                    .py_2()
+                    .rounded_md()
+                    .bg(colors.accent)
+                    .text_color(colors.selected_text)
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(colors.accent_hover))
+                    .active(|style| style.bg(colors.accent_active))
+                    .child("Click Me!")
+                    // on_click receives a ClickEvent with click_count() method
+                    .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                        this.click_count += 1;
+                        this.last_click_type = match event.click_count() {
+                            1 => "Single Click".to_string(),
+                            2 => "Double Click".to_string(),
+                            3 => "Triple Click".to_string(),
+                            n => format!("{n}x Click"),
+                        };
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .mt_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.text_muted)
+                            .child(format!("Total clicks: {}", self.click_count)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.text_muted)
+                            .child(format!("Last: {}", self.last_click_type)),
+                    ),
+            )
+    }
+}
+
+// ============================================================================
+// Hover Demo
+// ============================================================================
+//
+// Demonstrates hover interactions:
+// - hover() style modifier for CSS-like hover states
+// - on_hover() callback for programmatic hover detection
+
+struct HoverDemo {
+    is_hovered: bool,
+    hover_count: usize,
+}
+
+impl HoverDemo {
+    fn new() -> Self {
+        Self {
+            is_hovered: false,
+            hover_count: 0,
+        }
+    }
+}
+
+impl Render for HoverDemo {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
+        let is_hovered = self.is_hovered;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .bg(colors.surface)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child("Hover Events"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .child("Move your mouse in and out of the target"),
+            )
+            .child(
+                div()
+                    .id("hover-target")
+                    .px_4()
+                    .py_3()
+                    .rounded_md()
+                    .border_2()
+                    .border_color(if is_hovered {
+                        colors.accent
+                    } else {
+                        colors.border
+                    })
+                    .bg(if is_hovered {
+                        colors.accent_hover
+                    } else {
+                        colors.surface_hover
+                    })
+                    .text_color(if is_hovered {
+                        colors.selected_text
+                    } else {
+                        colors.text
+                    })
+                    .text_sm()
+                    .cursor_pointer()
+                    .child(if is_hovered {
+                        "Mouse Inside!"
+                    } else {
+                        "Hover Over Me"
+                    })
+                    // on_hover callback receives a bool: true when mouse enters, false when it leaves
+                    .on_hover(cx.listener(|this, &hovered, _window, cx| {
+                        this.is_hovered = hovered;
+                        if hovered {
+                            this.hover_count += 1;
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .mt_2()
+                    .child(format!("Times hovered: {}", self.hover_count)),
+            )
+    }
+}
+
+// ============================================================================
+// Mouse Events Demo
+// ============================================================================
+//
+// Demonstrates low-level mouse events:
+// - on_mouse_down - fires when mouse button is pressed
+// - on_mouse_up - fires when mouse button is released
+// - on_mouse_move - fires when mouse moves over element
+
+struct MouseEventsDemo {
+    mouse_position: Option<Point<Pixels>>,
+    is_pressed: bool,
+    event_log: Vec<String>,
+}
+
+impl MouseEventsDemo {
+    fn new() -> Self {
+        Self {
+            mouse_position: None,
+            is_pressed: false,
+            event_log: Vec::new(),
         }
     }
 
-    fn on_increment(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.on_increment = Some(Box::new(callback));
-        self
-    }
-
-    fn on_decrement(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.on_decrement = Some(Box::new(callback));
-        self
+    fn log_event(&mut self, event: &str) {
+        self.event_log.push(event.to_string());
+        if self.event_log.len() > 5 {
+            self.event_log.remove(0);
+        }
     }
 }
 
-impl RenderOnce for RenderOnceCounter {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let colors = self.colors;
-        let error = colors.error;
-        let error_hover = colors.error_hover;
-        let success = colors.success;
-        let success_hover = colors.success_hover;
-
-        div()
-            .id("render-once-counter")
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_4()
-            .rounded_lg()
-            .bg(colors.surface)
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(colors.text_muted)
-                    .child("RenderOnce Counter"),
-            )
-            .child(
-                div()
-                    .text_2xl()
-                    .text_color(colors.text)
-                    .child(format!("{}", self.count)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("render-once-decrement")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(error)
-                            .text_color(colors.selected_text)
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(error_hover))
-                            .child("−")
-                            .when_some(self.on_decrement, |element, callback| {
-                                element.on_click(move |_, window, cx| callback(window, cx))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("render-once-increment")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(success)
-                            .text_color(colors.selected_text)
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(success_hover))
-                            .child("+")
-                            .when_some(self.on_increment, |element, callback| {
-                                element.on_click(move |_, window, cx| callback(window, cx))
-                            }),
-                    ),
-            )
-    }
-}
-
-// Approach 3: Render (Entity-backed)
-//
-// `Render` components are backed by an `Entity<T>` and maintain their own
-// internal state. This is the recommended approach for complex components
-// that need to manage their own state, subscribe to events, or spawn tasks.
-//
-// Pros:
-// - Full control over internal state
-// - Can subscribe to events and observe other entities
-// - Can spawn async tasks
-// - Has identity (can be passed around as Entity<T>)
-//
-// Cons:
-// - More boilerplate
-// - Higher memory overhead
-// - More complex lifecycle
-
-struct RenderCounter {
-    count: i32,
-}
-
-impl RenderCounter {
-    fn new() -> Self {
-        Self { count: 0 }
-    }
-
-    fn increment(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.count += 1;
-        cx.notify();
-    }
-
-    fn decrement(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.count -= 1;
-        cx.notify();
-    }
-}
-
-impl Render for RenderCounter {
+impl Render for MouseEventsDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
-        let error = colors.error;
-        let error_hover = colors.error_hover;
-        let success = colors.success;
-        let success_hover = colors.success_hover;
+        let is_pressed = self.is_pressed;
+        let position_text = self
+            .mouse_position
+            .map(|p| format!("({:.0}, {:.0})", f32::from(p.x), f32::from(p.y)))
+            .unwrap_or_else(|| "—".to_string());
 
         div()
-            .id("render-counter")
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .p_4()
             .rounded_lg()
             .bg(colors.surface)
             .child(
                 div()
                     .text_sm()
-                    .text_color(colors.text_muted)
-                    .child("Render Counter"),
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child("Mouse Events"),
             )
             .child(
                 div()
-                    .text_2xl()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .child("Move and click within the target area"),
+            )
+            .child(
+                div()
+                    .id("mouse-events-target")
+                    .h_20()
+                    .rounded_md()
+                    .border_2()
+                    .border_color(if is_pressed {
+                        colors.accent
+                    } else {
+                        colors.border
+                    })
+                    .bg(if is_pressed {
+                        colors.accent_hover
+                    } else {
+                        colors.surface_hover
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
                     .text_color(colors.text)
-                    .child(format!("{}", self.count)),
+                    .child(format!("Position: {}", position_text))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.is_pressed = true;
+                            this.log_event("Mouse Down");
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.is_pressed = false;
+                            this.log_event("Mouse Up");
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.mouse_position = Some(event.position);
+                        cx.notify();
+                    })),
             )
             .child(
                 div()
                     .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("render-decrement")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(error)
-                            .text_color(colors.selected_text)
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(error_hover))
-                            .child("−")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.decrement(window, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("render-increment")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(success)
-                            .text_color(colors.selected_text)
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(success_hover))
-                            .child("+")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.increment(window, cx);
-                            })),
+                    .flex_col()
+                    .gap_0p5()
+                    .mt_2()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .children(
+                        self.event_log
+                            .iter()
+                            .map(|e| div().child(format!("• {}", e))),
                     ),
             )
     }
 }
 
-// Main Application View
+// ============================================================================
+// Drag and Drop Demo
+// ============================================================================
+//
+// Demonstrates drag and drop:
+// - on_drag - makes an element draggable, provides drag data
+// - on_drop - makes an element a drop target, receives drag data
+
+#[derive(Clone, Copy)]
+struct DragData {
+    index: usize,
+    color: Hsla,
+    position: Point<Pixels>,
+}
+
+impl DragData {
+    fn new(index: usize, color: Hsla) -> Self {
+        Self {
+            index,
+            color,
+            position: Point::default(),
+        }
+    }
+
+    fn with_position(mut self, position: Point<Pixels>) -> Self {
+        self.position = position;
+        self
+    }
+}
+
+// Render trait for DragData allows it to be rendered as drag feedback
+impl Render for DragData {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let size = gpui::size(px(80.), px(40.));
+
+        // Position the drag preview at the cursor
+        div()
+            .pl(self.position.x - size.width.half())
+            .pt(self.position.y - size.height.half())
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .items_center()
+                    .w(size.width)
+                    .h(size.height)
+                    .bg(self.color.opacity(0.8))
+                    .text_color(gpui::white())
+                    .text_xs()
+                    .rounded_md()
+                    .shadow_lg()
+                    .child(format!("Item {}", self.index + 1)),
+            )
+    }
+}
+
+struct DragDropDemo {
+    dropped_item: Option<DragData>,
+}
+
+impl DragDropDemo {
+    fn new() -> Self {
+        Self { dropped_item: None }
+    }
+}
+
+impl Render for DragDropDemo {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
+        let item_colors = [colors.error, colors.success, colors.warning];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .bg(colors.surface)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child("Drag and Drop"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    .child("Drag items to the drop zone below"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .children(item_colors.into_iter().enumerate().map(|(index, color)| {
+                        let drag_data = DragData::new(index, color.into());
+
+                        div()
+                            .id(("drag-item", index))
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_2()
+                            .border_color(color)
+                            .text_color(color)
+                            .text_xs()
+                            .cursor_grab()
+                            .hover(move |style| {
+                                let c: Hsla = color.into();
+                                style.bg(c.opacity(0.1))
+                            })
+                            .child(format!("Item {}", index + 1))
+                            // on_drag takes: drag data, and a closure that creates the drag preview
+                            .on_drag(drag_data, |data: &DragData, position, _, cx| {
+                                cx.new(|_| data.with_position(position))
+                            })
+                    })),
+            )
+            .child(
+                div()
+                    .id("drop-target")
+                    .mt_2()
+                    .h_16()
+                    .rounded_md()
+                    .border_2()
+                    .border_dashed()
+                    .border_color(
+                        self.dropped_item
+                            .map(|d| d.color)
+                            .unwrap_or_else(|| colors.border.into()),
+                    )
+                    .when_some(self.dropped_item, |el, data| el.bg(data.color.opacity(0.2)))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(colors.text_muted)
+                    // on_drop receives the drag data when an item is dropped
+                    .on_drop(cx.listener(|this, data: &DragData, _window, cx| {
+                        this.dropped_item = Some(*data);
+                        cx.notify();
+                    }))
+                    .child(
+                        self.dropped_item
+                            .map(|d| format!("Dropped: Item {}", d.index + 1))
+                            .unwrap_or_else(|| "Drop Zone".to_string()),
+                    ),
+            )
+    }
+}
+
+// ============================================================================
+// Main Application
+// ============================================================================
 
 struct InteractiveElementsExample {
-    render_counter: Entity<RenderCounter>,
-    render_once_count: i32,
+    click_demo: Entity<ClickDemo>,
+    hover_demo: Entity<HoverDemo>,
+    mouse_events_demo: Entity<MouseEventsDemo>,
+    drag_drop_demo: Entity<DragDropDemo>,
 }
 
 impl InteractiveElementsExample {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            render_counter: cx.new(|_| RenderCounter::new()),
-            render_once_count: 0,
+            click_demo: cx.new(|_| ClickDemo::new()),
+            hover_demo: cx.new(|_| HoverDemo::new()),
+            mouse_events_demo: cx.new(|_| MouseEventsDemo::new()),
+            drag_drop_demo: cx.new(|_| DragDropDemo::new()),
         }
     }
 }
 
 impl Render for InteractiveElementsExample {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
-        let render_once_count = self.render_once_count;
-        let handle = cx.entity().downgrade();
 
         div()
+            .id("main")
             .size_full()
-            .flex()
-            .flex_col()
-            .gap_6()
-            .p_8()
+            .p_6()
             .bg(colors.background)
+            .overflow_scroll()
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap_6()
+                    .max_w(px(800.))
                     .child(
                         div()
-                            .text_2xl()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(colors.text)
-                            .child("Interactive Elements"),
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(colors.text)
+                                    .child("Interactive Elements"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(colors.text_muted)
+                                    .child("Click, hover, mouse events, and drag-and-drop in GPUI"),
+                            ),
                     )
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(colors.text_muted)
-                            .child("Three approaches to stateful components in GPUI"),
+                            .grid()
+                            .grid_cols(2)
+                            .gap_4()
+                            .child(self.click_demo.clone())
+                            .child(self.hover_demo.clone())
+                            .child(self.mouse_events_demo.clone())
+                            .child(self.drag_drop_demo.clone()),
                     ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_4()
-                    .child(use_state_counter(&colors, window, cx))
-                    .child(
-                        RenderOnceCounter::new(colors.clone(), render_once_count)
-                            .on_increment({
-                                let handle = handle.clone();
-                                move |_window, cx| {
-                                    handle
-                                        .update(cx, |this, cx| {
-                                            this.render_once_count += 1;
-                                            cx.notify();
-                                        })
-                                        .ok();
-                                }
-                            })
-                            .on_decrement(move |_window, cx| {
-                                handle
-                                    .update(cx, |this, cx| {
-                                        this.render_once_count -= 1;
-                                        cx.notify();
-                                    })
-                                    .ok();
-                            }),
-                    )
-                    .child(self.render_counter.clone()),
-            )
-            .child(
-                div().mt_4().p_4().rounded_lg().bg(colors.surface).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .text_sm()
-                        .text_color(colors.text_muted)
-                        .child("• use_state: Hook-like state scoped to element lifetime")
-                        .child("• RenderOnce: Stateless component, parent manages state")
-                        .child("• Render: Entity-backed view with internal state"),
-                ),
             )
     }
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(600.), px(400.)), cx);
+        let bounds = Bounds::centered(None, size(px(700.), px(650.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

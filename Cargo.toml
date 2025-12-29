@@ -11,6 +11,7 @@ homepage = "https://gpui-ce.github.io/"
 readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
+autoexamples = false
 
 [features]
 default = ["font-kit", "wayland", "x11", "windows-manifest"]
@@ -312,6 +313,10 @@ name = "interactive_elements"
 path = "examples/learn/interactive_elements.rs"
 
 [[example]]
+name = "creating_components"
+path = "examples/learn/creating_components.rs"
+
+[[example]]
 name = "layout"
 path = "examples/learn/layout.rs"
 
@@ -331,6 +336,10 @@ path = "examples/learn/custom_drawing.rs"
 name = "animation"
 path = "examples/learn/animation.rs"
 
+[[example]]
+name = "text"
+path = "examples/learn/text.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
@@ -343,13 +352,17 @@ path = "examples/bench/data_table.rs"
 name = "paths_bench"
 path = "examples/bench/paths_bench.rs"
 
+[[example]]
+name = "pattern"
+path = "examples/bench/pattern.rs"
+
+[[example]]
+name = "shadow"
+path = "examples/bench/shadow.rs"
+
 # ============================================================================
 # Legacy Examples - Original examples (to be updated)
 # ============================================================================
-
-[[example]]
-name = "drag_drop"
-path = "examples/legacy/drag_drop.rs"
 
 [[example]]
 name = "focus_visible"
@@ -362,10 +375,6 @@ path = "examples/legacy/gif_viewer.rs"
 [[example]]
 name = "gradient"
 path = "examples/legacy/gradient.rs"
-
-[[example]]
-name = "grid_layout"
-path = "examples/legacy/grid_layout.rs"
 
 [[example]]
 name = "hello_world"
@@ -392,24 +401,8 @@ name = "opacity"
 path = "examples/legacy/opacity.rs"
 
 [[example]]
-name = "painting"
-path = "examples/legacy/painting.rs"
-
-[[example]]
-name = "pattern"
-path = "examples/legacy/pattern.rs"
-
-[[example]]
 name = "scrollable"
 path = "examples/legacy/scrollable.rs"
-
-[[example]]
-name = "set_menus"
-path = "examples/legacy/set_menus.rs"
-
-[[example]]
-name = "shadow"
-path = "examples/legacy/shadow.rs"
 
 [[example]]
 name = "svg"
@@ -418,18 +411,6 @@ path = "examples/legacy/svg/svg.rs"
 [[example]]
 name = "tab_stop"
 path = "examples/legacy/tab_stop.rs"
-
-[[example]]
-name = "text"
-path = "examples/legacy/text.rs"
-
-[[example]]
-name = "text_layout"
-path = "examples/legacy/text_layout.rs"
-
-[[example]]
-name = "text_wrapper"
-path = "examples/legacy/text_wrapper.rs"
 
 [[example]]
 name = "tree"

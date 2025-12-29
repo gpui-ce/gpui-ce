@@ -427,28 +427,7 @@ impl Render for AsyncTasksExample {
                                     ),
                             ),
                     ))
-                    .child(
-                        div()
-                            .p_3()
-                            .rounded_lg()
-                            .bg(colors.surface)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(colors.text_muted)
-                                    .child("Key Patterns:")
-                                    .child("• cx.spawn(async move |this, cx| ...) - foreground async")
-                                    .child("• cx.background_spawn(async { ... }) - off UI thread")
-                                    .child("• task.detach() - fire and forget")
-                                    .child(
-                                        "• task.detach_and_log_err(cx) - fire and forget with error logging",
-                                    )
-                                    .child("• Store Task<T> in field to keep running, drop to cancel"),
-                            ),
-                    ),
+
             )
     }
 }

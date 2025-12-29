@@ -417,22 +417,7 @@ impl Render for CustomDrawingExample {
                         "Combine canvas with mouse events for drawing",
                         self.drawing_canvas.clone(),
                         px(240.),
-                    ))
-                    .child(
-                        div().p_3().rounded_lg().bg(colors.surface).child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(colors.text_muted)
-                                .child("Key APIs:")
-                                .child("• canvas(prepaint, paint) - Custom drawing element")
-                                .child("• PathBuilder::fill() / stroke() - Create vector paths")
-                                .child("• window.paint_quad(fill(...)) - Draw rectangles")
-                                .child("• window.paint_path(path, color) - Draw custom paths"),
-                        ),
-                    ),
+                    )),
             )
     }
 }
