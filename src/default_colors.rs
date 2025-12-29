@@ -64,7 +64,7 @@ impl Colors {
         }
     }
 
-    /// Returns the default dark colors (macOS dark mode inspired).
+    /// Returns the default dark colors
     pub fn dark() -> Self {
         Self {
             // Text
@@ -105,7 +105,7 @@ impl Colors {
         }
     }
 
-    /// Returns the default light colors (macOS light mode inspired).
+    /// Returns the default light colors
     pub fn light() -> Self {
         Self {
             // Text

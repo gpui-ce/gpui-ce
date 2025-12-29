@@ -14,9 +14,7 @@ use gpui::{
     WindowOptions, div, prelude::*, px, size,
 };
 
-// ============================================================================
 // Example 1: Simple Foreground Task
-// ============================================================================
 //
 // `cx.spawn` runs an async closure on the foreground thread.
 // Use it when you need to perform async work that updates UI.
@@ -56,9 +54,7 @@ impl ForegroundTaskDemo {
     }
 }
 
-// ============================================================================
 // Example 2: Background Task with Progress
-// ============================================================================
 //
 // `cx.background_spawn` runs work off the UI thread.
 // Use it for heavy computation that shouldn't block the UI.
@@ -111,9 +107,7 @@ impl BackgroundTaskDemo {
     }
 }
 
-// ============================================================================
 // Example 3: Cancellable Task
-// ============================================================================
 //
 // Tasks can be cancelled by dropping them.
 // Store a task in a field to keep it running.
@@ -165,9 +159,7 @@ impl CancellableTaskDemo {
     }
 }
 
-// ============================================================================
 // Example 4: Task with Return Value
-// ============================================================================
 //
 // Tasks can return values that you can await.
 
@@ -222,9 +214,7 @@ impl ReturnValueDemo {
     }
 }
 
-// ============================================================================
 // Main Application
-// ============================================================================
 
 struct AsyncTasksExample {
     foreground_demo: Entity<ForegroundTaskDemo>,
@@ -460,9 +450,7 @@ impl Render for AsyncTasksExample {
     }
 }
 
-// ============================================================================
 // Helper Components
-// ============================================================================
 
 fn demo_section(
     colors: &Colors,

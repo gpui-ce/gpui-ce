@@ -13,9 +13,7 @@ use gpui::{
 
 actions!(styling_example, [Tab, TabPrev]);
 
-// ============================================================================
 // Interactive States Example
-// ============================================================================
 
 fn interactive_button(
     id: impl Into<gpui::ElementId>,
@@ -91,9 +89,7 @@ fn interactive_states_section(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Conditional Styling Example
-// ============================================================================
 
 fn status_badge(status: &'static str, variant: StatusVariant, colors: &Colors) -> impl IntoElement {
     let (bg, text): (Rgba, Rgba) = match variant {
@@ -201,9 +197,7 @@ fn conditional_section(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Group Hover Example
-// ============================================================================
 
 fn card_with_group_hover(
     id: impl Into<gpui::ElementId>,
@@ -288,9 +282,7 @@ fn group_hover_section(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Main Application View
-// ============================================================================
 
 struct StylingExample {
     focus_handle: FocusHandle,

@@ -11,9 +11,7 @@ use gpui::{
     WindowOptions, div, prelude::*, px, size,
 };
 
-// ============================================================================
 // Helper: Colored block for visualization
-// ============================================================================
 
 fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
     div()
@@ -29,9 +27,7 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
         .child(label)
 }
 
-// ============================================================================
 // Flexbox Examples
-// ============================================================================
 
 fn flexbox_row_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
@@ -159,9 +155,7 @@ fn flexbox_grow_example(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Grid Examples
-// ============================================================================
 
 fn grid_basic_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
@@ -231,9 +225,7 @@ fn grid_span_example(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Common Layout Patterns
-// ============================================================================
 
 fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
@@ -390,9 +382,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
         )
 }
 
-// ============================================================================
 // Main Application View
-// ============================================================================
 
 struct LayoutExample;
 

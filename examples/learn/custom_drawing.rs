@@ -13,9 +13,7 @@ use gpui::{
     WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
-// ============================================================================
 // Example 1: Basic Canvas Drawing
-// ============================================================================
 //
 // The `canvas` element provides two callbacks:
 // - prepaint: Called during layout to prepare drawing state
@@ -60,9 +58,7 @@ fn basic_shapes_canvas(colors: &Colors) -> impl IntoElement {
     .size_full()
 }
 
-// ============================================================================
 // Example 2: Custom Paths with PathBuilder
-// ============================================================================
 //
 // PathBuilder lets you create complex vector shapes:
 // - move_to: Start a new subpath
@@ -147,9 +143,7 @@ fn custom_paths_canvas(colors: &Colors) -> impl IntoElement {
     .size_full()
 }
 
-// ============================================================================
 // Example 3: Interactive Drawing
-// ============================================================================
 //
 // Combine canvas with mouse events for interactive drawing
 
@@ -351,9 +345,7 @@ impl Render for DrawingCanvas {
     }
 }
 
-// ============================================================================
 // Main Application View
-// ============================================================================
 
 struct CustomDrawingExample {
     drawing_canvas: gpui::Entity<DrawingCanvas>,
