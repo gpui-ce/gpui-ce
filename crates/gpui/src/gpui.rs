@@ -17,6 +17,8 @@ mod bounds_tree;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+#[cfg(feature = "dev-tools")]
+pub mod dev_tools;
 mod element;
 mod elements;
 mod executor;

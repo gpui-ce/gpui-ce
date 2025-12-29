@@ -27,6 +27,7 @@ test-support = [
     "x11",
 ]
 inspector = ["gpui_macros/inspector"]
+dev-tools = ["inspector"]
 leak-detection = ["backtrace"]
 runtime_shaders = []
 macos-blade = [
@@ -298,6 +299,11 @@ path = "examples/set_menus.rs"
 [[example]]
 name = "shadow"
 path = "examples/shadow.rs"
+
+[[example]]
+name = "inspector"
+path = "examples/inspector.rs"
+required-features = ["dev-tools"]
 
 [[example]]
 name = "svg"

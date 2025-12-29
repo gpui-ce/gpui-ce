@@ -11,7 +11,7 @@ GPUI is still in active development as we work on the Zed code editor, and is st
 gpui = { version = "*" }
 ```
 
- - [Ownership and data flow](_ownership_and_data_flow)
+- [Ownership and data flow](_ownership_and_data_flow)
 
 Everything in GPUI starts with an `Application`. You can create one with `Application::new()`, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()`, and register your first root view. See [gpui.rs](https://www.gpui.rs/) for a complete example.
 
@@ -64,3 +64,46 @@ In addition to the systems above, GPUI provides a range of smaller services that
 - The `[gpui::test]` macro provides a convenient way to write tests for your GPUI applications. Tests also have their own kind of context, a `TestAppContext` which provides ways of simulating common platform input. See `app::test_context` and `test` modules for more details.
 
 Currently, the best way to learn about these APIs is to read the Zed source code or drop a question in the [Zed Discord](https://zed.dev/community-links). We're working on improving the documentation, creating more examples, and will be publishing more guides to GPUI on our [blog](https://zed.dev/blog).
+
+## Dev Tools
+
+GPUI includes built-in developer tools for inspecting your UI. Enable the `dev-tools` feature to use them:
+
+```toml
+gpui = { version = "*", features = ["dev-tools"] }
+```
+
+Then initialize the dev tools in your application:
+
+```rust
+use gpui::dev_tools;
+
+fn main() {
+    Application::new().run(|cx: &mut App| {
+        cx.init_colors(); // Required for inspector UI styling
+        dev_tools::init(cx);
+
+        // Bind a keyboard shortcut to toggle the inspector
+        cx.bind_keys([KeyBinding::new(
+            "cmd-shift-i", // or "ctrl-shift-i" on Linux/Windows
+            dev_tools::ToggleInspector,
+            None,
+        )]);
+
+        // ... rest of your app
+    });
+}
+```
+
+The inspector allows you to:
+
+- **Select elements**: Click the "🔍 Pick" button to enter picking mode, then click on any element to inspect it
+- **View dimensions**: See the position, size, and content size of selected elements
+- **View styles**: See the active styles applied to the selected element
+- **Navigate hierarchy**: Scroll while hovering to select parent/child elements
+
+Run the inspector example to see it in action:
+
+```sh
+cargo run --example inspector --features dev-tools
+```
