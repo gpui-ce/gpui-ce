@@ -7,12 +7,11 @@
 //! 3. Task management - Storing, canceling, and detaching tasks
 //! 4. Progress updates - Communicating from background to UI
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Colors, Context, DefaultColors, Entity, GlobalColors, Render, Task,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Colors, Context, Entity, Render, Task, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 
 // ============================================================================
@@ -246,8 +245,8 @@ impl AsyncTasksExample {
 }
 
 impl Render for AsyncTasksExample {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
         let foreground = self.foreground_demo.read(cx);
         let background = self.background_demo.read(cx);
         let cancellable = self.cancellable_demo.read(cx);
@@ -355,6 +354,11 @@ impl Render for AsyncTasksExample {
                             )
                             .child({
                                 let is_running = cancellable.is_running();
+                                let (bg, bg_hover) = if is_running {
+                                    (colors.error, colors.error_hover)
+                                } else {
+                                    (colors.success, colors.success_hover)
+                                };
                                 div()
                                     .id("cancel-btn")
                                     .px_3()
@@ -363,19 +367,9 @@ impl Render for AsyncTasksExample {
                                     .text_sm()
                                     .text_color(colors.text)
                                     .cursor_pointer()
-                                    .when(is_running, |el| {
-                                        el.bg(colors.error)
-                                            .hover(|style| style.bg(colors.error_hover))
-                                    })
-                                    .when(!is_running, |el| {
-                                        el.bg(colors.success)
-                                            .hover(|style| style.bg(colors.success_hover))
-                                    })
-                                    .child(if is_running {
-                                        "Stop"
-                                    } else {
-                                        "Start Counter"
-                                    })
+                                    .bg(bg)
+                                    .hover(move |style| style.bg(bg_hover))
+                                    .child(if is_running { "Stop" } else { "Start Counter" })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancellable_demo.update(cx, |demo, cx| {
                                             demo.toggle(cx);
@@ -471,7 +465,7 @@ impl Render for AsyncTasksExample {
 // ============================================================================
 
 fn demo_section(
-    colors: &Arc<Colors>,
+    colors: &Colors,
     title: &'static str,
     description: &'static str,
     content: impl IntoElement,
@@ -508,7 +502,7 @@ fn demo_section(
 }
 
 fn button(
-    colors: &Arc<Colors>,
+    colors: &Colors,
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
@@ -517,7 +511,7 @@ fn button(
     let bg = colors.accent;
     let bg_hover = colors.accent_hover;
     let bg_active = colors.accent_active;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .id(id)
@@ -532,14 +526,14 @@ fn button(
         .when(!disabled, |el| {
             el.bg(bg)
                 .cursor_pointer()
-                .hover(|style| style.bg(bg_hover))
-                .active(|style| style.bg(bg_active))
+                .hover(move |style| style.bg(bg_hover))
+                .active(move |style| style.bg(bg_active))
         })
         .child(label)
 }
 
 fn secondary_button(
-    colors: &Arc<Colors>,
+    colors: &Colors,
     id: impl Into<gpui::ElementId>,
     label: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
@@ -556,11 +550,11 @@ fn secondary_button(
         .text_color(text)
         .bg(bg)
         .cursor_pointer()
-        .hover(|style| style.bg(bg_hover))
+        .hover(move |style| style.bg(bg_hover))
         .child(label)
 }
 
-fn progress_bar(colors: &Arc<Colors>, progress: u32) -> impl IntoElement {
+fn progress_bar(colors: &Colors, progress: u32) -> impl IntoElement {
     let clamped = progress.min(100);
     let bar_bg = colors.surface_hover;
     let bar_fill = colors.success;
@@ -582,8 +576,6 @@ fn progress_bar(colors: &Arc<Colors>, progress: u32) -> impl IntoElement {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
-
         let bounds = Bounds::centered(None, size(px(550.), px(850.)), cx);
         cx.open_window(
             WindowOptions {

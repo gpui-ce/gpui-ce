@@ -7,11 +7,9 @@
 //! 2. `RenderOnce` - Stateless component that receives state from parent
 //! 3. `Render` - Entity-backed view with persistent internal state
 
-use std::sync::Arc;
-
 use gpui::{
-    App, Application, Bounds, Colors, Context, DefaultColors, Entity, GlobalColors, IntoElement,
-    Render, RenderOnce, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Colors, Context, Entity, IntoElement, Render, RenderOnce, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
 // Approach 1: use_state
@@ -33,7 +31,7 @@ struct UseStateCounter {
     count: i32,
 }
 
-fn use_state_counter(colors: Arc<Colors>, window: &mut Window, cx: &mut App) -> impl IntoElement {
+fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl IntoElement {
     let state: Entity<UseStateCounter> =
         window.use_state(cx, |_window, _cx| UseStateCounter { count: 0 });
 
@@ -75,7 +73,7 @@ fn use_state_counter(colors: Arc<Colors>, window: &mut Window, cx: &mut App) -> 
                         .py_1()
                         .rounded_md()
                         .bg(error)
-                        .text_color(colors.text)
+                        .text_color(colors.selected_text)
                         .cursor_pointer()
                         .hover(move |style| style.bg(error_hover))
                         .child("−")
@@ -96,7 +94,7 @@ fn use_state_counter(colors: Arc<Colors>, window: &mut Window, cx: &mut App) -> 
                         .py_1()
                         .rounded_md()
                         .bg(success)
-                        .text_color(colors.text)
+                        .text_color(colors.selected_text)
                         .cursor_pointer()
                         .hover(move |style| style.bg(success_hover))
                         .child("+")
@@ -128,14 +126,14 @@ fn use_state_counter(colors: Arc<Colors>, window: &mut Window, cx: &mut App) -> 
 
 #[derive(IntoElement)]
 struct RenderOnceCounter {
-    colors: Arc<Colors>,
+    colors: Colors,
     count: i32,
     on_increment: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
     on_decrement: Option<Box<dyn Fn(&mut Window, &mut App) + 'static>>,
 }
 
 impl RenderOnceCounter {
-    fn new(colors: Arc<Colors>, count: i32) -> Self {
+    fn new(colors: Colors, count: i32) -> Self {
         Self {
             colors,
             count,
@@ -194,7 +192,7 @@ impl RenderOnce for RenderOnceCounter {
                             .py_1()
                             .rounded_md()
                             .bg(error)
-                            .text_color(colors.text)
+                            .text_color(colors.selected_text)
                             .cursor_pointer()
                             .hover(move |style| style.bg(error_hover))
                             .child("−")
@@ -209,7 +207,7 @@ impl RenderOnce for RenderOnceCounter {
                             .py_1()
                             .rounded_md()
                             .bg(success)
-                            .text_color(colors.text)
+                            .text_color(colors.selected_text)
                             .cursor_pointer()
                             .hover(move |style| style.bg(success_hover))
                             .child("+")
@@ -259,8 +257,8 @@ impl RenderCounter {
 }
 
 impl Render for RenderCounter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
         let error = colors.error;
         let error_hover = colors.error_hover;
         let success = colors.success;
@@ -297,7 +295,7 @@ impl Render for RenderCounter {
                             .py_1()
                             .rounded_md()
                             .bg(error)
-                            .text_color(colors.text)
+                            .text_color(colors.selected_text)
                             .cursor_pointer()
                             .hover(move |style| style.bg(error_hover))
                             .child("−")
@@ -312,7 +310,7 @@ impl Render for RenderCounter {
                             .py_1()
                             .rounded_md()
                             .bg(success)
-                            .text_color(colors.text)
+                            .text_color(colors.selected_text)
                             .cursor_pointer()
                             .hover(move |style| style.bg(success_hover))
                             .child("+")
@@ -342,7 +340,7 @@ impl InteractiveElementsExample {
 
 impl Render for InteractiveElementsExample {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+        let colors = Colors::for_appearance(window);
         let render_once_count = self.render_once_count;
         let handle = cx.entity().downgrade();
 
@@ -377,7 +375,7 @@ impl Render for InteractiveElementsExample {
                     .flex()
                     .flex_row()
                     .gap_4()
-                    .child(use_state_counter(colors.clone(), window, cx))
+                    .child(use_state_counter(&colors, window, cx))
                     .child(
                         RenderOnceCounter::new(colors.clone(), render_once_count)
                             .on_increment({
@@ -420,8 +418,6 @@ impl Render for InteractiveElementsExample {
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
-
         let bounds = Bounds::centered(None, size(px(600.), px(400.)), cx);
         cx.open_window(
             WindowOptions {

@@ -6,11 +6,9 @@
 //! 2. Grid - Two-dimensional layouts with spans
 //! 3. Common patterns - Sidebar, header/footer, centering
 
-use std::sync::Arc;
-
 use gpui::{
-    App, Application, Bounds, Colors, Context, DefaultColors, Div, GlobalColors, Hsla, Render,
-    Rgba, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Colors, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 
 // ============================================================================
@@ -35,9 +33,9 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
 // Flexbox Examples
 // ============================================================================
 
-fn flexbox_row_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn flexbox_row_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .flex()
@@ -60,9 +58,9 @@ fn flexbox_row_example(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn flexbox_column_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn flexbox_column_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .flex()
@@ -86,9 +84,9 @@ fn flexbox_column_example(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn flexbox_justify_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
     let surface = colors.surface;
 
     div()
@@ -137,9 +135,9 @@ fn flexbox_justify_example(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn flexbox_grow_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn flexbox_grow_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .flex()
@@ -165,9 +163,9 @@ fn flexbox_grow_example(colors: &Arc<Colors>) -> impl IntoElement {
 // Grid Examples
 // ============================================================================
 
-fn grid_basic_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn grid_basic_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .flex()
@@ -193,9 +191,9 @@ fn grid_basic_example(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn grid_span_example(colors: &Arc<Colors>) -> impl IntoElement {
+fn grid_span_example(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .flex()
@@ -237,7 +235,7 @@ fn grid_span_example(colors: &Arc<Colors>) -> impl IntoElement {
 // Common Layout Patterns
 // ============================================================================
 
-fn app_shell_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
     let text = colors.text;
     let surface = colors.surface;
@@ -305,9 +303,9 @@ fn app_shell_pattern(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn centered_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+fn centered_pattern(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
-    let text = colors.text;
+    let text = colors.selected_text;
     let surface = colors.surface;
     let accent = colors.accent;
 
@@ -342,7 +340,7 @@ fn centered_pattern(colors: &Arc<Colors>) -> impl IntoElement {
         )
 }
 
-fn stack_pattern(colors: &Arc<Colors>) -> impl IntoElement {
+fn stack_pattern(colors: &Colors) -> impl IntoElement {
     let text_muted = colors.text_muted;
     let surface = colors.surface;
 
@@ -399,8 +397,8 @@ fn stack_pattern(colors: &Arc<Colors>) -> impl IntoElement {
 struct LayoutExample;
 
 impl Render for LayoutExample {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
 
         div()
             .id("main")
@@ -470,11 +468,7 @@ impl Render for LayoutExample {
     }
 }
 
-fn section(
-    colors: &Arc<Colors>,
-    title: &'static str,
-    content: impl IntoElement,
-) -> impl IntoElement {
+fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
     let surface: Hsla = colors.surface.into();
 
     div()
@@ -496,8 +490,6 @@ fn section(
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
-
         let bounds = Bounds::centered(None, size(px(650.), px(700.)), cx);
         cx.open_window(
             WindowOptions {

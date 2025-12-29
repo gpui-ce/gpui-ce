@@ -27,9 +27,9 @@ pub struct Colors {
     pub border: Rgba,
     /// Separator color
     pub separator: Rgba,
-    /// Container color (deprecated, use surface)
+    /// Container color
     pub container: Rgba,
-    /// Accent/primary action color
+    /// Accent/primary action color (macOS blue)
     pub accent: Rgba,
     /// Accent color on hover
     pub accent_hover: Rgba,
@@ -64,85 +64,85 @@ impl Colors {
         }
     }
 
-    /// Returns the default dark colors.
+    /// Returns the default dark colors (macOS dark mode inspired).
     pub fn dark() -> Self {
         Self {
             // Text
             text: rgb(0xffffff),
-            text_muted: rgb(0x94a3b8),
+            text_muted: rgb(0x98989d),
             selected_text: rgb(0xffffff),
             disabled: rgb(0x565656),
 
             // Backgrounds
-            background: rgb(0x0f172a),
-            surface: rgb(0x1e293b),
-            surface_hover: rgb(0x334155),
+            background: rgb(0x1e1e1e),
+            surface: rgb(0x2d2d2d),
+            surface_hover: rgb(0x3d3d3d),
             container: rgb(0x262626),
 
             // Borders
-            border: rgb(0x334155),
-            separator: rgb(0x334155),
+            border: rgb(0x3d3d3d),
+            separator: rgb(0x3d3d3d),
 
             // Selection
-            selected: rgb(0x2457ca),
+            selected: rgb(0x0058d0),
 
-            // Accent (blue)
-            accent: rgb(0x3b82f6),
-            accent_hover: rgb(0x2563eb),
-            accent_active: rgb(0x1d4ed8),
+            // Accent (macOS blue)
+            accent: rgb(0x0a84ff),
+            accent_hover: rgb(0x409cff),
+            accent_active: rgb(0x0071e3),
 
             // Success (green)
-            success: rgb(0x22c55e),
-            success_hover: rgb(0x16a34a),
+            success: rgb(0x30d158),
+            success_hover: rgb(0x28cd52),
 
-            // Warning (yellow/amber)
-            warning: rgb(0xeab308),
-            warning_hover: rgb(0xca8a04),
+            // Warning (yellow/orange)
+            warning: rgb(0xffd60a),
+            warning_hover: rgb(0xffcc00),
 
             // Error (red)
-            error: rgb(0xef4444),
-            error_hover: rgb(0xdc2626),
+            error: rgb(0xff453a),
+            error_hover: rgb(0xff6961),
         }
     }
 
-    /// Returns the default light colors.
+    /// Returns the default light colors (macOS light mode inspired).
     pub fn light() -> Self {
         Self {
             // Text
-            text: rgb(0x0f172a),
-            text_muted: rgb(0x64748b),
+            text: rgb(0x1d1d1f),
+            text_muted: rgb(0x86868b),
             selected_text: rgb(0xffffff),
             disabled: rgb(0xb0b0b0),
 
             // Backgrounds
             background: rgb(0xffffff),
-            surface: rgb(0xf1f5f9),
-            surface_hover: rgb(0xe2e8f0),
-            container: rgb(0xf4f5f5),
+            surface: rgb(0xf5f5f7),
+            surface_hover: rgb(0xe8e8ed),
+            container: rgb(0xf5f5f7),
 
             // Borders
-            border: rgb(0xe2e8f0),
-            separator: rgb(0xe2e8f0),
+            border: rgb(0xd2d2d7),
+            separator: rgb(0xd2d2d7),
 
             // Selection
-            selected: rgb(0x2a63d9),
+            selected: rgb(0x0066cc),
 
-            // Accent (blue)
-            accent: rgb(0x2563eb),
-            accent_hover: rgb(0x1d4ed8),
-            accent_active: rgb(0x1e40af),
+            // Accent (macOS blue)
+            accent: rgb(0x007aff),
+            accent_hover: rgb(0x0071e3),
+            accent_active: rgb(0x0058d0),
 
             // Success (green)
-            success: rgb(0x16a34a),
-            success_hover: rgb(0x15803d),
+            success: rgb(0x28cd41),
+            success_hover: rgb(0x23b839),
 
-            // Warning (yellow/amber)
-            warning: rgb(0xca8a04),
-            warning_hover: rgb(0xa16207),
+            // Warning (yellow/orange)
+            warning: rgb(0xff9f0a),
+            warning_hover: rgb(0xe68f09),
 
             // Error (red)
-            error: rgb(0xdc2626),
-            error_hover: rgb(0xb91c1c),
+            error: rgb(0xff3b30),
+            error_hover: rgb(0xe6352b),
         }
     }
 

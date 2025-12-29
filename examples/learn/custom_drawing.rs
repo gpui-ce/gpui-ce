@@ -7,12 +7,10 @@
 //! 3. `window.paint_*` methods - Drawing quads, paths, and more
 //! 4. Interactive drawing - Responding to mouse events
 
-use std::sync::Arc;
-
 use gpui::{
-    App, Application, Bounds, Colors, Context, DefaultColors, GlobalColors, Hsla, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba,
-    Window, WindowBounds, WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
+    App, Application, Bounds, Colors, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
+    WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 // ============================================================================
@@ -23,7 +21,7 @@ use gpui::{
 // - prepaint: Called during layout to prepare drawing state
 // - paint: Called during paint to actually draw
 
-fn basic_shapes_canvas(colors: &Arc<Colors>) -> impl IntoElement {
+fn basic_shapes_canvas(colors: &Colors) -> impl IntoElement {
     let error = colors.error;
     let success = colors.success;
     let accent = colors.accent;
@@ -108,7 +106,7 @@ fn create_triangle(p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> P
     builder.build().unwrap()
 }
 
-fn custom_paths_canvas(colors: &Arc<Colors>) -> impl IntoElement {
+fn custom_paths_canvas(colors: &Colors) -> impl IntoElement {
     let warning = colors.warning;
     let accent = colors.accent;
 
@@ -218,10 +216,10 @@ impl DrawingCanvas {
         }
     }
 
-    fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_drawing && self.current_line.len() > 1 {
             self.lines.push(std::mem::take(&mut self.current_line));
-            let colors = cx.default_colors();
+            let colors = Colors::for_appearance(window);
             self.next_color(&colors);
         }
         self.is_drawing = false;
@@ -275,8 +273,8 @@ impl DrawingCanvas {
 }
 
 impl Render for DrawingCanvas {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
         let lines = self.lines.clone();
         let current_line = self.current_line.clone();
         let current_color = self.current_color(&colors);
@@ -286,7 +284,7 @@ impl Render for DrawingCanvas {
         let border = colors.border;
         let error = colors.error;
         let error_hover = colors.error_hover;
-        let text = colors.text;
+        let text = colors.selected_text;
         let text_muted = colors.text_muted;
 
         div()
@@ -370,8 +368,8 @@ impl CustomDrawingExample {
 }
 
 impl Render for CustomDrawingExample {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
 
         div()
             .id("main")
@@ -445,7 +443,7 @@ impl Render for CustomDrawingExample {
 }
 
 fn section(
-    colors: &Arc<Colors>,
+    colors: &Colors,
     title: &'static str,
     description: &'static str,
     content: impl IntoElement,
@@ -486,8 +484,6 @@ fn section(
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
-
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
         cx.open_window(
             WindowOptions {

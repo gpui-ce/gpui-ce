@@ -4,14 +4,11 @@
 //!
 //! 1. Interactive states - hover, active, focus, focus_visible
 //! 2. Conditional styling - when, when_some, map
-//! 3. Theming patterns - using globals for consistent colors
-
-use std::sync::Arc;
+//! 3. Theming patterns - using Colors for consistent styling
 
 use gpui::{
-    App, Application, Bounds, Colors, Context, DefaultColors, FocusHandle, GlobalColors, Hsla,
-    KeyBinding, Render, Rgba, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px,
-    rgb, size,
+    App, Application, Bounds, Colors, Context, FocusHandle, Hsla, KeyBinding, Render, Rgba, Window,
+    WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
 actions!(styling_example, [Tab, TabPrev]);
@@ -23,12 +20,12 @@ actions!(styling_example, [Tab, TabPrev]);
 fn interactive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
-    colors: &Arc<Colors>,
+    colors: &Colors,
 ) -> impl IntoElement {
     let accent = colors.accent;
     let accent_hover = colors.accent_hover;
     let accent_active = colors.accent_active;
-    let text = colors.text;
+    let text = colors.selected_text;
 
     div()
         .id(id)
@@ -48,7 +45,7 @@ fn focus_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     focus_handle: &FocusHandle,
-    colors: &Arc<Colors>,
+    colors: &Colors,
 ) -> impl IntoElement {
     let surface = colors.surface;
     let surface_hover = colors.surface_hover;
@@ -74,7 +71,7 @@ fn focus_button(
         .child(label)
 }
 
-fn interactive_states_section(colors: &Arc<Colors>) -> impl IntoElement {
+fn interactive_states_section(colors: &Colors) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -98,15 +95,11 @@ fn interactive_states_section(colors: &Arc<Colors>) -> impl IntoElement {
 // Conditional Styling Example
 // ============================================================================
 
-fn status_badge(
-    status: &'static str,
-    variant: StatusVariant,
-    colors: &Arc<Colors>,
-) -> impl IntoElement {
+fn status_badge(status: &'static str, variant: StatusVariant, colors: &Colors) -> impl IntoElement {
     let (bg, text): (Rgba, Rgba) = match variant {
-        StatusVariant::Success => (colors.success, colors.text),
+        StatusVariant::Success => (colors.success, colors.selected_text),
         StatusVariant::Warning => (colors.warning, rgb(0x000000)),
-        StatusVariant::Error => (colors.error, colors.text),
+        StatusVariant::Error => (colors.error, colors.selected_text),
         StatusVariant::Neutral => (colors.surface, colors.text),
     };
 
@@ -133,7 +126,7 @@ fn list_item(
     label: &'static str,
     is_selected: bool,
     is_disabled: bool,
-    colors: &Arc<Colors>,
+    colors: &Colors,
 ) -> impl IntoElement {
     let surface = colors.surface;
     let surface_hover = colors.surface_hover;
@@ -170,7 +163,7 @@ fn list_item(
         .child(label)
 }
 
-fn conditional_section(colors: &Arc<Colors>) -> impl IntoElement {
+fn conditional_section(colors: &Colors) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -216,7 +209,7 @@ fn card_with_group_hover(
     id: impl Into<gpui::ElementId>,
     title: &'static str,
     description: &'static str,
-    colors: &Arc<Colors>,
+    colors: &Colors,
 ) -> impl IntoElement {
     let surface = colors.surface;
     let border = colors.border;
@@ -264,7 +257,7 @@ fn card_with_group_hover(
         )
 }
 
-fn group_hover_section(colors: &Arc<Colors>) -> impl IntoElement {
+fn group_hover_section(colors: &Colors) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -331,8 +324,8 @@ impl StylingExample {
 }
 
 impl Render for StylingExample {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.default_colors().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Colors::for_appearance(window);
 
         div()
             .id("app")
@@ -431,7 +424,7 @@ impl Render for StylingExample {
                                 div()
                                     .text_xs()
                                     .text_color(colors.text_muted)
-                                    .child("Using GlobalColors for consistent theming"),
+                                    .child("Using Colors::for_appearance() for consistent theming"),
                             )
                             .child(
                                 div()
@@ -451,11 +444,7 @@ impl Render for StylingExample {
     }
 }
 
-fn section(
-    colors: &Arc<Colors>,
-    title: &'static str,
-    content: impl IntoElement,
-) -> impl IntoElement {
+fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
     let surface: Hsla = colors.surface.into();
     let border: Hsla = colors.border.into();
 
@@ -478,7 +467,7 @@ fn section(
         .child(content)
 }
 
-fn color_swatch(colors: &Arc<Colors>, name: &'static str, color: Rgba) -> impl IntoElement {
+fn color_swatch(colors: &Colors, name: &'static str, color: Rgba) -> impl IntoElement {
     let text_muted = colors.text_muted;
 
     div()
@@ -499,8 +488,6 @@ fn color_swatch(colors: &Arc<Colors>, name: &'static str, color: Rgba) -> impl I
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.set_global(GlobalColors(Arc::new(Colors::dark())));
-
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
