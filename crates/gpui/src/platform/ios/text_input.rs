@@ -1,13 +1,239 @@
 //! iOS text input handling.
 //!
-//! This module provides keyboard input support for iOS.
-//! For now, we use a simple approach that handles software keyboard input
-//! through the window's text input view.
+//! This module provides keyboard input support for iOS, implementing the full
+//! UITextInput protocol for proper software keyboard and IME support.
 //!
-//! Full UITextInput protocol support (for IME, marked text, etc.) can be
-//! added later if needed.
+//! Key components:
+//! - GPUITextPosition: UITextPosition subclass wrapping a UTF-16 index
+//! - GPUITextRange: UITextRange subclass wrapping start/end positions
+//! - Key code mapping for hardware keyboards
+//! - UITextInput protocol method implementations (in window.rs)
 
 use crate::{KeyDownEvent, Keystroke, Modifiers, PlatformInput};
+use objc::{
+    class,
+    declare::ClassDecl,
+    msg_send,
+    runtime::{Class, Object, Sel, BOOL, NO, YES},
+    sel, sel_impl,
+};
+use std::sync::Once;
+
+// Ivar names for GPUITextPosition
+const GPUI_POSITION_INDEX_IVAR: &str = "index";
+
+// Ivar names for GPUITextRange
+const GPUI_RANGE_START_IVAR: &str = "start";
+const GPUI_RANGE_END_IVAR: &str = "end";
+
+static TEXT_POSITION_CLASS_REGISTERED: Once = Once::new();
+static TEXT_RANGE_CLASS_REGISTERED: Once = Once::new();
+
+// Cache the registered classes to avoid repeated class!() lookups.
+// This avoids potential race conditions where class!() is called before
+// registration is complete.
+static mut TEXT_POSITION_CLASS: Option<&'static Class> = None;
+static mut TEXT_RANGE_CLASS: Option<&'static Class> = None;
+
+/// Register GPUITextPosition - a UITextPosition subclass that wraps a UTF-16 index.
+///
+/// iOS requires UITextPosition subclasses for the UITextInput protocol.
+/// Raw integers cannot be used directly.
+///
+/// This function caches the class reference to avoid repeated class!() lookups,
+/// which could fail if called during registration.
+pub fn register_text_position_class() -> &'static Class {
+    TEXT_POSITION_CLASS_REGISTERED.call_once(|| {
+        let superclass = class!(UITextPosition);
+        let mut decl = ClassDecl::new("GPUITextPosition", superclass).unwrap();
+
+        // Store UTF-16 index
+        decl.add_ivar::<usize>(GPUI_POSITION_INDEX_IVAR);
+
+        // Equality check - required for proper position comparison
+        extern "C" fn is_equal(this: &Object, _sel: Sel, other: *mut Object) -> BOOL {
+            unsafe {
+                if other.is_null() {
+                    return NO;
+                }
+                // Check if other is a GPUITextPosition - use cached class
+                let other_class: *const Class = msg_send![other, class];
+                let our_class = register_text_position_class();
+                if other_class as *const _ != our_class as *const _ {
+                    return NO;
+                }
+                let this_index: usize = *this.get_ivar(GPUI_POSITION_INDEX_IVAR);
+                let other_index: usize = *(&*other).get_ivar(GPUI_POSITION_INDEX_IVAR);
+                if this_index == other_index {
+                    YES
+                } else {
+                    NO
+                }
+            }
+        }
+
+        // Hash method for dictionary keys
+        extern "C" fn hash(this: &Object, _sel: Sel) -> usize {
+            unsafe {
+                let index: usize = *this.get_ivar(GPUI_POSITION_INDEX_IVAR);
+                index
+            }
+        }
+
+        unsafe {
+            decl.add_method(
+                sel!(isEqual:),
+                is_equal as extern "C" fn(&Object, Sel, *mut Object) -> BOOL,
+            );
+            decl.add_method(sel!(hash), hash as extern "C" fn(&Object, Sel) -> usize);
+        }
+
+        let registered_class = decl.register();
+        // Cache the class pointer - safe because registration happens only once
+        // and the class lives for the entire program lifetime.
+        unsafe {
+            TEXT_POSITION_CLASS = Some(registered_class);
+        }
+    });
+
+    // Return cached class - safe because Once::call_once guarantees
+    // the closure has completed before we reach this point.
+    unsafe {
+        TEXT_POSITION_CLASS.expect("GPUITextPosition class should be registered")
+    }
+}
+
+/// Create a GPUITextPosition with the given UTF-16 index.
+pub fn create_text_position(index: usize) -> *mut Object {
+    unsafe {
+        let class = register_text_position_class();
+        let position: *mut Object = msg_send![class, alloc];
+        let position: *mut Object = msg_send![position, init];
+        (*position).set_ivar(GPUI_POSITION_INDEX_IVAR, index);
+        position
+    }
+}
+
+/// Get the UTF-16 index from a GPUITextPosition.
+pub fn get_position_index(position: *mut Object) -> Option<usize> {
+    if position.is_null() {
+        return None;
+    }
+    unsafe {
+        let index: usize = *(&*position).get_ivar(GPUI_POSITION_INDEX_IVAR);
+        Some(index)
+    }
+}
+
+/// Register GPUITextRange - a UITextRange subclass wrapping start/end UTF-16 indices.
+///
+/// iOS requires UITextRange subclasses for the UITextInput protocol.
+///
+/// This function caches the class reference to avoid repeated class!() lookups,
+/// which could fail if called during registration.
+pub fn register_text_range_class() -> &'static Class {
+    // Ensure position class is registered first
+    register_text_position_class();
+
+    TEXT_RANGE_CLASS_REGISTERED.call_once(|| {
+        let superclass = class!(UITextRange);
+        let mut decl = ClassDecl::new("GPUITextRange", superclass).unwrap();
+
+        decl.add_ivar::<usize>(GPUI_RANGE_START_IVAR);
+        decl.add_ivar::<usize>(GPUI_RANGE_END_IVAR);
+
+        // start property - returns GPUITextPosition
+        extern "C" fn get_start(this: &Object, _sel: Sel) -> *mut Object {
+            unsafe {
+                let start: usize = *this.get_ivar(GPUI_RANGE_START_IVAR);
+                create_text_position(start)
+            }
+        }
+
+        // end property - returns GPUITextPosition
+        extern "C" fn get_end(this: &Object, _sel: Sel) -> *mut Object {
+            unsafe {
+                let end: usize = *this.get_ivar(GPUI_RANGE_END_IVAR);
+                create_text_position(end)
+            }
+        }
+
+        // isEmpty property - required by UITextRange
+        extern "C" fn is_empty(this: &Object, _sel: Sel) -> BOOL {
+            unsafe {
+                let start: usize = *this.get_ivar(GPUI_RANGE_START_IVAR);
+                let end: usize = *this.get_ivar(GPUI_RANGE_END_IVAR);
+                if start == end {
+                    YES
+                } else {
+                    NO
+                }
+            }
+        }
+
+        unsafe {
+            decl.add_method(
+                sel!(start),
+                get_start as extern "C" fn(&Object, Sel) -> *mut Object,
+            );
+            decl.add_method(
+                sel!(end),
+                get_end as extern "C" fn(&Object, Sel) -> *mut Object,
+            );
+            decl.add_method(
+                sel!(isEmpty),
+                is_empty as extern "C" fn(&Object, Sel) -> BOOL,
+            );
+        }
+
+        let registered_class = decl.register();
+        // Cache the class pointer - safe because registration happens only once
+        // and the class lives for the entire program lifetime.
+        unsafe {
+            TEXT_RANGE_CLASS = Some(registered_class);
+        }
+    });
+
+    // Return cached class - safe because Once::call_once guarantees
+    // the closure has completed before we reach this point.
+    unsafe {
+        TEXT_RANGE_CLASS.expect("GPUITextRange class should be registered")
+    }
+}
+
+/// Pre-register all text input classes.
+///
+/// Call this early during window initialization to ensure classes are registered
+/// before iOS tries to use them. This avoids race conditions where iOS queries
+/// UITextInput methods (like markedTextRange) before classes are ready.
+pub fn ensure_text_input_classes_registered() {
+    register_text_position_class();
+    register_text_range_class();
+}
+
+/// Create a GPUITextRange with start and end UTF-16 indices.
+pub fn create_text_range(start: usize, end: usize) -> *mut Object {
+    unsafe {
+        let class = register_text_range_class();
+        let range: *mut Object = msg_send![class, alloc];
+        let range: *mut Object = msg_send![range, init];
+        (*range).set_ivar(GPUI_RANGE_START_IVAR, start);
+        (*range).set_ivar(GPUI_RANGE_END_IVAR, end);
+        range
+    }
+}
+
+/// Get the start and end indices from a GPUITextRange.
+pub fn get_range_indices(range: *mut Object) -> Option<(usize, usize)> {
+    if range.is_null() {
+        return None;
+    }
+    unsafe {
+        let start: usize = *(&*range).get_ivar(GPUI_RANGE_START_IVAR);
+        let end: usize = *(&*range).get_ivar(GPUI_RANGE_END_IVAR);
+        Some((start, end))
+    }
+}
 
 /// Convert a key code from UIKeyboardHIDUsage to a GPUI key string.
 ///
@@ -131,14 +357,16 @@ pub fn key_code_to_key_down(key_code: u32, modifier_flags: u32) -> PlatformInput
     let modifiers = modifier_flags_to_modifiers(modifier_flags);
     let key = key_code_to_string(key_code);
 
+    let key_char = if key.len() == 1 {
+        Some(key.clone())
+    } else {
+        None
+    };
+
     let keystroke = Keystroke {
         modifiers,
-        key: key.clone(),
-        key_char: if key.len() == 1 {
-            Some(key.clone())
-        } else {
-            None
-        },
+        key,
+        key_char,
     };
 
     PlatformInput::KeyDown(KeyDownEvent {
@@ -153,14 +381,16 @@ pub fn key_code_to_key_up(key_code: u32, modifier_flags: u32) -> PlatformInput {
     let modifiers = modifier_flags_to_modifiers(modifier_flags);
     let key = key_code_to_string(key_code);
 
+    let key_char = if key.len() == 1 {
+        Some(key.clone())
+    } else {
+        None
+    };
+
     let keystroke = Keystroke {
         modifiers,
-        key: key.clone(),
-        key_char: if key.len() == 1 {
-            Some(key.clone())
-        } else {
-            None
-        },
+        key,
+        key_char,
     };
 
     PlatformInput::KeyUp(crate::KeyUpEvent { keystroke })

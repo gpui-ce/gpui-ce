@@ -225,8 +225,8 @@ impl ShaderShowcase {
                             max_ripple_radius,
                             time,
                             touch_offset,
-                            orbs.clone(),
-                            ripples.clone(),
+                            orbs,
+                            ripples,
                         )
                     },
                     move |_bounds,

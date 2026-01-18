@@ -376,6 +376,20 @@ pub extern "C" fn gpui_ios_handle_key_event(
     window.handle_key_event(key_code, modifiers, is_key_down);
 }
 
+/// Get the UIWindow from a GPUI window.
+///
+/// # Safety
+/// The window_ptr must be a valid pointer to an IosWindow.
+#[unsafe(no_mangle)]
+pub extern "C" fn gpui_ios_get_ui_window(window_ptr: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    if window_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let window = unsafe { &*(window_ptr as *const super::window::IosWindow) };
+    window.ui_window() as *mut std::ffi::c_void
+}
+
 // Import the demo module
 use super::demos::DemoApp;
 

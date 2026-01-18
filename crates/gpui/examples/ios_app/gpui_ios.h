@@ -122,6 +122,14 @@ void gpui_ios_handle_text_input(void* window_ptr, void* text_ptr);
 /// - is_key_down: true for key down, false for key up
 void gpui_ios_handle_key_event(void* window_ptr, uint32_t key_code, uint32_t modifiers, _Bool is_key_down);
 
+/// Get the UIWindow from a GPUI window.
+///
+/// Parameters:
+/// - window_ptr: Pointer to the IosWindow
+///
+/// Returns: Pointer to the UIWindow, or NULL if not available
+void* gpui_ios_get_ui_window(void* window_ptr);
+
 #ifdef __cplusplus
 }
 #endif
