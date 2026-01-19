@@ -12,6 +12,7 @@ mod dispatcher;
 mod display;
 mod events;
 pub mod ffi;
+mod file_picker;
 mod platform;
 mod text_input;
 mod window;

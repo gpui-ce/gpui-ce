@@ -200,23 +200,19 @@ impl Platform for IosPlatform {
 
     fn prompt_for_paths(
         &self,
-        _options: PathPromptOptions,
+        options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
-        let (tx, rx) = oneshot::channel();
-        // iOS uses UIDocumentPickerViewController for file selection
-        // This would need to be implemented with proper UIKit integration
-        let _ = tx.send(Err(anyhow!("File picker not yet implemented for iOS")));
-        rx
+        // Use the iOS file picker implementation
+        super::file_picker::prompt_for_paths(options)
     }
 
     fn prompt_for_new_path(
         &self,
-        _directory: &Path,
-        _suggested_name: Option<&str>,
+        directory: &Path,
+        suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
-        let (tx, rx) = oneshot::channel();
-        let _ = tx.send(Err(anyhow!("Save dialog not yet implemented for iOS")));
-        rx
+        // Use the iOS file picker implementation for save dialogs
+        super::file_picker::prompt_for_new_path(directory, suggested_name)
     }
 
     fn can_select_mixed_files_and_dirs(&self) -> bool {

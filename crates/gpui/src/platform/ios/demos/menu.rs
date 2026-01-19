@@ -3,13 +3,13 @@
 //! Provides a menu to select between different demo views.
 
 use super::{
-    AnimationPlayground, BACKGROUND, BLUE, GREEN, MAUVE, OVERLAY, SUBTEXT, SURFACE, ShaderShowcase,
-    TEXT, TextEditor,
+    AnimationPlayground, BACKGROUND, BLUE, GREEN, MAUVE, OVERLAY, PEACH, SUBTEXT, SURFACE,
+    ShaderShowcase, TEXT, TextEditor,
 };
 use crate::{
     App, Bounds, Context, ElementInputHandler, Entity, Focusable, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollDelta, ScrollWheelEvent, Window,
-    div, hsla, point, prelude::*, px, rgb, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Render, ScrollDelta,
+    ScrollWheelEvent, Window, div, hsla, point, prelude::*, px, rgb, size,
 };
 
 /// Which demo is currently active
@@ -82,6 +82,54 @@ impl DemoApp {
         self.shader_showcase = None;
         self.text_editor = None;
         cx.notify();
+    }
+
+    fn show_file_picker(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        println!("GPUI iOS: show_file_picker called");
+
+        // Use the platform's file picker
+        let options = PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        };
+
+        // Spawn an async task to handle the file picker result
+        cx.spawn(async move |_this, cx| {
+            println!("GPUI iOS: Spawning file picker task");
+
+            // Get the platform and show the picker
+            let result = cx.update(|cx| {
+                cx.prompt_for_paths(options)
+            });
+
+            match result {
+                Ok(receiver) => {
+                    println!("GPUI iOS: Waiting for file picker result");
+                    match receiver.await {
+                        Ok(Ok(Some(paths))) => {
+                            println!("GPUI iOS: File picker selected {} files:", paths.len());
+                            for path in &paths {
+                                println!("  - {:?}", path);
+                            }
+                        }
+                        Ok(Ok(None)) => {
+                            println!("GPUI iOS: File picker cancelled");
+                        }
+                        Ok(Err(e)) => {
+                            println!("GPUI iOS: File picker error: {:?}", e);
+                        }
+                        Err(e) => {
+                            println!("GPUI iOS: File picker channel error: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("GPUI iOS: Failed to show file picker: {:?}", e);
+                }
+            }
+        }).detach();
     }
 
     fn handle_animation_touch_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
@@ -280,6 +328,37 @@ impl DemoApp {
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
                                     this.go_to_text_editor(window, cx);
+                                }),
+                            ),
+                    )
+                    // File Picker button
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .px_6()
+                            .py_4()
+                            .bg(rgb(SURFACE))
+                            .rounded_xl()
+                            .border_l_4()
+                            .border_color(rgb(PEACH))
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .text_color(rgb(TEXT))
+                                    .child("File Picker"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(SUBTEXT))
+                                    .child("iOS document picker demo"),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.show_file_picker(window, cx);
                                 }),
                             ),
                     ),

@@ -130,6 +130,19 @@ void gpui_ios_handle_key_event(void* window_ptr, uint32_t key_code, uint32_t mod
 /// Returns: Pointer to the UIWindow, or NULL if not available
 void* gpui_ios_get_ui_window(void* window_ptr);
 
+// =============================================================================
+// File Picker API
+// =============================================================================
+
+/// Called when the user selects files in the document picker.
+///
+/// Parameters:
+/// - urls: Pointer to NSArray<NSURL*> with selected URLs, or NULL if cancelled
+void gpui_ios_file_picker_did_pick(void* urls);
+
+/// Called when the user cancels the document picker.
+void gpui_ios_file_picker_cancelled(void);
+
 #ifdef __cplusplus
 }
 #endif
