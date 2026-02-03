@@ -144,11 +144,11 @@ cocoa = "=0.26.0"
 cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
-core-graphics = "0.24"
+core-graphics = "0.25"
 core-text = "21"
 core-video = { version = "0.4.3", features = ["metal"] }
 flume = "0.11"
-font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed", optional = true }
+font-kit = { git = "https://github.com/noeljackson/font-kit", branch = "zed-font-kit-fix", package = "zed-font-kit", optional = true }
 foreign-types = "0.5"
 mach2 = "0.5"
 media = { package = "gpui_media", version = "0.2.2" }
@@ -176,7 +176,7 @@ blade-macros = { version = "0.3.0", optional = true }
 blade-util = { version = "0.3.0", optional = true }
 bytemuck = { version = "1", optional = true }
 cosmic-text = { version = "0.14.0", optional = true }
-font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed", features = [
+font-kit = { git = "https://github.com/noeljackson/font-kit", branch = "zed-font-kit-fix", package = "zed-font-kit", features = [
     "source-fontconfig-dlopen",
 ], optional = true }
 
