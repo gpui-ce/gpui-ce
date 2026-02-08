@@ -102,6 +102,7 @@ fn horizontal_chip(index: usize, colors: &Colors) -> impl IntoElement {
 
 fn horizontal_panel(colors: &Colors) -> impl IntoElement {
     div()
+        .w(px(680.))
         .flex()
         .flex_col()
         .gap_2()
@@ -116,12 +117,13 @@ fn horizontal_panel(colors: &Colors) -> impl IntoElement {
             div()
                 .id("horizontal-scroll")
                 .h(px(76.))
-                .overflow_scroll()
+                .overflow_x_scroll()
                 .overflow_fade_x(px(30.))
                 .rounded_lg()
                 .bg(colors.background)
                 .child(
                     div()
+                        .w(px(2200.))
                         .flex()
                         .items_center()
                         .gap_2()
