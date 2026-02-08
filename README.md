@@ -1,39 +1,77 @@
-# Zed
+# gpui - Community Edition
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/ci.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/ci.yml)
+A community fork of [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework.
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+## Usage
+
+```toml
+[dependencies]
+gpui = { package = "gpui-ce", version = "0.3" }
+
+# for test support...
+[dev-dependencies]
+gpui = { package = "gpui-ce", version = "0.3", features = ["test-support"] }
+```
+
+Then use `gpui::{import}` as normal.
 
 ---
 
-### Installation
+todo: rewrite below...
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or [install Zed via your local package manager](https://zed.dev/docs/linux#installing-via-a-package-manager).
+# Welcome to GPUI!
 
-Other platforms are not yet available:
+GPUI is a hybrid immediate and retained mode, GPU accelerated, UI framework
+for Rust, designed to support a wide variety of applications.
 
-- Web ([tracking issue](https://github.com/zed-industries/zed/issues/5396))
+Everything in GPUI starts with an `Application`. You can create one with `Application::new()`, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()`, and register your first root view. See [gpui.rs](https://www.gpui.rs/) for a complete example.
 
-### Developing Zed
+### Dependencies
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
-- [Running Collaboration Locally](./docs/src/development/local-collaboration.md)
+GPUI has various system dependencies that it needs in order to work.
 
-### Contributing
+#### macOS
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
+On macOS, GPUI uses Metal for rendering. In order to use Metal, you need to do the following:
 
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+- Install [Xcode](https://apps.apple.com/us/app/xcode/id497799835?mt=12) from the macOS App Store, or from the [Apple Developer](https://developer.apple.com/download/all/) website. Note this requires a developer account.
 
-### Licensing
+> Ensure you launch Xcode after installing, and install the macOS components, which is the default option.
 
-License information for third party dependencies must be correctly provided for CI to pass.
+- Install [Xcode command line tools](https://developer.apple.com/xcode/resources/)
 
-We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
+  ```sh
+  xcode-select --install
+  ```
 
-- Is it showing a `no license specified` error for a crate you've created? If so, add `publish = false` under `[package]` in your crate's Cargo.toml.
-- Is the error `failed to satisfy license requirements` for a dependency? If so, first determine what license the project has and whether this system is sufficient to comply with this license's requirements. If you're unsure, ask a lawyer. Once you've verified that this system is acceptable add the license's SPDX identifier to the `accepted` array in `script/licenses/zed-licenses.toml`.
-- Is `cargo-about` unable to find the license for a dependency? If so, add a clarification field at the end of `script/licenses/zed-licenses.toml`, as specified in the [cargo-about book](https://embarkstudios.github.io/cargo-about/cli/generate/config.html#crate-configuration).
+- Ensure that the Xcode command line tools are using your newly installed copy of Xcode:
+
+  ```sh
+  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+  ```
+
+## The Big Picture
+
+GPUI offers three different [registers](<https://en.wikipedia.org/wiki/Register_(sociolinguistics)>) depending on your needs:
+
+- State management and communication with `Entity`'s. Whenever you need to store application state that communicates between different parts of your application, you'll want to use GPUI's entities. Entities are owned by GPUI and are only accessible through an owned smart pointer similar to an `Rc`. See the `app::context` module for more information.
+
+- High level, declarative UI with views. All UI in GPUI starts with a view. A view is simply an `Entity` that can be rendered, by implementing the `Render` trait. At the start of each frame, GPUI will call this render method on the root view of a given window. Views build a tree of `elements`, lay them out and style them with a tailwind-style API, and then give them to GPUI to turn into pixels. See the `div` element for an all purpose swiss-army knife of rendering.
+
+- Low level, imperative UI with Elements. Elements are the building blocks of UI in GPUI, and they provide a nice wrapper around an imperative API that provides as much flexibility and control as you need. Elements have total control over how they and their child elements are rendered and can be used for making efficient views into large lists, implement custom layouting for a code editor, and anything else you can think of. See the `element` module for more information.
+
+Each of these registers has one or more corresponding contexts that can be accessed from all GPUI services. This context is your main interface to GPUI, and is used extensively throughout the framework.
+
+## Other Resources
+
+In addition to the systems above, GPUI provides a range of smaller services that are useful for building complex applications:
+
+- Actions are user-defined structs that are used for converting keystrokes into logical operations in your UI. Use this for implementing keyboard shortcuts, such as cmd-q. See the `action` module for more information.
+
+- Platform services, such as `quit the app` or `open a URL` are available as methods on the `app::App`.
+
+- An async executor that is integrated with the platform's event loop. See the `executor` module for more information.,
+
+- The `[gpui::test]` macro provides a convenient way to write tests for your GPUI applications. Tests also have their own kind of context, a `TestAppContext` which provides ways of simulating common platform input. See `app::test_context` and `test` modules for more details.
+
+Currently, the best way to learn about these APIs is to read the Zed source code or drop a question in the [Zed Discord](https://zed.dev/community-links). We're working on improving the documentation, creating more examples, and will be publishing more guides to GPUI on our [blog](https://zed.dev/blog).
