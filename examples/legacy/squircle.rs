@@ -51,20 +51,20 @@ impl Render for SquircleDemo {
                     .font_weight(FontWeight::BOLD)
                     .child("Squircle Corner Rendering"),
                 div().flex().gap_4().children([
-                    example_card("Circular", ".smoothness_0()", 0.0, rgb(0x3b82f6)),
-                    example_card("Subtle", ".smoothness_0p3()", 0.3, rgb(0x06b6d4)),
-                    example_card("Squircle", ".smoothness_0p5()", 0.5, rgb(0x8b5cf6)),
-                    example_card("Rounded", ".smoothness_0p7()", 0.7, rgb(0xec4899)),
+                    example_card("Circular", ".corner_superellipse(0.0)", 0.0, rgb(0x3b82f6)),
+                    example_card("Subtle", ".corner_superellipse(0.3)", 0.3, rgb(0x06b6d4)),
+                    example_card("Squircle", ".corner_superellipse(0.5)", 0.5, rgb(0x8b5cf6)),
+                    example_card("Rounded", ".corner_superellipse(0.7)", 0.7, rgb(0xec4899)),
                 ]),
                 div()
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
-                    .child("Smoothness Gradient"),
+                    .child("Superellipse Gradient"),
                 div().flex().gap_2().children(
                     (0..=10)
                         .map(|i| {
-                            let smoothness = i as f32 / 10.0;
-                            gradient_example(smoothness, rgb(0x10b981))
+                            let amount = i as f32 / 10.0;
+                            gradient_example(amount, rgb(0x10b981))
                         })
                         .collect::<Vec<_>>(),
                 ),
@@ -89,13 +89,13 @@ impl Render for SquircleDemo {
                     .child(
                         r#"// Usage Examples
 div()
+    .corner_superellipse(0.5)  // Squircle corners
     .rounded(px(40.0))
-    .smoothness_0p5()  // Squircle corners
     .bg(blue())
 
 div()
+    .corner_superellipse(0.7)  // Custom value
     .rounded(px(40.0))
-    .smoothness(0.7)   // Custom value
     .bg(green())"#,
                     ),
             ])
@@ -105,7 +105,7 @@ div()
 fn example_card(
     title: &'static str,
     description: &'static str,
-    smoothness: f32,
+    amount: f32,
     color: impl Clone + Into<Fill>,
 ) -> Div {
     div().flex().flex_col().gap_2().items_center().children([
@@ -113,7 +113,7 @@ fn example_card(
             .w(px(150.0))
             .h(px(150.0))
             .rounded(px(40.0))
-            .smoothness(smoothness)
+            .corner_superellipse(amount)
             .bg(color)
             .shadow_lg(),
         div().font_weight(FontWeight::BOLD).child(title),
@@ -121,22 +121,22 @@ fn example_card(
     ])
 }
 
-fn gradient_example(smoothness: f32, color: impl Clone + Into<Fill>) -> Div {
+fn gradient_example(amount: f32, color: impl Clone + Into<Fill>) -> Div {
     div()
         .w(px(60.0))
         .h(px(60.0))
         .rounded(px(15.0))
-        .smoothness(smoothness)
+        .corner_superellipse(amount)
         .bg(color)
         .flex()
         .items_center()
         .justify_center()
         .text_xs()
         .text_color(gpui::white())
-        .child(format!("{:.1}", smoothness))
+        .child(format!("{:.1}", amount))
 }
 
-fn image_example(label: &'static str, smoothness: f32) -> Div {
+fn image_example(label: &'static str, amount: f32) -> Div {
     div()
         .flex()
         .flex_col()
@@ -147,7 +147,7 @@ fn image_example(label: &'static str, smoothness: f32) -> Div {
                 .w(px(150.0))
                 .h(px(150.0))
                 .rounded(px(40.0))
-                .smoothness(smoothness)
+                .corner_superellipse(amount)
                 .object_fit(ObjectFit::Cover),
         )
         .child(div().text_sm().text_color(rgb(0x6b7280)).child(label))

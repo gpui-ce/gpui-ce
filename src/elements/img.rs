@@ -475,7 +475,7 @@ impl Element for Img {
                         .clamp_radii_for_quad_size(new_bounds.size);
 
                     window
-                        .paint_image_with_smoothness(
+                        .paint_image_with_corner_superellipse(
                             new_bounds,
                             corner_radii,
                             data,

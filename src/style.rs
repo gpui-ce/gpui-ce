@@ -653,7 +653,7 @@ impl Style {
                     border_color,
                     self.border_style,
                 )
-                .smoothness(self.smoothness.unwrap_or(0.0)),
+                .corner_superellipse(self.smoothness.unwrap_or(0.0)),
             );
         }
 
@@ -691,7 +691,7 @@ impl Style {
                 self.border_color.unwrap_or_default(),
                 self.border_style,
             )
-            .smoothness(self.smoothness.unwrap_or(0.0));
+            .corner_superellipse(self.smoothness.unwrap_or(0.0));
 
             window.with_content_mask(Some(ContentMask { bounds: top_bounds }), |window| {
                 window.paint_quad(quad.clone());

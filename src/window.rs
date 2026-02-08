@@ -3234,19 +3234,26 @@ impl Window {
         frame_index: usize,
         grayscale: bool,
     ) -> Result<()> {
-        self.paint_image_with_smoothness(bounds, corner_radii, data, frame_index, grayscale, 0.0)
+        self.paint_image_with_corner_superellipse(
+            bounds,
+            corner_radii,
+            data,
+            frame_index,
+            grayscale,
+            0.0,
+        )
     }
 
-    /// Paint an image with squircle corners (smoothness > 0.0)
-    /// smoothness: 0.0 = circular corners, 0.5 = squircle, 1.0 = square corners
-    pub fn paint_image_with_smoothness(
+    /// Paint an image with superellipse corners.
+    /// amount: 0.0 = circular corners, 0.5 = squircle, 1.0 = square-ish corners.
+    pub fn paint_image_with_corner_superellipse(
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
         data: Arc<RenderImage>,
         frame_index: usize,
         grayscale: bool,
-        smoothness: f32,
+        amount: f32,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
@@ -3284,7 +3291,7 @@ impl Window {
             corner_radii,
             tile,
             opacity,
-            smoothness: smoothness.clamp(0.0, 1.0),
+            smoothness: amount.clamp(0.0, 1.0),
             pad2: 0,
             pad3: 0,
             pad4: 0,
@@ -5241,13 +5248,14 @@ impl PaintQuad {
         }
     }
 
-    /// Sets the corner smoothness (0.0 = circle, 0.5 = squircle, 1.0 = square).
-    pub fn smoothness(self, smoothness: f32) -> Self {
+    /// Sets superellipse corner amount (0.0 = circular, 0.5 = squircle, 1.0 = square-ish).
+    pub fn corner_superellipse(self, amount: f32) -> Self {
         PaintQuad {
-            smoothness: smoothness.clamp(0.0, 1.0),
+            smoothness: amount.clamp(0.0, 1.0),
             ..self
         }
     }
+
 }
 
 /// Creates a quad with the given parameters.
