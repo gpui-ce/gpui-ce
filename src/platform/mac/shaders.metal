@@ -101,6 +101,27 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
+  float mask_alpha = 1.0;
+  if (quad.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - quad.content_mask.bounds.origin.x) /
+      quad.content_mask.fade_out.left);
+  }
+  if (quad.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (quad.content_mask.bounds.origin.x + quad.content_mask.bounds.size.width - input.position.x) /
+      quad.content_mask.fade_out.right);
+  }
+  if (quad.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - quad.content_mask.bounds.origin.y) /
+      quad.content_mask.fade_out.top);
+  }
+  if (quad.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (quad.content_mask.bounds.origin.y + quad.content_mask.bounds.size.height - input.position.y) /
+      quad.content_mask.fade_out.bottom);
+  }
   float4 background_color = fill_color(quad.background, input.position.xy, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
@@ -115,7 +136,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
       quad.border_widths.right == 0.0 &&
       quad.border_widths.bottom == 0.0 &&
       unrounded) {
-    return background_color;
+    return background_color * float4(1.0, 1.0, 1.0, mask_alpha);
   }
 
   float2 size = float2(quad.bounds.size.width, quad.bounds.size.height);
@@ -175,7 +196,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   // Fast path for points that must be part of the background
   if (is_within_inner_straight_border && !is_near_rounded_corner) {
-    return background_color;
+    return background_color * float4(1.0, 1.0, 1.0, mask_alpha);
   }
 
   // Signed distance of the point to the outside edge of the quad's border
@@ -393,7 +414,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                 saturate(antialias_threshold - inner_sdf));
   }
 
-  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf));
+  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * mask_alpha);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -494,6 +515,27 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
                                 constant Shadow *shadows
                                 [[buffer(ShadowInputIndex_Shadows)]]) {
   Shadow shadow = shadows[input.shadow_id];
+  float mask_alpha = 1.0;
+  if (shadow.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - shadow.content_mask.bounds.origin.x) /
+      shadow.content_mask.fade_out.left);
+  }
+  if (shadow.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (shadow.content_mask.bounds.origin.x + shadow.content_mask.bounds.size.width - input.position.x) /
+      shadow.content_mask.fade_out.right);
+  }
+  if (shadow.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - shadow.content_mask.bounds.origin.y) /
+      shadow.content_mask.fade_out.top);
+  }
+  if (shadow.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (shadow.content_mask.bounds.origin.y + shadow.content_mask.bounds.size.height - input.position.y) /
+      shadow.content_mask.fade_out.bottom);
+  }
 
   float2 origin = float2(shadow.bounds.origin.x, shadow.bounds.origin.y);
   float2 size = float2(shadow.bounds.size.width, shadow.bounds.size.height);
@@ -538,7 +580,7 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     }
   }
 
-  return input.color * float4(1., 1., 1., alpha);
+  return input.color * float4(1., 1., 1., alpha * mask_alpha);
 }
 
 struct UnderlineVertexOutput {
@@ -581,6 +623,27 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
   const float WAVE_HEIGHT_RATIO = 0.8;
 
   Underline underline = underlines[input.underline_id];
+  float mask_alpha = 1.0;
+  if (underline.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - underline.content_mask.bounds.origin.x) /
+      underline.content_mask.fade_out.left);
+  }
+  if (underline.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (underline.content_mask.bounds.origin.x + underline.content_mask.bounds.size.width - input.position.x) /
+      underline.content_mask.fade_out.right);
+  }
+  if (underline.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - underline.content_mask.bounds.origin.y) /
+      underline.content_mask.fade_out.top);
+  }
+  if (underline.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (underline.content_mask.bounds.origin.y + underline.content_mask.bounds.size.height - input.position.y) /
+      underline.content_mask.fade_out.bottom);
+  }
   if (underline.wavy) {
     float half_thickness = underline.thickness * 0.5;
     float2 origin =
@@ -599,13 +662,14 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float distance_from_bottom_border = distance_in_pixels + half_thickness;
     float alpha = saturate(
         0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return input.color * float4(1., 1., 1., alpha);
+    return input.color * float4(1., 1., 1., alpha * mask_alpha);
   } else {
-    return input.color;
+    return input.color * float4(1., 1., 1., mask_alpha);
   }
 }
 
 struct MonochromeSpriteVertexOutput {
+  uint sprite_id [[flat]];
   float4 position [[position]];
   float2 tile_position;
   float4 color [[flat]];
@@ -613,6 +677,7 @@ struct MonochromeSpriteVertexOutput {
 };
 
 struct MonochromeSpriteFragmentInput {
+  uint sprite_id [[flat]];
   float4 position [[position]];
   float2 tile_position;
   float4 color [[flat]];
@@ -636,6 +701,7 @@ vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
   float4 color = hsla_to_rgba(sprite.color);
   return MonochromeSpriteVertexOutput{
+      sprite_id,
       device_position,
       tile_position,
       color,
@@ -655,7 +721,30 @@ fragment float4 monochrome_sprite_fragment(
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float4 color = input.color;
+  MonochromeSprite sprite = sprites[input.sprite_id];
+  float mask_alpha = 1.0;
+  if (sprite.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - sprite.content_mask.bounds.origin.x) /
+      sprite.content_mask.fade_out.left);
+  }
+  if (sprite.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (sprite.content_mask.bounds.origin.x + sprite.content_mask.bounds.size.width - input.position.x) /
+      sprite.content_mask.fade_out.right);
+  }
+  if (sprite.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - sprite.content_mask.bounds.origin.y) /
+      sprite.content_mask.fade_out.top);
+  }
+  if (sprite.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (sprite.content_mask.bounds.origin.y + sprite.content_mask.bounds.size.height - input.position.y) /
+      sprite.content_mask.fade_out.bottom);
+  }
   color.a *= sample.a;
+  color.a *= mask_alpha;
   return color;
 }
 
@@ -700,6 +789,27 @@ fragment float4 polychrome_sprite_fragment(
     constant PolychromeSprite *sprites [[buffer(SpriteInputIndex_Sprites)]],
     texture2d<float> atlas_texture [[texture(SpriteInputIndex_AtlasTexture)]]) {
   PolychromeSprite sprite = sprites[input.sprite_id];
+  float mask_alpha = 1.0;
+  if (sprite.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - sprite.content_mask.bounds.origin.x) /
+      sprite.content_mask.fade_out.left);
+  }
+  if (sprite.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (sprite.content_mask.bounds.origin.x + sprite.content_mask.bounds.size.width - input.position.x) /
+      sprite.content_mask.fade_out.right);
+  }
+  if (sprite.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - sprite.content_mask.bounds.origin.y) /
+      sprite.content_mask.fade_out.top);
+  }
+  if (sprite.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (sprite.content_mask.bounds.origin.y + sprite.content_mask.bounds.size.height - input.position.y) /
+      sprite.content_mask.fade_out.bottom);
+  }
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
   float4 sample =
@@ -714,7 +824,7 @@ fragment float4 polychrome_sprite_fragment(
     color.g = grayscale;
     color.b = grayscale;
   }
-  color.a *= sprite.opacity * saturate(0.5 - distance);
+  color.a *= sprite.opacity * saturate(0.5 - distance) * mask_alpha;
   return color;
 }
 
@@ -764,6 +874,27 @@ fragment float4 path_rasterization_fragment(
   float2 dy = dfdy(input.st_position);
 
   PathRasterizationVertex v = vertices[input.vertex_id];
+  float mask_alpha = 1.0;
+  if (v.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - v.content_mask.bounds.origin.x) /
+      v.content_mask.fade_out.left);
+  }
+  if (v.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (v.content_mask.bounds.origin.x + v.content_mask.bounds.size.width - input.position.x) /
+      v.content_mask.fade_out.right);
+  }
+  if (v.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - v.content_mask.bounds.origin.y) /
+      v.content_mask.fade_out.top);
+  }
+  if (v.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (v.content_mask.bounds.origin.y + v.content_mask.bounds.size.height - input.position.y) /
+      v.content_mask.fade_out.bottom);
+  }
   Background background = v.color;
   Bounds_ScaledPixels path_bounds = v.bounds;
   float alpha;
@@ -795,7 +926,10 @@ fragment float4 path_rasterization_fragment(
     gradient_color.color0,
     gradient_color.color1
   );
-  return float4(color.rgb * color.a * alpha, alpha * color.a);
+  return float4(
+    color.rgb * color.a * alpha * mask_alpha,
+    alpha * color.a * mask_alpha
+  );
 }
 
 struct PathSpriteVertexOutput {
@@ -835,12 +969,14 @@ fragment float4 path_sprite_fragment(
 }
 
 struct SurfaceVertexOutput {
+  uint surface_id [[flat]];
   float4 position [[position]];
   float2 texture_position;
   float clip_distance [[clip_distance]][4];
 };
 
 struct SurfaceFragmentInput {
+  uint surface_id [[flat]];
   float4 position [[position]];
   float2 texture_position;
 };
@@ -863,12 +999,15 @@ vertex SurfaceVertexOutput surface_vertex(
   // to the current vertex of the unit triangle.
   float2 texture_position = unit_vertex;
   return SurfaceVertexOutput{
+      surface_id,
       device_position,
       texture_position,
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
 fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+                                 constant SurfaceBounds *surfaces
+                                 [[buffer(SurfaceInputIndex_Surfaces)]],
                                  texture2d<float> y_texture
                                  [[texture(SurfaceInputIndex_YTexture)]],
                                  texture2d<float> cb_cr_texture
@@ -882,8 +1021,32 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
   float4 ycbcr = float4(
       y_texture.sample(texture_sampler, input.texture_position).r,
       cb_cr_texture.sample(texture_sampler, input.texture_position).rg, 1.0);
+  SurfaceBounds surface = surfaces[input.surface_id];
+  float mask_alpha = 1.0;
+  if (surface.content_mask.fade_out.left > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.x - surface.content_mask.bounds.origin.x) /
+      surface.content_mask.fade_out.left);
+  }
+  if (surface.content_mask.fade_out.right > 0.0) {
+    mask_alpha *= saturate(
+      (surface.content_mask.bounds.origin.x + surface.content_mask.bounds.size.width - input.position.x) /
+      surface.content_mask.fade_out.right);
+  }
+  if (surface.content_mask.fade_out.top > 0.0) {
+    mask_alpha *= saturate(
+      (input.position.y - surface.content_mask.bounds.origin.y) /
+      surface.content_mask.fade_out.top);
+  }
+  if (surface.content_mask.fade_out.bottom > 0.0) {
+    mask_alpha *= saturate(
+      (surface.content_mask.bounds.origin.y + surface.content_mask.bounds.size.height - input.position.y) /
+      surface.content_mask.fade_out.bottom);
+  }
 
-  return ycbcrToRGBTransform * ycbcr;
+  float4 color = ycbcrToRGBTransform * ycbcr;
+  color.a *= mask_alpha;
+  return color;
 }
 
 float4 hsla_to_rgba(Hsla hsla) {

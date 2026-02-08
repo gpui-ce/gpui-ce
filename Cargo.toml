@@ -340,6 +340,10 @@ path = "examples/learn/animation.rs"
 name = "text"
 path = "examples/learn/text.rs"
 
+[[example]]
+name = "overflow_fade"
+path = "examples/learn/overflow_fade.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================

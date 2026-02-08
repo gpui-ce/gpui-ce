@@ -152,6 +152,9 @@ pub struct Style {
     /// How children overflowing their container should affect layout
     #[refineable]
     pub overflow: Point<Overflow>,
+    /// Edge fade distances for overflow masking.
+    #[refineable]
+    pub overflow_fade: Edges<AbsoluteLength>,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -551,6 +554,9 @@ impl Style {
 
     /// Get the content mask for this element style, based on the given bounds.
     /// If the element does not hide its overflow, this will return `None`.
+    ///
+    /// Note: overflow fade is axis-aligned and evaluated in window space;
+    /// it is not transform-aware.
     pub fn overflow_mask(
         &self,
         bounds: Bounds<Pixels>,
@@ -595,7 +601,39 @@ impl Style {
                     (false, false) => Bounds::from_corners(min, max),
                 };
 
-                Some(ContentMask { bounds })
+                let mut fade_out = self.overflow_fade.to_pixels(rem_size);
+                if self.overflow.x == Overflow::Visible {
+                    fade_out.left = Pixels::ZERO;
+                    fade_out.right = Pixels::ZERO;
+                }
+                if self.overflow.y == Overflow::Visible {
+                    fade_out.top = Pixels::ZERO;
+                    fade_out.bottom = Pixels::ZERO;
+                }
+
+                let max_x = bounds.size.width.max(Pixels::ZERO);
+                let max_y = bounds.size.height.max(Pixels::ZERO);
+                fade_out.top = fade_out.top.clamp(Pixels::ZERO, max_y);
+                fade_out.right = fade_out.right.clamp(Pixels::ZERO, max_x);
+                fade_out.bottom = fade_out.bottom.clamp(Pixels::ZERO, max_y);
+                fade_out.left = fade_out.left.clamp(Pixels::ZERO, max_x);
+                let normalize_pair = |start: Pixels, end: Pixels, max: Pixels| {
+                    let total = start + end;
+                    if total > max && total > Pixels::ZERO {
+                        let scale = max.0 / total.0;
+                        (start * scale, end * scale)
+                    } else {
+                        (start, end)
+                    }
+                };
+                let (left, right) = normalize_pair(fade_out.left, fade_out.right, max_x);
+                fade_out.left = left;
+                fade_out.right = right;
+                let (top, bottom) = normalize_pair(fade_out.top, fade_out.bottom, max_y);
+                fade_out.top = top;
+                fade_out.bottom = bottom;
+
+                Some(ContentMask { bounds, fade_out })
             }
         }
     }
@@ -686,12 +724,19 @@ impl Style {
                 self.border_style,
             );
 
-            window.with_content_mask(Some(ContentMask { bounds: top_bounds }), |window| {
-                window.paint_quad(quad.clone());
-            });
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: top_bounds,
+                    ..Default::default()
+                }),
+                |window| {
+                    window.paint_quad(quad.clone());
+                },
+            );
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: right_bounds,
+                    ..Default::default()
                 }),
                 |window| {
                     window.paint_quad(quad.clone());
@@ -700,6 +745,7 @@ impl Style {
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: bottom_bounds,
+                    ..Default::default()
                 }),
                 |window| {
                     window.paint_quad(quad.clone());
@@ -708,6 +754,7 @@ impl Style {
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: left_bounds,
+                    ..Default::default()
                 }),
                 |window| {
                     window.paint_quad(quad);
@@ -737,6 +784,7 @@ impl Default for Style {
                 x: Overflow::Visible,
                 y: Overflow::Visible,
             },
+            overflow_fade: Edges::<AbsoluteLength>::zero(),
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             scrollbar_width: AbsoluteLength::default(),
