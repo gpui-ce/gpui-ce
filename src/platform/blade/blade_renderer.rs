@@ -3,8 +3,8 @@
 
 use super::{BladeAtlas, BladeContext};
 use crate::{
-    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
+    Background, Bounds, ContentMask, DevicePixels, Edges, GpuSpecs, MonochromeSprite, Path, Point,
+    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
     get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
@@ -44,9 +44,45 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct PodEdges {
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
+}
+
+impl From<Edges<ScaledPixels>> for PodEdges {
+    fn from(edges: Edges<ScaledPixels>) -> Self {
+        Self {
+            top: edges.top.0,
+            right: edges.right.0,
+            bottom: edges.bottom.0,
+            left: edges.left.0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PodContentMask {
+    bounds: PodBounds,
+    fade_out: PodEdges,
+}
+
+impl From<ContentMask<ScaledPixels>> for PodContentMask {
+    fn from(content_mask: ContentMask<ScaledPixels>) -> Self {
+        Self {
+            bounds: content_mask.bounds.into(),
+            fade_out: content_mask.fade_out.into(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct SurfaceParams {
     bounds: PodBounds,
-    content_mask: PodBounds,
+    content_mask: PodContentMask,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -121,6 +157,7 @@ struct PathRasterizationVertex {
     st_position: Point<f32>,
     color: Background,
     bounds: Bounds<ScaledPixels>,
+    content_mask: PodContentMask,
 }
 
 struct BladePipelines {
@@ -608,6 +645,7 @@ impl BladeRenderer {
                     st_position: v.st_position,
                     color: path.color,
                     bounds: path.clipped_bounds(),
+                    content_mask: path.content_mask.into(),
                 }));
             }
             let vertex_buf = unsafe { self.instance_belt.alloc_typed(&vertices, &self.gpu) };
@@ -891,7 +929,7 @@ impl BladeRenderer {
                                     globals,
                                     surface_locals: SurfaceParams {
                                         bounds: surface.bounds.into(),
-                                        content_mask: surface.content_mask.bounds.into(),
+                                        content_mask: surface.content_mask.into(),
                                     },
                                     t_y,
                                     t_cb_cr,

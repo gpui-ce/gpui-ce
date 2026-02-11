@@ -782,6 +782,7 @@ impl StateInner {
         &mut self,
         bounds: Bounds<Pixels>,
         padding: Edges<Pixels>,
+        content_mask: Option<ContentMask<Pixels>>,
         autoscroll: bool,
         render_item: &mut RenderItemFn,
         window: &mut Window,
@@ -812,7 +813,7 @@ impl StateInner {
                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
                 item_origin.y -= layout_response.scroll_top.offset_in_item;
                 for item in &mut layout_response.item_layouts {
-                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    window.with_content_mask(content_mask.clone(), |window| {
                         item.element.prepaint_at(item_origin, window, cx);
                     });
 
@@ -1018,7 +1019,9 @@ impl Element for List {
         state.reset = false;
 
         let mut style = Style::default();
+        style.overflow.y = Overflow::Scroll;
         style.refine(&self.style);
+        let content_mask = style.overflow_mask(bounds, window.rem_size());
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
@@ -1040,13 +1043,28 @@ impl Element for List {
         let padding = style
             .padding
             .to_pixels(bounds.size.into(), window.rem_size());
-        let layout =
-            match state.prepaint_items(bounds, padding, true, &mut self.render_item, window, cx) {
+        let layout = match state.prepaint_items(
+            bounds,
+            padding,
+            content_mask.clone(),
+            true,
+            &mut self.render_item,
+            window,
+            cx,
+        ) {
                 Ok(layout) => layout,
                 Err(autoscroll_request) => {
                     state.logical_scroll_top = Some(autoscroll_request);
                     state
-                        .prepaint_items(bounds, padding, false, &mut self.render_item, window, cx)
+                        .prepaint_items(
+                            bounds,
+                            padding,
+                            content_mask,
+                            false,
+                            &mut self.render_item,
+                            window,
+                            cx,
+                        )
                         .unwrap()
                 }
             };
@@ -1067,11 +1085,18 @@ impl Element for List {
         cx: &mut App,
     ) {
         let current_view = window.current_view();
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            for item in &mut prepaint.layout.item_layouts {
-                item.element.paint(window, cx);
-            }
-        });
+        let mut style = Style::default();
+        style.overflow.y = Overflow::Scroll;
+        style.refine(&self.style);
+        let content_mask = style.overflow_mask(bounds, window.rem_size());
+        window.with_content_mask(
+            content_mask,
+            |window| {
+                for item in &mut prepaint.layout.item_layouts {
+                    item.element.paint(window, cx);
+                }
+            },
+        );
 
         let list_state = self.state.clone();
         let height = bounds.size.height;
