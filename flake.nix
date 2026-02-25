@@ -24,11 +24,7 @@
           ];
         };
 
-        toolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml);
-        naersk' = pkgs.callPackage naersk {
-          cargo = toolchain;
-          rustc = toolchain;
-        };
+        naersk' = pkgs.callPackage naersk { };
 
         buildInputs = with pkgs; [
           libxkbcommon
@@ -51,7 +47,13 @@
         ];
 
         nativeBuildInputs = with pkgs; [
-          toolchain
+          (pkgs.rust-bin.stable.latest.default.override {
+            extensions = [
+              "rust-src"
+              "cargo"
+              "rustc"
+            ];
+          })
           pkg-config
           cmake
           perl
@@ -59,26 +61,20 @@
         ];
       in
       rec {
-        defaultPackage = packages.gpui-ce;
-        packages = {
-          gpui-ce = naersk'.buildPackage {
-            src = ./.;
-            nativeBuildInputs = nativeBuildInputs;
-            buildInputs = buildInputs;
-          };
-          container = pkgs.dockerTools.buildImage {
-            name = "gpui-ce";
-            config = {
-            };
-          };
-        };
-
         devShell = pkgs.mkShell {
+          RUST_SRC_PATH = "${
+            pkgs.rust-bin.stable.latest.default.override {
+              extensions = [ "rust-src" ];
+            }
+          }/lib/rustlib/src/rust/library";
+
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
           XDG_SESSION_TYPE = "wayland";
           shellHook = ''
             export WAYLAND_DISPLAY=''${WAYLAND_DISPLAY:-wayland-0}
             export XDG_RUNTIME_DIR=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+            export VK_LAYER_PATH="${pkgs.renderdoc}/lib:${pkgs.renderdoc}/lib64:${pkgs.renderdoc}/share/vulkan/implicit_layer.d:$VK_LAYER_PATH"
+            export VK_INSTANCE_LAYERS="VK_LAYER_RENDERDOC_Capture:$VK_INSTANCE_LAYERS"
           '';
 
           nativeBuildInputs =
@@ -86,6 +82,15 @@
             [
               nixfmt
               cmake
+              rustc
+              rustfmt
+              cargo
+              clippy
+              rust-analyzer
+              vulkan-tools
+              vulkan-loader
+              vulkan-validation-layers
+              renderdoc
             ]
             ++ buildInputs
             ++ nativeBuildInputs;
