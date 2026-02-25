@@ -2,10 +2,6 @@
 
 set -euo pipefail
 
-if [[ ! " $* " == *" -p "* && ! " $* " == *" --package "* ]]; then
-    set -- "$@" --workspace
-fi
-
 set -x
 "${CARGO:-cargo}" clippy "$@" --release --all-targets --all-features -- --deny warnings
 
