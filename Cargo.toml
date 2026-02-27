@@ -333,6 +333,18 @@ name = "custom_drawing"
 path = "examples/learn/custom_drawing.rs"
 
 [[example]]
+name = "custom_draw_api"
+path = "examples/learn/custom_draw_api.rs"
+
+[[example]]
+name = "custom_draw_api_animated"
+path = "examples/learn/custom_draw_api_animated.rs"
+
+[[example]]
+name = "custom_draw_api_instanced"
+path = "examples/learn/custom_draw_api_instanced.rs"
+
+[[example]]
 name = "animation"
 path = "examples/learn/animation.rs"
 
@@ -359,6 +371,10 @@ path = "examples/bench/pattern.rs"
 [[example]]
 name = "shadow"
 path = "examples/bench/shadow.rs"
+
+[[example]]
+name = "custom_draw_stress"
+path = "examples/bench/custom_draw_stress.rs"
 
 # ============================================================================
 # Legacy Examples - Original examples (to be updated)

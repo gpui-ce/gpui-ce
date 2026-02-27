@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, CustomDraw, Edges, Hsla,
+    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -32,6 +32,7 @@ pub(crate) struct Scene {
     pub(crate) monochrome_sprites: Vec<MonochromeSprite>,
     pub(crate) polychrome_sprites: Vec<PolychromeSprite>,
     pub(crate) surfaces: Vec<PaintSurface>,
+    pub(crate) custom_draws: Vec<CustomDraw>,
 }
 
 impl Scene {
@@ -46,6 +47,7 @@ impl Scene {
         self.monochrome_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
+        self.custom_draws.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -109,6 +111,10 @@ impl Scene {
                 surface.order = order;
                 self.surfaces.push(surface.clone());
             }
+            Primitive::Custom(custom) => {
+                custom.order = order;
+                self.custom_draws.push(custom.clone());
+            }
         }
         self.paint_operations
             .push(PaintOperation::Primitive(primitive));
@@ -134,6 +140,13 @@ impl Scene {
         self.polychrome_sprites
             .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.surfaces.sort_by_key(|surface| surface.order);
+        self.custom_draws.sort_by_key(|custom| {
+            (
+                custom.order,
+                custom.batch_key.pipeline.0,
+                custom.batch_key.bindings_hash,
+            )
+        });
     }
 
     #[cfg_attr(
@@ -166,6 +179,9 @@ impl Scene {
             surfaces: &self.surfaces,
             surfaces_start: 0,
             surfaces_iter: self.surfaces.iter().peekable(),
+            custom_draws: &self.custom_draws,
+            custom_draws_start: 0,
+            custom_draws_iter: self.custom_draws.iter().peekable(),
         }
     }
 }
@@ -187,6 +203,7 @@ pub(crate) enum PrimitiveKind {
     MonochromeSprite,
     PolychromeSprite,
     Surface,
+    Custom,
 }
 
 pub(crate) enum PaintOperation {
@@ -204,6 +221,7 @@ pub(crate) enum Primitive {
     MonochromeSprite(MonochromeSprite),
     PolychromeSprite(PolychromeSprite),
     Surface(PaintSurface),
+    Custom(CustomDraw),
 }
 
 impl Primitive {
@@ -216,6 +234,7 @@ impl Primitive {
             Primitive::MonochromeSprite(sprite) => &sprite.bounds,
             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
             Primitive::Surface(surface) => &surface.bounds,
+            Primitive::Custom(custom) => &custom.bounds,
         }
     }
 
@@ -228,6 +247,7 @@ impl Primitive {
             Primitive::MonochromeSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
+            Primitive::Custom(custom) => &custom.content_mask,
         }
     }
 }
@@ -261,6 +281,9 @@ struct BatchIterator<'a> {
     surfaces: &'a [PaintSurface],
     surfaces_start: usize,
     surfaces_iter: Peekable<slice::Iter<'a, PaintSurface>>,
+    custom_draws: &'a [CustomDraw],
+    custom_draws_start: usize,
+    custom_draws_iter: Peekable<slice::Iter<'a, CustomDraw>>,
 }
 
 impl<'a> Iterator for BatchIterator<'a> {
@@ -289,6 +312,10 @@ impl<'a> Iterator for BatchIterator<'a> {
             (
                 self.surfaces_iter.peek().map(|s| s.order),
                 PrimitiveKind::Surface,
+            ),
+            (
+                self.custom_draws_iter.peek().map(|s| s.order),
+                PrimitiveKind::Custom,
             ),
         ];
         orders_and_kinds.sort_by_key(|(order, kind)| (order.unwrap_or(u32::MAX), *kind));
@@ -420,6 +447,22 @@ impl<'a> Iterator for BatchIterator<'a> {
                     &self.surfaces[surfaces_start..surfaces_end],
                 ))
             }
+            PrimitiveKind::Custom => {
+                let custom_start = self.custom_draws_start;
+                let mut custom_end = custom_start + 1;
+                self.custom_draws_iter.next();
+                while self
+                    .custom_draws_iter
+                    .next_if(|custom| (custom.order, batch_kind) < max_order_and_kind)
+                    .is_some()
+                {
+                    custom_end += 1;
+                }
+                self.custom_draws_start = custom_end;
+                Some(PrimitiveBatch::CustomDraws(
+                    &self.custom_draws[custom_start..custom_end],
+                ))
+            }
         }
     }
 }
@@ -432,6 +475,7 @@ impl<'a> Iterator for BatchIterator<'a> {
     ),
     allow(dead_code)
 )]
+#[cfg_attr(not(feature = "macos-blade"), allow(dead_code))]
 pub(crate) enum PrimitiveBatch<'a> {
     Shadows(&'a [Shadow]),
     Quads(&'a [Quad]),
@@ -446,6 +490,7 @@ pub(crate) enum PrimitiveBatch<'a> {
         sprites: &'a [PolychromeSprite],
     },
     Surfaces(&'a [PaintSurface]),
+    CustomDraws(&'a [CustomDraw]),
 }
 
 #[derive(Default, Debug, Clone)]
@@ -665,6 +710,12 @@ pub(crate) struct PaintSurface {
 impl From<PaintSurface> for Primitive {
     fn from(surface: PaintSurface) -> Self {
         Primitive::Surface(surface)
+    }
+}
+
+impl From<CustomDraw> for Primitive {
+    fn from(custom: CustomDraw) -> Self {
+        Primitive::Custom(custom)
     }
 }
 

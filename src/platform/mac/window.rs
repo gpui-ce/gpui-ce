@@ -1478,6 +1478,17 @@ impl PlatformWindow for MacWindow {
         self.0.lock().renderer.sprite_atlas().clone()
     }
 
+    fn custom_draw_registry(&self) -> Option<Arc<dyn crate::CustomDrawRegistry>> {
+        #[cfg(feature = "macos-blade")]
+        {
+            Some(self.0.lock().renderer.custom_draw_registry())
+        }
+        #[cfg(not(feature = "macos-blade"))]
+        {
+            None
+        }
+    }
+
     fn gpu_specs(&self) -> Option<crate::GpuSpecs> {
         None
     }

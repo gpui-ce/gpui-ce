@@ -15,6 +15,7 @@ mod asset_cache;
 mod assets;
 mod bounds_tree;
 mod color;
+mod custom_draw;
 /// The default colors used by GPUI.
 pub mod default_colors;
 mod element;
@@ -75,6 +76,7 @@ pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use color::*;
+pub use custom_draw::*;
 pub use ctor::ctor;
 pub use default_colors::*;
 pub use element::*;

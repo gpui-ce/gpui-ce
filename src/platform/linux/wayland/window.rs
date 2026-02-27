@@ -1226,6 +1226,11 @@ impl PlatformWindow for WaylandWindow {
         state.renderer.sprite_atlas().clone()
     }
 
+    fn custom_draw_registry(&self) -> Option<Arc<dyn crate::CustomDrawRegistry>> {
+        let state = self.borrow();
+        Some(state.renderer.custom_draw_registry())
+    }
+
     fn show_window_menu(&self, position: Point<Pixels>) {
         let state = self.borrow();
         let serial = state.client.get_serial(SerialKind::MousePress);

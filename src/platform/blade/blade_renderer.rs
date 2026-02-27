@@ -1,10 +1,10 @@
 // Doing `if let` gives you nice scoping with passes/encoders
 #![allow(irrefutable_let_patterns)]
 
-use super::{BladeAtlas, BladeContext};
+use super::{BladeAtlas, BladeContext, BladeCustomDrawRegistry, CustomBindings};
 use crate::{
-    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
+    Background, Bounds, CustomBufferSource, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
+    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
     get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
@@ -335,6 +335,7 @@ pub struct BladeRenderer {
     instance_belt: BufferBelt,
     atlas: Arc<BladeAtlas>,
     atlas_sampler: gpu::Sampler,
+    custom_draw: Arc<BladeCustomDrawRegistry>,
     #[cfg(target_os = "macos")]
     core_video_texture_cache: CVMetalTextureCache,
     path_intermediate_texture: gpu::Texture,
@@ -385,6 +386,10 @@ impl BladeRenderer {
             min_filter: gpu::FilterMode::Linear,
             ..Default::default()
         });
+        let custom_draw = Arc::new(BladeCustomDrawRegistry::new(
+            Arc::clone(&context.gpu),
+            surface.info(),
+        ));
 
         let (path_intermediate_texture, path_intermediate_texture_view) =
             create_path_intermediate_texture(
@@ -421,6 +426,7 @@ impl BladeRenderer {
             instance_belt,
             atlas,
             atlas_sampler,
+            custom_draw,
             #[cfg(target_os = "macos")]
             core_video_texture_cache,
             path_intermediate_texture,
@@ -539,6 +545,10 @@ impl BladeRenderer {
         &self.atlas
     }
 
+    pub fn custom_draw_registry(&self) -> Arc<BladeCustomDrawRegistry> {
+        Arc::clone(&self.custom_draw)
+    }
+
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn gpu_specs(&self) -> GpuSpecs {
         let info = self.gpu.device_information();
@@ -625,6 +635,7 @@ impl BladeRenderer {
     pub fn destroy(&mut self) {
         self.wait_for_gpu();
         self.atlas.destroy();
+        self.custom_draw.destroy();
         self.gpu.destroy_sampler(self.atlas_sampler);
         self.instance_belt.destroy(&self.gpu);
         self.gpu.destroy_command_encoder(&mut self.command_encoder);
@@ -644,6 +655,7 @@ impl BladeRenderer {
     pub fn draw(&mut self, scene: &Scene) {
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
+        self.custom_draw.before_frame(&mut self.command_encoder);
 
         let frame = {
             profiling::scope!("acquire frame");
@@ -903,6 +915,87 @@ impl BladeRenderer {
                         }
                     }
                 }
+                PrimitiveBatch::CustomDraws(draws) => {
+                    let buffers_snapshot = self.custom_draw.buffers_snapshot();
+                    let textures_snapshot = self.custom_draw.textures_snapshot();
+                    let samplers_snapshot = self.custom_draw.samplers_snapshot();
+                    let mut index = 0;
+                    while index < draws.len() {
+                        let batch_key = draws[index].batch_key;
+                        let mut end = index + 1;
+                        while end < draws.len() && draws[end].batch_key == batch_key {
+                            end += 1;
+                        }
+
+                        let batch = &draws[index..end];
+                        let pipeline_id = batch[0].pipeline;
+                        let bindings = &batch[0].bindings;
+
+                        if let Some(()) = self.custom_draw.with_pipeline(
+                            pipeline_id,
+                            |pipeline, binding_kinds| {
+                                let mut encoder = pass.with(pipeline);
+                                if !binding_kinds.is_empty() {
+                                    if bindings.len() < binding_kinds.len() {
+                                        log::warn!(
+                                            "custom draw bindings missing (expected {}, got {})",
+                                            binding_kinds.len(),
+                                            bindings.len()
+                                        );
+                                        return;
+                                    }
+                                    let bindings = CustomBindings {
+                                        bindings,
+                                        binding_kinds,
+                                        buffers: &buffers_snapshot,
+                                        textures: &textures_snapshot,
+                                        samplers: &samplers_snapshot,
+                                        instance_belt: &mut self.instance_belt as *mut _,
+                                        gpu: Arc::as_ptr(&self.gpu),
+                                    };
+                                    encoder.bind(0, &bindings);
+                                }
+
+                                for draw in batch {
+                                    if draw.vertex_count == 0 || draw.instance_count == 0 {
+                                        continue;
+                                    }
+                                    let mut missing_buffer = false;
+                                    for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
+                                        match &buffer.source {
+                                            CustomBufferSource::Inline(data) => {
+                                                let buf =
+                                                    self.instance_belt.alloc_bytes(data, &self.gpu);
+                                                encoder.bind_vertex(index as u32, buf);
+                                            }
+                                            CustomBufferSource::Buffer(id) => {
+                                                let Some(buffer) =
+                                                    self.custom_draw.get_buffer(*id)
+                                                else {
+                                                    log::warn!("custom draw buffer missing");
+                                                    missing_buffer = true;
+                                                    break;
+                                                };
+                                                encoder.bind_vertex(
+                                                    index as u32,
+                                                    gpu::BufferPiece::from(buffer),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if missing_buffer {
+                                        continue;
+                                    }
+                                    encoder.draw(0, draw.vertex_count, 0, draw.instance_count);
+                                }
+                            },
+                        ) {
+                            log::warn!("custom draw pipeline {:?} not found", pipeline_id.0);
+                        }
+
+                        index = end;
+                    }
+                }
             }
         }
         drop(pass);
@@ -913,6 +1006,7 @@ impl BladeRenderer {
         profiling::scope!("finish");
         self.instance_belt.flush(&sync_point);
         self.atlas.after_frame(&sync_point);
+        self.custom_draw.after_frame(&sync_point);
 
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);

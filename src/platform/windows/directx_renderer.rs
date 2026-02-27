@@ -324,6 +324,7 @@ impl DirectXRenderer {
                     sprites,
                 } => self.draw_polychrome_sprites(texture_id, sprites),
                 PrimitiveBatch::Surfaces(surfaces) => self.draw_surfaces(surfaces),
+                PrimitiveBatch::CustomDraws(_) => Ok(()),
             }
             .context(format!(
                 "scene too large:\

@@ -42,7 +42,7 @@ use crate::{
     Point, Priority, RealtimePriority, RenderGlyphParams, RenderImage, RenderImageParams,
     RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer,
     SystemWindowTab, Task, TaskLabel, TaskTiming, ThreadTaskTimings, Window, WindowControlArea,
-    hash, point, px, size,
+    CustomDrawRegistry, hash, point, px, size,
 };
 use anyhow::Result;
 use async_task::Runnable;
@@ -510,6 +510,9 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn draw(&self, scene: &Scene);
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+    fn custom_draw_registry(&self) -> Option<Arc<dyn CustomDrawRegistry>> {
+        None
+    }
 
     // macOS specific methods
     fn get_title(&self) -> String {

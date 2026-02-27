@@ -532,6 +532,7 @@ impl MetalRenderer {
                     viewport_size,
                     command_encoder,
                 ),
+                PrimitiveBatch::CustomDraws(_) => true,
             };
             if !ok {
                 command_encoder.end_encoding();

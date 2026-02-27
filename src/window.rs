@@ -3,7 +3,10 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
+    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId, CustomDraw,
+    CustomDrawParams, CustomPipelineDesc, CustomPipelineId, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureId, Decorations, DevicePixels,
+    DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
     FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
     KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
@@ -3286,6 +3289,117 @@ impl Window {
             content_mask,
             image_buffer,
         });
+    }
+
+    /// Create a custom GPU pipeline for drawing with user-provided shaders and vertex layouts.
+    pub fn create_custom_pipeline(&mut self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
+        crate::custom_draw::validate_custom_pipeline_desc(&desc)?;
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw pipeline not supported on this platform"));
+        };
+        registry.create_pipeline(desc)
+    }
+
+    /// Create a custom buffer for GPU-backed drawing.
+    pub fn create_custom_buffer(&mut self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw buffers not supported on this platform"));
+        };
+        registry.create_buffer(desc)
+    }
+
+    /// Update a previously created custom buffer.
+    pub fn update_custom_buffer(&mut self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw buffers not supported on this platform"));
+        };
+        registry.update_buffer(id, data)
+    }
+
+    /// Remove a previously created custom buffer.
+    pub fn remove_custom_buffer(&mut self, id: CustomBufferId) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw buffers not supported on this platform"));
+        };
+        registry.remove_buffer(id);
+        Ok(())
+    }
+
+    /// Create a custom texture for GPU-backed drawing.
+    pub fn create_custom_texture(&mut self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw textures not supported on this platform"));
+        };
+        registry.create_texture(desc)
+    }
+
+    /// Update a previously created custom texture.
+    pub fn update_custom_texture(
+        &mut self,
+        id: CustomTextureId,
+        data: Arc<[u8]>,
+    ) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw textures not supported on this platform"));
+        };
+        registry.update_texture(id, data)
+    }
+
+    /// Remove a previously created custom texture.
+    pub fn remove_custom_texture(&mut self, id: CustomTextureId) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw textures not supported on this platform"));
+        };
+        registry.remove_texture(id);
+        Ok(())
+    }
+
+    /// Create a custom sampler for GPU-backed drawing.
+    pub fn create_custom_sampler(&mut self, desc: CustomSamplerDesc) -> Result<CustomSamplerId> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw samplers not supported on this platform"));
+        };
+        registry.create_sampler(desc)
+    }
+
+    /// Remove a previously created custom sampler.
+    pub fn remove_custom_sampler(&mut self, id: CustomSamplerId) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!("custom draw samplers not supported on this platform"));
+        };
+        registry.remove_sampler(id);
+        Ok(())
+    }
+
+    /// Paint a custom draw command into the scene.
+    pub fn paint_custom(&mut self, params: CustomDrawParams) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask();
+        let bounds = params.bounds.scale(scale_factor);
+        let content_mask = content_mask.scale(scale_factor);
+        let bindings_hash = params
+            .bindings
+            .iter()
+            .fold(1469598103934665603u64, |hash, binding| {
+                hash.wrapping_mul(1099511628211) ^ binding.hash()
+            });
+        self.next_frame.scene.insert_primitive(CustomDraw {
+            order: 0,
+            bounds,
+            content_mask,
+            pipeline: params.pipeline,
+            vertex_buffers: params.vertex_buffers,
+            vertex_count: params.vertex_count,
+            instance_count: params.instance_count,
+            bindings: params.bindings,
+            batch_key: CustomBatchKey {
+                pipeline: params.pipeline,
+                bindings_hash,
+            },
+        });
+        Ok(())
     }
 
     /// Removes an image from the sprite atlas.

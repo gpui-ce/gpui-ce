@@ -1480,6 +1480,11 @@ impl PlatformWindow for X11Window {
         inner.renderer.sprite_atlas().clone()
     }
 
+    fn custom_draw_registry(&self) -> Option<Arc<dyn crate::CustomDrawRegistry>> {
+        let inner = self.0.state.borrow();
+        Some(inner.renderer.custom_draw_registry())
+    }
+
     fn show_window_menu(&self, position: Point<Pixels>) {
         let state = self.0.state.borrow();
 
