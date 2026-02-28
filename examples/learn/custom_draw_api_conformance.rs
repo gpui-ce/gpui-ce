@@ -1,16 +1,12 @@
-//! Custom Draw API (Instanced) Example
+//! Custom Draw API (Explicit Bindings) Example
 //!
-//! Demonstrates instanced rendering with a per-instance buffer.
-//!
-//! Notes:
-//! - Works on Metal (default macOS) and Blade (`macos-blade` feature).
-//! - WGSL must omit @location and @group/@binding; use a0.. and b0.. names instead.
+//! Demonstrates explicit @location and @group/@binding usage with
+//! instancing, texture sampling, and a uniform transform matrix.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use gpui::{
     App, AppContext, Application, Bounds, Colors, Context, CustomAddressMode, CustomBindingDesc,
@@ -23,131 +19,67 @@ use gpui::{
 };
 
 const SHADER_SOURCE: &str = r#"
- struct VertexInput {
-   a0: vec2<f32>,
-   a1: vec2<f32>,
-   a2: vec2<f32>,
-   a3: vec4<f32>,
- };
- 
- struct VertexOutput {
-   @builtin(position) position: vec4<f32>,
-   @location(0) uv: vec2<f32>,
-   @location(1) color: vec4<f32>,
- };
- 
- struct Uniforms {
-   time: f32,
-   amplitude: f32,
-   pad: vec2<f32>,
- };
- 
- var b0: texture_2d<f32>;
- var b1: sampler;
- var<uniform> b2: Uniforms;
- 
- @vertex
- fn vs_main(input: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
-   var out: VertexOutput;
-   let phase = f32(instance_index) * 0.35;
-   let wobble = vec2<f32>(sin(b2.time + phase), cos(b2.time + phase)) * b2.amplitude;
-   let pos = input.a0 + input.a2 + wobble;
-   out.position = vec4<f32>(pos, 0.0, 1.0);
-   out.uv = input.a1;
-   out.color = input.a3;
-   return out;
- }
- 
- @fragment
- fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-   let tex = textureSample(b0, b1, input.uv);
-   return tex * input.color;
- }
- "#;
+struct VertexInput {
+  @location(0) position: vec2<f32>,
+  @location(1) uv: vec2<f32>,
+  @location(2) offset: vec2<f32>,
+  @location(3) tint: vec4<f32>,
+};
 
-struct InstancedCustomDrawExample {
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+  @location(1) color: vec4<f32>,
+};
+
+struct Uniforms {
+  transform: mat4x4<f32>,
+};
+
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+@group(1) @binding(2) var<uniform> u: Uniforms;
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let pos = u.transform * vec4<f32>(input.position + input.offset, 0.0, 1.0);
+  out.position = pos;
+  out.uv = input.uv;
+  out.color = input.tint;
+  return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  let texel = textureSample(tex, samp, input.uv);
+  return texel * input.color;
+}
+"#;
+
+struct ConformanceExample {
     pipeline: Option<CustomPipelineId>,
     vertex_buffer: Option<CustomBufferId>,
     instance_buffer: Option<CustomBufferId>,
     texture: Option<CustomTextureId>,
     sampler: Option<CustomSamplerId>,
-    start: Instant,
     error: Option<String>,
-    config: InstancedConfig,
 }
 
-const DEFAULT_INSTANCE_COUNT: usize = 12;
-const DEFAULT_QUAD_SIZE_PX: f32 = 32.0;
-const DEFAULT_GRID_PAD_PX: f32 = 20.0;
-const DEFAULT_BOUNDS_INSET_PX: f32 = 1.0;
+const INSTANCE_COUNT: usize = 16;
+const QUAD_SIZE_PX: f32 = 28.0;
+const GRID_PAD_PX: f32 = 18.0;
+const BOUNDS_INSET_PX: f32 = 1.0;
 
-#[derive(Debug, Clone, Copy)]
-struct InstancedConfig {
-    instances: usize,
-    quad_size_px: f32,
-    grid_pad_px: f32,
-    bounds_inset_px: f32,
-}
-
-impl InstancedConfig {
-    fn from_args() -> Self {
-        let mut config = InstancedConfig {
-            instances: DEFAULT_INSTANCE_COUNT,
-            quad_size_px: DEFAULT_QUAD_SIZE_PX,
-            grid_pad_px: DEFAULT_GRID_PAD_PX,
-            bounds_inset_px: DEFAULT_BOUNDS_INSET_PX,
-        };
-
-        let mut args = std::env::args().skip(1);
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--instances" => {
-                    if let Some(value) = args.next() {
-                        if let Ok(parsed) = value.parse::<usize>() {
-                            config.instances = parsed.max(1);
-                        }
-                    }
-                }
-                "--quad-size" => {
-                    if let Some(value) = args.next() {
-                        if let Ok(parsed) = value.parse::<f32>() {
-                            config.quad_size_px = parsed.max(1.0);
-                        }
-                    }
-                }
-                "--grid-pad" => {
-                    if let Some(value) = args.next() {
-                        if let Ok(parsed) = value.parse::<f32>() {
-                            config.grid_pad_px = parsed.max(0.0);
-                        }
-                    }
-                }
-                "--bounds-inset" => {
-                    if let Some(value) = args.next() {
-                        if let Ok(parsed) = value.parse::<f32>() {
-                            config.bounds_inset_px = parsed.max(0.0);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        config
-    }
-}
-
-impl InstancedCustomDrawExample {
-    fn new(config: InstancedConfig, _cx: &mut Context<Self>) -> Self {
+impl ConformanceExample {
+    fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             pipeline: None,
             vertex_buffer: None,
             instance_buffer: None,
             texture: None,
             sampler: None,
-            start: Instant::now(),
             error: None,
-            config,
         }
     }
 
@@ -181,7 +113,7 @@ impl InstancedCustomDrawExample {
         CustomSamplerId,
     )> {
         let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
-            name: "custom_draw_demo_instanced".to_string(),
+            name: "custom_draw_conformance".to_string(),
             shader_source: SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
@@ -194,13 +126,13 @@ impl InstancedCustomDrawExample {
                                 name: CustomVertexAttributeName::A0,
                                 offset: 0,
                                 format: CustomVertexFormat::F32Vec2,
-                                location: None,
+                                location: Some(0),
                             },
                             CustomVertexAttribute {
                                 name: CustomVertexAttributeName::A1,
                                 offset: 8,
                                 format: CustomVertexFormat::F32Vec2,
-                                location: None,
+                                location: Some(1),
                             },
                         ],
                     },
@@ -214,13 +146,13 @@ impl InstancedCustomDrawExample {
                                 name: CustomVertexAttributeName::A2,
                                 offset: 0,
                                 format: CustomVertexFormat::F32Vec2,
-                                location: None,
+                                location: Some(2),
                             },
                             CustomVertexAttribute {
                                 name: CustomVertexAttributeName::A3,
                                 offset: 8,
                                 format: CustomVertexFormat::F32Vec4,
-                                location: None,
+                                location: Some(3),
                             },
                         ],
                     },
@@ -232,42 +164,50 @@ impl InstancedCustomDrawExample {
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
                     kind: CustomBindingKind::Texture,
-                    slot: None,
+                    slot: Some(gpui::CustomBindingSlot {
+                        group: 1,
+                        binding: 0,
+                    }),
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B1,
                     kind: CustomBindingKind::Sampler,
-                    slot: None,
+                    slot: Some(gpui::CustomBindingSlot {
+                        group: 1,
+                        binding: 1,
+                    }),
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B2,
-                    kind: CustomBindingKind::Uniform { size: 16 },
-                    slot: None,
+                    kind: CustomBindingKind::Uniform { size: 64 },
+                    slot: Some(gpui::CustomBindingSlot {
+                        group: 1,
+                        binding: 2,
+                    }),
                 },
             ],
         })?;
 
         let vertex_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "quad_vertices_instanced".to_string(),
+            name: "conformance_vertices".to_string(),
             data: quad_vertex_data(),
         })?;
 
         let instance_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "quad_instances".to_string(),
-            data: instance_data_for_bounds(Bounds::default(), window.viewport_size(), self.config),
+            name: "conformance_instances".to_string(),
+            data: instance_data_for_bounds(Bounds::default(), window.viewport_size()),
         })?;
 
-        let texture_data = checker_texture_data();
         let texture = window.create_custom_texture(CustomTextureDesc {
-            name: "checker_texture_instanced".to_string(),
+            name: "conformance_texture".to_string(),
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
-            data: texture_data,
+            data: checker_texture_data(),
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {
-            name: "checker_sampler_instanced".to_string(),
+            name: "conformance_sampler".to_string(),
             min_filter: CustomFilterMode::Nearest,
             mag_filter: CustomFilterMode::Nearest,
             mipmap_filter: CustomFilterMode::Nearest,
@@ -278,11 +218,10 @@ impl InstancedCustomDrawExample {
     }
 }
 
-impl Render for InstancedCustomDrawExample {
+impl Render for ConformanceExample {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
-        window.request_animation_frame();
 
         let header = div()
             .flex()
@@ -293,13 +232,13 @@ impl Render for InstancedCustomDrawExample {
                     .text_xl()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
-                    .child("Custom Draw API (Instanced)"),
+                    .child("Custom Draw API (Explicit Bindings)"),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(colors.text_muted)
-                    .child("Per-instance buffer for offsets + colors"),
+                    .child("@location + @group/@binding + uniform + instancing"),
             );
 
         let surface: Hsla = colors.surface.into();
@@ -321,48 +260,22 @@ impl Render for InstancedCustomDrawExample {
             self.texture,
             self.sampler,
         ) {
-            let start = self.start;
-            let config = self.config;
             let prepaint = move |bounds: Bounds<_>, window: &mut Window, _cx: &mut App| {
-                let layout_bounds = inset_bounds(bounds, px(config.bounds_inset_px));
+                let layout_bounds = inset_bounds(bounds, px(BOUNDS_INSET_PX));
                 let viewport = window.viewport_size();
-                let vertex_data =
-                    quad_vertex_data_for_pixel_size(px(config.quad_size_px), viewport);
+                let vertex_data = quad_vertex_data_for_pixel_size(px(QUAD_SIZE_PX), viewport);
                 if let Err(err) =
                     window.update_custom_buffer(vertex_buffer, Arc::clone(&vertex_data))
                 {
                     log::error!("custom draw vertex update failed: {err}");
                 }
-                let instance_data = instance_data_for_bounds(layout_bounds, viewport, config);
+                let instance_data = instance_data_for_bounds(layout_bounds, viewport);
                 if let Err(err) =
                     window.update_custom_buffer(instance_buffer, Arc::clone(&instance_data))
                 {
                     log::error!("custom draw instance update failed: {err}");
                 }
-                let elapsed = start.elapsed().as_secs_f32();
-                let grid = (config.instances as f32).sqrt().ceil();
-                let half_quad = config.quad_size_px * 0.5;
-                let pad = px(config.grid_pad_px + half_quad);
-                let inner_width = (layout_bounds.size.width - pad * 2.0).max(px(1.0));
-                let inner_height = (layout_bounds.size.height - pad * 2.0).max(px(1.0));
-                let margin_px = if grid > 1.0 {
-                    let cell_w = inner_width / (grid - 1.0);
-                    let cell_h = inner_height / (grid - 1.0);
-                    let cell_min = cell_w.min(cell_h);
-                    (cell_min - px(config.quad_size_px)) * 0.5
-                } else {
-                    px(0.0)
-                }
-                .max(px(0.0));
-                let edge_margin = pad - px(half_quad);
-                let max_wobble_px = margin_px.min(edge_margin).max(px(0.0));
-                let amplitude = (f32::from(max_wobble_px) * 2.0 / f32::from(viewport.width))
-                    .min(f32::from(max_wobble_px) * 2.0 / f32::from(viewport.height));
-                let mut uniform = Vec::with_capacity(16);
-                push_f32(&mut uniform, elapsed);
-                push_f32(&mut uniform, amplitude);
-                push_f32(&mut uniform, 0.0);
-                push_f32(&mut uniform, 0.0);
+                let transform = identity_transform();
                 CustomDrawParams {
                     bounds,
                     pipeline,
@@ -375,11 +288,11 @@ impl Render for InstancedCustomDrawExample {
                         },
                     ],
                     vertex_count: 6,
-                    instance_count: config.instances as u32,
+                    instance_count: INSTANCE_COUNT as u32,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),
-                        CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::from(uniform))),
+                        CustomBindingValue::Uniform(CustomBufferSource::Inline(transform)),
                     ],
                 }
             };
@@ -488,18 +401,17 @@ fn quad_vertex_data_for_pixel_size(
 fn instance_data_for_bounds(
     bounds: Bounds<gpui::Pixels>,
     viewport: gpui::Size<gpui::Pixels>,
-    config: InstancedConfig,
 ) -> Arc<[u8]> {
-    let mut data = Vec::with_capacity(config.instances * 24);
+    let mut data = Vec::with_capacity(INSTANCE_COUNT * 24);
     let viewport_w = f32::from(viewport.width).max(1.0);
     let viewport_h = f32::from(viewport.height).max(1.0);
 
-    let grid = (config.instances as f32).sqrt().ceil() as usize;
-    let pad = px(config.grid_pad_px + config.quad_size_px * 0.5);
+    let grid = (INSTANCE_COUNT as f32).sqrt().ceil() as usize;
+    let pad = px(GRID_PAD_PX + QUAD_SIZE_PX * 0.5);
     let inner_width = (bounds.size.width - pad * 2.0).max(px(1.0));
     let inner_height = (bounds.size.height - pad * 2.0).max(px(1.0));
 
-    for i in 0..config.instances {
+    for i in 0..INSTANCE_COUNT {
         let gx = (i % grid) as f32;
         let gy = (i / grid) as f32;
         let fx = if grid > 1 {
@@ -520,13 +432,24 @@ fn instance_data_for_bounds(
 
         push_f32(&mut data, ndc_x);
         push_f32(&mut data, ndc_y);
-        let t = i as f32 / (config.instances as f32);
+        let t = i as f32 / (INSTANCE_COUNT as f32);
         push_f32(&mut data, 0.4 + 0.6 * t);
         push_f32(&mut data, 0.8 - 0.5 * t);
         push_f32(&mut data, 1.0 - 0.3 * t);
         push_f32(&mut data, 1.0);
     }
 
+    Arc::from(data)
+}
+
+fn identity_transform() -> Arc<[u8]> {
+    let mut data = Vec::with_capacity(16 * 4);
+    let values = [
+        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    for value in values {
+        push_f32(&mut data, value);
+    }
     Arc::from(data)
 }
 
@@ -541,19 +464,17 @@ fn checker_texture_data() -> Arc<[u8]> {
 }
 
 fn main() {
-    let config = InstancedConfig::from_args();
-    Application::new().run(move |cx: &mut App| {
+    Application::new().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
-        let config_copy = config;
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            move |_, cx| cx.new(|cx| InstancedCustomDrawExample::new(config_copy, cx)),
+            |_, cx| cx.new(|cx| ConformanceExample::new(cx)),
         )
         .expect("Failed to open window");
 
-        example_prelude::init_example(cx, "Custom Draw API (Instanced)");
+        example_prelude::init_example(cx, "Custom Draw API (Explicit Bindings)");
     });
 }

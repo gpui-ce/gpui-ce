@@ -23,39 +23,39 @@ use gpui::{
 };
 
 const SHADER_SOURCE: &str = r#"
-struct VertexInput {
-  a0: vec2<f32>,
-  a1: vec2<f32>,
-};
-
-struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) uv: vec2<f32>,
-};
-
-struct Uniforms {
-  uv_offset: vec2<f32>,
-  pad: vec2<f32>,
-};
-
-var b0: texture_2d<f32>;
-var b1: sampler;
-var<uniform> b2: Uniforms;
-
-@vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
-  var out: VertexOutput;
-  out.position = vec4<f32>(input.a0, 0.0, 1.0);
-  out.uv = input.a1;
-  return out;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  let uv = input.uv + b2.uv_offset;
-  return textureSample(b0, b1, uv);
-}
-"#;
+ struct VertexInput {
+   a0: vec2<f32>,
+   a1: vec2<f32>,
+ };
+ 
+ struct VertexOutput {
+   @builtin(position) position: vec4<f32>,
+   @location(0) uv: vec2<f32>,
+ };
+ 
+ struct Uniforms {
+   uv_offset: vec2<f32>,
+   pad: vec2<f32>,
+ };
+ 
+ var b0: texture_2d<f32>;
+ var b1: sampler;
+ var<uniform> b2: Uniforms;
+ 
+ @vertex
+ fn vs_main(input: VertexInput) -> VertexOutput {
+   var out: VertexOutput;
+   out.position = vec4<f32>(input.a0, 0.0, 1.0);
+   out.uv = input.a1;
+   return out;
+ }
+ 
+ @fragment
+ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+   let uv = input.uv + b2.uv_offset;
+   return textureSample(b0, b1, uv);
+ }
+ "#;
 
 struct AnimatedCustomDrawExample {
     pipeline: Option<CustomPipelineId>,
@@ -118,11 +118,13 @@ impl AnimatedCustomDrawExample {
                             name: CustomVertexAttributeName::A0,
                             offset: 0,
                             format: CustomVertexFormat::F32Vec2,
+                            location: None,
                         },
                         CustomVertexAttribute {
                             name: CustomVertexAttributeName::A1,
                             offset: 8,
                             format: CustomVertexFormat::F32Vec2,
+                            location: None,
                         },
                     ],
                 },
@@ -133,14 +135,17 @@ impl AnimatedCustomDrawExample {
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
                     kind: CustomBindingKind::Texture,
+                    slot: None,
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B1,
                     kind: CustomBindingKind::Sampler,
+                    slot: None,
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B2,
                     kind: CustomBindingKind::Uniform { size: 16 },
+                    slot: None,
                 },
             ],
         })?;
@@ -243,12 +248,14 @@ impl Render for AnimatedCustomDrawExample {
                 }
             };
 
-            let paint =
-                move |_bounds: Bounds<_>, params: CustomDrawParams, window: &mut Window, _cx: &mut App| {
-                    if let Err(err) = window.paint_custom(params) {
-                        log::error!("custom draw paint failed: {err}");
-                    }
-                };
+            let paint = move |_bounds: Bounds<_>,
+                              params: CustomDrawParams,
+                              window: &mut Window,
+                              _cx: &mut App| {
+                if let Err(err) = window.paint_custom(params) {
+                    log::error!("custom draw paint failed: {err}");
+                }
+            };
 
             div()
                 .w(px(420.))

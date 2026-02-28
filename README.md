@@ -15,6 +15,8 @@ gpui = { package = "gpui-ce", version = "0.3", features = ["test-support"] }
 
 Then use `gpui::{import}` as normal.
 
+---
+
 todo: rewrite below...
 
 # Welcome to GPUI!

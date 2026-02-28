@@ -3,9 +3,9 @@
 
 use super::{BladeAtlas, BladeContext, BladeCustomDrawRegistry, CustomBindings};
 use crate::{
-    Background, Bounds, CustomBufferSource, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
-    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
-    get_gamma_correction_ratios,
+    Background, Bounds, CustomBindingKind, CustomBufferSource, DevicePixels, GpuSpecs,
+    MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene,
+    Shadow, Size, Underline, get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
 use blade_util::{BufferBelt, BufferBeltDescriptor};
@@ -933,65 +933,96 @@ impl BladeRenderer {
 
                         if let Some(()) = self.custom_draw.with_pipeline(
                             pipeline_id,
-                            |pipeline, binding_kinds| {
+                            |pipeline,
+                             binding_kinds: &[Vec<CustomBindingKind>],
+                             binding_indices: &[Vec<Option<usize>>]| {
                                 let mut encoder = pass.with(pipeline);
-                                if !binding_kinds.is_empty() {
-                                    if bindings.len() < binding_kinds.len() {
-                                        log::warn!(
-                                            "custom draw bindings missing (expected {}, got {})",
-                                            binding_kinds.len(),
-                                            bindings.len()
-                                        );
-                                        return;
+                                let mut max_index = 0usize;
+                                for indices in binding_indices {
+                                    for index in indices.iter().flatten() {
+                                        max_index = max_index.max(*index);
+                                    }
+                                }
+                                if !binding_kinds.is_empty() && bindings.len() <= max_index {
+                                    log::warn!(
+                                        "custom draw bindings missing (expected at least {}, got {})",
+                                        max_index + 1,
+                                        bindings.len()
+                                    );
+                                }
+                                for (group_index, group_kinds) in binding_kinds.iter().enumerate() {
+                                    if group_kinds.is_empty() {
+                                        continue;
+                                    }
+                                    let group_indices = binding_indices
+                                        .get(group_index)
+                                        .map(|indices| indices.as_slice())
+                                        .unwrap_or(&[]);
+                                    for (slot_index, binding_index) in
+                                        group_indices.iter().enumerate()
+                                    {
+                                        let Some(binding_index) = binding_index else {
+                                            continue;
+                                        };
+                                        if bindings.get(*binding_index).is_none() {
+                                            log::warn!(
+                                                "custom draw missing binding value for group {} binding {} (value index {})",
+                                                group_index,
+                                                slot_index,
+                                                binding_index
+                                            );
+                                            break;
+                                        }
                                     }
                                     let bindings = CustomBindings {
                                         bindings,
-                                        binding_kinds,
+                                        binding_kinds: group_kinds,
+                                        binding_indices: group_indices,
                                         buffers: &buffers_snapshot,
                                         textures: &textures_snapshot,
                                         samplers: &samplers_snapshot,
                                         instance_belt: &mut self.instance_belt as *mut _,
                                         gpu: Arc::as_ptr(&self.gpu),
                                     };
-                                    encoder.bind(0, &bindings);
+                                    encoder.bind(group_index as u32, &bindings);
                                 }
 
                                 for draw in batch {
-                                    if draw.vertex_count == 0 || draw.instance_count == 0 {
-                                        continue;
-                                    }
-                                    let mut missing_buffer = false;
-                                    for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
-                                        match &buffer.source {
-                                            CustomBufferSource::Inline(data) => {
-                                                let buf =
-                                                    self.instance_belt.alloc_bytes(data, &self.gpu);
-                                                encoder.bind_vertex(index as u32, buf);
-                                            }
-                                            CustomBufferSource::Buffer(id) => {
-                                                let Some(buffer) =
-                                                    self.custom_draw.get_buffer(*id)
-                                                else {
-                                                    log::warn!("custom draw buffer missing");
-                                                    missing_buffer = true;
-                                                    break;
-                                                };
-                                                encoder.bind_vertex(
-                                                    index as u32,
-                                                    gpu::BufferPiece::from(buffer),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    if missing_buffer {
-                                        continue;
-                                    }
-                                    encoder.draw(0, draw.vertex_count, 0, draw.instance_count);
-                                }
-                            },
-                        ) {
-                            log::warn!("custom draw pipeline {:?} not found", pipeline_id.0);
-                        }
+                                     if draw.vertex_count == 0 || draw.instance_count == 0 {
+                                         continue;
+                                     }
+                                     let mut missing_buffer = false;
+                                     for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
+                                         match &buffer.source {
+                                             CustomBufferSource::Inline(data) => {
+                                                 let buf =
+                                                     self.instance_belt.alloc_bytes(data, &self.gpu);
+                                                 encoder.bind_vertex(index as u32, buf);
+                                             }
+                                             CustomBufferSource::Buffer(id) => {
+                                                 let Some(buffer) =
+                                                     self.custom_draw.get_buffer(*id)
+                                                 else {
+                                                     log::warn!("custom draw buffer missing");
+                                                     missing_buffer = true;
+                                                     break;
+                                                 };
+                                                 encoder.bind_vertex(
+                                                     index as u32,
+                                                     gpu::BufferPiece::from(buffer),
+                                                 );
+                                             }
+                                         }
+                                     }
+                                     if missing_buffer {
+                                         continue;
+                                     }
+                                     encoder.draw(0, draw.vertex_count, 0, draw.instance_count);
+                                 }
+                             },
+                         ) {
+                             log::warn!("custom draw pipeline {:?} not found", pipeline_id.0);
+                         }
 
                         index = end;
                     }

@@ -13,9 +13,10 @@ use gpui::{
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
     CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
     CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexAttribute, CustomVertexAttributeName,
-    CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat, CustomVertexLayout, Hsla, Render,
-    Styled, Window, WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
+    CustomTextureFormat, CustomTextureId, CustomUniformBuilder, CustomVertexAttribute,
+    CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat,
+    CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds, WindowOptions, canvas, div,
+    prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -202,11 +203,13 @@ impl StressHarness {
                             name: CustomVertexAttributeName::A0,
                             offset: 0,
                             format: CustomVertexFormat::F32Vec2,
+                            location: None,
                         },
                         CustomVertexAttribute {
                             name: CustomVertexAttributeName::A1,
                             offset: 8,
                             format: CustomVertexFormat::F32Vec2,
+                            location: None,
                         },
                     ],
                 },
@@ -217,14 +220,17 @@ impl StressHarness {
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
                     kind: CustomBindingKind::Texture,
+                    slot: None,
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B1,
                     kind: CustomBindingKind::Sampler,
+                    slot: None,
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B2,
                     kind: CustomBindingKind::Uniform { size: 48 },
+                    slot: None,
                 },
             ],
         })?;
@@ -327,20 +333,22 @@ impl Render for StressHarness {
                         log::error!("custom draw vertex update failed: {err}");
                     }
                 }
-                let mut uniform = Vec::with_capacity(48);
-                push_f32(&mut uniform, f32::from(layout_bounds.origin.x));
-                push_f32(&mut uniform, f32::from(layout_bounds.origin.y));
-                push_f32(&mut uniform, f32::from(layout_bounds.size.width));
-                push_f32(&mut uniform, f32::from(layout_bounds.size.height));
-                push_f32(&mut uniform, f32::from(viewport.width));
-                push_f32(&mut uniform, f32::from(viewport.height));
+                let mut uniform = CustomUniformBuilder::new();
+                uniform
+                    .push_vec2(
+                        f32::from(layout_bounds.origin.x),
+                        f32::from(layout_bounds.origin.y),
+                    )
+                    .push_vec2(
+                        f32::from(layout_bounds.size.width),
+                        f32::from(layout_bounds.size.height),
+                    )
+                    .push_vec2(f32::from(viewport.width), f32::from(viewport.height));
                 let grid = (config.instances as f32).sqrt().ceil();
-                push_f32(&mut uniform, grid);
-                push_f32(&mut uniform, grid);
-                push_f32(&mut uniform, f32::from(px(config.grid_pad_px)));
-                push_f32(&mut uniform, f32::from(px(config.grid_pad_px)));
-                push_f32(&mut uniform, 0.0);
-                push_f32(&mut uniform, 0.0);
+                uniform.push_vec2(grid, grid).push_vec2(
+                    f32::from(px(config.grid_pad_px)),
+                    f32::from(px(config.grid_pad_px)),
+                );
                 CustomDrawParams {
                     bounds,
                     pipeline,
@@ -352,7 +360,7 @@ impl Render for StressHarness {
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),
-                        CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::from(uniform))),
+                        CustomBindingValue::Uniform(CustomBufferSource::Inline(uniform.finish())),
                     ],
                 }
             };
@@ -389,10 +397,6 @@ impl Render for StressHarness {
     }
 }
 
-fn push_f32(data: &mut Vec<u8>, value: f32) {
-    data.extend_from_slice(&value.to_le_bytes());
-}
-
 fn inset_bounds(bounds: Bounds<gpui::Pixels>, inset: gpui::Pixels) -> Bounds<gpui::Pixels> {
     let width = (bounds.size.width - inset * 2.0).max(px(1.0));
     let height = (bounds.size.height - inset * 2.0).max(px(1.0));
@@ -400,6 +404,10 @@ fn inset_bounds(bounds: Bounds<gpui::Pixels>, inset: gpui::Pixels) -> Bounds<gpu
         origin: bounds.origin + gpui::Point::new(inset, inset),
         size: gpui::Size::new(width, height),
     }
+}
+
+fn push_f32(data: &mut Vec<u8>, value: f32) {
+    data.extend_from_slice(&value.to_le_bytes());
 }
 
 fn quad_vertex_data() -> Arc<[u8]> {

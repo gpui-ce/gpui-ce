@@ -110,6 +110,8 @@ pub struct CustomVertexAttribute {
     pub offset: u32,
     /// Attribute format.
     pub format: CustomVertexFormat,
+    /// Optional explicit shader location for this attribute.
+    pub location: Option<u32>,
 }
 
 /// Vertex buffer layout for custom pipelines.
@@ -150,6 +152,8 @@ pub struct CustomPipelineDesc {
 }
 
 pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result<()> {
+    use std::collections::{BTreeMap, BTreeSet};
+
     if desc.vertex_entry.trim().is_empty() {
         return Err(anyhow!("custom draw vertex entry is empty"));
     }
@@ -165,6 +169,44 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
                     size
                 ));
             }
+        }
+    }
+
+    let mut seen_locations = BTreeSet::new();
+    for fetch in &desc.vertex_fetches {
+        for attr in &fetch.layout.attributes {
+            if let Some(location) = attr.location {
+                if !seen_locations.insert(location) {
+                    return Err(anyhow!(
+                        "custom draw vertex attribute locations must be unique (duplicate {})",
+                        location
+                    ));
+                }
+            }
+        }
+    }
+
+    const MAX_BINDING_INDEX: u32 = 4096;
+    let mut group_bindings: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for binding in &desc.bindings {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
+            group: 0,
+            binding: binding.name.index(),
+        });
+        if slot.binding > MAX_BINDING_INDEX {
+            return Err(anyhow!(
+                "custom draw binding index {} out of range (max {})",
+                slot.binding,
+                MAX_BINDING_INDEX
+            ));
+        }
+        let group = group_bindings.entry(slot.group).or_default();
+        if !group.insert(slot.binding) {
+            return Err(anyhow!(
+                "custom draw binding slots must be unique (group {}, binding {})",
+                slot.group,
+                slot.binding
+            ));
         }
     }
 
@@ -194,6 +236,16 @@ impl CustomBindingName {
             CustomBindingName::B3 => "b3",
         }
     }
+
+    /// Returns the numeric binding index for this slot.
+    pub const fn index(self) -> u32 {
+        match self {
+            CustomBindingName::B0 => 0,
+            CustomBindingName::B1 => 1,
+            CustomBindingName::B2 => 2,
+            CustomBindingName::B3 => 3,
+        }
+    }
 }
 
 /// Binding kinds supported by custom pipelines.
@@ -220,6 +272,86 @@ pub struct CustomBindingDesc {
     pub name: CustomBindingName,
     /// Binding kind.
     pub kind: CustomBindingKind,
+    /// Optional explicit group/binding slot.
+    pub slot: Option<CustomBindingSlot>,
+}
+
+/// Explicit bind group slot for a custom binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CustomBindingSlot {
+    /// Bind group index.
+    pub group: u32,
+    /// Binding index within the group.
+    pub binding: u32,
+}
+
+/// Helper for building 16-byte aligned uniform buffers.
+#[derive(Debug, Default, Clone)]
+pub struct CustomUniformBuilder {
+    data: Vec<u8>,
+}
+
+impl CustomUniformBuilder {
+    /// Create a new uniform builder.
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    /// Append raw bytes to the uniform buffer.
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> &mut Self {
+        self.data.extend_from_slice(bytes);
+        self
+    }
+
+    /// Append a single f32.
+    pub fn push_f32(&mut self, value: f32) -> &mut Self {
+        self.data.extend_from_slice(&value.to_le_bytes());
+        self
+    }
+
+    /// Append a vec2<f32>.
+    pub fn push_vec2(&mut self, x: f32, y: f32) -> &mut Self {
+        self.push_f32(x);
+        self.push_f32(y);
+        self
+    }
+
+    /// Append a vec4<f32>.
+    pub fn push_vec4(&mut self, x: f32, y: f32, z: f32, w: f32) -> &mut Self {
+        self.push_f32(x);
+        self.push_f32(y);
+        self.push_f32(z);
+        self.push_f32(w);
+        self
+    }
+
+    /// Append a 4x4 matrix (column-major) of f32 values.
+    pub fn push_mat4(&mut self, values: [f32; 16]) -> &mut Self {
+        for value in values {
+            self.push_f32(value);
+        }
+        self
+    }
+
+    /// Current size in bytes (before padding).
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns true if empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Finalize the buffer, padding to 16-byte alignment.
+    pub fn finish(mut self) -> Arc<[u8]> {
+        let remainder = self.data.len() % 16;
+        if remainder != 0 {
+            let pad = 16 - remainder;
+            self.data.extend(std::iter::repeat(0u8).take(pad));
+        }
+        Arc::from(self.data)
+    }
 }
 
 #[cfg(test)]
@@ -228,14 +360,14 @@ mod tests {
 
     fn base_desc() -> CustomPipelineDesc {
         CustomPipelineDesc {
-            name: "test_pipeline".to_string(),
-            shader_source: "@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }".to_string(),
-            vertex_entry: "vs".to_string(),
-            fragment_entry: "fs".to_string(),
-            vertex_fetches: Vec::new(),
-            primitive: CustomPrimitiveTopology::TriangleList,
-            bindings: Vec::new(),
-        }
+             name: "test_pipeline".to_string(),
+             shader_source: "@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }".to_string(),
+             vertex_entry: "vs".to_string(),
+             fragment_entry: "fs".to_string(),
+             vertex_fetches: Vec::new(),
+             primitive: CustomPrimitiveTopology::TriangleList,
+             bindings: Vec::new(),
+         }
     }
 
     #[test]
@@ -255,6 +387,7 @@ mod tests {
         desc.bindings.push(CustomBindingDesc {
             name: CustomBindingName::B0,
             kind: CustomBindingKind::Uniform { size: 12 },
+            slot: None,
         });
         assert!(validate_custom_pipeline_desc(&desc).is_err());
     }
@@ -265,8 +398,65 @@ mod tests {
         desc.bindings.push(CustomBindingDesc {
             name: CustomBindingName::B0,
             kind: CustomBindingKind::Uniform { size: 16 },
+            slot: None,
         });
         assert!(validate_custom_pipeline_desc(&desc).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_vertex_locations() {
+        let mut desc = base_desc();
+        desc.vertex_fetches.push(CustomVertexFetch {
+            layout: CustomVertexLayout {
+                stride: 16,
+                attributes: vec![
+                    CustomVertexAttribute {
+                        name: CustomVertexAttributeName::A0,
+                        offset: 0,
+                        format: CustomVertexFormat::F32Vec2,
+                        location: Some(0),
+                    },
+                    CustomVertexAttribute {
+                        name: CustomVertexAttributeName::A1,
+                        offset: 8,
+                        format: CustomVertexFormat::F32Vec2,
+                        location: Some(0),
+                    },
+                ],
+            },
+            instanced: false,
+        });
+        assert!(validate_custom_pipeline_desc(&desc).is_err());
+    }
+
+    #[test]
+    fn accepts_sparse_binding_slots() {
+        let mut desc = base_desc();
+        desc.bindings.push(CustomBindingDesc {
+            name: CustomBindingName::B0,
+            kind: CustomBindingKind::Uniform { size: 16 },
+            slot: Some(CustomBindingSlot {
+                group: 0,
+                binding: 4,
+            }),
+        });
+        desc.bindings.push(CustomBindingDesc {
+            name: CustomBindingName::B1,
+            kind: CustomBindingKind::Buffer,
+            slot: Some(CustomBindingSlot {
+                group: 0,
+                binding: 0,
+            }),
+        });
+        assert!(validate_custom_pipeline_desc(&desc).is_ok());
+    }
+
+    #[test]
+    fn uniform_builder_pads_to_16_bytes() {
+        let mut builder = CustomUniformBuilder::new();
+        builder.push_f32(1.0).push_vec2(2.0, 3.0);
+        let data = builder.finish();
+        assert_eq!(data.len() % 16, 0);
     }
 }
 

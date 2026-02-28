@@ -1,14 +1,8 @@
-//! Custom Draw API Example
+//! Custom Draw API (Missing Binding) Example
 //!
-//! Demonstrates the custom GPU draw pipeline:
-//! - custom pipeline creation (WGSL)
-//! - vertex buffer binding
-//! - texture + sampler bindings
-//! - paint_custom draw call
-//!
-//! Notes:
-//! - Works on Metal (default macOS) and Blade (`macos-blade` feature).
-//! - WGSL must omit @location and @group/@binding; use a0.. and b0.. names instead.
+//! Demonstrates the warning emitted when a declared binding is not supplied
+//! in the draw call. The missing binding is unused by the shader, so the
+//! quad still renders.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
@@ -26,34 +20,34 @@ use gpui::{
 };
 
 const SHADER_SOURCE: &str = r#"
- struct VertexInput {
-   a0: vec2<f32>,
-   a1: vec2<f32>,
- };
- 
- struct VertexOutput {
-   @builtin(position) position: vec4<f32>,
-   @location(0) uv: vec2<f32>,
- };
- 
- var b0: texture_2d<f32>;
- var b1: sampler;
- 
- @vertex
- fn vs_main(input: VertexInput) -> VertexOutput {
-   var out: VertexOutput;
-   out.position = vec4<f32>(input.a0, 0.0, 1.0);
-   out.uv = input.a1;
-   return out;
- }
- 
- @fragment
- fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-   return textureSample(b0, b1, input.uv);
- }
- "#;
+struct VertexInput {
+  a0: vec2<f32>,
+  a1: vec2<f32>,
+};
 
-struct CustomDrawExample {
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+var b0: texture_2d<f32>;
+var b1: sampler;
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.position = vec4<f32>(input.a0, 0.0, 1.0);
+  out.uv = input.a1;
+  return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return textureSample(b0, b1, input.uv);
+}
+"#;
+
+struct MissingBindingExample {
     pipeline: Option<CustomPipelineId>,
     vertex_buffer: Option<CustomBufferId>,
     texture: Option<CustomTextureId>,
@@ -61,7 +55,9 @@ struct CustomDrawExample {
     error: Option<String>,
 }
 
-impl CustomDrawExample {
+const BOUNDS_INSET_PX: f32 = 1.0;
+
+impl MissingBindingExample {
     fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             pipeline: None,
@@ -100,7 +96,7 @@ impl CustomDrawExample {
         CustomSamplerId,
     )> {
         let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
-            name: "custom_draw_demo".to_string(),
+            name: "custom_draw_missing_binding".to_string(),
             shader_source: SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
@@ -136,26 +132,33 @@ impl CustomDrawExample {
                     kind: CustomBindingKind::Sampler,
                     slot: None,
                 },
+                // Declared but not supplied (triggers a warning).
+                CustomBindingDesc {
+                    name: CustomBindingName::B2,
+                    kind: CustomBindingKind::Uniform { size: 16 },
+                    slot: Some(gpui::CustomBindingSlot {
+                        group: 1,
+                        binding: 0,
+                    }),
+                },
             ],
         })?;
 
-        let vertex_data = quad_vertex_data();
         let vertex_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "quad_vertices".to_string(),
-            data: vertex_data,
+            name: "missing_binding_vertices".to_string(),
+            data: quad_vertex_data(),
         })?;
 
-        let texture_data = checker_texture_data();
         let texture = window.create_custom_texture(CustomTextureDesc {
-            name: "checker_texture".to_string(),
+            name: "missing_binding_texture".to_string(),
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
-            data: texture_data,
+            data: checker_texture_data(),
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {
-            name: "checker_sampler".to_string(),
+            name: "missing_binding_sampler".to_string(),
             min_filter: CustomFilterMode::Nearest,
             mag_filter: CustomFilterMode::Nearest,
             mipmap_filter: CustomFilterMode::Nearest,
@@ -166,7 +169,7 @@ impl CustomDrawExample {
     }
 }
 
-impl Render for CustomDrawExample {
+impl Render for MissingBindingExample {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
@@ -180,13 +183,13 @@ impl Render for CustomDrawExample {
                     .text_xl()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
-                    .child("Custom Draw API"),
+                    .child("Custom Draw API (Missing Binding)"),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(colors.text_muted)
-                    .child("Custom WGSL pipeline + vertex buffer + texture/sampler"),
+                    .child("Logs a warning; quad still renders"),
             );
 
         let surface: Hsla = colors.surface.into();
@@ -202,12 +205,14 @@ impl Render for CustomDrawExample {
             self.sampler,
         ) {
             let prepaint = move |bounds: Bounds<_>, window: &mut Window, _cx: &mut App| {
-                let vertex_data = quad_vertex_data_for_bounds(bounds, window.viewport_size());
+                let layout_bounds = inset_bounds(bounds, px(BOUNDS_INSET_PX));
+                let viewport = window.viewport_size();
+                let vertex_data = quad_vertex_data_for_bounds(layout_bounds, viewport);
                 if let Err(err) = window.update_custom_buffer(buffer, Arc::clone(&vertex_data)) {
                     log::error!("custom draw vertex update failed: {err}");
                 }
                 CustomDrawParams {
-                    bounds,
+                    bounds: layout_bounds,
                     pipeline,
                     vertex_buffers: vec![CustomVertexBuffer {
                         source: CustomBufferSource::Buffer(buffer),
@@ -217,6 +222,7 @@ impl Render for CustomDrawExample {
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),
+                        // Missing uniform on purpose.
                     ],
                 }
             };
@@ -278,26 +284,32 @@ fn quad_vertex_data() -> Arc<[u8]> {
     Arc::from(data)
 }
 
+fn inset_bounds(bounds: Bounds<gpui::Pixels>, inset: gpui::Pixels) -> Bounds<gpui::Pixels> {
+    let width = (bounds.size.width - inset * 2.0).max(px(1.0));
+    let height = (bounds.size.height - inset * 2.0).max(px(1.0));
+    Bounds {
+        origin: bounds.origin + gpui::Point::new(inset, inset),
+        size: gpui::Size::new(width, height),
+    }
+}
+
 fn quad_vertex_data_for_bounds(
     bounds: Bounds<gpui::Pixels>,
     viewport: gpui::Size<gpui::Pixels>,
 ) -> Arc<[u8]> {
     let mut data = Vec::with_capacity(6 * 4 * 4);
-    let left = bounds.origin.x;
-    let top = bounds.origin.y;
-    let right = bounds.origin.x + bounds.size.width;
-    let bottom = bounds.origin.y + bounds.size.height;
-
     let viewport_w = f32::from(viewport.width).max(1.0);
     let viewport_h = f32::from(viewport.height).max(1.0);
 
-    let to_ndc_x = |x: gpui::Pixels| (f32::from(x) / viewport_w) * 2.0 - 1.0;
-    let to_ndc_y = |y: gpui::Pixels| 1.0 - (f32::from(y) / viewport_h) * 2.0;
+    let left_px = f32::from(bounds.origin.x);
+    let top_px = f32::from(bounds.origin.y);
+    let right_px = left_px + f32::from(bounds.size.width);
+    let bottom_px = top_px + f32::from(bounds.size.height);
 
-    let left_ndc = to_ndc_x(left);
-    let right_ndc = to_ndc_x(right);
-    let top_ndc = to_ndc_y(top);
-    let bottom_ndc = to_ndc_y(bottom);
+    let left_ndc = (left_px / viewport_w) * 2.0 - 1.0;
+    let right_ndc = (right_px / viewport_w) * 2.0 - 1.0;
+    let top_ndc = 1.0 - (top_px / viewport_h) * 2.0;
+    let bottom_ndc = 1.0 - (bottom_px / viewport_h) * 2.0;
 
     let vertices = [
         (left_ndc, top_ndc, 0.0, 0.0),
@@ -336,10 +348,10 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| CustomDrawExample::new(cx)),
+            |_, cx| cx.new(|cx| MissingBindingExample::new(cx)),
         )
         .expect("Failed to open window");
 
-        example_prelude::init_example(cx, "Custom Draw API");
+        example_prelude::init_example(cx, "Custom Draw API (Missing Binding)");
     });
 }

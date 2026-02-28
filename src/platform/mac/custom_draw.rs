@@ -5,8 +5,8 @@ use anyhow::anyhow;
 use metal::{self, MTLResourceOptions};
 
 use crate::{
-    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBufferDesc, CustomBufferId,
-    CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
+    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingSlot, CustomBufferDesc,
+    CustomBufferId, CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
     CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
     CustomTextureFormat, CustomTextureId, CustomVertexFetch, CustomVertexFormat, Result,
 };
@@ -128,8 +128,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         let attribute_locations = build_attribute_locations(&desc.vertex_fetches)?;
         assign_vertex_locations(&mut module, vertex_entry_index, &attribute_locations)?;
 
-        reject_explicit_bindings(&module)?;
-        let binding_map = build_binding_map(&desc.bindings);
+        let (bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
         let vertex_entry_name = module.entry_points[vertex_entry_index].name.clone();
         let fragment_entry_name = module.entry_points[fragment_entry_index].name.clone();
         assign_resource_bindings(
@@ -137,14 +136,16 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             &info,
             &vertex_entry_name,
             vertex_entry_index,
-            &binding_map,
+            &bindings_by_name,
+            &bindings_by_slot,
         )?;
         assign_resource_bindings(
             &mut module,
             &info,
             &fragment_entry_name,
             fragment_entry_index,
-            &binding_map,
+            &bindings_by_name,
+            &bindings_by_slot,
         )?;
 
         let buffer_binding_base = u8::try_from(desc.vertex_fetches.len())
@@ -399,32 +400,74 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BindingInfo {
+    kind: CustomBindingKind,
+    slot: CustomBindingSlot,
+}
+
 fn build_attribute_locations(
     vertex_fetches: &[CustomVertexFetch],
 ) -> Result<HashMap<&'static str, u32>> {
     let mut locations = HashMap::new();
+    let mut used_locations = std::collections::BTreeSet::new();
+
+    for fetch in vertex_fetches {
+        for attribute in &fetch.layout.attributes {
+            if let Some(location) = attribute.location {
+                if !used_locations.insert(location) {
+                    return Err(anyhow!(
+                        "custom draw vertex attribute locations must be unique (duplicate {})",
+                        location
+                    ));
+                }
+                locations.insert(attribute.name.as_str(), location);
+            }
+        }
+    }
+
     let mut next_location = 0u32;
     for fetch in vertex_fetches {
         for attribute in &fetch.layout.attributes {
             let name = attribute.name.as_str();
             if locations.contains_key(name) {
-                return Err(anyhow!("duplicate vertex attribute '{name}'"));
+                continue;
+            }
+            while used_locations.contains(&next_location) {
+                next_location += 1;
             }
             locations.insert(name, next_location);
+            used_locations.insert(next_location);
             next_location += 1;
         }
     }
+
     Ok(locations)
 }
 
-fn build_binding_map(
+fn build_binding_maps(
     bindings: &[CustomBindingDesc],
-) -> HashMap<&'static str, (u32, CustomBindingKind)> {
-    let mut map = HashMap::new();
-    for (index, binding) in bindings.iter().enumerate() {
-        map.insert(binding.name.as_str(), (index as u32, binding.kind));
+) -> (
+    HashMap<&'static str, BindingInfo>,
+    HashMap<(u32, u32), BindingInfo>,
+) {
+    let mut by_name = HashMap::new();
+    let mut by_slot = HashMap::new();
+
+    for binding in bindings {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
+            group: 0,
+            binding: binding.name.index(),
+        });
+        let info = BindingInfo {
+            kind: binding.kind,
+            slot,
+        };
+        by_name.insert(binding.name.as_str(), info);
+        by_slot.insert((slot.group, slot.binding), info);
     }
-    map
+
+    (by_name, by_slot)
 }
 
 fn assign_vertex_locations(
@@ -452,6 +495,7 @@ fn assign_vertex_locations(
                     ));
                 }
             };
+            let mut modified = false;
             if ep_index == vertex_entry_index {
                 for member in members.iter_mut() {
                     if member.binding.is_some() {
@@ -470,6 +514,7 @@ fn assign_vertex_locations(
                         sampling: None,
                         blend_src: None,
                     });
+                    modified = true;
                 }
             } else {
                 let mut location = 0;
@@ -482,23 +527,13 @@ fn assign_vertex_locations(
                             blend_src: None,
                         });
                         location += 1;
+                        modified = true;
                     }
                 }
             }
-            module.types.replace(argument.ty, ty);
-        }
-    }
-    Ok(())
-}
-
-fn reject_explicit_bindings(module: &naga::Module) -> Result<()> {
-    for (_, var) in module.global_variables.iter() {
-        if let Some(binding) = var.binding {
-            return Err(anyhow!(
-                "explicit binding @group({}) @binding({}) is not supported",
-                binding.group,
-                binding.binding
-            ));
+            if modified {
+                module.types.replace(argument.ty, ty);
+            }
         }
     }
     Ok(())
@@ -509,7 +544,8 @@ fn assign_resource_bindings(
     info: &naga::valid::ModuleInfo,
     entry_point_name: &str,
     entry_point_index: usize,
-    binding_map: &HashMap<&'static str, (u32, CustomBindingKind)>,
+    bindings_by_name: &HashMap<&'static str, BindingInfo>,
+    bindings_by_slot: &HashMap<(u32, u32), BindingInfo>,
 ) -> Result<()> {
     let ep_info = info.get_entry_point(entry_point_index);
     let mut updates = Vec::new();
@@ -518,34 +554,40 @@ fn assign_resource_bindings(
         if ep_info[handle].is_empty() {
             continue;
         }
-        if var.binding.is_some() {
-            continue;
-        }
         match var.space {
             naga::AddressSpace::Storage { .. }
             | naga::AddressSpace::Uniform
             | naga::AddressSpace::Handle => {}
             _ => continue,
         }
-        let name = var
-            .name
-            .as_deref()
-            .ok_or_else(|| anyhow!("custom draw binding missing name"))?;
-        let Some((binding_index, binding_kind)) = binding_map.get(name) else {
-            return Err(anyhow!(
-                "custom draw binding '{}' not declared in pipeline",
-                name
-            ));
+        let name = var.name.as_deref().unwrap_or("<unnamed>");
+        let binding_info = if let Some(binding) = var.binding {
+            *bindings_by_slot
+                .get(&(binding.group, binding.binding))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "explicit binding @group({}) @binding({}) not declared for '{}'",
+                        binding.group,
+                        binding.binding,
+                        name
+                    )
+                })?
+        } else {
+            *bindings_by_name
+                .get(name)
+                .ok_or_else(|| anyhow!("custom draw binding '{}' not declared in pipeline", name))?
         };
-        validate_binding_kind(module, var, *binding_kind, entry_point_name, name)?;
-        updates.push((handle, *binding_index));
+        validate_binding_kind(module, var, binding_info.kind, entry_point_name, name)?;
+        if var.binding.is_none() {
+            updates.push((handle, binding_info.slot));
+        }
     }
 
-    for (handle, binding_index) in updates {
+    for (handle, slot) in updates {
         let var = module.global_variables.get_mut(handle);
         var.binding = Some(naga::ResourceBinding {
-            group: 0,
-            binding: binding_index,
+            group: slot.group,
+            binding: slot.binding,
         });
     }
 
@@ -618,9 +660,13 @@ fn build_entry_point_resources(
     for (index, binding) in bindings.iter().enumerate() {
         let binding_index = u8::try_from(index)
             .map_err(|_| anyhow!("custom draw binding index exceeds Metal slot limit"))?;
-        let resource_binding = naga::ResourceBinding {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
             group: 0,
-            binding: index as u32,
+            binding: binding.name.index(),
+        });
+        let resource_binding = naga::ResourceBinding {
+            group: slot.group,
+            binding: slot.binding,
         };
         let buffer_slot = buffer_binding_base
             .checked_add(binding_index)

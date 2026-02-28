@@ -5,8 +5,7 @@ use crate::{
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
     Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId, CustomDraw,
     CustomDrawParams, CustomPipelineDesc, CustomPipelineId, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureId, Decorations, DevicePixels,
-    DispatchActionListener,
+    CustomTextureDesc, CustomTextureId, Decorations, DevicePixels, DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
     FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
     KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
@@ -2946,6 +2945,8 @@ impl Window {
             corner_radii: quad.corner_radii.scale(scale_factor),
             border_widths: quad.border_widths.scale(scale_factor),
             border_style: quad.border_style,
+            smoothness: 0.0,
+            pad: 0,
         });
     }
 
@@ -3149,6 +3150,10 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                smoothness: 0.0,
+                pad2: 0,
+                pad3: 0,
+                pad4: 0,
             });
         }
         Ok(())
@@ -3267,6 +3272,10 @@ impl Window {
             corner_radii,
             tile,
             opacity,
+            smoothness: 0.0,
+            pad2: 0,
+            pad3: 0,
+            pad4: 0,
         });
         Ok(())
     }
@@ -3295,7 +3304,9 @@ impl Window {
     pub fn create_custom_pipeline(&mut self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
         crate::custom_draw::validate_custom_pipeline_desc(&desc)?;
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw pipeline not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
         };
         registry.create_pipeline(desc)
     }
@@ -3303,7 +3314,9 @@ impl Window {
     /// Create a custom buffer for GPU-backed drawing.
     pub fn create_custom_buffer(&mut self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw buffers not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw buffers not supported on this platform"
+            ));
         };
         registry.create_buffer(desc)
     }
@@ -3311,7 +3324,9 @@ impl Window {
     /// Update a previously created custom buffer.
     pub fn update_custom_buffer(&mut self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw buffers not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw buffers not supported on this platform"
+            ));
         };
         registry.update_buffer(id, data)
     }
@@ -3319,7 +3334,9 @@ impl Window {
     /// Remove a previously created custom buffer.
     pub fn remove_custom_buffer(&mut self, id: CustomBufferId) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw buffers not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw buffers not supported on this platform"
+            ));
         };
         registry.remove_buffer(id);
         Ok(())
@@ -3328,19 +3345,19 @@ impl Window {
     /// Create a custom texture for GPU-backed drawing.
     pub fn create_custom_texture(&mut self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw textures not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw textures not supported on this platform"
+            ));
         };
         registry.create_texture(desc)
     }
 
     /// Update a previously created custom texture.
-    pub fn update_custom_texture(
-        &mut self,
-        id: CustomTextureId,
-        data: Arc<[u8]>,
-    ) -> Result<()> {
+    pub fn update_custom_texture(&mut self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw textures not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw textures not supported on this platform"
+            ));
         };
         registry.update_texture(id, data)
     }
@@ -3348,7 +3365,9 @@ impl Window {
     /// Remove a previously created custom texture.
     pub fn remove_custom_texture(&mut self, id: CustomTextureId) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw textures not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw textures not supported on this platform"
+            ));
         };
         registry.remove_texture(id);
         Ok(())
@@ -3357,7 +3376,9 @@ impl Window {
     /// Create a custom sampler for GPU-backed drawing.
     pub fn create_custom_sampler(&mut self, desc: CustomSamplerDesc) -> Result<CustomSamplerId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw samplers not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw samplers not supported on this platform"
+            ));
         };
         registry.create_sampler(desc)
     }
@@ -3365,7 +3386,9 @@ impl Window {
     /// Remove a previously created custom sampler.
     pub fn remove_custom_sampler(&mut self, id: CustomSamplerId) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
-            return Err(anyhow!("custom draw samplers not supported on this platform"));
+            return Err(anyhow!(
+                "custom draw samplers not supported on this platform"
+            ));
         };
         registry.remove_sampler(id);
         Ok(())

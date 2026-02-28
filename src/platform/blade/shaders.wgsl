@@ -487,6 +487,8 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
+    smoothness: f32,
+    pad: u32,
 }
 var<storage, read> b_quads: array<Quad>;
 
@@ -1205,6 +1207,10 @@ struct PolychromeSprite {
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
+    smoothness: f32,
+    pad2: u32,
+    pad3: u32,
+    pad4: u32,
 }
 var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 

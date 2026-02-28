@@ -346,6 +346,22 @@ name = "custom_draw_api_instanced"
 path = "examples/learn/custom_draw_api_instanced.rs"
 
 [[example]]
+name = "custom_draw_api_conformance"
+path = "examples/learn/custom_draw_api_conformance.rs"
+
+[[example]]
+name = "custom_draw_api_mixed"
+path = "examples/learn/custom_draw_api_mixed.rs"
+
+[[example]]
+name = "custom_draw_api_multi_group"
+path = "examples/learn/custom_draw_api_multi_group.rs"
+
+[[example]]
+name = "custom_draw_api_missing_binding"
+path = "examples/learn/custom_draw_api_missing_binding.rs"
+
+[[example]]
 name = "animation"
 path = "examples/learn/animation.rs"
 
