@@ -1,0 +1,131 @@
+[package]
+name = "blade-graphics"
+version = "0.7.0"
+edition = "2021"
+description = "Graphics abstraction for Blade"
+keywords = ["graphics"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+
+[lib]
+
+[dependencies]
+bitflags = { workspace = true }
+bytemuck = { workspace = true }
+codespan-reporting = "0.12"
+hidden-trait = "0.1"
+log = { workspace = true }
+mint = { workspace = true }
+naga = { workspace = true }
+raw-window-handle = "0.6"
+once_cell = "1"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "CFCGTypes",
+] }
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "std",
+    "MTLTypes",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLBuffer",
+    "MTLTexture",
+    "MTLSampler",
+    "MTLDrawable",
+    "MTLAccelerationStructure",
+    "MTLAccelerationStructureTypes",
+    "MTLCounters",
+    "MTLLibrary",
+    "MTLStageInputOutputDescriptor",
+    "MTLComputePipeline",
+    "MTLVertexDescriptor",
+    "MTLDepthStencil",
+    "MTLComputePipeline",
+    "MTLRenderPipeline",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLAccelerationStructureCommandEncoder",
+    "MTLBlitCommandEncoder",
+    "MTLComputeCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLBlitPass",
+    "MTLComputePass",
+    "MTLRenderPass",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLCaptureManager",
+    "MTLCaptureScope",
+    "block2",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-metal",
+    "objc2-core-foundation",
+    "CALayer",
+    "CAMetalLayer",
+] }
+naga = { workspace = true, features = ["msl-out"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-quartz-core",
+    "objc2-core-foundation",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-quartz-core",
+    "objc2-core-foundation",
+    "UIResponder",
+    "UIView",
+    "UIWindow",
+    "UIScene",
+    "UIWindowScene",
+    "UIScreen",
+] }
+
+[target.'cfg(any(vulkan, windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
+ash = "0.38"
+ash-window = "0.13"
+gpu-alloc = "0.6"
+gpu-alloc-ash = "0.7"
+naga = { workspace = true, features = ["spv-out"] }
+slab = { workspace = true }
+
+[target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
+glow = "0.16"
+naga = { workspace = true, features = ["glsl-out"] }
+
+[target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
+egl = { package = "khronos-egl", version = "6.0", features = ["dynamic"] }
+libloading = { version = "0.8" }
+
+[target.'cfg(all(target_arch = "wasm32"))'.dependencies]
+wasm-bindgen = "0.2.83"
+web-sys = { workspace = true, features = [
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+] }
+js-sys = "0.3.60"
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "bitflags::*",
+    "mint::*",
+    "naga::*",
+    "raw_window_handle::*",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

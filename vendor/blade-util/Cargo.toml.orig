@@ -1,0 +1,19 @@
+[package]
+name = "blade-util"
+version = "0.3.0"
+edition = "2021"
+description = "Utility logic for Blade applications"
+keywords = ["graphics"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+
+[lib]
+
+[dependencies]
+blade-graphics = { version = "0.7", path = "../blade-graphics" }
+bytemuck = { workspace = true }
+log = { workspace = true }
+profiling = { workspace = true }
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["blade_graphics::*"]
