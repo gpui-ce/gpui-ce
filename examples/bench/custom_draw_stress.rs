@@ -35,6 +35,7 @@ struct Uniforms {
   viewport: vec2<f32>,
   grid: vec2<f32>,
   pad: vec2<f32>,
+  pad2: vec2<f32>,
 };
 
 var b0: texture_2d<f32>;
@@ -193,26 +194,24 @@ impl StressHarness {
             shader_source: SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
-            vertex_fetches: vec![
-                CustomVertexFetch {
-                    layout: CustomVertexLayout {
-                        stride: 16,
-                        attributes: vec![
-                            CustomVertexAttribute {
-                                name: CustomVertexAttributeName::A0,
-                                offset: 0,
-                                format: CustomVertexFormat::F32Vec2,
-                            },
-                            CustomVertexAttribute {
-                                name: CustomVertexAttributeName::A1,
-                                offset: 8,
-                                format: CustomVertexFormat::F32Vec2,
-                            },
-                        ],
-                    },
-                    instanced: false,
+            vertex_fetches: vec![CustomVertexFetch {
+                layout: CustomVertexLayout {
+                    stride: 16,
+                    attributes: vec![
+                        CustomVertexAttribute {
+                            name: CustomVertexAttributeName::A0,
+                            offset: 0,
+                            format: CustomVertexFormat::F32Vec2,
+                        },
+                        CustomVertexAttribute {
+                            name: CustomVertexAttributeName::A1,
+                            offset: 8,
+                            format: CustomVertexFormat::F32Vec2,
+                        },
+                    ],
                 },
-            ],
+                instanced: false,
+            }],
             primitive: CustomPrimitiveTopology::TriangleList,
             bindings: vec![
                 CustomBindingDesc {
@@ -225,7 +224,7 @@ impl StressHarness {
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B2,
-                    kind: CustomBindingKind::Uniform { size: 40 },
+                    kind: CustomBindingKind::Uniform { size: 48 },
                 },
             ],
         })?;
@@ -280,15 +279,10 @@ impl Render for StressHarness {
                     .text_color(colors.text)
                     .child("Custom Draw Stress"),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(colors.text_muted)
-                    .child(format!(
-                        "Draws: 1  |  Instances: {}  |  FPS: {:.1}",
-                        self.config.instances, self.last_fps
-                    )),
-            );
+            .child(div().text_sm().text_color(colors.text_muted).child(format!(
+                "Draws: 1  |  Instances: {}  |  FPS: {:.1}",
+                self.config.instances, self.last_fps
+            )));
 
         let surface: Hsla = colors.surface.into();
         let content = if let Some(err) = &self.error {
@@ -333,7 +327,7 @@ impl Render for StressHarness {
                         log::error!("custom draw vertex update failed: {err}");
                     }
                 }
-                let mut uniform = Vec::with_capacity(40);
+                let mut uniform = Vec::with_capacity(48);
                 push_f32(&mut uniform, f32::from(layout_bounds.origin.x));
                 push_f32(&mut uniform, f32::from(layout_bounds.origin.y));
                 push_f32(&mut uniform, f32::from(layout_bounds.size.width));
@@ -345,32 +339,32 @@ impl Render for StressHarness {
                 push_f32(&mut uniform, grid);
                 push_f32(&mut uniform, f32::from(px(config.grid_pad_px)));
                 push_f32(&mut uniform, f32::from(px(config.grid_pad_px)));
+                push_f32(&mut uniform, 0.0);
+                push_f32(&mut uniform, 0.0);
                 CustomDrawParams {
                     bounds,
                     pipeline,
-                    vertex_buffers: vec![
-                        CustomVertexBuffer {
-                            source: CustomBufferSource::Buffer(vertex_buffer),
-                        },
-                    ],
+                    vertex_buffers: vec![CustomVertexBuffer {
+                        source: CustomBufferSource::Buffer(vertex_buffer),
+                    }],
                     vertex_count: 6,
                     instance_count: config.instances as u32,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),
-                        CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::from(
-                            uniform,
-                        ))),
+                        CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::from(uniform))),
                     ],
                 }
             };
 
-            let paint =
-                move |_bounds: Bounds<_>, params: CustomDrawParams, window: &mut Window, _cx: &mut App| {
-                    if let Err(err) = window.paint_custom(params) {
-                        log::error!("custom draw paint failed: {err}");
-                    }
-                };
+            let paint = move |_bounds: Bounds<_>,
+                              params: CustomDrawParams,
+                              window: &mut Window,
+                              _cx: &mut App| {
+                if let Err(err) = window.paint_custom(params) {
+                    log::error!("custom draw paint failed: {err}");
+                }
+            };
 
             div()
                 .w(px(640.))

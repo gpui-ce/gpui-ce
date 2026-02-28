@@ -1,0 +1,753 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use anyhow::anyhow;
+use metal::{self, MTLResourceOptions};
+
+use crate::{
+    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBufferDesc, CustomBufferId,
+    CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
+    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
+    CustomTextureFormat, CustomTextureId, CustomVertexFetch, CustomVertexFormat, Result,
+};
+
+pub(crate) struct MetalCustomDrawRegistry {
+    device: metal::Device,
+    pixel_format: metal::MTLPixelFormat,
+    pipelines: Mutex<Vec<Option<MetalCustomPipeline>>>,
+    buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
+    textures: Mutex<Vec<Option<MetalCustomTexture>>>,
+    samplers: Mutex<Vec<Option<metal::SamplerState>>>,
+}
+
+unsafe impl Send for MetalCustomDrawRegistry {}
+unsafe impl Sync for MetalCustomDrawRegistry {}
+
+pub(crate) struct MetalCustomPipeline {
+    pub(crate) pipeline_state: metal::RenderPipelineState,
+    pub(crate) bindings: Vec<CustomBindingKind>,
+    pub(crate) primitive: metal::MTLPrimitiveType,
+    pub(crate) vertex_fetch_count: usize,
+    pub(crate) buffer_binding_base: u64,
+}
+
+struct MetalCustomBuffer {
+    buffer: metal::Buffer,
+    size: u64,
+}
+
+struct MetalCustomTexture {
+    texture: metal::Texture,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+}
+
+impl MetalCustomDrawRegistry {
+    pub(crate) fn new(device: metal::Device, pixel_format: metal::MTLPixelFormat) -> Self {
+        Self {
+            device,
+            pixel_format,
+            pipelines: Mutex::new(Vec::new()),
+            buffers: Mutex::new(Vec::new()),
+            textures: Mutex::new(Vec::new()),
+            samplers: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn with_pipeline<F, R>(&self, id: CustomPipelineId, f: F) -> Option<R>
+    where
+        F: FnOnce(&MetalCustomPipeline) -> R,
+    {
+        let pipelines = self.pipelines.lock().unwrap();
+        let entry = pipelines.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn buffers_snapshot(&self) -> Vec<Option<metal::Buffer>> {
+        self.buffers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|slot| slot.as_ref().map(|entry| entry.buffer.clone()))
+            .collect()
+    }
+
+    pub(crate) fn textures_snapshot(&self) -> Vec<Option<metal::Texture>> {
+        self.textures
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|slot| slot.as_ref().map(|entry| entry.texture.clone()))
+            .collect()
+    }
+
+    pub(crate) fn samplers_snapshot(&self) -> Vec<Option<metal::SamplerState>> {
+        self.samplers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|slot| slot.as_ref().cloned())
+            .collect()
+    }
+
+    fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> u32 {
+        if let Some((index, slot)) = slots
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        {
+            *slot = Some(value);
+            return index as u32;
+        }
+        slots.push(Some(value));
+        (slots.len() - 1) as u32
+    }
+}
+
+impl CustomDrawRegistry for MetalCustomDrawRegistry {
+    fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
+        let mut module = naga::front::wgsl::parse_str(&desc.shader_source)
+            .map_err(|err| anyhow!("WGSL parse failed: {err}"))?;
+        let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
+        let info = naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+            .validate(&module)
+            .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
+
+        let vertex_entry_index = module
+            .entry_points
+            .iter()
+            .position(|entry| entry.name == desc.vertex_entry)
+            .ok_or_else(|| anyhow!("vertex entry '{}' not found", desc.vertex_entry))?;
+        let fragment_entry_index = module
+            .entry_points
+            .iter()
+            .position(|entry| entry.name == desc.fragment_entry)
+            .ok_or_else(|| anyhow!("fragment entry '{}' not found", desc.fragment_entry))?;
+
+        let attribute_locations = build_attribute_locations(&desc.vertex_fetches)?;
+        assign_vertex_locations(&mut module, vertex_entry_index, &attribute_locations)?;
+
+        reject_explicit_bindings(&module)?;
+        let binding_map = build_binding_map(&desc.bindings);
+        let vertex_entry_name = module.entry_points[vertex_entry_index].name.clone();
+        let fragment_entry_name = module.entry_points[fragment_entry_index].name.clone();
+        assign_resource_bindings(
+            &mut module,
+            &info,
+            &vertex_entry_name,
+            vertex_entry_index,
+            &binding_map,
+        )?;
+        assign_resource_bindings(
+            &mut module,
+            &info,
+            &fragment_entry_name,
+            fragment_entry_index,
+            &binding_map,
+        )?;
+
+        let buffer_binding_base = u8::try_from(desc.vertex_fetches.len())
+            .map_err(|_| anyhow!("custom draw supports up to {} vertex buffers", u8::MAX))?;
+        let entry_point_resources =
+            build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
+        let mut naga_options = naga::back::msl::Options::default();
+        naga_options.lang_version = (1, 2);
+        naga_options.fake_missing_bindings = false;
+        naga_options.zero_initialize_workgroup_memory = false;
+        naga_options.force_loop_bounding = false;
+        naga_options
+            .per_entry_point_map
+            .insert(desc.vertex_entry.clone(), entry_point_resources.clone());
+        naga_options
+            .per_entry_point_map
+            .insert(desc.fragment_entry.clone(), entry_point_resources);
+
+        let pipeline_options = naga::back::msl::PipelineOptions {
+            allow_and_force_point_size: matches!(
+                desc.primitive,
+                CustomPrimitiveTopology::PointList
+            ),
+            vertex_pulling_transform: false,
+            vertex_buffer_mappings: Vec::new(),
+        };
+
+        let (msl_source, translation) =
+            naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
+                .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
+
+        let compile_options = metal::CompileOptions::new();
+        compile_options.set_language_version(metal::MTLLanguageVersion::V1_2);
+        let library = self
+            .device
+            .new_library_with_source(&msl_source, &compile_options)
+            .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
+
+        let vertex_name = translation
+            .entry_point_names
+            .get(vertex_entry_index)
+            .ok_or_else(|| anyhow!("missing translated vertex entry"))
+            .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?;
+        let fragment_name = translation
+            .entry_point_names
+            .get(fragment_entry_index)
+            .ok_or_else(|| anyhow!("missing translated fragment entry"))
+            .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?;
+
+        let vertex_fn = library
+            .get_function(vertex_name, None)
+            .map_err(|err| anyhow!("vertex entry '{vertex_name}' not found: {err}"))?;
+        let fragment_fn = library
+            .get_function(fragment_name, None)
+            .map_err(|err| anyhow!("fragment entry '{fragment_name}' not found: {err}"))?;
+
+        let vertex_descriptor =
+            build_vertex_descriptor(&desc.vertex_fetches, &attribute_locations)?;
+
+        let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
+        pipeline_descriptor.set_label(&desc.name);
+        pipeline_descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+        pipeline_descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+        pipeline_descriptor.set_vertex_descriptor(Some(vertex_descriptor));
+
+        let color_attachment = pipeline_descriptor
+            .color_attachments()
+            .object_at(0)
+            .ok_or_else(|| anyhow!("missing color attachment"))?;
+        color_attachment.set_pixel_format(self.pixel_format);
+        color_attachment.set_blending_enabled(true);
+        color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+        color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+        color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+        color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
+        color_attachment
+            .set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+        color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+
+        let pipeline_state = self
+            .device
+            .new_render_pipeline_state(&pipeline_descriptor)
+            .map_err(|err| anyhow!("custom draw pipeline failed: {err}"))?;
+
+        let binding_kinds = desc.bindings.iter().map(|binding| binding.kind).collect();
+        let pipeline = MetalCustomPipeline {
+            pipeline_state,
+            bindings: binding_kinds,
+            primitive: metal_primitive(desc.primitive),
+            vertex_fetch_count: desc.vertex_fetches.len(),
+            buffer_binding_base: buffer_binding_base as u64,
+        };
+
+        let mut pipelines = self.pipelines.lock().unwrap();
+        let id = Self::alloc_slot(&mut pipelines, pipeline);
+        Ok(CustomPipelineId(id))
+    }
+
+    fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
+        let size = desc.data.len() as u64;
+        let buffer = self
+            .device
+            .new_buffer(size.max(1), MTLResourceOptions::StorageModeManaged);
+        if !desc.data.is_empty() {
+            unsafe {
+                let destination = buffer.contents() as *mut u8;
+                std::ptr::copy_nonoverlapping(desc.data.as_ptr(), destination, desc.data.len());
+            }
+            buffer.did_modify_range(metal::NSRange {
+                location: 0,
+                length: size as u64,
+            });
+        }
+        let mut buffers = self.buffers.lock().unwrap();
+        let id = Self::alloc_slot(
+            &mut buffers,
+            MetalCustomBuffer {
+                buffer,
+                size: size.max(1),
+            },
+        );
+        Ok(CustomBufferId(id))
+    }
+
+    fn update_buffer(&self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()> {
+        let mut buffers = self.buffers.lock().unwrap();
+        let Some(slot) = buffers.get_mut(id.0 as usize) else {
+            return Err(anyhow!("custom buffer id out of range"));
+        };
+        let Some(entry) = slot.as_mut() else {
+            return Err(anyhow!("custom buffer id out of range"));
+        };
+
+        let new_size = data.len() as u64;
+        if new_size > entry.size {
+            let buffer = self
+                .device
+                .new_buffer(new_size.max(1), MTLResourceOptions::StorageModeManaged);
+            *entry = MetalCustomBuffer {
+                buffer,
+                size: new_size.max(1),
+            };
+        }
+
+        if !data.is_empty() {
+            unsafe {
+                let destination = entry.buffer.contents() as *mut u8;
+                std::ptr::copy_nonoverlapping(data.as_ptr(), destination, data.len());
+            }
+            entry.buffer.did_modify_range(metal::NSRange {
+                location: 0,
+                length: new_size as u64,
+            });
+        }
+        Ok(())
+    }
+
+    fn remove_buffer(&self, id: CustomBufferId) {
+        let mut buffers = self.buffers.lock().unwrap();
+        if let Some(slot) = buffers.get_mut(id.0 as usize) {
+            slot.take();
+        }
+    }
+
+    fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
+        let (pixel_format, bytes_per_pixel) = match desc.format {
+            CustomTextureFormat::Rgba8Unorm => (metal::MTLPixelFormat::RGBA8Unorm, 4),
+            CustomTextureFormat::Bgra8Unorm => (metal::MTLPixelFormat::BGRA8Unorm, 4),
+        };
+
+        if desc.data.len() < (desc.width * desc.height * bytes_per_pixel) as usize {
+            return Err(anyhow!("custom texture data is smaller than texture size"));
+        }
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(pixel_format);
+        descriptor.set_width(desc.width as u64);
+        descriptor.set_height(desc.height as u64);
+        descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+
+        let texture = self.device.new_texture(&descriptor);
+        upload_texture_data(
+            &texture,
+            desc.width,
+            desc.height,
+            bytes_per_pixel,
+            &desc.data,
+        );
+
+        let mut textures = self.textures.lock().unwrap();
+        let id = Self::alloc_slot(
+            &mut textures,
+            MetalCustomTexture {
+                texture,
+                width: desc.width,
+                height: desc.height,
+                bytes_per_pixel,
+            },
+        );
+        Ok(CustomTextureId(id))
+    }
+
+    fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
+        let mut textures = self.textures.lock().unwrap();
+        let Some(slot) = textures.get_mut(id.0 as usize) else {
+            return Err(anyhow!("custom texture id out of range"));
+        };
+        let Some(entry) = slot.as_mut() else {
+            return Err(anyhow!("custom texture id out of range"));
+        };
+        let expected_len = (entry.width * entry.height * entry.bytes_per_pixel) as usize;
+        if data.len() < expected_len {
+            return Err(anyhow!("custom texture data is smaller than texture size"));
+        }
+        upload_texture_data(
+            &entry.texture,
+            entry.width,
+            entry.height,
+            entry.bytes_per_pixel,
+            &data,
+        );
+        Ok(())
+    }
+
+    fn remove_texture(&self, id: CustomTextureId) {
+        let mut textures = self.textures.lock().unwrap();
+        if let Some(slot) = textures.get_mut(id.0 as usize) {
+            slot.take();
+        }
+    }
+
+    fn create_sampler(&self, desc: CustomSamplerDesc) -> Result<CustomSamplerId> {
+        let descriptor = metal::SamplerDescriptor::new();
+        descriptor.set_mag_filter(map_min_mag_filter(desc.mag_filter));
+        descriptor.set_min_filter(map_min_mag_filter(desc.min_filter));
+        descriptor.set_mip_filter(map_mip_filter(desc.mipmap_filter));
+        descriptor.set_address_mode_s(map_address_mode(desc.address_modes[0]));
+        descriptor.set_address_mode_t(map_address_mode(desc.address_modes[1]));
+        descriptor.set_address_mode_r(map_address_mode(desc.address_modes[2]));
+
+        let sampler = self.device.new_sampler(&descriptor);
+        let mut samplers = self.samplers.lock().unwrap();
+        let id = Self::alloc_slot(&mut samplers, sampler);
+        Ok(CustomSamplerId(id))
+    }
+
+    fn remove_sampler(&self, id: CustomSamplerId) {
+        let mut samplers = self.samplers.lock().unwrap();
+        if let Some(slot) = samplers.get_mut(id.0 as usize) {
+            slot.take();
+        }
+    }
+}
+
+fn build_attribute_locations(
+    vertex_fetches: &[CustomVertexFetch],
+) -> Result<HashMap<&'static str, u32>> {
+    let mut locations = HashMap::new();
+    let mut next_location = 0u32;
+    for fetch in vertex_fetches {
+        for attribute in &fetch.layout.attributes {
+            let name = attribute.name.as_str();
+            if locations.contains_key(name) {
+                return Err(anyhow!("duplicate vertex attribute '{name}'"));
+            }
+            locations.insert(name, next_location);
+            next_location += 1;
+        }
+    }
+    Ok(locations)
+}
+
+fn build_binding_map(
+    bindings: &[CustomBindingDesc],
+) -> HashMap<&'static str, (u32, CustomBindingKind)> {
+    let mut map = HashMap::new();
+    for (index, binding) in bindings.iter().enumerate() {
+        map.insert(binding.name.as_str(), (index as u32, binding.kind));
+    }
+    map
+}
+
+fn assign_vertex_locations(
+    module: &mut naga::Module,
+    vertex_entry_index: usize,
+    attribute_locations: &HashMap<&'static str, u32>,
+) -> Result<()> {
+    for (ep_index, entry_point) in module.entry_points.iter().enumerate() {
+        if entry_point.stage != naga::ShaderStage::Vertex {
+            continue;
+        }
+        for argument in entry_point.function.arguments.iter() {
+            if argument.binding.is_some() {
+                continue;
+            }
+            let mut ty = module.types[argument.ty].clone();
+            let members = match ty.inner {
+                naga::TypeInner::Struct {
+                    ref mut members, ..
+                } => members,
+                _ => {
+                    return Err(anyhow!(
+                        "vertex entry '{}' input is not a struct",
+                        entry_point.name
+                    ));
+                }
+            };
+            if ep_index == vertex_entry_index {
+                for member in members.iter_mut() {
+                    if member.binding.is_some() {
+                        continue;
+                    }
+                    let name = member
+                        .name
+                        .as_deref()
+                        .ok_or_else(|| anyhow!("vertex input member missing name"))?;
+                    let location = attribute_locations
+                        .get(name)
+                        .ok_or_else(|| anyhow!("vertex input '{}' not provided in layout", name))?;
+                    member.binding = Some(naga::Binding::Location {
+                        location: *location,
+                        interpolation: None,
+                        sampling: None,
+                        blend_src: None,
+                    });
+                }
+            } else {
+                let mut location = 0;
+                for member in members.iter_mut() {
+                    if member.binding.is_none() {
+                        member.binding = Some(naga::Binding::Location {
+                            location,
+                            interpolation: None,
+                            sampling: None,
+                            blend_src: None,
+                        });
+                        location += 1;
+                    }
+                }
+            }
+            module.types.replace(argument.ty, ty);
+        }
+    }
+    Ok(())
+}
+
+fn reject_explicit_bindings(module: &naga::Module) -> Result<()> {
+    for (_, var) in module.global_variables.iter() {
+        if let Some(binding) = var.binding {
+            return Err(anyhow!(
+                "explicit binding @group({}) @binding({}) is not supported",
+                binding.group,
+                binding.binding
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assign_resource_bindings(
+    module: &mut naga::Module,
+    info: &naga::valid::ModuleInfo,
+    entry_point_name: &str,
+    entry_point_index: usize,
+    binding_map: &HashMap<&'static str, (u32, CustomBindingKind)>,
+) -> Result<()> {
+    let ep_info = info.get_entry_point(entry_point_index);
+    let mut updates = Vec::new();
+
+    for (handle, var) in module.global_variables.iter() {
+        if ep_info[handle].is_empty() {
+            continue;
+        }
+        if var.binding.is_some() {
+            continue;
+        }
+        match var.space {
+            naga::AddressSpace::Storage { .. }
+            | naga::AddressSpace::Uniform
+            | naga::AddressSpace::Handle => {}
+            _ => continue,
+        }
+        let name = var
+            .name
+            .as_deref()
+            .ok_or_else(|| anyhow!("custom draw binding missing name"))?;
+        let Some((binding_index, binding_kind)) = binding_map.get(name) else {
+            return Err(anyhow!(
+                "custom draw binding '{}' not declared in pipeline",
+                name
+            ));
+        };
+        validate_binding_kind(module, var, *binding_kind, entry_point_name, name)?;
+        updates.push((handle, *binding_index));
+    }
+
+    for (handle, binding_index) in updates {
+        let var = module.global_variables.get_mut(handle);
+        var.binding = Some(naga::ResourceBinding {
+            group: 0,
+            binding: binding_index,
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_binding_kind(
+    module: &naga::Module,
+    var: &naga::GlobalVariable,
+    binding_kind: CustomBindingKind,
+    entry_point_name: &str,
+    name: &str,
+) -> Result<()> {
+    match binding_kind {
+        CustomBindingKind::Texture => match module.types[var.ty].inner {
+            naga::TypeInner::Image { .. } => Ok(()),
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a texture",
+                name,
+                entry_point_name
+            )),
+        },
+        CustomBindingKind::Sampler => match module.types[var.ty].inner {
+            naga::TypeInner::Sampler { .. } => Ok(()),
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a sampler",
+                name,
+                entry_point_name
+            )),
+        },
+        CustomBindingKind::Uniform { size } => {
+            if var.space != naga::AddressSpace::Uniform {
+                return Err(anyhow!(
+                    "binding '{}' in entry '{}' must be uniform",
+                    name,
+                    entry_point_name
+                ));
+            }
+            let mut layouter = naga::proc::Layouter::default();
+            layouter
+                .update(module.to_ctx())
+                .map_err(|err| anyhow!("uniform layout failed: {err}"))?;
+            let layout = &layouter[var.ty];
+            if layout.size != size {
+                return Err(anyhow!(
+                    "binding '{}' size mismatch (expected {}, shader reports {})",
+                    name,
+                    size,
+                    layout.size
+                ));
+            }
+            Ok(())
+        }
+        CustomBindingKind::Buffer => match var.space {
+            naga::AddressSpace::Storage { .. } => Ok(()),
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a storage buffer",
+                name,
+                entry_point_name
+            )),
+        },
+    }
+}
+
+fn build_entry_point_resources(
+    bindings: &[CustomBindingDesc],
+    buffer_binding_base: u8,
+) -> Result<naga::back::msl::EntryPointResources> {
+    let mut resources = naga::back::msl::EntryPointResources::default();
+    for (index, binding) in bindings.iter().enumerate() {
+        let binding_index = u8::try_from(index)
+            .map_err(|_| anyhow!("custom draw binding index exceeds Metal slot limit"))?;
+        let resource_binding = naga::ResourceBinding {
+            group: 0,
+            binding: index as u32,
+        };
+        let buffer_slot = buffer_binding_base
+            .checked_add(binding_index)
+            .ok_or_else(|| anyhow!("custom draw buffer slot overflow"))?;
+        let bind_target = match binding.kind {
+            CustomBindingKind::Texture => naga::back::msl::BindTarget {
+                texture: Some(binding_index),
+                ..Default::default()
+            },
+            CustomBindingKind::Sampler => naga::back::msl::BindTarget {
+                sampler: Some(naga::back::msl::BindSamplerTarget::Resource(binding_index)),
+                ..Default::default()
+            },
+            CustomBindingKind::Buffer => naga::back::msl::BindTarget {
+                buffer: Some(buffer_slot),
+                mutable: true,
+                ..Default::default()
+            },
+            CustomBindingKind::Uniform { .. } => naga::back::msl::BindTarget {
+                buffer: Some(buffer_slot),
+                ..Default::default()
+            },
+        };
+        resources.resources.insert(resource_binding, bind_target);
+    }
+    Ok(resources)
+}
+
+fn build_vertex_descriptor<'a>(
+    vertex_fetches: &'a [CustomVertexFetch],
+    attribute_locations: &'a HashMap<&'static str, u32>,
+) -> Result<&'a metal::VertexDescriptorRef> {
+    let descriptor = metal::VertexDescriptor::new();
+    for (buffer_index, fetch) in vertex_fetches.iter().enumerate() {
+        let layout = descriptor
+            .layouts()
+            .object_at(buffer_index as u64)
+            .ok_or_else(|| anyhow!("missing vertex buffer layout"))?;
+        layout.set_stride(fetch.layout.stride as u64);
+        layout.set_step_function(if fetch.instanced {
+            metal::MTLVertexStepFunction::PerInstance
+        } else {
+            metal::MTLVertexStepFunction::PerVertex
+        });
+        layout.set_step_rate(1);
+
+        for attribute in &fetch.layout.attributes {
+            let location = attribute_locations
+                .get(attribute.name.as_str())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "vertex attribute '{}' missing location",
+                        attribute.name.as_str()
+                    )
+                })?;
+            let attr_descriptor = descriptor
+                .attributes()
+                .object_at(*location as u64)
+                .ok_or_else(|| anyhow!("missing vertex attribute descriptor"))?;
+            attr_descriptor.set_format(metal_vertex_format(attribute.format));
+            attr_descriptor.set_offset(attribute.offset as u64);
+            attr_descriptor.set_buffer_index(buffer_index as u64);
+        }
+    }
+    Ok(descriptor)
+}
+
+fn metal_vertex_format(format: CustomVertexFormat) -> metal::MTLVertexFormat {
+    match format {
+        CustomVertexFormat::F32 => metal::MTLVertexFormat::Float,
+        CustomVertexFormat::F32Vec2 => metal::MTLVertexFormat::Float2,
+        CustomVertexFormat::F32Vec3 => metal::MTLVertexFormat::Float3,
+        CustomVertexFormat::F32Vec4 => metal::MTLVertexFormat::Float4,
+        CustomVertexFormat::U32 => metal::MTLVertexFormat::UInt,
+        CustomVertexFormat::U32Vec2 => metal::MTLVertexFormat::UInt2,
+        CustomVertexFormat::U32Vec3 => metal::MTLVertexFormat::UInt3,
+        CustomVertexFormat::U32Vec4 => metal::MTLVertexFormat::UInt4,
+        CustomVertexFormat::I32 => metal::MTLVertexFormat::Int,
+        CustomVertexFormat::I32Vec2 => metal::MTLVertexFormat::Int2,
+        CustomVertexFormat::I32Vec3 => metal::MTLVertexFormat::Int3,
+        CustomVertexFormat::I32Vec4 => metal::MTLVertexFormat::Int4,
+    }
+}
+
+fn metal_primitive(primitive: CustomPrimitiveTopology) -> metal::MTLPrimitiveType {
+    match primitive {
+        CustomPrimitiveTopology::PointList => metal::MTLPrimitiveType::Point,
+        CustomPrimitiveTopology::LineList => metal::MTLPrimitiveType::Line,
+        CustomPrimitiveTopology::LineStrip => metal::MTLPrimitiveType::LineStrip,
+        CustomPrimitiveTopology::TriangleList => metal::MTLPrimitiveType::Triangle,
+        CustomPrimitiveTopology::TriangleStrip => metal::MTLPrimitiveType::TriangleStrip,
+    }
+}
+
+fn map_min_mag_filter(filter: CustomFilterMode) -> metal::MTLSamplerMinMagFilter {
+    match filter {
+        CustomFilterMode::Nearest => metal::MTLSamplerMinMagFilter::Nearest,
+        CustomFilterMode::Linear => metal::MTLSamplerMinMagFilter::Linear,
+    }
+}
+
+fn map_mip_filter(filter: CustomFilterMode) -> metal::MTLSamplerMipFilter {
+    match filter {
+        CustomFilterMode::Nearest => metal::MTLSamplerMipFilter::Nearest,
+        CustomFilterMode::Linear => metal::MTLSamplerMipFilter::Linear,
+    }
+}
+
+fn map_address_mode(mode: CustomAddressMode) -> metal::MTLSamplerAddressMode {
+    match mode {
+        CustomAddressMode::ClampToEdge => metal::MTLSamplerAddressMode::ClampToEdge,
+        CustomAddressMode::Repeat => metal::MTLSamplerAddressMode::Repeat,
+    }
+}
+
+fn upload_texture_data(
+    texture: &metal::TextureRef,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+    data: &[u8],
+) {
+    let region = metal::MTLRegion::new_2d(0, 0, width as u64, height as u64);
+    texture.replace_region(
+        region,
+        0,
+        data.as_ptr() as *const _,
+        (width * bytes_per_pixel) as u64,
+    );
+}

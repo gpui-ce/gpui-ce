@@ -156,6 +156,7 @@ metal = "0.29"
 objc = "0.2"
 objc2 = { version = "0.6", optional = true }
 objc2-metal = { version = "0.3", optional = true }
+naga = { version = "25.0", features = ["wgsl-in", "msl-out"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies]
 pathfinder_geometry = "0.5"

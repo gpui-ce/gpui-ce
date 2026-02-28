@@ -1,6 +1,6 @@
-# Custom Draw (Blade-only)
+# Custom Draw (Metal + Blade)
 
-The custom draw API is currently supported only when using the Blade backend.
+The custom draw API is supported on Metal (default on macOS) and Blade (`macos-blade`).
 
 ## Features
 
@@ -15,17 +15,17 @@ The custom draw API is currently supported only when using the Blade backend.
 ## Quick start
 
 ```sh
-# Base example
-cargo run --example custom_draw_api --features macos-blade
+# Base example (Metal default on macOS; add --features macos-blade for Blade)
+cargo run --example custom_draw_api
 
 # Animated uniform example
-cargo run --example custom_draw_api_animated --features macos-blade
+cargo run --example custom_draw_api_animated
 
 # Instanced rendering example
-cargo run --example custom_draw_api_instanced --features macos-blade
+cargo run --example custom_draw_api_instanced
 
 # Stress harness (many instanced quads)
-cargo run --example custom_draw_stress --features macos-blade
+cargo run --example custom_draw_stress
 ```
 
 ## WGSL constraints (Blade reflection)
@@ -60,14 +60,14 @@ var<uniform> b2: Uniforms;
 ## Stress harness flags
 
 ```sh
-cargo run --example custom_draw_stress --features macos-blade -- \
+cargo run --example custom_draw_stress -- \
   --instances 2500 --quad-size 10 --grid-pad 6 --bounds-inset 1
 ```
 
 ### Instanced example flags
 
 ```sh
-cargo run --example custom_draw_api_instanced --features macos-blade -- \
+cargo run --example custom_draw_api_instanced -- \
   --instances 25 --quad-size 24 --grid-pad 16 --bounds-inset 1
 ```
 
@@ -77,6 +77,6 @@ cargo run --example custom_draw_api_instanced --features macos-blade -- \
 - Increase `--instances` until FPS drops below display refresh.
 
 ```sh
-cargo run --release --example custom_draw_stress --features macos-blade -- \
+cargo run --release --example custom_draw_stress -- \
   --instances 10000
 ```

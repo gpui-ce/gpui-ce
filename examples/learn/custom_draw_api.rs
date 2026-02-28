@@ -7,7 +7,7 @@
 //! - paint_custom draw call
 //!
 //! Notes:
-//! - Blade-only (macos-blade feature)
+//! - Works on Metal (default macOS) and Blade (`macos-blade` feature).
 //! - WGSL must omit @location and @group/@binding; use a0.. and b0.. names instead.
 
 #[path = "../prelude.rs"]

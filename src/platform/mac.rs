@@ -10,6 +10,8 @@ mod keyboard;
 mod screen_capture;
 
 #[cfg(not(feature = "macos-blade"))]
+mod custom_draw;
+#[cfg(not(feature = "macos-blade"))]
 mod metal_atlas;
 #[cfg(not(feature = "macos-blade"))]
 pub mod metal_renderer;

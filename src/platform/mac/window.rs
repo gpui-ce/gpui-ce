@@ -1479,14 +1479,7 @@ impl PlatformWindow for MacWindow {
     }
 
     fn custom_draw_registry(&self) -> Option<Arc<dyn crate::CustomDrawRegistry>> {
-        #[cfg(feature = "macos-blade")]
-        {
-            Some(self.0.lock().renderer.custom_draw_registry())
-        }
-        #[cfg(not(feature = "macos-blade"))]
-        {
-            None
-        }
+        Some(self.0.lock().renderer.custom_draw_registry())
     }
 
     fn gpu_specs(&self) -> Option<crate::GpuSpecs> {
