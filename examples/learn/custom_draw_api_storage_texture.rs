@@ -1,88 +1,118 @@
-//! Custom Draw API Example
+//! Custom Draw API (Storage Texture) Example
 //!
-//! Demonstrates the custom GPU draw pipeline:
-//! - custom pipeline creation (WGSL)
-//! - vertex buffer binding
-//! - texture + sampler bindings
-//! - paint_custom draw call
-//!
-//! Notes:
-//! - Works on Metal (default macOS) and Blade (`macos-blade` feature).
-//! - WGSL must omit @location and @group/@binding; use a0.. and b0.. names instead.
+//! Demonstrates a compute pipeline writing into a storage texture that is
+//! then sampled by a draw pass.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{
     App, AppContext, Application, Bounds, Colors, Context, CustomAddressMode, CustomBindingDesc,
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
-    CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
-    CustomPipelineState, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
+    CustomBufferSource, CustomComputeDispatch, CustomComputePipelineDesc, CustomComputePipelineId,
+    CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
+    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
+    CustomTextureFormat, CustomTextureId, CustomTextureUsage, CustomUniformBuilder,
     CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
     CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
     WindowOptions, canvas, div, prelude::*, px, size,
 };
 
-const SHADER_SOURCE: &str = r#"
- struct VertexInput {
-   a0: vec2<f32>,
-   a1: vec2<f32>,
- };
- 
- struct VertexOutput {
-   @builtin(position) position: vec4<f32>,
-   @location(0) uv: vec2<f32>,
- };
- 
- var b0: texture_2d<f32>;
- var b1: sampler;
- 
- @vertex
- fn vs_main(input: VertexInput) -> VertexOutput {
-   var out: VertexOutput;
-   out.position = vec4<f32>(input.a0, 0.0, 1.0);
-   out.uv = input.a1;
-   return out;
- }
- 
- @fragment
- fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-   return textureSample(b0, b1, input.uv);
- }
- "#;
+const STORAGE_TEXTURE_SIZE: u32 = 256;
+const WORKGROUP_SIZE: u32 = 8;
 
-struct CustomDrawExample {
-    pipeline: Option<CustomPipelineId>,
-    vertex_buffer: Option<CustomBufferId>,
-    texture: Option<CustomTextureId>,
-    sampler: Option<CustomSamplerId>,
-    error: Option<String>,
+const COMPUTE_SHADER_SOURCE: &str = r#"
+struct Params {
+  time: vec4<f32>,
+};
+
+var b0: texture_storage_2d<rgba8unorm, write>;
+var<uniform> b1: Params;
+
+@compute @workgroup_size(8, 8)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let size = textureDimensions(b0);
+  if id.x >= size.x || id.y >= size.y {
+    return;
+  }
+
+  let uv = vec2<f32>(f32(id.x) / f32(size.x), f32(id.y) / f32(size.y));
+  let pulse = 0.5 + 0.5 * sin(b1.time.x);
+  let color = vec4<f32>(uv.x, uv.y, pulse, 1.0);
+  textureStore(b0, vec2<i32>(id.xy), color);
+}
+"#;
+
+const DRAW_SHADER_SOURCE: &str = r#"
+struct VertexInput {
+  a0: vec2<f32>,
+  a1: vec2<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+var b0: texture_2d<f32>;
+var b1: sampler;
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.position = vec4<f32>(input.a0, 0.0, 1.0);
+  out.uv = input.a1;
+  return out;
 }
 
-impl CustomDrawExample {
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return textureSample(b0, b1, input.uv);
+}
+"#;
+
+struct StorageTextureExample {
+    compute_pipeline: Option<CustomComputePipelineId>,
+    render_pipeline: Option<CustomPipelineId>,
+    vertex_buffer: Option<CustomBufferId>,
+    storage_texture: Option<CustomTextureId>,
+    sampler: Option<CustomSamplerId>,
+    error: Option<String>,
+    start: Instant,
+}
+
+struct StorageTextureFrame {
+    compute: CustomComputeDispatch,
+    draw: CustomDrawParams,
+}
+
+impl StorageTextureExample {
     fn new(_cx: &mut Context<Self>) -> Self {
         Self {
-            pipeline: None,
+            compute_pipeline: None,
+            render_pipeline: None,
             vertex_buffer: None,
-            texture: None,
+            storage_texture: None,
             sampler: None,
             error: None,
+            start: Instant::now(),
         }
     }
 
     fn ensure_resources(&mut self, window: &mut Window) {
-        if self.pipeline.is_some() || self.error.is_some() {
+        if self.compute_pipeline.is_some() || self.error.is_some() {
             return;
         }
 
         match self.build_resources(window) {
-            Ok((pipeline, buffer, texture, sampler)) => {
-                self.pipeline = Some(pipeline);
-                self.vertex_buffer = Some(buffer);
-                self.texture = Some(texture);
+            Ok((compute_pipeline, render_pipeline, vertex_buffer, storage_texture, sampler)) => {
+                self.compute_pipeline = Some(compute_pipeline);
+                self.render_pipeline = Some(render_pipeline);
+                self.vertex_buffer = Some(vertex_buffer);
+                self.storage_texture = Some(storage_texture);
                 self.sampler = Some(sampler);
             }
             Err(err) => {
@@ -95,14 +125,34 @@ impl CustomDrawExample {
         &self,
         window: &mut Window,
     ) -> anyhow::Result<(
+        CustomComputePipelineId,
         CustomPipelineId,
         CustomBufferId,
         CustomTextureId,
         CustomSamplerId,
     )> {
-        let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
-            name: "custom_draw_demo".to_string(),
-            shader_source: SHADER_SOURCE.to_string(),
+        let compute_pipeline =
+            window.create_custom_compute_pipeline(CustomComputePipelineDesc {
+                name: "custom_draw_storage_compute".to_string(),
+                shader_source: COMPUTE_SHADER_SOURCE.to_string(),
+                entry_point: "cs_main".to_string(),
+                bindings: vec![
+                    CustomBindingDesc {
+                        name: CustomBindingName::B0,
+                        kind: CustomBindingKind::StorageTexture,
+                        slot: None,
+                    },
+                    CustomBindingDesc {
+                        name: CustomBindingName::B1,
+                        kind: CustomBindingKind::Uniform { size: 16 },
+                        slot: None,
+                    },
+                ],
+            })?;
+
+        let render_pipeline = window.create_custom_pipeline(CustomPipelineDesc {
+            name: "custom_draw_storage_render".to_string(),
+            shader_source: DRAW_SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
             vertex_fetches: vec![CustomVertexFetch {
@@ -142,38 +192,54 @@ impl CustomDrawExample {
             ],
         })?;
 
-        let vertex_data = quad_vertex_data();
         let vertex_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "quad_vertices".to_string(),
-            data: vertex_data,
+            name: "storage_texture_vertices".to_string(),
+            data: quad_vertex_data(),
         })?;
 
-        let texture_data = checker_texture_data();
         let texture = window.create_custom_texture(CustomTextureDesc {
-            name: "checker_texture".to_string(),
-            width: 2,
-            height: 2,
+            name: "storage_texture".to_string(),
+            width: STORAGE_TEXTURE_SIZE,
+            height: STORAGE_TEXTURE_SIZE,
             format: CustomTextureFormat::Rgba8Unorm,
-            usage: CustomTextureUsage::SAMPLED,
-            data: vec![texture_data],
+            usage: CustomTextureUsage::SAMPLED | CustomTextureUsage::STORAGE,
+            data: vec![Arc::from(vec![
+                0u8;
+                (STORAGE_TEXTURE_SIZE * STORAGE_TEXTURE_SIZE * 4)
+                    as usize
+            ])],
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {
-            name: "checker_sampler".to_string(),
-            min_filter: CustomFilterMode::Nearest,
-            mag_filter: CustomFilterMode::Nearest,
+            name: "storage_texture_sampler".to_string(),
+            min_filter: CustomFilterMode::Linear,
+            mag_filter: CustomFilterMode::Linear,
             mipmap_filter: CustomFilterMode::Nearest,
             address_modes: [CustomAddressMode::ClampToEdge; 3],
         })?;
 
-        Ok((pipeline, vertex_buffer, texture, sampler))
+        Ok((
+            compute_pipeline,
+            render_pipeline,
+            vertex_buffer,
+            texture,
+            sampler,
+        ))
+    }
+
+    fn uniform_for_time(&self) -> Arc<[u8]> {
+        let t = self.start.elapsed().as_secs_f32();
+        let mut builder = CustomUniformBuilder::new();
+        builder.push_vec4(t, 0.0, 0.0, 0.0);
+        builder.finish()
     }
 }
 
-impl Render for CustomDrawExample {
+impl Render for StorageTextureExample {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
+        window.request_animation_frame();
 
         let header = div()
             .flex()
@@ -184,13 +250,13 @@ impl Render for CustomDrawExample {
                     .text_xl()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
-                    .child("Custom Draw API"),
+                    .child("Custom Draw API (Storage Texture)"),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(colors.text_muted)
-                    .child("Custom WGSL pipeline + vertex buffer + texture/sampler"),
+                    .child("Compute writes a storage texture sampled in a draw pass"),
             );
 
         let surface: Hsla = colors.surface.into();
@@ -199,40 +265,66 @@ impl Render for CustomDrawExample {
                 .text_sm()
                 .text_color(colors.error)
                 .child(format!("Custom draw unsupported: {err}"))
-        } else if let (Some(pipeline), Some(buffer), Some(texture), Some(sampler)) = (
-            self.pipeline,
+        } else if let (
+            Some(compute_pipeline),
+            Some(render_pipeline),
+            Some(vertex_buffer),
+            Some(storage_texture),
+            Some(sampler),
+        ) = (
+            self.compute_pipeline,
+            self.render_pipeline,
             self.vertex_buffer,
-            self.texture,
+            self.storage_texture,
             self.sampler,
         ) {
+            let uniform = self.uniform_for_time();
             let prepaint = move |bounds: Bounds<_>, window: &mut Window, _cx: &mut App| {
                 let vertex_data = quad_vertex_data_for_bounds(bounds, window.viewport_size());
-                if let Err(err) = window.update_custom_buffer(buffer, Arc::clone(&vertex_data)) {
+                if let Err(err) =
+                    window.update_custom_buffer(vertex_buffer, Arc::clone(&vertex_data))
+                {
                     log::error!("custom draw vertex update failed: {err}");
                 }
-                CustomDrawParams {
-                    bounds,
-                    pipeline,
-                    vertex_buffers: vec![CustomVertexBuffer {
-                        source: CustomBufferSource::Buffer(buffer),
-                    }],
-                    vertex_count: 6,
-                    index_buffer: None,
-                    index_count: 0,
-                    target: None,
-                    instance_count: 1,
-                    bindings: vec![
-                        CustomBindingValue::Texture(texture),
-                        CustomBindingValue::Sampler(sampler),
-                    ],
+                let group_count = (STORAGE_TEXTURE_SIZE + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+                StorageTextureFrame {
+                    compute: CustomComputeDispatch {
+                        pipeline: compute_pipeline,
+                        bindings: vec![
+                            CustomBindingValue::Texture(storage_texture),
+                            CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::clone(
+                                &uniform,
+                            ))),
+                        ],
+                        workgroup_count: [group_count, group_count, 1],
+                    },
+                    draw: CustomDrawParams {
+                        bounds,
+                        pipeline: render_pipeline,
+                        vertex_buffers: vec![CustomVertexBuffer {
+                            source: CustomBufferSource::Buffer(vertex_buffer),
+                        }],
+                        vertex_count: 6,
+                        index_buffer: None,
+                        index_count: 0,
+                        target: None,
+                        instance_count: 1,
+                        bindings: vec![
+                            CustomBindingValue::Texture(storage_texture),
+                            CustomBindingValue::Sampler(sampler),
+                        ],
+                    },
                 }
             };
 
             let paint = move |_bounds: Bounds<_>,
-                              params: CustomDrawParams,
+                              params: StorageTextureFrame,
                               window: &mut Window,
                               _cx: &mut App| {
-                if let Err(err) = window.paint_custom(params) {
+                if let Err(err) = window.dispatch_custom_compute(params.compute) {
+                    log::error!("custom compute dispatch failed: {err}");
+                }
+                if let Err(err) = window.paint_custom(params.draw) {
                     log::error!("custom draw paint failed: {err}");
                 }
             };
@@ -325,16 +417,6 @@ fn quad_vertex_data_for_bounds(
     Arc::from(data)
 }
 
-fn checker_texture_data() -> Arc<[u8]> {
-    let data: [u8; 16] = [
-        0xff, 0x4d, 0x4d, 0xff, // red
-        0x4d, 0xff, 0x4d, 0xff, // green
-        0x4d, 0x4d, 0xff, 0xff, // blue
-        0xff, 0xff, 0xff, 0xff, // white
-    ];
-    Arc::from(data)
-}
-
 fn main() {
     Application::new().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
@@ -343,10 +425,10 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| CustomDrawExample::new(cx)),
+            |_, cx| cx.new(|cx| StorageTextureExample::new(cx)),
         )
         .expect("Failed to open window");
 
-        example_prelude::init_example(cx, "Custom Draw API");
+        example_prelude::init_example(cx, "Custom Draw API (Storage Texture)");
     });
 }

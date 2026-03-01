@@ -12,8 +12,8 @@ use crate::{
     CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
     CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
     CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
-    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat,
-    Result,
+    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -631,12 +631,25 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             }
         }
 
+        let mut usage = metal::MTLTextureUsage::empty();
+        if desc.usage.contains(CustomTextureUsage::SAMPLED) {
+            usage |= metal::MTLTextureUsage::ShaderRead;
+        }
+        if desc.usage.contains(CustomTextureUsage::STORAGE) {
+            usage |= metal::MTLTextureUsage::ShaderWrite;
+        }
+        if usage.is_empty() {
+            return Err(anyhow!(
+                "custom texture usage must include sampled or storage"
+            ));
+        }
+
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(pixel_format);
         descriptor.set_width(desc.width as u64);
         descriptor.set_height(desc.height as u64);
         descriptor.set_mipmap_level_count(desc.data.len() as u64);
-        descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+        descriptor.set_usage(usage);
 
         let texture = self.device.new_texture(&descriptor);
         for (level, data) in desc.data.iter().enumerate() {
@@ -907,8 +920,9 @@ fn binding_kind_key(kind: CustomBindingKind) -> BindingKindKey {
     match kind {
         CustomBindingKind::Buffer => BindingKindKey { kind: 0, size: 0 },
         CustomBindingKind::Texture => BindingKindKey { kind: 1, size: 0 },
-        CustomBindingKind::Sampler => BindingKindKey { kind: 2, size: 0 },
-        CustomBindingKind::Uniform { size } => BindingKindKey { kind: 3, size },
+        CustomBindingKind::StorageTexture => BindingKindKey { kind: 2, size: 0 },
+        CustomBindingKind::Sampler => BindingKindKey { kind: 3, size: 0 },
+        CustomBindingKind::Uniform { size } => BindingKindKey { kind: 4, size },
     }
 }
 
@@ -1169,9 +1183,23 @@ fn validate_binding_kind(
 ) -> Result<()> {
     match binding_kind {
         CustomBindingKind::Texture => match module.types[var.ty].inner {
-            naga::TypeInner::Image { .. } => Ok(()),
+            naga::TypeInner::Image {
+                class: naga::ImageClass::Sampled { .. },
+                ..
+            } => Ok(()),
             _ => Err(anyhow!(
-                "binding '{}' in entry '{}' must be a texture",
+                "binding '{}' in entry '{}' must be a sampled texture",
+                name,
+                entry_point_name
+            )),
+        },
+        CustomBindingKind::StorageTexture => match module.types[var.ty].inner {
+            naga::TypeInner::Image {
+                class: naga::ImageClass::Storage { .. },
+                ..
+            } => Ok(()),
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a storage texture",
                 name,
                 entry_point_name
             )),
@@ -1238,10 +1266,12 @@ fn build_entry_point_resources(
             .checked_add(binding_index)
             .ok_or_else(|| anyhow!("custom draw buffer slot overflow"))?;
         let bind_target = match binding.kind {
-            CustomBindingKind::Texture => naga::back::msl::BindTarget {
-                texture: Some(binding_index),
-                ..Default::default()
-            },
+            CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
+                naga::back::msl::BindTarget {
+                    texture: Some(binding_index),
+                    ..Default::default()
+                }
+            }
             CustomBindingKind::Sampler => naga::back::msl::BindTarget {
                 sampler: Some(naga::back::msl::BindSamplerTarget::Resource(binding_index)),
                 ..Default::default()

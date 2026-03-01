@@ -354,6 +354,10 @@ name = "custom_draw_api_compute"
 path = "examples/learn/custom_draw_api_compute.rs"
 
 [[example]]
+name = "custom_draw_api_storage_texture"
+path = "examples/learn/custom_draw_api_storage_texture.rs"
+
+[[example]]
 name = "custom_draw_api_conformance"
 path = "examples/learn/custom_draw_api_conformance.rs"
 

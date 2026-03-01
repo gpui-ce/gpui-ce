@@ -12,10 +12,10 @@ use gpui::{
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
     CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
     CustomPipelineState, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomVertexAttribute,
-    CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat,
-    CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds, WindowOptions, canvas, div,
-    prelude::*, px, size,
+    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
+    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
+    CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
+    WindowOptions, canvas, div, prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -159,6 +159,7 @@ impl MixedExample {
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
+            usage: CustomTextureUsage::SAMPLED,
             data: vec![checker_texture_data()],
         })?;
 

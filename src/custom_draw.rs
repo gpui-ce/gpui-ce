@@ -526,8 +526,10 @@ impl CustomBindingName {
 pub enum CustomBindingKind {
     /// Storage buffer binding.
     Buffer,
-    /// 2D texture binding.
+    /// 2D sampled texture binding.
     Texture,
+    /// Storage texture binding (read/write).
+    StorageTexture,
     /// Sampler binding.
     Sampler,
     /// Uniform/constant buffer binding.
@@ -916,6 +918,23 @@ pub enum CustomTextureFormat {
     Bgra8UnormSrgb,
 }
 
+bitflags::bitflags! {
+    /// Usage flags for custom textures.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CustomTextureUsage: u8 {
+        /// Texture can be sampled in shaders.
+        const SAMPLED = 1 << 0;
+        /// Texture can be written via storage texture bindings.
+        const STORAGE = 1 << 1;
+    }
+}
+
+impl Default for CustomTextureUsage {
+    fn default() -> Self {
+        Self::SAMPLED
+    }
+}
+
 /// Texture description for custom GPU rendering.
 #[derive(Debug, Clone)]
 pub struct CustomTextureDesc {
@@ -927,6 +946,8 @@ pub struct CustomTextureDesc {
     pub height: u32,
     /// Texture format.
     pub format: CustomTextureFormat,
+    /// Texture usage flags.
+    pub usage: CustomTextureUsage,
     /// Initial texture contents for each mip level (level 0 first).
     pub data: Vec<Arc<[u8]>>,
 }

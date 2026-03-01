@@ -10,6 +10,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Instanced rendering.
 - Uniform bindings (per-draw data).
 - Storage buffers (read/write) with buffer slices for dynamic offsets.
+- Storage textures (compute write) + sampled textures.
 - Texture + sampler bindings.
 - sRGB formats + mipmapped textures.
 - Compute pipelines + dispatch.
@@ -35,6 +36,9 @@ cargo run --example custom_draw_api_offscreen
 
 # Compute pipeline + storage buffer example
 cargo run --example custom_draw_api_compute
+
+# Storage texture example
+cargo run --example custom_draw_api_storage_texture
 
 # Explicit @location + @group/@binding example
 cargo run --example custom_draw_api_conformance
@@ -106,6 +110,11 @@ fit inside the buffer and uniform slices must be at least the declared uniform s
 
 Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first). Use
 `CustomTextureUpdate { level, data }` to update a specific level.
+
+## Storage textures
+
+Create textures with `CustomTextureUsage::STORAGE` (optionally combined with `SAMPLED`). Bind them
+using `CustomBindingKind::StorageTexture` and `CustomBindingValue::Texture`.
 
 ## Compute dispatch
 
@@ -184,8 +193,7 @@ cargo run --release --example custom_draw_stress -- \
 - Single color target only (no MRT/MSAA resolve).
 - No MSAA/sample count control or custom viewport/scissor state.
 - No push constants or binding arrays (texture/buffer arrays).
-- No storage textures (compute can only write buffers).
-- Texture support is limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
+- Storage textures are limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
 
 ## Core roadmap (triage)
 
@@ -195,7 +203,6 @@ cargo run --release --example custom_draw_stress -- \
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
-  - Storage textures (read/write).
   - Push constants + binding arrays (texture/buffer arrays).
   - More texture formats/types (arrays/cubemaps, compressed formats).
   - Multiple color attachments (MRT) + MSAA.

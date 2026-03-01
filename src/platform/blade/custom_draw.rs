@@ -11,7 +11,7 @@ use crate::{
     CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc,
     CustomPipelineId, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
     CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
-    CustomVertexFormat, Result,
+    CustomTextureUsage, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -326,7 +326,9 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             let name = binding.name.as_str();
             let shader_binding = match binding.kind {
                 CustomBindingKind::Buffer => gpu::ShaderBinding::Buffer,
-                CustomBindingKind::Texture => gpu::ShaderBinding::Texture,
+                CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
+                    gpu::ShaderBinding::Texture
+                }
                 CustomBindingKind::Sampler => gpu::ShaderBinding::Sampler,
                 CustomBindingKind::Uniform { size } => gpu::ShaderBinding::Plain { size },
             };
@@ -450,7 +452,9 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             let name = binding.name.as_str();
             let shader_binding = match binding.kind {
                 CustomBindingKind::Buffer => gpu::ShaderBinding::Buffer,
-                CustomBindingKind::Texture => gpu::ShaderBinding::Texture,
+                CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
+                    gpu::ShaderBinding::Texture
+                }
                 CustomBindingKind::Sampler => gpu::ShaderBinding::Sampler,
                 CustomBindingKind::Uniform { size } => gpu::ShaderBinding::Plain { size },
             };
@@ -629,6 +633,21 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             }
         }
 
+        let is_sampled = desc.usage.contains(CustomTextureUsage::SAMPLED);
+        let is_storage = desc.usage.contains(CustomTextureUsage::STORAGE);
+        if !is_sampled && !is_storage {
+            return Err(anyhow::anyhow!(
+                "custom texture usage must include sampled or storage"
+            ));
+        }
+        let mut usage = gpu::TextureUsage::COPY;
+        if is_sampled {
+            usage |= gpu::TextureUsage::RESOURCE;
+        }
+        if is_storage {
+            usage |= gpu::TextureUsage::STORAGE;
+        }
+
         let raw = self.gpu.create_texture(gpu::TextureDesc {
             name: &desc.name,
             format,
@@ -641,7 +660,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             mip_level_count: desc.data.len() as u32,
             sample_count: 1,
             dimension: gpu::TextureDimension::D2,
-            usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+            usage,
             external: None,
         });
         let view = self.gpu.create_texture_view(
@@ -1032,7 +1051,10 @@ impl gpu::ShaderData for CustomBindings<'_> {
                         }
                     }
                 },
-                (CustomBindingKind::Texture, CustomBindingValue::Texture(id)) => {
+                (
+                    CustomBindingKind::Texture | CustomBindingKind::StorageTexture,
+                    CustomBindingValue::Texture(id),
+                ) => {
                     if let Some(view) = self
                         .textures
                         .get(id.0 as usize)

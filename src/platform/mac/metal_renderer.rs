@@ -1624,7 +1624,7 @@ impl MetalRenderer {
         for (index, kind) in pipeline.bindings.iter().enumerate() {
             let Some(binding) = bindings.get(index) else {
                 match kind {
-                    CustomBindingKind::Texture => {
+                    CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
                         command_encoder.set_vertex_texture(index as u64, None);
                         command_encoder.set_fragment_texture(index as u64, None);
                     }
@@ -1668,7 +1668,10 @@ impl MetalRenderer {
                         other => return other,
                     }
                 }
-                (CustomBindingKind::Texture, CustomBindingValue::Texture(id)) => {
+                (
+                    CustomBindingKind::Texture | CustomBindingKind::StorageTexture,
+                    CustomBindingValue::Texture(id),
+                ) => {
                     let Some(texture) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref())
                     else {
                         log::warn!("custom draw texture {:?} missing", id.0);
@@ -1718,7 +1721,7 @@ impl MetalRenderer {
         for (index, kind) in pipeline.bindings.iter().enumerate() {
             let Some(binding) = bindings.get(index) else {
                 match kind {
-                    CustomBindingKind::Texture => {
+                    CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
                         command_encoder.set_texture(index as u64, None);
                     }
                     CustomBindingKind::Sampler => {
@@ -1760,7 +1763,10 @@ impl MetalRenderer {
                         other => return other,
                     }
                 }
-                (CustomBindingKind::Texture, CustomBindingValue::Texture(id)) => {
+                (
+                    CustomBindingKind::Texture | CustomBindingKind::StorageTexture,
+                    CustomBindingValue::Texture(id),
+                ) => {
                     let Some(texture) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref())
                     else {
                         log::warn!("custom compute texture {:?} missing", id.0);
