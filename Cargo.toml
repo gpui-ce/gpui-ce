@@ -156,13 +156,14 @@ metal = "0.29"
 objc = "0.2"
 objc2 = { version = "0.6", optional = true }
 objc2-metal = { version = "0.3", optional = true }
-naga = { version = "25.0", features = ["wgsl-in", "msl-out"] }
+naga = { version = "25.0", features = ["wgsl-in", "msl-out", "wgsl-out"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies]
 pathfinder_geometry = "0.5"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed", optional = true }
+naga = { version = "25.0", features = ["wgsl-in", "wgsl-out"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 flume = "0.11"
@@ -356,6 +357,10 @@ path = "examples/learn/custom_draw_api_compute.rs"
 [[example]]
 name = "custom_draw_api_storage_texture"
 path = "examples/learn/custom_draw_api_storage_texture.rs"
+
+[[example]]
+name = "custom_draw_api_binding_arrays"
+path = "examples/learn/custom_draw_api_binding_arrays.rs"
 
 [[example]]
 name = "custom_draw_api_conformance"

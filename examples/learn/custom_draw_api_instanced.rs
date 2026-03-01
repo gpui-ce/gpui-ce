@@ -231,6 +231,7 @@ impl InstancedCustomDrawExample {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -383,6 +384,7 @@ impl Render for InstancedCustomDrawExample {
                     index_count: 0,
                     target: None,
                     instance_count: config.instances as u32,
+                    push_constants: None,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),

@@ -136,6 +136,7 @@ impl StorageTextureExample {
                 name: "custom_draw_storage_compute".to_string(),
                 shader_source: COMPUTE_SHADER_SOURCE.to_string(),
                 entry_point: "cs_main".to_string(),
+                push_constants: None,
                 bindings: vec![
                     CustomBindingDesc {
                         name: CustomBindingName::B0,
@@ -178,6 +179,7 @@ impl StorageTextureExample {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -290,6 +292,7 @@ impl Render for StorageTextureExample {
                 StorageTextureFrame {
                     compute: CustomComputeDispatch {
                         pipeline: compute_pipeline,
+                        push_constants: None,
                         bindings: vec![
                             CustomBindingValue::Texture(storage_texture),
                             CustomBindingValue::Uniform(CustomBufferSource::Inline(Arc::clone(
@@ -309,6 +312,7 @@ impl Render for StorageTextureExample {
                         index_count: 0,
                         target: None,
                         instance_count: 1,
+                        push_constants: None,
                         bindings: vec![
                             CustomBindingValue::Texture(storage_texture),
                             CustomBindingValue::Sampler(sampler),

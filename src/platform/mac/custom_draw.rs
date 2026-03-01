@@ -10,8 +10,8 @@ use crate::{
     CustomComputePipelineId, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
     CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
     CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
-    CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
+    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
     CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
     CustomVertexFormat, Result,
 };
@@ -34,6 +34,7 @@ unsafe impl Sync for MetalCustomDrawRegistry {}
 pub(crate) struct MetalCustomPipeline {
     pub(crate) pipeline_state: metal::RenderPipelineState,
     pub(crate) bindings: Vec<CustomBindingKind>,
+    pub(crate) argument_buffers: Vec<Option<ArgumentBufferBinding>>,
     pub(crate) primitive: metal::MTLPrimitiveType,
     pub(crate) cull_mode: metal::MTLCullMode,
     pub(crate) front_face: metal::MTLWinding,
@@ -47,8 +48,13 @@ pub(crate) struct MetalCustomPipeline {
 pub(crate) struct MetalCustomComputePipeline {
     pub(crate) pipeline_state: metal::ComputePipelineState,
     pub(crate) bindings: Vec<CustomBindingKind>,
+    pub(crate) argument_buffers: Vec<Option<ArgumentBufferBinding>>,
     pub(crate) workgroup_size: [u32; 3],
     pub(crate) buffer_binding_base: u64,
+}
+
+pub(crate) struct ArgumentBufferBinding {
+    pub(crate) encoder: metal::ArgumentEncoder,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -66,6 +72,7 @@ struct PipelineCacheKey {
     color_format: u64,
     state: PipelineStateKey,
     vertex_fetches: Vec<VertexFetchKey>,
+    push_constants: Option<u32>,
     bindings: Vec<BindingKey>,
 }
 
@@ -95,6 +102,13 @@ struct BindingKey {
 struct BindingKindKey {
     kind: u8,
     size: u32,
+    count: u32,
+}
+
+struct PushConstantsInfo {
+    name: &'static str,
+    size: u32,
+    slot: CustomBindingSlot,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -249,10 +263,21 @@ impl MetalCustomDrawRegistry {
             return Ok(existing);
         }
 
+        let has_binding_arrays = desc.bindings.iter().any(|binding| {
+            matches!(
+                binding.kind,
+                CustomBindingKind::BufferArray { .. }
+                    | CustomBindingKind::TextureArray { .. }
+                    | CustomBindingKind::StorageTextureArray { .. }
+            )
+        });
+        let msl_lang_version = if has_binding_arrays { (2, 0) } else { (1, 2) };
+
         let mut module = naga::front::wgsl::parse_str(&desc.shader_source)
             .map_err(|err| anyhow!("WGSL parse failed: {err}"))?;
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        let info = naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+        let capabilities = naga_capabilities(&desc.bindings);
+        let mut info = naga::valid::Validator::new(flags, capabilities)
             .validate(&module)
             .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
 
@@ -267,10 +292,41 @@ impl MetalCustomDrawRegistry {
             .position(|entry| entry.name == desc.fragment_entry)
             .ok_or_else(|| anyhow!("fragment entry '{}' not found", desc.fragment_entry))?;
 
+        let push_constants_slot = push_constants_slot(&desc.bindings);
+        let push_constants = apply_push_constants(
+            &mut module,
+            &info,
+            &[vertex_entry_index, fragment_entry_index],
+            desc.push_constants,
+            push_constants_slot,
+        )?;
+        if push_constants.is_some() {
+            info = naga::valid::Validator::new(flags, capabilities)
+                .validate(&module)
+                .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
+        }
+
         let attribute_locations = build_attribute_locations(&desc.vertex_fetches)?;
         assign_vertex_locations(&mut module, vertex_entry_index, &attribute_locations)?;
 
-        let (bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
+        let (mut bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
+        if let Some(push_constants) = &push_constants {
+            if bindings_by_name.contains_key(push_constants.name) {
+                return Err(anyhow!(
+                    "custom draw push constants name '{}' conflicts with a binding name",
+                    push_constants.name
+                ));
+            }
+            bindings_by_name.insert(
+                push_constants.name,
+                BindingInfo {
+                    kind: CustomBindingKind::Uniform {
+                        size: push_constants.size,
+                    },
+                    slot: push_constants.slot,
+                },
+            );
+        }
         let vertex_entry_name = module.entry_points[vertex_entry_index].name.clone();
         let fragment_entry_name = module.entry_points[fragment_entry_index].name.clone();
         assign_resource_bindings(
@@ -290,6 +346,10 @@ impl MetalCustomDrawRegistry {
             &bindings_by_slot,
         )?;
 
+        let binding_array_handles = collect_binding_array_handles(&module);
+        let vertex_usage = info.get_entry_point(vertex_entry_index);
+        let fragment_usage = info.get_entry_point(fragment_entry_index);
+
         let buffer_binding_base = u8::try_from(desc.vertex_fetches.len())
             .map_err(|_| anyhow!("custom draw supports up to {} vertex buffers", u8::MAX))?;
 
@@ -303,10 +363,28 @@ impl MetalCustomDrawRegistry {
                 desc.fragment_entry.clone(),
             )
         } else {
-            let entry_point_resources =
+            let mut entry_point_resources =
                 build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
+            if let Some(push_constants) = &push_constants {
+                let binding_index = u8::try_from(desc.bindings.len())
+                    .map_err(|_| anyhow!("custom draw binding index exceeds Metal slot limit"))?;
+                let buffer_slot = buffer_binding_base
+                    .checked_add(binding_index)
+                    .ok_or_else(|| anyhow!("custom draw push constants slot overflow"))?;
+                entry_point_resources.resources.insert(
+                    naga::ResourceBinding {
+                        group: push_constants.slot.group,
+                        binding: push_constants.slot.binding,
+                    },
+                    naga::back::msl::BindTarget {
+                        buffer: Some(buffer_slot),
+                        ..Default::default()
+                    },
+                );
+            }
+            normalize_binding_array_address_space(&mut module);
             let mut naga_options = naga::back::msl::Options::default();
-            naga_options.lang_version = (1, 2);
+            naga_options.lang_version = msl_lang_version;
             naga_options.fake_missing_bindings = false;
             naga_options.zero_initialize_workgroup_memory = false;
             naga_options.force_loop_bounding = false;
@@ -347,7 +425,11 @@ impl MetalCustomDrawRegistry {
         };
 
         let compile_options = metal::CompileOptions::new();
-        compile_options.set_language_version(metal::MTLLanguageVersion::V1_2);
+        compile_options.set_language_version(if has_binding_arrays {
+            metal::MTLLanguageVersion::V2_0
+        } else {
+            metal::MTLLanguageVersion::V1_2
+        });
         let library = self
             .device
             .new_library_with_source(&msl_source, &compile_options)
@@ -359,6 +441,48 @@ impl MetalCustomDrawRegistry {
         let fragment_fn = library
             .get_function(&fragment_name, None)
             .map_err(|err| anyhow!("fragment entry '{fragment_name}' not found: {err}"))?;
+
+        let mut argument_buffers =
+            Vec::with_capacity(desc.bindings.len() + usize::from(push_constants.is_some()));
+        for (index, binding) in desc.bindings.iter().enumerate() {
+            let argument_buffer = match binding.kind {
+                CustomBindingKind::BufferArray { .. }
+                | CustomBindingKind::TextureArray { .. }
+                | CustomBindingKind::StorageTextureArray { .. } => {
+                    let slot = binding.slot.unwrap_or(CustomBindingSlot {
+                        group: 0,
+                        binding: binding.name.index(),
+                    });
+                    let handle = binding_array_handles
+                        .get(&(slot.group, slot.binding))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "binding array '{}' not found in shader",
+                                binding.name.as_str()
+                            )
+                        })?;
+                    let vertex_used = !vertex_usage[*handle].is_empty();
+                    let fragment_used = !fragment_usage[*handle].is_empty();
+                    let buffer_slot = u64::from(buffer_binding_base) + index as u64;
+                    let encoder = if vertex_used {
+                        vertex_fn.new_argument_encoder(buffer_slot as metal::NSUInteger)
+                    } else if fragment_used {
+                        fragment_fn.new_argument_encoder(buffer_slot as metal::NSUInteger)
+                    } else {
+                        return Err(anyhow!(
+                            "binding array '{}' is not used by the shader",
+                            binding.name.as_str()
+                        ));
+                    };
+                    Some(ArgumentBufferBinding { encoder })
+                }
+                _ => None,
+            };
+            argument_buffers.push(argument_buffer);
+        }
+        if push_constants.is_some() {
+            argument_buffers.push(None);
+        }
 
         let vertex_descriptor =
             build_vertex_descriptor(&desc.vertex_fetches, &attribute_locations)?;
@@ -391,10 +515,17 @@ impl MetalCustomDrawRegistry {
             .new_render_pipeline_state(&pipeline_descriptor)
             .map_err(|err| anyhow!("custom draw pipeline failed: {err}"))?;
 
-        let binding_kinds = desc.bindings.iter().map(|binding| binding.kind).collect();
+        let mut binding_kinds: Vec<CustomBindingKind> =
+            desc.bindings.iter().map(|binding| binding.kind).collect();
+        if let Some(push_constants) = &push_constants {
+            binding_kinds.push(CustomBindingKind::Uniform {
+                size: push_constants.size,
+            });
+        }
         let pipeline = MetalCustomPipeline {
             pipeline_state,
             bindings: binding_kinds,
+            argument_buffers,
             primitive: metal_primitive(desc.primitive),
             cull_mode: metal_cull_mode(desc.state.cull_mode),
             front_face: metal_front_face(desc.state.front_face),
@@ -419,10 +550,21 @@ impl MetalCustomDrawRegistry {
         &self,
         desc: CustomComputePipelineDesc,
     ) -> Result<CustomComputePipelineId> {
+        let has_binding_arrays = desc.bindings.iter().any(|binding| {
+            matches!(
+                binding.kind,
+                CustomBindingKind::BufferArray { .. }
+                    | CustomBindingKind::TextureArray { .. }
+                    | CustomBindingKind::StorageTextureArray { .. }
+            )
+        });
+        let msl_lang_version = if has_binding_arrays { (2, 0) } else { (1, 2) };
+
         let mut module = naga::front::wgsl::parse_str(&desc.shader_source)
             .map_err(|err| anyhow!("WGSL parse failed: {err}"))?;
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        let info = naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+        let capabilities = naga_capabilities(&desc.bindings);
+        let mut info = naga::valid::Validator::new(flags, capabilities)
             .validate(&module)
             .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
 
@@ -450,7 +592,38 @@ impl MetalCustomDrawRegistry {
         }
         let workgroup_size = entry.workgroup_size;
 
-        let (bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
+        let push_constants_slot = push_constants_slot(&desc.bindings);
+        let push_constants = apply_push_constants(
+            &mut module,
+            &info,
+            &[entry_index],
+            desc.push_constants,
+            push_constants_slot,
+        )?;
+        if push_constants.is_some() {
+            info = naga::valid::Validator::new(flags, capabilities)
+                .validate(&module)
+                .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
+        }
+
+        let (mut bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
+        if let Some(push_constants) = &push_constants {
+            if bindings_by_name.contains_key(push_constants.name) {
+                return Err(anyhow!(
+                    "custom compute push constants name '{}' conflicts with a binding name",
+                    push_constants.name
+                ));
+            }
+            bindings_by_name.insert(
+                push_constants.name,
+                BindingInfo {
+                    kind: CustomBindingKind::Uniform {
+                        size: push_constants.size,
+                    },
+                    slot: push_constants.slot,
+                },
+            );
+        }
         let entry_name = module.entry_points[entry_index].name.clone();
         assign_resource_bindings(
             &mut module,
@@ -461,9 +634,28 @@ impl MetalCustomDrawRegistry {
             &bindings_by_slot,
         )?;
 
-        let entry_point_resources = build_entry_point_resources(&desc.bindings, 0)?;
+        let binding_array_handles = collect_binding_array_handles(&module);
+        let entry_usage = info.get_entry_point(entry_index);
+
+        let mut entry_point_resources = build_entry_point_resources(&desc.bindings, 0)?;
+        if let Some(push_constants) = &push_constants {
+            let binding_index = u8::try_from(desc.bindings.len())
+                .map_err(|_| anyhow!("custom compute binding index exceeds Metal slot limit"))?;
+            let buffer_slot = binding_index;
+            entry_point_resources.resources.insert(
+                naga::ResourceBinding {
+                    group: push_constants.slot.group,
+                    binding: push_constants.slot.binding,
+                },
+                naga::back::msl::BindTarget {
+                    buffer: Some(buffer_slot),
+                    ..Default::default()
+                },
+            );
+        }
+        normalize_binding_array_address_space(&mut module);
         let mut naga_options = naga::back::msl::Options::default();
-        naga_options.lang_version = (1, 2);
+        naga_options.lang_version = msl_lang_version;
         naga_options.fake_missing_bindings = false;
         naga_options.zero_initialize_workgroup_memory = false;
         naga_options.force_loop_bounding = false;
@@ -489,7 +681,11 @@ impl MetalCustomDrawRegistry {
             .to_string();
 
         let compile_options = metal::CompileOptions::new();
-        compile_options.set_language_version(metal::MTLLanguageVersion::V1_2);
+        compile_options.set_language_version(if has_binding_arrays {
+            metal::MTLLanguageVersion::V2_0
+        } else {
+            metal::MTLLanguageVersion::V1_2
+        });
         let library = self
             .device
             .new_library_with_source(&msl_source, &compile_options)
@@ -499,15 +695,59 @@ impl MetalCustomDrawRegistry {
             .get_function(&compute_name, None)
             .map_err(|err| anyhow!("compute entry '{compute_name}' not found: {err}"))?;
 
+        let mut argument_buffers =
+            Vec::with_capacity(desc.bindings.len() + usize::from(push_constants.is_some()));
+        for (index, binding) in desc.bindings.iter().enumerate() {
+            let argument_buffer = match binding.kind {
+                CustomBindingKind::BufferArray { .. }
+                | CustomBindingKind::TextureArray { .. }
+                | CustomBindingKind::StorageTextureArray { .. } => {
+                    let slot = binding.slot.unwrap_or(CustomBindingSlot {
+                        group: 0,
+                        binding: binding.name.index(),
+                    });
+                    let handle = binding_array_handles
+                        .get(&(slot.group, slot.binding))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "binding array '{}' not found in shader",
+                                binding.name.as_str()
+                            )
+                        })?;
+                    if entry_usage[*handle].is_empty() {
+                        return Err(anyhow!(
+                            "binding array '{}' is not used by the shader",
+                            binding.name.as_str()
+                        ));
+                    }
+                    let buffer_slot = index as u64;
+                    let encoder = compute_fn.new_argument_encoder(buffer_slot as metal::NSUInteger);
+                    Some(ArgumentBufferBinding { encoder })
+                }
+                _ => None,
+            };
+            argument_buffers.push(argument_buffer);
+        }
+        if push_constants.is_some() {
+            argument_buffers.push(None);
+        }
+
         let pipeline_state = self
             .device
             .new_compute_pipeline_state_with_function(compute_fn.as_ref())
             .map_err(|err| anyhow!("custom compute pipeline failed: {err}"))?;
 
-        let binding_kinds = desc.bindings.iter().map(|binding| binding.kind).collect();
+        let mut binding_kinds: Vec<CustomBindingKind> =
+            desc.bindings.iter().map(|binding| binding.kind).collect();
+        if let Some(push_constants) = &push_constants {
+            binding_kinds.push(CustomBindingKind::Uniform {
+                size: push_constants.size,
+            });
+        }
         let pipeline = MetalCustomComputePipeline {
             pipeline_state,
             bindings: binding_kinds,
+            argument_buffers,
             workgroup_size,
             buffer_binding_base: 0,
         };
@@ -869,6 +1109,53 @@ fn build_binding_maps(
     (by_name, by_slot)
 }
 
+fn collect_binding_array_handles(
+    module: &naga::Module,
+) -> HashMap<(u32, u32), naga::Handle<naga::GlobalVariable>> {
+    let mut handles = HashMap::new();
+    for (handle, var) in module.global_variables.iter() {
+        let Some(binding) = var.binding else {
+            continue;
+        };
+        if matches!(
+            module.types[var.ty].inner,
+            naga::TypeInner::BindingArray { .. }
+        ) {
+            handles.insert((binding.group, binding.binding), handle);
+        }
+    }
+    handles
+}
+
+fn naga_capabilities(bindings: &[CustomBindingDesc]) -> naga::valid::Capabilities {
+    let mut capabilities = naga::valid::Capabilities::empty();
+    for binding in bindings {
+        match binding.kind {
+            CustomBindingKind::BufferArray { .. } | CustomBindingKind::TextureArray { .. } => {
+                capabilities |=
+                    naga::valid::Capabilities::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+            }
+            CustomBindingKind::StorageTextureArray { .. } => {
+                capabilities |=
+                    naga::valid::Capabilities::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING;
+            }
+            _ => {}
+        }
+    }
+    capabilities
+}
+
+fn normalize_binding_array_address_space(module: &mut naga::Module) {
+    for (_, var) in module.global_variables.iter_mut() {
+        if matches!(
+            module.types[var.ty].inner,
+            naga::TypeInner::BindingArray { .. }
+        ) {
+            var.space = naga::AddressSpace::Handle;
+        }
+    }
+}
+
 fn pipeline_cache_key(
     desc: &CustomPipelineDesc,
     source: PipelineSourceKey,
@@ -882,6 +1169,7 @@ fn pipeline_cache_key(
         color_format: color_format as u64,
         state: pipeline_state_key(desc.state),
         vertex_fetches: desc.vertex_fetches.iter().map(vertex_fetch_key).collect(),
+        push_constants: desc.push_constants.map(|push| push.size),
         bindings: desc.bindings.iter().map(binding_key).collect(),
     }
 }
@@ -918,12 +1206,132 @@ fn binding_key(binding: &CustomBindingDesc) -> BindingKey {
 
 fn binding_kind_key(kind: CustomBindingKind) -> BindingKindKey {
     match kind {
-        CustomBindingKind::Buffer => BindingKindKey { kind: 0, size: 0 },
-        CustomBindingKind::Texture => BindingKindKey { kind: 1, size: 0 },
-        CustomBindingKind::StorageTexture => BindingKindKey { kind: 2, size: 0 },
-        CustomBindingKind::Sampler => BindingKindKey { kind: 3, size: 0 },
-        CustomBindingKind::Uniform { size } => BindingKindKey { kind: 4, size },
+        CustomBindingKind::Buffer => BindingKindKey {
+            kind: 0,
+            size: 0,
+            count: 0,
+        },
+        CustomBindingKind::Texture => BindingKindKey {
+            kind: 1,
+            size: 0,
+            count: 0,
+        },
+        CustomBindingKind::StorageTexture => BindingKindKey {
+            kind: 2,
+            size: 0,
+            count: 0,
+        },
+        CustomBindingKind::Sampler => BindingKindKey {
+            kind: 3,
+            size: 0,
+            count: 0,
+        },
+        CustomBindingKind::Uniform { size } => BindingKindKey {
+            kind: 4,
+            size,
+            count: 0,
+        },
+        CustomBindingKind::BufferArray { count } => BindingKindKey {
+            kind: 5,
+            size: 0,
+            count,
+        },
+        CustomBindingKind::TextureArray { count } => BindingKindKey {
+            kind: 6,
+            size: 0,
+            count,
+        },
+        CustomBindingKind::StorageTextureArray { count } => BindingKindKey {
+            kind: 7,
+            size: 0,
+            count,
+        },
     }
+}
+
+fn push_constants_slot(bindings: &[CustomBindingDesc]) -> CustomBindingSlot {
+    let mut max_group = 0u32;
+    for binding in bindings {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
+            group: 0,
+            binding: binding.name.index(),
+        });
+        max_group = max_group.max(slot.group);
+    }
+    CustomBindingSlot {
+        group: max_group.saturating_add(1),
+        binding: 0,
+    }
+}
+
+fn apply_push_constants(
+    module: &mut naga::Module,
+    info: &naga::valid::ModuleInfo,
+    entry_indices: &[usize],
+    push_constants: Option<CustomPushConstantsDesc>,
+    slot: CustomBindingSlot,
+) -> Result<Option<PushConstantsInfo>> {
+    let mut push_constant_handle = None;
+    for (handle, var) in module.global_variables.iter() {
+        if var.space != naga::AddressSpace::PushConstant {
+            continue;
+        }
+        let used = entry_indices.iter().any(|index| {
+            let ep_info = info.get_entry_point(*index);
+            !ep_info[handle].is_empty()
+        });
+        if !used {
+            continue;
+        }
+        if push_constant_handle.is_some() {
+            return Err(anyhow!(
+                "custom draw shaders may declare at most one push constants block"
+            ));
+        }
+        push_constant_handle = Some(handle);
+    }
+
+    let Some(handle) = push_constant_handle else {
+        if push_constants.is_some() {
+            return Err(anyhow!(
+                "push constants were provided but the shader has no push constant block"
+            ));
+        }
+        return Ok(None);
+    };
+
+    let push_constants = push_constants
+        .ok_or_else(|| anyhow!("shader declares push constants but none were provided"))?;
+
+    let mut layouter = naga::proc::Layouter::default();
+    layouter
+        .update(module.to_ctx())
+        .map_err(|err| anyhow!("push constants layout failed: {err}"))?;
+    let layout = &layouter[module.global_variables[handle].ty];
+    if layout.size != push_constants.size {
+        return Err(anyhow!(
+            "push constants size mismatch (expected {}, shader reports {})",
+            push_constants.size,
+            layout.size
+        ));
+    }
+
+    let var = module.global_variables.get_mut(handle);
+    var.space = naga::AddressSpace::Uniform;
+    var.binding = None;
+    if var.name.is_none() {
+        var.name = Some("push_constants".to_string());
+    }
+    let name = var
+        .name
+        .clone()
+        .unwrap_or_else(|| "push_constants".to_string());
+
+    Ok(Some(PushConstantsInfo {
+        name: Box::leak(name.into_boxed_str()),
+        size: push_constants.size,
+        slot,
+    }))
 }
 
 fn vertex_attribute_name_key(name: CustomVertexAttributeName) -> u8 {
@@ -1182,6 +1590,66 @@ fn validate_binding_kind(
     name: &str,
 ) -> Result<()> {
     match binding_kind {
+        CustomBindingKind::BufferArray { count } => match module.types[var.ty].inner {
+            naga::TypeInner::BindingArray { size, .. } => {
+                validate_binding_array_size(size, count, entry_point_name, name)?;
+                match var.space {
+                    naga::AddressSpace::Storage { .. } => Ok(()),
+                    _ => Err(anyhow!(
+                        "binding '{}' in entry '{}' must be a storage buffer array",
+                        name,
+                        entry_point_name
+                    )),
+                }
+            }
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a storage buffer array",
+                name,
+                entry_point_name
+            )),
+        },
+        CustomBindingKind::TextureArray { count } => match module.types[var.ty].inner {
+            naga::TypeInner::BindingArray { base, size } => match module.types[base].inner {
+                naga::TypeInner::Image {
+                    class: naga::ImageClass::Sampled { .. },
+                    ..
+                } => {
+                    validate_binding_array_size(size, count, entry_point_name, name)?;
+                    Ok(())
+                }
+                _ => Err(anyhow!(
+                    "binding '{}' in entry '{}' must be a sampled texture array",
+                    name,
+                    entry_point_name
+                )),
+            },
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a sampled texture array",
+                name,
+                entry_point_name
+            )),
+        },
+        CustomBindingKind::StorageTextureArray { count } => match module.types[var.ty].inner {
+            naga::TypeInner::BindingArray { base, size } => match module.types[base].inner {
+                naga::TypeInner::Image {
+                    class: naga::ImageClass::Storage { .. },
+                    ..
+                } => {
+                    validate_binding_array_size(size, count, entry_point_name, name)?;
+                    Ok(())
+                }
+                _ => Err(anyhow!(
+                    "binding '{}' in entry '{}' must be a storage texture array",
+                    name,
+                    entry_point_name
+                )),
+            },
+            _ => Err(anyhow!(
+                "binding '{}' in entry '{}' must be a storage texture array",
+                name,
+                entry_point_name
+            )),
+        },
         CustomBindingKind::Texture => match module.types[var.ty].inner {
             naga::TypeInner::Image {
                 class: naga::ImageClass::Sampled { .. },
@@ -1246,6 +1714,40 @@ fn validate_binding_kind(
     }
 }
 
+fn validate_binding_array_size(
+    size: naga::ArraySize,
+    expected: u32,
+    entry_point_name: &str,
+    name: &str,
+) -> Result<()> {
+    let actual = match size {
+        naga::ArraySize::Constant(size) => size.get(),
+        naga::ArraySize::Pending(_) => {
+            return Err(anyhow!(
+                "binding '{}' in entry '{}' must use a constant binding array length",
+                name,
+                entry_point_name
+            ));
+        }
+        naga::ArraySize::Dynamic => {
+            return Err(anyhow!(
+                "binding '{}' in entry '{}' must not use a runtime-sized binding array",
+                name,
+                entry_point_name
+            ));
+        }
+    };
+    if actual != expected {
+        return Err(anyhow!(
+            "binding '{}' array length mismatch (expected {}, shader reports {})",
+            name,
+            expected,
+            actual
+        ));
+    }
+    Ok(())
+}
+
 fn build_entry_point_resources(
     bindings: &[CustomBindingDesc],
     buffer_binding_base: u8,
@@ -1266,6 +1768,16 @@ fn build_entry_point_resources(
             .checked_add(binding_index)
             .ok_or_else(|| anyhow!("custom draw buffer slot overflow"))?;
         let bind_target = match binding.kind {
+            CustomBindingKind::BufferArray { .. } => naga::back::msl::BindTarget {
+                buffer: Some(buffer_slot),
+                mutable: true,
+                ..Default::default()
+            },
+            CustomBindingKind::TextureArray { .. }
+            | CustomBindingKind::StorageTextureArray { .. } => naga::back::msl::BindTarget {
+                buffer: Some(buffer_slot),
+                ..Default::default()
+            },
             CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
                 naga::back::msl::BindTarget {
                     texture: Some(binding_index),

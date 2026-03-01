@@ -163,6 +163,7 @@ impl ConformanceExample {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -296,6 +297,7 @@ impl Render for ConformanceExample {
                     index_count: 0,
                     target: None,
                     instance_count: INSTANCE_COUNT as u32,
+                    push_constants: None,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),

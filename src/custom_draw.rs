@@ -273,6 +273,13 @@ pub struct CustomVertexFetch {
     pub instanced: bool,
 }
 
+/// Push constants descriptor for a custom pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomPushConstantsDesc {
+    /// Push constant size in bytes (16-byte aligned).
+    pub size: u32,
+}
+
 /// Pipeline description for custom GPU rendering.
 #[derive(Debug, Clone)]
 pub struct CustomPipelineDesc {
@@ -292,7 +299,9 @@ pub struct CustomPipelineDesc {
     pub target_format: Option<CustomTextureFormat>,
     /// Fixed-function pipeline state.
     pub state: CustomPipelineState,
-    /// Optional shader bindings (buffers only for now).
+    /// Optional push constants block.
+    pub push_constants: Option<CustomPushConstantsDesc>,
+    /// Optional shader bindings.
     pub bindings: Vec<CustomBindingDesc>,
 }
 
@@ -305,6 +314,8 @@ pub struct CustomComputePipelineDesc {
     pub shader_source: String,
     /// Compute entry point name.
     pub entry_point: String,
+    /// Optional push constants block.
+    pub push_constants: Option<CustomPushConstantsDesc>,
     /// Optional shader bindings.
     pub bindings: Vec<CustomBindingDesc>,
 }
@@ -319,14 +330,37 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
         return Err(anyhow!("custom draw fragment entry is empty"));
     }
 
+    if let Some(push_constants) = desc.push_constants {
+        if push_constants.size == 0 || push_constants.size % 16 != 0 {
+            return Err(anyhow!(
+                "custom draw push constants size must be non-zero and 16-byte aligned (got {})",
+                push_constants.size
+            ));
+        }
+    }
+
     for binding in &desc.bindings {
-        if let CustomBindingKind::Uniform { size } = binding.kind {
-            if size == 0 || size % 16 != 0 {
-                return Err(anyhow!(
-                    "custom draw uniform size must be non-zero and 16-byte aligned (got {})",
-                    size
-                ));
+        match binding.kind {
+            CustomBindingKind::Uniform { size } => {
+                if size == 0 || size % 16 != 0 {
+                    return Err(anyhow!(
+                        "custom draw uniform size must be non-zero and 16-byte aligned (got {})",
+                        size
+                    ));
+                }
             }
+            CustomBindingKind::BufferArray { count }
+            | CustomBindingKind::TextureArray { count }
+            | CustomBindingKind::StorageTextureArray { count } => {
+                if count == 0 || count > MAX_BINDING_ARRAY_COUNT {
+                    return Err(anyhow!(
+                        "custom draw binding array count must be between 1 and {} (got {})",
+                        MAX_BINDING_ARRAY_COUNT,
+                        count
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -390,14 +424,37 @@ pub(crate) fn validate_custom_compute_pipeline_desc(
         return Err(anyhow!("custom compute entry is empty"));
     }
 
+    if let Some(push_constants) = desc.push_constants {
+        if push_constants.size == 0 || push_constants.size % 16 != 0 {
+            return Err(anyhow!(
+                "custom compute push constants size must be non-zero and 16-byte aligned (got {})",
+                push_constants.size
+            ));
+        }
+    }
+
     for binding in &desc.bindings {
-        if let CustomBindingKind::Uniform { size } = binding.kind {
-            if size == 0 || size % 16 != 0 {
-                return Err(anyhow!(
-                    "custom compute uniform size must be non-zero and 16-byte aligned (got {})",
-                    size
-                ));
+        match binding.kind {
+            CustomBindingKind::Uniform { size } => {
+                if size == 0 || size % 16 != 0 {
+                    return Err(anyhow!(
+                        "custom compute uniform size must be non-zero and 16-byte aligned (got {})",
+                        size
+                    ));
+                }
             }
+            CustomBindingKind::BufferArray { count }
+            | CustomBindingKind::TextureArray { count }
+            | CustomBindingKind::StorageTextureArray { count } => {
+                if count == 0 || count > MAX_BINDING_ARRAY_COUNT {
+                    return Err(anyhow!(
+                        "custom compute binding array count must be between 1 and {} (got {})",
+                        MAX_BINDING_ARRAY_COUNT,
+                        count
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -521,15 +578,33 @@ impl CustomBindingName {
     }
 }
 
+/// Maximum number of resources in a binding array.
+pub(crate) const MAX_BINDING_ARRAY_COUNT: u32 = 16;
+
 /// Binding kinds supported by custom pipelines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomBindingKind {
     /// Storage buffer binding.
     Buffer,
+    /// Storage buffer binding array.
+    BufferArray {
+        /// Number of elements in the array.
+        count: u32,
+    },
     /// 2D sampled texture binding.
     Texture,
+    /// 2D sampled texture binding array.
+    TextureArray {
+        /// Number of elements in the array.
+        count: u32,
+    },
     /// Storage texture binding (read/write).
     StorageTexture,
+    /// Storage texture binding array.
+    StorageTextureArray {
+        /// Number of elements in the array.
+        count: u32,
+    },
     /// Sampler binding.
     Sampler,
     /// Uniform/constant buffer binding.
@@ -643,6 +718,7 @@ mod tests {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: Vec::new(),
         }
     }
@@ -844,7 +920,9 @@ pub struct CustomDrawParams {
     pub target: Option<CustomRenderTarget>,
     /// Number of instances to draw.
     pub instance_count: u32,
-    /// Optional shader bindings (buffers only for now).
+    /// Optional push constants data.
+    pub push_constants: Option<Arc<[u8]>>,
+    /// Optional shader bindings.
     pub bindings: Vec<CustomBindingValue>,
 }
 
@@ -853,6 +931,8 @@ pub struct CustomDrawParams {
 pub struct CustomComputeDispatch {
     /// Compute pipeline to use.
     pub pipeline: CustomComputePipelineId,
+    /// Optional push constants data.
+    pub push_constants: Option<Arc<[u8]>>,
     /// Bindings for the dispatch.
     pub bindings: Vec<CustomBindingValue>,
     /// Workgroup counts for the dispatch.
@@ -864,8 +944,12 @@ pub struct CustomComputeDispatch {
 pub enum CustomBindingValue {
     /// Storage buffer binding.
     Buffer(CustomBufferSource),
+    /// Storage buffer binding array.
+    BufferArray(Vec<CustomBufferSource>),
     /// Texture binding.
     Texture(CustomTextureId),
+    /// Texture binding array.
+    TextureArray(Vec<CustomTextureId>),
     /// Sampler binding.
     Sampler(CustomSamplerId),
     /// Uniform/constant buffer binding.
@@ -882,11 +966,31 @@ impl CustomBindingValue {
                 hash = hash.wrapping_mul(1099511628211);
                 hash ^= source.hash();
             }
+            CustomBindingValue::BufferArray(sources) => {
+                hash = hash.wrapping_mul(1099511628211);
+                hash ^= 5;
+                hash = hash.wrapping_mul(1099511628211);
+                hash ^= sources.len() as u64;
+                for source in sources {
+                    hash = hash.wrapping_mul(1099511628211);
+                    hash ^= source.hash();
+                }
+            }
             CustomBindingValue::Texture(id) => {
                 hash = hash.wrapping_mul(1099511628211);
                 hash ^= 2;
                 hash = hash.wrapping_mul(1099511628211);
                 hash ^= id.0 as u64;
+            }
+            CustomBindingValue::TextureArray(ids) => {
+                hash = hash.wrapping_mul(1099511628211);
+                hash ^= 6;
+                hash = hash.wrapping_mul(1099511628211);
+                hash ^= ids.len() as u64;
+                for id in ids {
+                    hash = hash.wrapping_mul(1099511628211);
+                    hash ^= id.0 as u64;
+                }
             }
             CustomBindingValue::Sampler(id) => {
                 hash = hash.wrapping_mul(1099511628211);

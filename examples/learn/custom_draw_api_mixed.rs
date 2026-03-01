@@ -127,6 +127,7 @@ impl MixedExample {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -228,6 +229,7 @@ impl Render for MixedExample {
                     index_count: 0,
                     target: None,
                     instance_count: 1,
+                    push_constants: None,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),

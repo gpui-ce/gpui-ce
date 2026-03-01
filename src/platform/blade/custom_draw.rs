@@ -5,12 +5,13 @@ use blade_graphics::{self as gpu, ShaderBindable as _};
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 
 use crate::{
-    CustomAddressMode, CustomBindingKind, CustomBindingValue, CustomBlendMode, CustomBufferDesc,
-    CustomBufferId, CustomBufferSource, CustomComputePipelineDesc, CustomComputePipelineId,
-    CustomCullMode, CustomDepthCompare, CustomDepthFormat, CustomDepthTargetDesc,
-    CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc,
-    CustomPipelineId, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingValue, CustomBlendMode,
+    CustomBufferDesc, CustomBufferId, CustomBufferSource, CustomComputePipelineDesc,
+    CustomComputePipelineId, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
+    CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode,
+    CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
+    CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
     CustomTextureUsage, CustomVertexFormat, Result,
 };
 
@@ -258,8 +259,16 @@ impl BladeCustomDrawRegistry {
 
 impl CustomDrawRegistry for BladeCustomDrawRegistry {
     fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
+        let push_constants_slot = push_constants_slot(&desc.bindings);
+        let (shader_source, push_constants) = prepare_blade_shader_source(
+            &desc.shader_source,
+            &[&desc.vertex_entry, &desc.fragment_entry],
+            &desc.bindings,
+            desc.push_constants,
+            push_constants_slot,
+        )?;
         let shader = self.gpu.create_shader(gpu::ShaderDesc {
-            source: &desc.shader_source,
+            source: &shader_source,
         });
 
         let color_format = desc
@@ -326,8 +335,15 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             let name = binding.name.as_str();
             let shader_binding = match binding.kind {
                 CustomBindingKind::Buffer => gpu::ShaderBinding::Buffer,
+                CustomBindingKind::BufferArray { count } => {
+                    gpu::ShaderBinding::BufferArray { count }
+                }
                 CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
                     gpu::ShaderBinding::Texture
+                }
+                CustomBindingKind::TextureArray { count }
+                | CustomBindingKind::StorageTextureArray { count } => {
+                    gpu::ShaderBinding::TextureArray { count }
                 }
                 CustomBindingKind::Sampler => gpu::ShaderBinding::Sampler,
                 CustomBindingKind::Uniform { size } => gpu::ShaderBinding::Plain { size },
@@ -340,10 +356,45 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             group[binding_index] = Some((name, shader_binding, binding.kind, flat_index));
         }
 
+        if let Some(push_constants) = &push_constants {
+            if desc
+                .bindings
+                .iter()
+                .any(|binding| binding.name.as_str() == push_constants.name)
+            {
+                return Err(anyhow::anyhow!(
+                    "custom draw push constants name '{}' conflicts with a binding name",
+                    push_constants.name
+                ));
+            }
+            let group = group_entries.entry(push_constants.slot.group).or_default();
+            let binding_index = push_constants.slot.binding as usize;
+            if group.len() <= binding_index {
+                group.resize(binding_index + 1, None);
+            }
+            if group[binding_index].is_some() {
+                return Err(anyhow::anyhow!(
+                    "custom draw push constants slot conflicts with existing binding (group {}, binding {})",
+                    push_constants.slot.group,
+                    push_constants.slot.binding
+                ));
+            }
+            group[binding_index] = Some((
+                push_constants.name,
+                gpu::ShaderBinding::Plain {
+                    size: push_constants.size,
+                },
+                CustomBindingKind::Uniform {
+                    size: push_constants.size,
+                },
+                desc.bindings.len(),
+            ));
+        }
+
         let mut binding_layouts: Vec<gpu::ShaderDataLayout> = Vec::new();
         let mut binding_kinds_by_group: Vec<Vec<CustomBindingKind>> = Vec::new();
         let mut binding_indices_by_group: Vec<Vec<Option<usize>>> = Vec::new();
-        if !desc.bindings.is_empty() {
+        if !group_entries.is_empty() {
             let max_group = *group_entries.keys().max().unwrap_or(&0);
             for group in 0..=max_group {
                 if let Some(entries) = group_entries.get(&group) {
@@ -436,8 +487,16 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         &self,
         desc: CustomComputePipelineDesc,
     ) -> Result<CustomComputePipelineId> {
+        let push_constants_slot = push_constants_slot(&desc.bindings);
+        let (shader_source, push_constants) = prepare_blade_shader_source(
+            &desc.shader_source,
+            &[&desc.entry_point],
+            &desc.bindings,
+            desc.push_constants,
+            push_constants_slot,
+        )?;
         let shader = self.gpu.create_shader(gpu::ShaderDesc {
-            source: &desc.shader_source,
+            source: &shader_source,
         });
 
         let mut group_entries: BTreeMap<
@@ -452,8 +511,15 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             let name = binding.name.as_str();
             let shader_binding = match binding.kind {
                 CustomBindingKind::Buffer => gpu::ShaderBinding::Buffer,
+                CustomBindingKind::BufferArray { count } => {
+                    gpu::ShaderBinding::BufferArray { count }
+                }
                 CustomBindingKind::Texture | CustomBindingKind::StorageTexture => {
                     gpu::ShaderBinding::Texture
+                }
+                CustomBindingKind::TextureArray { count }
+                | CustomBindingKind::StorageTextureArray { count } => {
+                    gpu::ShaderBinding::TextureArray { count }
                 }
                 CustomBindingKind::Sampler => gpu::ShaderBinding::Sampler,
                 CustomBindingKind::Uniform { size } => gpu::ShaderBinding::Plain { size },
@@ -466,10 +532,45 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             group[binding_index] = Some((name, shader_binding, binding.kind, flat_index));
         }
 
+        if let Some(push_constants) = &push_constants {
+            if desc
+                .bindings
+                .iter()
+                .any(|binding| binding.name.as_str() == push_constants.name)
+            {
+                return Err(anyhow::anyhow!(
+                    "custom compute push constants name '{}' conflicts with a binding name",
+                    push_constants.name
+                ));
+            }
+            let group = group_entries.entry(push_constants.slot.group).or_default();
+            let binding_index = push_constants.slot.binding as usize;
+            if group.len() <= binding_index {
+                group.resize(binding_index + 1, None);
+            }
+            if group[binding_index].is_some() {
+                return Err(anyhow::anyhow!(
+                    "custom compute push constants slot conflicts with existing binding (group {}, binding {})",
+                    push_constants.slot.group,
+                    push_constants.slot.binding
+                ));
+            }
+            group[binding_index] = Some((
+                push_constants.name,
+                gpu::ShaderBinding::Plain {
+                    size: push_constants.size,
+                },
+                CustomBindingKind::Uniform {
+                    size: push_constants.size,
+                },
+                desc.bindings.len(),
+            ));
+        }
+
         let mut binding_layouts: Vec<gpu::ShaderDataLayout> = Vec::new();
         let mut binding_kinds_by_group: Vec<Vec<CustomBindingKind>> = Vec::new();
         let mut binding_indices_by_group: Vec<Vec<Option<usize>>> = Vec::new();
-        if !desc.bindings.is_empty() {
+        if !group_entries.is_empty() {
             let max_group = *group_entries.keys().max().unwrap_or(&0);
             for group in 0..=max_group {
                 if let Some(entries) = group_entries.get(&group) {
@@ -897,6 +998,143 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
     }
 }
 
+struct PushConstantsInfo {
+    name: &'static str,
+    size: u32,
+    slot: CustomBindingSlot,
+}
+
+fn push_constants_slot(bindings: &[CustomBindingDesc]) -> CustomBindingSlot {
+    let mut max_group = 0u32;
+    for binding in bindings {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
+            group: 0,
+            binding: binding.name.index(),
+        });
+        max_group = max_group.max(slot.group);
+    }
+    CustomBindingSlot {
+        group: max_group.saturating_add(1),
+        binding: 0,
+    }
+}
+
+fn naga_capabilities(bindings: &[CustomBindingDesc]) -> naga::valid::Capabilities {
+    let mut capabilities = naga::valid::Capabilities::empty();
+    for binding in bindings {
+        match binding.kind {
+            CustomBindingKind::BufferArray { .. } | CustomBindingKind::TextureArray { .. } => {
+                capabilities |=
+                    naga::valid::Capabilities::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+            }
+            CustomBindingKind::StorageTextureArray { .. } => {
+                capabilities |=
+                    naga::valid::Capabilities::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING;
+            }
+            _ => {}
+        }
+    }
+    capabilities
+}
+
+fn prepare_blade_shader_source(
+    source: &str,
+    entry_points: &[&str],
+    bindings: &[CustomBindingDesc],
+    push_constants: Option<CustomPushConstantsDesc>,
+    push_constants_slot: CustomBindingSlot,
+) -> Result<(String, Option<PushConstantsInfo>)> {
+    let mut module = naga::front::wgsl::parse_str(source)
+        .map_err(|err| anyhow::anyhow!("WGSL parse failed: {err}"))?;
+    let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
+    let capabilities = naga_capabilities(bindings);
+    let mut validator = naga::valid::Validator::new(flags, capabilities);
+    let info = validator
+        .validate(&module)
+        .map_err(|err| anyhow::anyhow!("WGSL validation failed: {err}"))?;
+
+    let mut entry_indices = Vec::with_capacity(entry_points.len());
+    for entry_point in entry_points {
+        let index = module
+            .entry_points
+            .iter()
+            .position(|entry| entry.name == *entry_point)
+            .ok_or_else(|| anyhow::anyhow!("entry '{}' not found", entry_point))?;
+        entry_indices.push(index);
+    }
+
+    let mut push_constant_handle = None;
+    for (handle, var) in module.global_variables.iter() {
+        if var.space != naga::AddressSpace::PushConstant {
+            continue;
+        }
+        let used = entry_indices.iter().any(|index| {
+            let ep_info = info.get_entry_point(*index);
+            !ep_info[handle].is_empty()
+        });
+        if !used {
+            continue;
+        }
+        if push_constant_handle.is_some() {
+            return Err(anyhow::anyhow!(
+                "custom draw shaders may declare at most one push constants block"
+            ));
+        }
+        push_constant_handle = Some(handle);
+    }
+
+    let Some(handle) = push_constant_handle else {
+        if push_constants.is_some() {
+            return Err(anyhow::anyhow!(
+                "push constants were provided but the shader has no push constant block"
+            ));
+        }
+        return Ok((source.to_string(), None));
+    };
+
+    let push_constants = push_constants
+        .ok_or_else(|| anyhow::anyhow!("shader declares push constants but none were provided"))?;
+
+    let mut layouter = naga::proc::Layouter::default();
+    layouter
+        .update(module.to_ctx())
+        .map_err(|err| anyhow::anyhow!("push constants layout failed: {err}"))?;
+    let layout = &layouter[module.global_variables[handle].ty];
+    if layout.size != push_constants.size {
+        return Err(anyhow::anyhow!(
+            "push constants size mismatch (expected {}, shader reports {})",
+            push_constants.size,
+            layout.size
+        ));
+    }
+
+    let var = module.global_variables.get_mut(handle);
+    var.space = naga::AddressSpace::Uniform;
+    var.binding = None;
+    if var.name.is_none() {
+        var.name = Some("push_constants".to_string());
+    }
+    let name = var
+        .name
+        .clone()
+        .unwrap_or_else(|| "push_constants".to_string());
+
+    let info = validator
+        .validate(&module)
+        .map_err(|err| anyhow::anyhow!("WGSL validation failed: {err}"))?;
+    let source = naga::back::wgsl::write_string(&module, &info, Default::default())
+        .map_err(|err| anyhow::anyhow!("WGSL serialization failed: {err}"))?;
+
+    Ok((
+        source,
+        Some(PushConstantsInfo {
+            name: Box::leak(name.into_boxed_str()),
+            size: push_constants.size,
+            slot: push_constants_slot,
+        }),
+    ))
+}
+
 fn blade_blend_state(
     blend: CustomBlendMode,
     alpha_mode: gpu::AlphaMode,
@@ -1052,6 +1290,35 @@ impl gpu::ShaderData for CustomBindings<'_> {
                     }
                 },
                 (
+                    CustomBindingKind::BufferArray { count },
+                    CustomBindingValue::BufferArray(sources),
+                ) => {
+                    if sources.len() != *count as usize {
+                        log::warn!(
+                            "custom draw buffer array length mismatch (expected {}, got {})",
+                            count,
+                            sources.len()
+                        );
+                        continue;
+                    }
+                    let mut pieces = Vec::with_capacity(*count as usize);
+                    let mut missing = false;
+                    for source in sources {
+                        if let Some(piece) =
+                            resolve_buffer_piece(source, self.buffers, instance_belt, gpu)
+                        {
+                            pieces.push(piece);
+                        } else {
+                            missing = true;
+                            break;
+                        }
+                    }
+                    if missing {
+                        continue;
+                    }
+                    bind_buffer_array(&mut context, i as u32, *count, &pieces);
+                }
+                (
                     CustomBindingKind::Texture | CustomBindingKind::StorageTexture,
                     CustomBindingValue::Texture(id),
                 ) => {
@@ -1062,6 +1329,39 @@ impl gpu::ShaderData for CustomBindings<'_> {
                     {
                         view.bind_to(&mut context, i as u32);
                     }
+                }
+                (
+                    CustomBindingKind::TextureArray { count }
+                    | CustomBindingKind::StorageTextureArray { count },
+                    CustomBindingValue::TextureArray(ids),
+                ) => {
+                    if ids.len() != *count as usize {
+                        log::warn!(
+                            "custom draw texture array length mismatch (expected {}, got {})",
+                            count,
+                            ids.len()
+                        );
+                        continue;
+                    }
+                    let mut views = Vec::with_capacity(*count as usize);
+                    let mut missing = false;
+                    for id in ids {
+                        if let Some(view) = self
+                            .textures
+                            .get(id.0 as usize)
+                            .and_then(|slot| slot.as_ref())
+                        {
+                            views.push(*view);
+                        } else {
+                            log::warn!("custom draw texture {:?} missing", id.0);
+                            missing = true;
+                            break;
+                        }
+                    }
+                    if missing {
+                        continue;
+                    }
+                    bind_texture_array(&mut context, i as u32, *count, &views);
                 }
                 (CustomBindingKind::Sampler, CustomBindingValue::Sampler(id)) => {
                     if let Some(sampler) = self
@@ -1142,4 +1442,120 @@ impl gpu::ShaderData for CustomBindings<'_> {
             }
         }
     }
+}
+
+fn resolve_buffer_piece(
+    source: &CustomBufferSource,
+    buffers: &[Option<BladeBufferSnapshot>],
+    instance_belt: &mut BufferBelt,
+    gpu: &gpu::Context,
+) -> Option<gpu::BufferPiece> {
+    match source {
+        CustomBufferSource::Inline(data) => Some(instance_belt.alloc_bytes(data, gpu)),
+        CustomBufferSource::Buffer(id) => {
+            if let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) {
+                Some(gpu::BufferPiece::from(buffer.buffer))
+            } else {
+                log::warn!("custom draw buffer {:?} missing", id.0);
+                None
+            }
+        }
+        CustomBufferSource::BufferSlice { id, offset, size } => {
+            if let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) {
+                if *size == 0 {
+                    log::warn!("custom draw buffer slice is empty");
+                    None
+                } else if offset.saturating_add(*size) > buffer.size {
+                    log::warn!("custom draw buffer slice out of range");
+                    None
+                } else {
+                    Some(gpu::BufferPiece {
+                        buffer: buffer.buffer,
+                        offset: *offset,
+                    })
+                }
+            } else {
+                log::warn!("custom draw buffer {:?} missing", id.0);
+                None
+            }
+        }
+    }
+}
+
+fn bind_buffer_array(
+    context: &mut gpu::PipelineContext,
+    index: u32,
+    count: u32,
+    pieces: &[gpu::BufferPiece],
+) {
+    match count {
+        1 => bind_buffer_array_const::<1>(context, index, pieces),
+        2 => bind_buffer_array_const::<2>(context, index, pieces),
+        3 => bind_buffer_array_const::<3>(context, index, pieces),
+        4 => bind_buffer_array_const::<4>(context, index, pieces),
+        5 => bind_buffer_array_const::<5>(context, index, pieces),
+        6 => bind_buffer_array_const::<6>(context, index, pieces),
+        7 => bind_buffer_array_const::<7>(context, index, pieces),
+        8 => bind_buffer_array_const::<8>(context, index, pieces),
+        9 => bind_buffer_array_const::<9>(context, index, pieces),
+        10 => bind_buffer_array_const::<10>(context, index, pieces),
+        11 => bind_buffer_array_const::<11>(context, index, pieces),
+        12 => bind_buffer_array_const::<12>(context, index, pieces),
+        13 => bind_buffer_array_const::<13>(context, index, pieces),
+        14 => bind_buffer_array_const::<14>(context, index, pieces),
+        15 => bind_buffer_array_const::<15>(context, index, pieces),
+        16 => bind_buffer_array_const::<16>(context, index, pieces),
+        _ => log::warn!("custom draw buffer array count {} unsupported", count),
+    }
+}
+
+fn bind_buffer_array_const<const N: gpu::ResourceIndex>(
+    context: &mut gpu::PipelineContext,
+    index: u32,
+    pieces: &[gpu::BufferPiece],
+) {
+    let mut array = gpu::BufferArray::<N>::new();
+    for piece in pieces.iter().take(N as usize) {
+        array.alloc(*piece);
+    }
+    (&array).bind_to(context, index);
+}
+
+fn bind_texture_array(
+    context: &mut gpu::PipelineContext,
+    index: u32,
+    count: u32,
+    views: &[gpu::TextureView],
+) {
+    match count {
+        1 => bind_texture_array_const::<1>(context, index, views),
+        2 => bind_texture_array_const::<2>(context, index, views),
+        3 => bind_texture_array_const::<3>(context, index, views),
+        4 => bind_texture_array_const::<4>(context, index, views),
+        5 => bind_texture_array_const::<5>(context, index, views),
+        6 => bind_texture_array_const::<6>(context, index, views),
+        7 => bind_texture_array_const::<7>(context, index, views),
+        8 => bind_texture_array_const::<8>(context, index, views),
+        9 => bind_texture_array_const::<9>(context, index, views),
+        10 => bind_texture_array_const::<10>(context, index, views),
+        11 => bind_texture_array_const::<11>(context, index, views),
+        12 => bind_texture_array_const::<12>(context, index, views),
+        13 => bind_texture_array_const::<13>(context, index, views),
+        14 => bind_texture_array_const::<14>(context, index, views),
+        15 => bind_texture_array_const::<15>(context, index, views),
+        16 => bind_texture_array_const::<16>(context, index, views),
+        _ => log::warn!("custom draw texture array count {} unsupported", count),
+    }
+}
+
+fn bind_texture_array_const<const N: gpu::ResourceIndex>(
+    context: &mut gpu::PipelineContext,
+    index: u32,
+    views: &[gpu::TextureView],
+) {
+    let mut array = gpu::TextureArray::<N>::new();
+    for view in views.iter().take(N as usize) {
+        array.alloc(*view);
+    }
+    (&array).bind_to(context, index);
 }

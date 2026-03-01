@@ -9,9 +9,11 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Index buffers + indexed draws.
 - Instanced rendering.
 - Uniform bindings (per-draw data).
+- Push constants.
 - Storage buffers (read/write) with buffer slices for dynamic offsets.
 - Storage textures (compute write) + sampled textures.
 - Texture + sampler bindings.
+- Binding arrays (texture/buffer).
 - sRGB formats + mipmapped textures.
 - Compute pipelines + dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
@@ -39,6 +41,9 @@ cargo run --example custom_draw_api_compute
 
 # Storage texture example
 cargo run --example custom_draw_api_storage_texture
+
+# Binding arrays example
+cargo run --example custom_draw_api_binding_arrays
 
 # Explicit @location + @group/@binding example
 cargo run --example custom_draw_api_conformance
@@ -100,6 +105,18 @@ builder
 let uniform = builder.finish(); // padded to 16 bytes
 ```
 
+## Push constants
+
+Declare a push constant block in WGSL:
+
+```wgsl
+var<push_constant> Params: Params;
+```
+
+Set `push_constants` on the pipeline descriptor with the block size (16-byte aligned) and provide
+per-draw data via `CustomDrawParams.push_constants` or per-dispatch data via
+`CustomComputeDispatch.push_constants`.
+
 ## Buffer slices (dynamic offsets)
 
 Use `CustomBufferSource::BufferSlice { id, offset, size }` to bind a sub-range of a larger buffer
@@ -115,6 +132,16 @@ Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first
 
 Create textures with `CustomTextureUsage::STORAGE` (optionally combined with `SAMPLED`). Bind them
 using `CustomBindingKind::StorageTexture` and `CustomBindingValue::Texture`.
+
+## Binding arrays
+
+Use WGSL `binding_array<T, N>` (N ≤ 16) with `CustomBindingKind::TextureArray`,
+`CustomBindingKind::StorageTextureArray`, or `CustomBindingKind::BufferArray`, and supply values
+via `CustomBindingValue::TextureArray` or `CustomBindingValue::BufferArray`.
+
+See `custom_draw_api_binding_arrays` for a working example. Binding arrays use Metal argument
+buffers on macOS (Metal 2.0+). WGSL-to-MSL translation currently supports texture binding arrays;
+buffer binding arrays require precompiled MSL or Blade.
 
 ## Compute dispatch
 
@@ -192,7 +219,8 @@ cargo run --release --example custom_draw_stress -- \
 - Depth is limited to Depth32Float; no stencil attachments.
 - Single color target only (no MRT/MSAA resolve).
 - No MSAA/sample count control or custom viewport/scissor state.
-- No push constants or binding arrays (texture/buffer arrays).
+- Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
+  precompiled MSL (texture arrays are supported).
 - Storage textures are limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
 
 ## Core roadmap (triage)
@@ -203,7 +231,6 @@ cargo run --release --example custom_draw_stress -- \
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
-  - Push constants + binding arrays (texture/buffer arrays).
   - More texture formats/types (arrays/cubemaps, compressed formats).
   - Multiple color attachments (MRT) + MSAA.
 - **P2 (performance/tooling)**

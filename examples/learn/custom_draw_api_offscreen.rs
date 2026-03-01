@@ -201,6 +201,7 @@ impl OffscreenCustomDrawExample {
                 }),
                 ..CustomPipelineState::default()
             },
+            push_constants: None,
             bindings: Vec::new(),
         })?;
 
@@ -232,6 +233,7 @@ impl OffscreenCustomDrawExample {
             primitive: CustomPrimitiveTopology::TriangleList,
             target_format: None,
             state: CustomPipelineState::default(),
+            push_constants: None,
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -358,6 +360,7 @@ impl Render for OffscreenCustomDrawExample {
                         index_count: 12,
                         target: Some(target),
                         instance_count: 1,
+                        push_constants: None,
                         bindings: Vec::new(),
                     },
                     CustomDrawParams {
@@ -371,6 +374,7 @@ impl Render for OffscreenCustomDrawExample {
                         index_count: 0,
                         target: None,
                         instance_count: 1,
+                        push_constants: None,
                         bindings: vec![
                             CustomBindingValue::Texture(render_target),
                             CustomBindingValue::Sampler(sampler),

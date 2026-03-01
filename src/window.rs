@@ -3,19 +3,19 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId, CustomCompute,
-    CustomComputeDispatch, CustomComputePipelineDesc, CustomComputePipelineId,
-    CustomDepthTargetDesc, CustomDepthTargetId, CustomDraw, CustomDrawParams, CustomPipelineDesc,
-    CustomPipelineId, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureId, CustomTextureUpdate, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
-    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    Context, Corners, CursorStyle, CustomBatchKey, CustomBindingValue, CustomBufferDesc,
+    CustomBufferId, CustomBufferSource, CustomCompute, CustomComputeDispatch,
+    CustomComputePipelineDesc, CustomComputePipelineId, CustomDepthTargetDesc, CustomDepthTargetId,
+    CustomDraw, CustomDrawParams, CustomPipelineDesc, CustomPipelineId, CustomRenderTargetDesc,
+    CustomSamplerDesc, CustomSamplerId, CustomTextureDesc, CustomTextureId, CustomTextureUpdate,
+    Decorations, DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId,
+    Edges, Effect, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId,
+    GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+    Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
+    MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
     StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
@@ -3482,9 +3482,16 @@ impl Window {
             return Ok(());
         }
 
+        let mut bindings = params.bindings;
+        if let Some(push_constants) = params.push_constants {
+            bindings.push(CustomBindingValue::Uniform(CustomBufferSource::Inline(
+                push_constants,
+            )));
+        }
+
         self.next_frame.scene.insert_compute(CustomCompute {
             pipeline: params.pipeline,
-            bindings: params.bindings,
+            bindings,
             workgroup_count: params.workgroup_count,
         });
         Ok(())
@@ -3508,8 +3515,13 @@ impl Window {
                 "custom draw index count provided without an index buffer"
             ));
         }
-        let bindings_hash = params
-            .bindings
+        let mut bindings = params.bindings;
+        if let Some(push_constants) = params.push_constants {
+            bindings.push(CustomBindingValue::Uniform(CustomBufferSource::Inline(
+                push_constants,
+            )));
+        }
+        let bindings_hash = bindings
             .iter()
             .fold(1469598103934665603u64, |hash, binding| {
                 hash.wrapping_mul(1099511628211) ^ binding.hash()
@@ -3526,7 +3538,7 @@ impl Window {
             index_count: params.index_count,
             target: params.target,
             instance_count: params.instance_count,
-            bindings: params.bindings,
+            bindings,
             batch_key: CustomBatchKey {
                 pipeline: params.pipeline,
                 target_hash,

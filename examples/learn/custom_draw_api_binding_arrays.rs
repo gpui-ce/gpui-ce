@@ -1,14 +1,6 @@
-//! Custom Draw API Example
+//! Custom Draw API (Binding Arrays) Example
 //!
-//! Demonstrates the custom GPU draw pipeline:
-//! - custom pipeline creation (WGSL)
-//! - vertex buffer binding
-//! - texture + sampler bindings
-//! - paint_custom draw call
-//!
-//! Notes:
-//! - Works on Metal (default macOS) and Blade (`macos-blade` feature).
-//! - WGSL must omit @location and @group/@binding; use a0.. and b0.. names instead.
+//! Demonstrates texture binding arrays.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
@@ -27,47 +19,48 @@ use gpui::{
 };
 
 const SHADER_SOURCE: &str = r#"
- struct VertexInput {
-   a0: vec2<f32>,
-   a1: vec2<f32>,
- };
- 
- struct VertexOutput {
-   @builtin(position) position: vec4<f32>,
-   @location(0) uv: vec2<f32>,
- };
- 
- var b0: texture_2d<f32>;
- var b1: sampler;
- 
- @vertex
- fn vs_main(input: VertexInput) -> VertexOutput {
-   var out: VertexOutput;
-   out.position = vec4<f32>(input.a0, 0.0, 1.0);
-   out.uv = input.a1;
-   return out;
- }
- 
- @fragment
- fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-   return textureSample(b0, b1, input.uv);
- }
- "#;
+struct VertexInput {
+  a0: vec2<f32>,
+  a1: vec2<f32>,
+};
 
-struct CustomDrawExample {
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+var b0: binding_array<texture_2d<f32>, 2>;
+var b1: sampler;
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.position = vec4<f32>(input.a0, 0.0, 1.0);
+  out.uv = input.a1;
+  return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  let index = select(0u, 1u, input.uv.x > 0.5);
+  return textureSample(b0[index], b1, input.uv);
+}
+"#;
+
+struct BindingArrayExample {
     pipeline: Option<CustomPipelineId>,
     vertex_buffer: Option<CustomBufferId>,
-    texture: Option<CustomTextureId>,
+    textures: Option<[CustomTextureId; 2]>,
     sampler: Option<CustomSamplerId>,
     error: Option<String>,
 }
 
-impl CustomDrawExample {
+impl BindingArrayExample {
     fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             pipeline: None,
             vertex_buffer: None,
-            texture: None,
+            textures: None,
             sampler: None,
             error: None,
         }
@@ -79,10 +72,10 @@ impl CustomDrawExample {
         }
 
         match self.build_resources(window) {
-            Ok((pipeline, buffer, texture, sampler)) => {
+            Ok((pipeline, vertex_buffer, textures, sampler)) => {
                 self.pipeline = Some(pipeline);
-                self.vertex_buffer = Some(buffer);
-                self.texture = Some(texture);
+                self.vertex_buffer = Some(vertex_buffer);
+                self.textures = Some(textures);
                 self.sampler = Some(sampler);
             }
             Err(err) => {
@@ -97,11 +90,11 @@ impl CustomDrawExample {
     ) -> anyhow::Result<(
         CustomPipelineId,
         CustomBufferId,
-        CustomTextureId,
+        [CustomTextureId; 2],
         CustomSamplerId,
     )> {
         let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
-            name: "custom_draw_demo".to_string(),
+            name: "custom_draw_binding_arrays".to_string(),
             shader_source: SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
@@ -132,7 +125,7 @@ impl CustomDrawExample {
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
-                    kind: CustomBindingKind::Texture,
+                    kind: CustomBindingKind::TextureArray { count: 2 },
                     slot: None,
                 },
                 CustomBindingDesc {
@@ -143,79 +136,82 @@ impl CustomDrawExample {
             ],
         })?;
 
-        let vertex_data = quad_vertex_data();
         let vertex_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "quad_vertices".to_string(),
-            data: vertex_data,
+            name: "binding_array_vertices".to_string(),
+            data: quad_vertex_data(),
         })?;
 
-        let texture_data = checker_texture_data();
-        let texture = window.create_custom_texture(CustomTextureDesc {
-            name: "checker_texture".to_string(),
+        let texture_a = window.create_custom_texture(CustomTextureDesc {
+            name: "binding_array_texture_a".to_string(),
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
             usage: CustomTextureUsage::SAMPLED,
-            data: vec![texture_data],
+            data: vec![checker_texture_data(
+                [0xff, 0x73, 0x73, 0xff],
+                [0xff, 0xff, 0xff, 0xff],
+            )],
+        })?;
+
+        let texture_b = window.create_custom_texture(CustomTextureDesc {
+            name: "binding_array_texture_b".to_string(),
+            width: 2,
+            height: 2,
+            format: CustomTextureFormat::Rgba8Unorm,
+            usage: CustomTextureUsage::SAMPLED,
+            data: vec![checker_texture_data(
+                [0x5f, 0xa8, 0xff, 0xff],
+                [0x6b, 0xff, 0xb4, 0xff],
+            )],
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {
-            name: "checker_sampler".to_string(),
+            name: "binding_array_sampler".to_string(),
             min_filter: CustomFilterMode::Nearest,
             mag_filter: CustomFilterMode::Nearest,
             mipmap_filter: CustomFilterMode::Nearest,
             address_modes: [CustomAddressMode::ClampToEdge; 3],
         })?;
 
-        Ok((pipeline, vertex_buffer, texture, sampler))
+        Ok((pipeline, vertex_buffer, [texture_a, texture_b], sampler))
     }
 }
 
-impl Render for CustomDrawExample {
+impl Render for BindingArrayExample {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
 
         let header = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .text_xl()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(colors.text)
-                    .child("Custom Draw API"),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(colors.text_muted)
-                    .child("Custom WGSL pipeline + vertex buffer + texture/sampler"),
-            );
+            .text_lg()
+            .text_color(colors.text)
+            .child("Custom Draw Binding Arrays");
 
         let surface: Hsla = colors.surface.into();
-        let content = if let Some(err) = &self.error {
+        let content = if let Some(err) = self.error.as_ref() {
             div()
                 .text_sm()
                 .text_color(colors.error)
                 .child(format!("Custom draw unsupported: {err}"))
-        } else if let (Some(pipeline), Some(buffer), Some(texture), Some(sampler)) = (
+        } else if let (Some(pipeline), Some(vertex_buffer), Some(textures), Some(sampler)) = (
             self.pipeline,
             self.vertex_buffer,
-            self.texture,
+            self.textures,
             self.sampler,
         ) {
             let prepaint = move |bounds: Bounds<_>, window: &mut Window, _cx: &mut App| {
                 let vertex_data = quad_vertex_data_for_bounds(bounds, window.viewport_size());
-                if let Err(err) = window.update_custom_buffer(buffer, Arc::clone(&vertex_data)) {
+                if let Err(err) =
+                    window.update_custom_buffer(vertex_buffer, Arc::clone(&vertex_data))
+                {
                     log::error!("custom draw vertex update failed: {err}");
                 }
+
                 CustomDrawParams {
                     bounds,
                     pipeline,
                     vertex_buffers: vec![CustomVertexBuffer {
-                        source: CustomBufferSource::Buffer(buffer),
+                        source: CustomBufferSource::Buffer(vertex_buffer),
                     }],
                     vertex_count: 6,
                     index_buffer: None,
@@ -224,7 +220,7 @@ impl Render for CustomDrawExample {
                     instance_count: 1,
                     push_constants: None,
                     bindings: vec![
-                        CustomBindingValue::Texture(texture),
+                        CustomBindingValue::TextureArray(vec![textures[0], textures[1]]),
                         CustomBindingValue::Sampler(sampler),
                     ],
                 }
@@ -327,13 +323,12 @@ fn quad_vertex_data_for_bounds(
     Arc::from(data)
 }
 
-fn checker_texture_data() -> Arc<[u8]> {
-    let data: [u8; 16] = [
-        0xff, 0x4d, 0x4d, 0xff, // red
-        0x4d, 0xff, 0x4d, 0xff, // green
-        0x4d, 0x4d, 0xff, 0xff, // blue
-        0xff, 0xff, 0xff, 0xff, // white
-    ];
+fn checker_texture_data(primary: [u8; 4], secondary: [u8; 4]) -> Arc<[u8]> {
+    let mut data = Vec::with_capacity(16);
+    data.extend_from_slice(&primary);
+    data.extend_from_slice(&secondary);
+    data.extend_from_slice(&secondary);
+    data.extend_from_slice(&primary);
     Arc::from(data)
 }
 
@@ -345,10 +340,10 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| CustomDrawExample::new(cx)),
+            |_, cx| cx.new(|cx| BindingArrayExample::new(cx)),
         )
         .expect("Failed to open window");
 
-        example_prelude::init_example(cx, "Custom Draw API");
+        example_prelude::init_example(cx, "Custom Draw Binding Arrays");
     });
 }
