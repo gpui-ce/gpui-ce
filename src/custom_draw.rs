@@ -643,6 +643,11 @@ pub(crate) struct CustomBatchKey {
 
 pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId>;
+    fn create_pipeline_msl(
+        &self,
+        desc: CustomPipelineDesc,
+        msl_source: String,
+    ) -> Result<CustomPipelineId>;
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId>;
     fn update_buffer(&self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()>;
     fn remove_buffer(&self, id: CustomBufferId);

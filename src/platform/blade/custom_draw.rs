@@ -341,6 +341,16 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         Ok(CustomPipelineId(id))
     }
 
+    fn create_pipeline_msl(
+        &self,
+        _desc: CustomPipelineDesc,
+        _msl_source: String,
+    ) -> Result<CustomPipelineId> {
+        Err(anyhow::anyhow!(
+            "precompiled MSL is only supported on the Metal backend"
+        ))
+    }
+
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let size = desc.data.len() as u64;
         let buffer = self.gpu.create_buffer(gpu::BufferDesc {

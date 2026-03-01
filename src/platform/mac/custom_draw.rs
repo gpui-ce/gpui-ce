@@ -5,16 +5,18 @@ use anyhow::anyhow;
 use metal::{self, MTLResourceOptions};
 
 use crate::{
-    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingSlot, CustomBufferDesc,
-    CustomBufferId, CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
-    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexFetch, CustomVertexFormat, Result,
+    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingName, CustomBindingSlot,
+    CustomBufferDesc, CustomBufferId, CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc,
+    CustomPipelineId, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomVertexAttribute,
+    CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
     device: metal::Device,
     pixel_format: metal::MTLPixelFormat,
     pipelines: Mutex<Vec<Option<MetalCustomPipeline>>>,
+    pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
     samplers: Mutex<Vec<Option<metal::SamplerState>>>,
@@ -29,6 +31,50 @@ pub(crate) struct MetalCustomPipeline {
     pub(crate) primitive: metal::MTLPrimitiveType,
     pub(crate) vertex_fetch_count: usize,
     pub(crate) buffer_binding_base: u64,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+enum PipelineSourceKey {
+    Wgsl(String),
+    Msl(String),
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct PipelineCacheKey {
+    source: PipelineSourceKey,
+    vertex_entry: String,
+    fragment_entry: String,
+    primitive: u8,
+    vertex_fetches: Vec<VertexFetchKey>,
+    bindings: Vec<BindingKey>,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct VertexFetchKey {
+    stride: u32,
+    instanced: bool,
+    attributes: Vec<VertexAttributeKey>,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct VertexAttributeKey {
+    name: u8,
+    offset: u32,
+    format: u8,
+    location: Option<u32>,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct BindingKey {
+    name: u8,
+    kind: BindingKindKey,
+    slot: Option<CustomBindingSlot>,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct BindingKindKey {
+    kind: u8,
+    size: u32,
 }
 
 struct MetalCustomBuffer {
@@ -49,6 +95,7 @@ impl MetalCustomDrawRegistry {
             device,
             pixel_format,
             pipelines: Mutex::new(Vec::new()),
+            pipeline_cache: Mutex::new(HashMap::new()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
             samplers: Mutex::new(Vec::new()),
@@ -103,10 +150,21 @@ impl MetalCustomDrawRegistry {
         slots.push(Some(value));
         (slots.len() - 1) as u32
     }
-}
 
-impl CustomDrawRegistry for MetalCustomDrawRegistry {
-    fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
+    fn create_pipeline_internal(
+        &self,
+        desc: CustomPipelineDesc,
+        msl_source: Option<String>,
+    ) -> Result<CustomPipelineId> {
+        let source_key = match &msl_source {
+            Some(source) => PipelineSourceKey::Msl(source.clone()),
+            None => PipelineSourceKey::Wgsl(desc.shader_source.clone()),
+        };
+        let cache_key = pipeline_cache_key(&desc, source_key);
+        if let Some(existing) = self.pipeline_cache.lock().unwrap().get(&cache_key).copied() {
+            return Ok(existing);
+        }
+
         let mut module = naga::front::wgsl::parse_str(&desc.shader_source)
             .map_err(|err| anyhow!("WGSL parse failed: {err}"))?;
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
@@ -150,32 +208,59 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
         let buffer_binding_base = u8::try_from(desc.vertex_fetches.len())
             .map_err(|_| anyhow!("custom draw supports up to {} vertex buffers", u8::MAX))?;
-        let entry_point_resources =
-            build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
-        let mut naga_options = naga::back::msl::Options::default();
-        naga_options.lang_version = (1, 2);
-        naga_options.fake_missing_bindings = false;
-        naga_options.zero_initialize_workgroup_memory = false;
-        naga_options.force_loop_bounding = false;
-        naga_options
-            .per_entry_point_map
-            .insert(desc.vertex_entry.clone(), entry_point_resources.clone());
-        naga_options
-            .per_entry_point_map
-            .insert(desc.fragment_entry.clone(), entry_point_resources);
 
-        let pipeline_options = naga::back::msl::PipelineOptions {
-            allow_and_force_point_size: matches!(
-                desc.primitive,
-                CustomPrimitiveTopology::PointList
-            ),
-            vertex_pulling_transform: false,
-            vertex_buffer_mappings: Vec::new(),
+        let (msl_source, vertex_name, fragment_name) = if let Some(source) = msl_source {
+            if source.trim().is_empty() {
+                return Err(anyhow!("MSL source is empty"));
+            }
+            (
+                source,
+                desc.vertex_entry.clone(),
+                desc.fragment_entry.clone(),
+            )
+        } else {
+            let entry_point_resources =
+                build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
+            let mut naga_options = naga::back::msl::Options::default();
+            naga_options.lang_version = (1, 2);
+            naga_options.fake_missing_bindings = false;
+            naga_options.zero_initialize_workgroup_memory = false;
+            naga_options.force_loop_bounding = false;
+            naga_options
+                .per_entry_point_map
+                .insert(desc.vertex_entry.clone(), entry_point_resources.clone());
+            naga_options
+                .per_entry_point_map
+                .insert(desc.fragment_entry.clone(), entry_point_resources);
+
+            let pipeline_options = naga::back::msl::PipelineOptions {
+                allow_and_force_point_size: matches!(
+                    desc.primitive,
+                    CustomPrimitiveTopology::PointList
+                ),
+                vertex_pulling_transform: false,
+                vertex_buffer_mappings: Vec::new(),
+            };
+
+            let (msl_source, translation) =
+                naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
+                    .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
+
+            let vertex_name = translation
+                .entry_point_names
+                .get(vertex_entry_index)
+                .ok_or_else(|| anyhow!("missing translated vertex entry"))
+                .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
+                .to_string();
+            let fragment_name = translation
+                .entry_point_names
+                .get(fragment_entry_index)
+                .ok_or_else(|| anyhow!("missing translated fragment entry"))
+                .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
+                .to_string();
+
+            (msl_source, vertex_name, fragment_name)
         };
-
-        let (msl_source, translation) =
-            naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
-                .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
 
         let compile_options = metal::CompileOptions::new();
         compile_options.set_language_version(metal::MTLLanguageVersion::V1_2);
@@ -184,22 +269,11 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             .new_library_with_source(&msl_source, &compile_options)
             .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
 
-        let vertex_name = translation
-            .entry_point_names
-            .get(vertex_entry_index)
-            .ok_or_else(|| anyhow!("missing translated vertex entry"))
-            .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?;
-        let fragment_name = translation
-            .entry_point_names
-            .get(fragment_entry_index)
-            .ok_or_else(|| anyhow!("missing translated fragment entry"))
-            .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?;
-
         let vertex_fn = library
-            .get_function(vertex_name, None)
+            .get_function(&vertex_name, None)
             .map_err(|err| anyhow!("vertex entry '{vertex_name}' not found: {err}"))?;
         let fragment_fn = library
-            .get_function(fragment_name, None)
+            .get_function(&fragment_name, None)
             .map_err(|err| anyhow!("fragment entry '{fragment_name}' not found: {err}"))?;
 
         let vertex_descriptor =
@@ -241,7 +315,26 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
         let mut pipelines = self.pipelines.lock().unwrap();
         let id = Self::alloc_slot(&mut pipelines, pipeline);
-        Ok(CustomPipelineId(id))
+        let pipeline_id = CustomPipelineId(id);
+        self.pipeline_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key, pipeline_id);
+        Ok(pipeline_id)
+    }
+}
+
+impl CustomDrawRegistry for MetalCustomDrawRegistry {
+    fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
+        self.create_pipeline_internal(desc, None)
+    }
+
+    fn create_pipeline_msl(
+        &self,
+        desc: CustomPipelineDesc,
+        msl_source: String,
+    ) -> Result<CustomPipelineId> {
+        self.create_pipeline_internal(desc, Some(msl_source))
     }
 
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
@@ -468,6 +561,105 @@ fn build_binding_maps(
     }
 
     (by_name, by_slot)
+}
+
+fn pipeline_cache_key(desc: &CustomPipelineDesc, source: PipelineSourceKey) -> PipelineCacheKey {
+    PipelineCacheKey {
+        source,
+        vertex_entry: desc.vertex_entry.clone(),
+        fragment_entry: desc.fragment_entry.clone(),
+        primitive: primitive_key(desc.primitive),
+        vertex_fetches: desc.vertex_fetches.iter().map(vertex_fetch_key).collect(),
+        bindings: desc.bindings.iter().map(binding_key).collect(),
+    }
+}
+
+fn vertex_fetch_key(fetch: &CustomVertexFetch) -> VertexFetchKey {
+    VertexFetchKey {
+        stride: fetch.layout.stride,
+        instanced: fetch.instanced,
+        attributes: fetch
+            .layout
+            .attributes
+            .iter()
+            .map(vertex_attribute_key)
+            .collect(),
+    }
+}
+
+fn vertex_attribute_key(attribute: &CustomVertexAttribute) -> VertexAttributeKey {
+    VertexAttributeKey {
+        name: vertex_attribute_name_key(attribute.name),
+        offset: attribute.offset,
+        format: vertex_format_key(attribute.format),
+        location: attribute.location,
+    }
+}
+
+fn binding_key(binding: &CustomBindingDesc) -> BindingKey {
+    BindingKey {
+        name: binding_name_key(binding.name),
+        kind: binding_kind_key(binding.kind),
+        slot: binding.slot,
+    }
+}
+
+fn binding_kind_key(kind: CustomBindingKind) -> BindingKindKey {
+    match kind {
+        CustomBindingKind::Buffer => BindingKindKey { kind: 0, size: 0 },
+        CustomBindingKind::Texture => BindingKindKey { kind: 1, size: 0 },
+        CustomBindingKind::Sampler => BindingKindKey { kind: 2, size: 0 },
+        CustomBindingKind::Uniform { size } => BindingKindKey { kind: 3, size },
+    }
+}
+
+fn vertex_attribute_name_key(name: CustomVertexAttributeName) -> u8 {
+    match name {
+        CustomVertexAttributeName::A0 => 0,
+        CustomVertexAttributeName::A1 => 1,
+        CustomVertexAttributeName::A2 => 2,
+        CustomVertexAttributeName::A3 => 3,
+        CustomVertexAttributeName::A4 => 4,
+        CustomVertexAttributeName::A5 => 5,
+        CustomVertexAttributeName::A6 => 6,
+        CustomVertexAttributeName::A7 => 7,
+    }
+}
+
+fn binding_name_key(name: CustomBindingName) -> u8 {
+    match name {
+        CustomBindingName::B0 => 0,
+        CustomBindingName::B1 => 1,
+        CustomBindingName::B2 => 2,
+        CustomBindingName::B3 => 3,
+    }
+}
+
+fn vertex_format_key(format: CustomVertexFormat) -> u8 {
+    match format {
+        CustomVertexFormat::F32 => 0,
+        CustomVertexFormat::F32Vec2 => 1,
+        CustomVertexFormat::F32Vec3 => 2,
+        CustomVertexFormat::F32Vec4 => 3,
+        CustomVertexFormat::U32 => 4,
+        CustomVertexFormat::U32Vec2 => 5,
+        CustomVertexFormat::U32Vec3 => 6,
+        CustomVertexFormat::U32Vec4 => 7,
+        CustomVertexFormat::I32 => 8,
+        CustomVertexFormat::I32Vec2 => 9,
+        CustomVertexFormat::I32Vec3 => 10,
+        CustomVertexFormat::I32Vec4 => 11,
+    }
+}
+
+fn primitive_key(primitive: CustomPrimitiveTopology) -> u8 {
+    match primitive {
+        CustomPrimitiveTopology::PointList => 0,
+        CustomPrimitiveTopology::LineList => 1,
+        CustomPrimitiveTopology::LineStrip => 2,
+        CustomPrimitiveTopology::TriangleList => 3,
+        CustomPrimitiveTopology::TriangleStrip => 4,
+    }
 }
 
 fn assign_vertex_locations(

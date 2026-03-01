@@ -3311,6 +3311,24 @@ impl Window {
         registry.create_pipeline(desc)
     }
 
+    /// Create a custom GPU pipeline using precompiled Metal shading language (MSL) source.
+    ///
+    /// The `CustomPipelineDesc` WGSL source is still validated to ensure bindings and layouts are
+    /// consistent, but the provided MSL source is compiled directly on Metal.
+    pub fn create_custom_pipeline_msl(
+        &mut self,
+        desc: CustomPipelineDesc,
+        msl_source: String,
+    ) -> Result<CustomPipelineId> {
+        crate::custom_draw::validate_custom_pipeline_desc(&desc)?;
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        registry.create_pipeline_msl(desc, msl_source)
+    }
+
     /// Create a custom buffer for GPU-backed drawing.
     pub fn create_custom_buffer(&mut self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {

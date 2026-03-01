@@ -54,6 +54,20 @@ See `custom_draw_api_conformance` (explicit), `custom_draw_api_mixed` (mixed exp
 `custom_draw_api_missing_binding` (logs missing binding warnings) for examples.
 The mixed example computes its quad from the canvas bounds so it stays inside the rounded border on resize.
 
+## Metal pipeline caching + precompiled MSL
+
+- Metal custom draw pipelines are cached by shader source, entry points, layouts, and bindings.
+- You can bypass WGSL→MSL translation with precompiled MSL:
+
+```rust
+let pipeline = window.create_custom_pipeline_msl(desc, msl_source)?;
+```
+
+MSL slot mapping follows the binding order used in `CustomPipelineDesc`:
+- Textures/samplers use the binding index (0..N)
+- Buffers/uniforms use `vertex_fetch_count + binding_index`
+- Binding groups are ignored on Metal (slots are flat)
+
 ## Uniform helper (16-byte alignment)
 
 Use `CustomUniformBuilder` to avoid the common "uniform size must be 16-byte aligned" error:
@@ -135,9 +149,31 @@ cargo run --release --example custom_draw_stress -- \
   --instances 10000
 ```
 
-## Future work
+## Known limitations (current gaps)
 
-- Streaming texture uploads for large, per-frame data (e.g., video frames).
-- Offscreen render targets for multi-pass effects and composition.
-- Explicit compute/fragment passes to build post-processing pipelines.
-- Better tooling for GPU resource lifetime and frame pacing.
+- No index buffers or indexed draws.
+- No depth/stencil attachments or depth testing.
+- Single color target only (no MRT/MSAA resolve).
+- Fixed pipeline state (blend/cull/depth/sample count/viewport not configurable).
+- Binding model is small and flat (4 bindings; no dynamic offsets or push constants).
+- No storage buffers/textures or compute pipelines.
+- Texture support is limited to 2D RGBA/BGRA without mipmaps, arrays, or sRGB control.
+- No offscreen render targets or multi-pass render workflow.
+
+## Core roadmap (triage)
+
+- **P0 (core primitives)**
+  - Index buffers + indexed draws.
+  - Depth/stencil attachments + depth testing.
+  - Offscreen render targets / render passes for multi-pass composition.
+  - Configurable pipeline state (blend modes, cull, depth, sample count, viewport/scissor).
+- **P1 (feature growth)**
+  - Storage buffers/textures + compute pipelines/passes.
+  - Expanded binding model (more bindings, dynamic offsets, push constants).
+  - More texture formats/types (mips, sRGB, arrays/cubemaps).
+  - Multiple color attachments (MRT) + MSAA.
+- **P2 (performance/tooling)**
+  - Streaming texture uploads for large, per-frame data (e.g., video frames).
+  - Persistent pipeline cache / `.metallib` loading for Metal.
+  - GPU profiling (timestamps) + resource lifetime diagnostics.
+  - Frame pacing / diagnostics tooling.
