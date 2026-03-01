@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, CustomDraw, Edges, Hsla,
-    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, CustomCompute, CustomDraw,
+    Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -33,6 +33,7 @@ pub(crate) struct Scene {
     pub(crate) polychrome_sprites: Vec<PolychromeSprite>,
     pub(crate) surfaces: Vec<PaintSurface>,
     pub(crate) custom_draws: Vec<CustomDraw>,
+    pub(crate) custom_computes: Vec<CustomCompute>,
 }
 
 impl Scene {
@@ -48,6 +49,7 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.custom_draws.clear();
+        self.custom_computes.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -120,10 +122,16 @@ impl Scene {
             .push(PaintOperation::Primitive(primitive));
     }
 
+    pub fn insert_compute(&mut self, compute: CustomCompute) {
+        self.custom_computes.push(compute.clone());
+        self.paint_operations.push(PaintOperation::Compute(compute));
+    }
+
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                PaintOperation::Compute(compute) => self.insert_compute(compute.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
@@ -208,6 +216,7 @@ pub(crate) enum PrimitiveKind {
 
 pub(crate) enum PaintOperation {
     Primitive(Primitive),
+    Compute(CustomCompute),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
 }

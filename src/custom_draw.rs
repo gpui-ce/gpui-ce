@@ -8,6 +8,10 @@ use crate::{Bounds, ContentMask, Pixels, Result, ScaledPixels};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CustomPipelineId(pub(crate) u32);
 
+/// Identifier for a registered custom compute pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CustomComputePipelineId(pub(crate) u32);
+
 /// Identifier for a registered custom buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CustomBufferId(pub(crate) u32);
@@ -292,6 +296,19 @@ pub struct CustomPipelineDesc {
     pub bindings: Vec<CustomBindingDesc>,
 }
 
+/// Pipeline description for custom GPU compute.
+#[derive(Debug, Clone)]
+pub struct CustomComputePipelineDesc {
+    /// Debug name for the pipeline.
+    pub name: String,
+    /// WGSL shader source.
+    pub shader_source: String,
+    /// Compute entry point name.
+    pub entry_point: String,
+    /// Optional shader bindings.
+    pub bindings: Vec<CustomBindingDesc>,
+}
+
 pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -355,6 +372,63 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
         if !group.insert(slot.binding) {
             return Err(anyhow!(
                 "custom draw binding slots must be unique (group {}, binding {})",
+                slot.group,
+                slot.binding
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_custom_compute_pipeline_desc(
+    desc: &CustomComputePipelineDesc,
+) -> Result<()> {
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+    if desc.entry_point.trim().is_empty() {
+        return Err(anyhow!("custom compute entry is empty"));
+    }
+
+    for binding in &desc.bindings {
+        if let CustomBindingKind::Uniform { size } = binding.kind {
+            if size == 0 || size % 16 != 0 {
+                return Err(anyhow!(
+                    "custom compute uniform size must be non-zero and 16-byte aligned (got {})",
+                    size
+                ));
+            }
+        }
+    }
+
+    let mut seen_binding_names = HashSet::new();
+    for binding in &desc.bindings {
+        if !seen_binding_names.insert(binding.name) {
+            return Err(anyhow!(
+                "custom compute binding names must be unique (duplicate {})",
+                binding.name.as_str()
+            ));
+        }
+    }
+
+    const MAX_BINDING_INDEX: u32 = 4096;
+    let mut group_bindings: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for binding in &desc.bindings {
+        let slot = binding.slot.unwrap_or(CustomBindingSlot {
+            group: 0,
+            binding: binding.name.index(),
+        });
+        if slot.binding > MAX_BINDING_INDEX {
+            return Err(anyhow!(
+                "custom compute binding index {} out of range (max {})",
+                slot.binding,
+                MAX_BINDING_INDEX
+            ));
+        }
+        let group = group_bindings.entry(slot.group).or_default();
+        if !group.insert(slot.binding) {
+            return Err(anyhow!(
+                "custom compute binding slots must be unique (group {}, binding {})",
                 slot.group,
                 slot.binding
             ));
@@ -772,6 +846,17 @@ pub struct CustomDrawParams {
     pub bindings: Vec<CustomBindingValue>,
 }
 
+/// Parameters for a custom compute dispatch.
+#[derive(Debug, Clone)]
+pub struct CustomComputeDispatch {
+    /// Compute pipeline to use.
+    pub pipeline: CustomComputePipelineId,
+    /// Bindings for the dispatch.
+    pub bindings: Vec<CustomBindingValue>,
+    /// Workgroup counts for the dispatch.
+    pub workgroup_count: [u32; 3],
+}
+
 /// Binding values for a custom draw call.
 #[derive(Debug, Clone)]
 pub enum CustomBindingValue {
@@ -942,6 +1027,14 @@ pub(crate) struct CustomDraw {
     pub(crate) batch_key: CustomBatchKey,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "macos-blade"), allow(dead_code))]
+pub(crate) struct CustomCompute {
+    pub(crate) pipeline: CustomComputePipelineId,
+    pub(crate) bindings: Vec<CustomBindingValue>,
+    pub(crate) workgroup_count: [u32; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CustomBatchKey {
     pub(crate) pipeline: CustomPipelineId,
@@ -956,6 +1049,10 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
         desc: CustomPipelineDesc,
         msl_source: String,
     ) -> Result<CustomPipelineId>;
+    fn create_compute_pipeline(
+        &self,
+        desc: CustomComputePipelineDesc,
+    ) -> Result<CustomComputePipelineId>;
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId>;
     fn update_buffer(&self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()>;
     fn remove_buffer(&self, id: CustomBufferId);

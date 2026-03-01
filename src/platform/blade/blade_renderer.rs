@@ -663,6 +663,12 @@ impl BladeRenderer {
         let buffers_snapshot = self.custom_draw.buffers_snapshot();
         let textures_snapshot = self.custom_draw.textures_snapshot();
         let samplers_snapshot = self.custom_draw.samplers_snapshot();
+        self.dispatch_custom_computes(
+            scene,
+            &buffers_snapshot,
+            &textures_snapshot,
+            &samplers_snapshot,
+        );
         self.draw_custom_render_targets(
             scene,
             &buffers_snapshot,
@@ -1188,6 +1194,82 @@ impl BladeRenderer {
 
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
+    }
+
+    fn dispatch_custom_computes(
+        &mut self,
+        scene: &Scene,
+        buffers_snapshot: &[Option<BladeBufferSnapshot>],
+        textures_snapshot: &[Option<gpu::TextureView>],
+        samplers_snapshot: &[Option<gpu::Sampler>],
+    ) {
+        if scene.custom_computes.is_empty() {
+            return;
+        }
+
+        let mut pass = self.command_encoder.compute("custom_compute");
+        for compute in scene.custom_computes.iter() {
+            if compute.workgroup_count.iter().any(|count| *count == 0) {
+                continue;
+            }
+            if let Some(()) = self.custom_draw.with_compute_pipeline(compute.pipeline, |pipeline| {
+                let binding_kinds = pipeline.bindings.as_slice();
+                let binding_indices = pipeline.binding_indices.as_slice();
+                let mut encoder = pass.with(&pipeline.pipeline);
+
+                let mut max_index = 0usize;
+                for indices in binding_indices {
+                    for index in indices.iter().flatten() {
+                        max_index = max_index.max(*index);
+                    }
+                }
+                if !binding_kinds.is_empty() && compute.bindings.len() <= max_index {
+                    log::warn!(
+                        "custom compute bindings missing (expected at least {}, got {})",
+                        max_index + 1,
+                        compute.bindings.len()
+                    );
+                }
+                for (group_index, group_kinds) in binding_kinds.iter().enumerate() {
+                    if group_kinds.is_empty() {
+                        continue;
+                    }
+                    let group_indices = binding_indices
+                        .get(group_index)
+                        .map(|indices| indices.as_slice())
+                        .unwrap_or(&[]);
+                    for (slot_index, binding_index) in group_indices.iter().enumerate() {
+                        let Some(binding_index) = binding_index else {
+                            continue;
+                        };
+                        if compute.bindings.get(*binding_index).is_none() {
+                            log::warn!(
+                                "custom compute missing binding value for group {} binding {} (value index {})",
+                                group_index,
+                                slot_index,
+                                binding_index
+                            );
+                            break;
+                        }
+                    }
+                    let bindings = CustomBindings {
+                        bindings: &compute.bindings,
+                        binding_kinds: group_kinds,
+                        binding_indices: group_indices,
+                        buffers: buffers_snapshot,
+                        textures: textures_snapshot,
+                        samplers: samplers_snapshot,
+                        instance_belt: &mut self.instance_belt as *mut _,
+                        gpu: Arc::as_ptr(&self.gpu),
+                    };
+                    encoder.bind(group_index as u32, &bindings);
+                }
+
+                encoder.dispatch(compute.workgroup_count);
+            }) {
+                log::warn!("custom compute pipeline {:?} not found", compute.pipeline.0);
+            }
+        }
     }
 
     fn draw_custom_render_targets(

@@ -3,7 +3,8 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId,
+    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId, CustomCompute,
+    CustomComputeDispatch, CustomComputePipelineDesc, CustomComputePipelineId,
     CustomDepthTargetDesc, CustomDepthTargetId, CustomDraw, CustomDrawParams, CustomPipelineDesc,
     CustomPipelineId, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
     CustomTextureDesc, CustomTextureId, CustomTextureUpdate, Decorations, DevicePixels,
@@ -3312,6 +3313,20 @@ impl Window {
         registry.create_pipeline(desc)
     }
 
+    /// Create a custom GPU compute pipeline with user-provided shaders and bindings.
+    pub fn create_custom_compute_pipeline(
+        &mut self,
+        desc: CustomComputePipelineDesc,
+    ) -> Result<CustomComputePipelineId> {
+        crate::custom_draw::validate_custom_compute_pipeline_desc(&desc)?;
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom compute pipeline not supported on this platform"
+            ));
+        };
+        registry.create_compute_pipeline(desc)
+    }
+
     /// Create a custom GPU pipeline using precompiled Metal shading language (MSL) source.
     ///
     /// The `CustomPipelineDesc` WGSL source is still validated to ensure bindings and layouts are
@@ -3456,6 +3471,22 @@ impl Window {
             ));
         };
         registry.remove_sampler(id);
+        Ok(())
+    }
+
+    /// Dispatch a custom compute command into the scene.
+    pub fn dispatch_custom_compute(&mut self, params: CustomComputeDispatch) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        if params.workgroup_count.iter().any(|count| *count == 0) {
+            return Ok(());
+        }
+
+        self.next_frame.scene.insert_compute(CustomCompute {
+            pipeline: params.pipeline,
+            bindings: params.bindings,
+            workgroup_count: params.workgroup_count,
+        });
         Ok(())
     }
 

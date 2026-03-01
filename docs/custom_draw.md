@@ -12,6 +12,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Storage buffers (read/write) with buffer slices for dynamic offsets.
 - Texture + sampler bindings.
 - sRGB formats + mipmapped textures.
+- Compute pipelines + dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
 - Offscreen render targets + depth testing.
 - Batching by pipeline + bindings.
@@ -31,6 +32,9 @@ cargo run --example custom_draw_api_instanced
 
 # Offscreen render target + depth example
 cargo run --example custom_draw_api_offscreen
+
+# Compute pipeline + storage buffer example
+cargo run --example custom_draw_api_compute
 
 # Explicit @location + @group/@binding example
 cargo run --example custom_draw_api_conformance
@@ -103,6 +107,12 @@ fit inside the buffer and uniform slices must be at least the declared uniform s
 Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first). Use
 `CustomTextureUpdate { level, data }` to update a specific level.
 
+## Compute dispatch
+
+Use `CustomComputePipelineDesc` + `create_custom_compute_pipeline` to create a compute pipeline,
+then call `dispatch_custom_compute` with workgroup counts and bindings. Compute dispatches run
+before custom draw render passes each frame.
+
 ## Error semantics
 
 - **Pipeline creation** (`create_custom_pipeline`) returns `Err` for:
@@ -174,7 +184,7 @@ cargo run --release --example custom_draw_stress -- \
 - Single color target only (no MRT/MSAA resolve).
 - No MSAA/sample count control or custom viewport/scissor state.
 - No push constants or binding arrays (texture/buffer arrays).
-- No storage textures or compute pipelines.
+- No storage textures (compute can only write buffers).
 - Texture support is limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
 
 ## Core roadmap (triage)
@@ -185,9 +195,9 @@ cargo run --release --example custom_draw_stress -- \
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
-  - Storage textures + compute pipelines/passes.
+  - Storage textures (read/write).
   - Push constants + binding arrays (texture/buffer arrays).
-  - More texture formats/types (mips, sRGB, arrays/cubemaps).
+  - More texture formats/types (arrays/cubemaps, compressed formats).
   - Multiple color attachments (MRT) + MSAA.
 - **P2 (performance/tooling)**
   - Streaming texture uploads for large, per-frame data (e.g., video frames).

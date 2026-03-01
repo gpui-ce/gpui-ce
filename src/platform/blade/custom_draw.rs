@@ -6,17 +6,19 @@ use blade_util::{BufferBelt, BufferBeltDescriptor};
 
 use crate::{
     CustomAddressMode, CustomBindingKind, CustomBindingValue, CustomBlendMode, CustomBufferDesc,
-    CustomBufferId, CustomBufferSource, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
-    CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode,
-    CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
-    CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomVertexFormat, Result,
+    CustomBufferId, CustomBufferSource, CustomComputePipelineDesc, CustomComputePipelineId,
+    CustomCullMode, CustomDepthCompare, CustomDepthFormat, CustomDepthTargetDesc,
+    CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc,
+    CustomPipelineId, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
+    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
     gpu: Arc<gpu::Context>,
     surface_info: gpu::SurfaceInfo,
     pipelines: Mutex<Vec<Option<BladeCustomPipeline>>>,
+    compute_pipelines: Mutex<Vec<Option<BladeCustomComputePipeline>>>,
     buffers: Mutex<Vec<Option<BladeCustomBuffer>>>,
     textures: Mutex<Vec<Option<BladeCustomTexture>>>,
     depth_targets: Mutex<Vec<Option<BladeCustomDepthTarget>>>,
@@ -31,6 +33,12 @@ pub(crate) struct BladeCustomPipeline {
     pub(crate) binding_indices: Vec<Vec<Option<usize>>>,
     pub(crate) color_format: gpu::TextureFormat,
     pub(crate) depth_format: Option<gpu::TextureFormat>,
+}
+
+pub(crate) struct BladeCustomComputePipeline {
+    pub(crate) pipeline: gpu::ComputePipeline,
+    pub(crate) bindings: Vec<Vec<CustomBindingKind>>,
+    pub(crate) binding_indices: Vec<Vec<Option<usize>>>,
 }
 
 struct BladeCustomBuffer {
@@ -79,6 +87,7 @@ impl BladeCustomDrawRegistry {
             gpu,
             surface_info,
             pipelines: Mutex::new(Vec::new()),
+            compute_pipelines: Mutex::new(Vec::new()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
             depth_targets: Mutex::new(Vec::new()),
@@ -98,6 +107,12 @@ impl BladeCustomDrawRegistry {
             self.gpu.destroy_render_pipeline(&mut pipeline.pipeline);
         }
         pipelines.clear();
+
+        let mut compute_pipelines = self.compute_pipelines.lock().unwrap();
+        for pipeline in compute_pipelines.iter_mut().flatten() {
+            self.gpu.destroy_compute_pipeline(&mut pipeline.pipeline);
+        }
+        compute_pipelines.clear();
         let mut buffers = self.buffers.lock().unwrap();
         for buffer in buffers.iter_mut().flatten() {
             self.gpu.destroy_buffer(buffer.buffer);
@@ -129,6 +144,15 @@ impl BladeCustomDrawRegistry {
         F: FnOnce(&BladeCustomPipeline) -> R,
     {
         let pipelines = self.pipelines.lock().unwrap();
+        let entry = pipelines.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn with_compute_pipeline<F, R>(&self, id: CustomComputePipelineId, f: F) -> Option<R>
+    where
+        F: FnOnce(&BladeCustomComputePipeline) -> R,
+    {
+        let pipelines = self.compute_pipelines.lock().unwrap();
         let entry = pipelines.get(id.0 as usize)?.as_ref()?;
         Some(f(entry))
     }
@@ -404,6 +428,99 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             },
         );
         Ok(CustomPipelineId(id))
+    }
+
+    fn create_compute_pipeline(
+        &self,
+        desc: CustomComputePipelineDesc,
+    ) -> Result<CustomComputePipelineId> {
+        let shader = self.gpu.create_shader(gpu::ShaderDesc {
+            source: &desc.shader_source,
+        });
+
+        let mut group_entries: BTreeMap<
+            u32,
+            Vec<Option<(&'static str, gpu::ShaderBinding, CustomBindingKind, usize)>>,
+        > = BTreeMap::new();
+        for (flat_index, binding) in desc.bindings.iter().enumerate() {
+            let slot = binding.slot.unwrap_or(crate::CustomBindingSlot {
+                group: 0,
+                binding: binding.name.index(),
+            });
+            let name = binding.name.as_str();
+            let shader_binding = match binding.kind {
+                CustomBindingKind::Buffer => gpu::ShaderBinding::Buffer,
+                CustomBindingKind::Texture => gpu::ShaderBinding::Texture,
+                CustomBindingKind::Sampler => gpu::ShaderBinding::Sampler,
+                CustomBindingKind::Uniform { size } => gpu::ShaderBinding::Plain { size },
+            };
+            let group = group_entries.entry(slot.group).or_default();
+            let binding_index = slot.binding as usize;
+            if group.len() <= binding_index {
+                group.resize(binding_index + 1, None);
+            }
+            group[binding_index] = Some((name, shader_binding, binding.kind, flat_index));
+        }
+
+        let mut binding_layouts: Vec<gpu::ShaderDataLayout> = Vec::new();
+        let mut binding_kinds_by_group: Vec<Vec<CustomBindingKind>> = Vec::new();
+        let mut binding_indices_by_group: Vec<Vec<Option<usize>>> = Vec::new();
+        if !desc.bindings.is_empty() {
+            let max_group = *group_entries.keys().max().unwrap_or(&0);
+            for group in 0..=max_group {
+                if let Some(entries) = group_entries.get(&group) {
+                    let mut layout = gpu::ShaderDataLayout::default();
+                    let mut kinds = Vec::with_capacity(entries.len());
+                    let mut indices = Vec::with_capacity(entries.len());
+                    for (binding_index, entry) in entries.iter().enumerate() {
+                        match entry {
+                            Some((name, shader_binding, kind, flat_index)) => {
+                                layout.bindings.push((name, *shader_binding));
+                                kinds.push(*kind);
+                                indices.push(Some(*flat_index));
+                            }
+                            None => {
+                                let placeholder = Box::leak(
+                                    format!("__gpui_unused_b{}_{}", group, binding_index)
+                                        .into_boxed_str(),
+                                );
+                                layout
+                                    .bindings
+                                    .push((placeholder, gpu::ShaderBinding::Buffer));
+                                kinds.push(CustomBindingKind::Buffer);
+                                indices.push(None);
+                            }
+                        }
+                    }
+                    binding_layouts.push(layout);
+                    binding_kinds_by_group.push(kinds);
+                    binding_indices_by_group.push(indices);
+                } else {
+                    binding_layouts.push(gpu::ShaderDataLayout::default());
+                    binding_kinds_by_group.push(Vec::new());
+                    binding_indices_by_group.push(Vec::new());
+                }
+            }
+        }
+
+        let data_layouts: Vec<&gpu::ShaderDataLayout> = binding_layouts.iter().collect();
+
+        let pipeline = self.gpu.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: &desc.name,
+            data_layouts: data_layouts.as_slice(),
+            compute: shader.at(&desc.entry_point),
+        });
+
+        let mut pipelines = self.compute_pipelines.lock().unwrap();
+        let id = Self::alloc_slot(
+            &mut pipelines,
+            BladeCustomComputePipeline {
+                pipeline,
+                bindings: binding_kinds_by_group,
+                binding_indices: binding_indices_by_group,
+            },
+        );
+        Ok(CustomComputePipelineId(id))
     }
 
     fn create_pipeline_msl(

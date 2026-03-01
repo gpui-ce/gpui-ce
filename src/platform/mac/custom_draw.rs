@@ -6,11 +6,12 @@ use metal::{self, MTLResourceOptions};
 
 use crate::{
     CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingName, CustomBindingSlot,
-    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomCullMode, CustomDepthCompare,
-    CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
-    CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
-    CustomPipelineState, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomComputePipelineDesc,
+    CustomComputePipelineId, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
+    CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
+    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
+    CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
     CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat,
     Result,
 };
@@ -19,6 +20,7 @@ pub(crate) struct MetalCustomDrawRegistry {
     device: metal::Device,
     pixel_format: metal::MTLPixelFormat,
     pipelines: Mutex<Vec<Option<MetalCustomPipeline>>>,
+    compute_pipelines: Mutex<Vec<Option<MetalCustomComputePipeline>>>,
     pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
@@ -39,6 +41,13 @@ pub(crate) struct MetalCustomPipeline {
     pub(crate) depth_format: Option<metal::MTLPixelFormat>,
     pub(crate) depth_state: Option<metal::DepthStencilState>,
     pub(crate) vertex_fetch_count: usize,
+    pub(crate) buffer_binding_base: u64,
+}
+
+pub(crate) struct MetalCustomComputePipeline {
+    pub(crate) pipeline_state: metal::ComputePipelineState,
+    pub(crate) bindings: Vec<CustomBindingKind>,
+    pub(crate) workgroup_size: [u32; 3],
     pub(crate) buffer_binding_base: u64,
 }
 
@@ -131,6 +140,7 @@ impl MetalCustomDrawRegistry {
             device,
             pixel_format,
             pipelines: Mutex::new(Vec::new()),
+            compute_pipelines: Mutex::new(Vec::new()),
             pipeline_cache: Mutex::new(HashMap::new()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
@@ -144,6 +154,15 @@ impl MetalCustomDrawRegistry {
         F: FnOnce(&MetalCustomPipeline) -> R,
     {
         let pipelines = self.pipelines.lock().unwrap();
+        let entry = pipelines.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn with_compute_pipeline<F, R>(&self, id: CustomComputePipelineId, f: F) -> Option<R>
+    where
+        F: FnOnce(&MetalCustomComputePipeline) -> R,
+    {
+        let pipelines = self.compute_pipelines.lock().unwrap();
         let entry = pipelines.get(id.0 as usize)?.as_ref()?;
         Some(f(entry))
     }
@@ -395,6 +414,108 @@ impl MetalCustomDrawRegistry {
             .insert(cache_key, pipeline_id);
         Ok(pipeline_id)
     }
+
+    fn create_compute_pipeline_internal(
+        &self,
+        desc: CustomComputePipelineDesc,
+    ) -> Result<CustomComputePipelineId> {
+        let mut module = naga::front::wgsl::parse_str(&desc.shader_source)
+            .map_err(|err| anyhow!("WGSL parse failed: {err}"))?;
+        let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
+        let info = naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+            .validate(&module)
+            .map_err(|err| anyhow!("WGSL validation failed: {err}"))?;
+
+        let entry_index = module
+            .entry_points
+            .iter()
+            .position(|entry| entry.name == desc.entry_point)
+            .ok_or_else(|| anyhow!("compute entry '{}' not found", desc.entry_point))?;
+        let entry = &module.entry_points[entry_index];
+        if entry.stage != naga::ShaderStage::Compute {
+            return Err(anyhow!(
+                "entry '{}' is not a compute shader",
+                desc.entry_point
+            ));
+        }
+        if let Some(overrides) = entry.workgroup_size_overrides.as_ref() {
+            if overrides
+                .iter()
+                .any(|override_expr| override_expr.is_some())
+            {
+                return Err(anyhow!(
+                    "custom compute pipelines do not support workgroup size overrides"
+                ));
+            }
+        }
+        let workgroup_size = entry.workgroup_size;
+
+        let (bindings_by_name, bindings_by_slot) = build_binding_maps(&desc.bindings);
+        let entry_name = module.entry_points[entry_index].name.clone();
+        assign_resource_bindings(
+            &mut module,
+            &info,
+            &entry_name,
+            entry_index,
+            &bindings_by_name,
+            &bindings_by_slot,
+        )?;
+
+        let entry_point_resources = build_entry_point_resources(&desc.bindings, 0)?;
+        let mut naga_options = naga::back::msl::Options::default();
+        naga_options.lang_version = (1, 2);
+        naga_options.fake_missing_bindings = false;
+        naga_options.zero_initialize_workgroup_memory = false;
+        naga_options.force_loop_bounding = false;
+        naga_options
+            .per_entry_point_map
+            .insert(desc.entry_point.clone(), entry_point_resources);
+
+        let pipeline_options = naga::back::msl::PipelineOptions {
+            allow_and_force_point_size: false,
+            vertex_pulling_transform: false,
+            vertex_buffer_mappings: Vec::new(),
+        };
+
+        let (msl_source, translation) =
+            naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
+                .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
+
+        let compute_name = translation
+            .entry_point_names
+            .get(entry_index)
+            .ok_or_else(|| anyhow!("missing translated compute entry"))
+            .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
+            .to_string();
+
+        let compile_options = metal::CompileOptions::new();
+        compile_options.set_language_version(metal::MTLLanguageVersion::V1_2);
+        let library = self
+            .device
+            .new_library_with_source(&msl_source, &compile_options)
+            .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
+
+        let compute_fn = library
+            .get_function(&compute_name, None)
+            .map_err(|err| anyhow!("compute entry '{compute_name}' not found: {err}"))?;
+
+        let pipeline_state = self
+            .device
+            .new_compute_pipeline_state_with_function(compute_fn.as_ref())
+            .map_err(|err| anyhow!("custom compute pipeline failed: {err}"))?;
+
+        let binding_kinds = desc.bindings.iter().map(|binding| binding.kind).collect();
+        let pipeline = MetalCustomComputePipeline {
+            pipeline_state,
+            bindings: binding_kinds,
+            workgroup_size,
+            buffer_binding_base: 0,
+        };
+
+        let mut pipelines = self.compute_pipelines.lock().unwrap();
+        let id = Self::alloc_slot(&mut pipelines, pipeline);
+        Ok(CustomComputePipelineId(id))
+    }
 }
 
 impl CustomDrawRegistry for MetalCustomDrawRegistry {
@@ -408,6 +529,13 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         msl_source: String,
     ) -> Result<CustomPipelineId> {
         self.create_pipeline_internal(desc, Some(msl_source))
+    }
+
+    fn create_compute_pipeline(
+        &self,
+        desc: CustomComputePipelineDesc,
+    ) -> Result<CustomComputePipelineId> {
+        self.create_compute_pipeline_internal(desc)
     }
 
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {

@@ -350,6 +350,10 @@ name = "custom_draw_api_offscreen"
 path = "examples/learn/custom_draw_api_offscreen.rs"
 
 [[example]]
+name = "custom_draw_api_compute"
+path = "examples/learn/custom_draw_api_compute.rs"
+
+[[example]]
 name = "custom_draw_api_conformance"
 path = "examples/learn/custom_draw_api_conformance.rs"
 
