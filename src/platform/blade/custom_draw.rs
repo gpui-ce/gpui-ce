@@ -5,13 +5,13 @@ use blade_graphics::{self as gpu, ShaderBindable as _};
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 
 use crate::{
-    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingValue, CustomBlendMode,
-    CustomBufferDesc, CustomBufferId, CustomBufferSource, CustomComputePipelineDesc,
-    CustomComputePipelineId, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
-    CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode,
-    CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
-    CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingSlot, CustomBindingValue,
+    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
+    CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
+    CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
+    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
+    CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
+    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
     CustomTextureUsage, CustomVertexFormat, Result,
 };
 
@@ -67,8 +67,6 @@ pub(crate) struct BladeCustomTexture {
 pub(crate) struct BladeCustomDepthTarget {
     pub(crate) texture: gpu::Texture,
     pub(crate) view: gpu::TextureView,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
     pub(crate) format: gpu::TextureFormat,
     pub(crate) clear_depth: f32,
 }
@@ -305,7 +303,6 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                             CustomVertexFormat::I32Vec3 => gpu::VertexFormat::I32Vec3,
                             CustomVertexFormat::I32Vec4 => gpu::VertexFormat::I32Vec4,
                         },
-                        location: attr.location,
                     },
                 ));
             }
@@ -932,8 +929,6 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         let target = BladeCustomDepthTarget {
             texture: raw,
             view,
-            width: desc.width,
-            height: desc.height,
             format,
             clear_depth: desc.clear_depth.unwrap_or(1.0),
         };
@@ -1122,8 +1117,9 @@ fn prepare_blade_shader_source(
     let info = validator
         .validate(&module)
         .map_err(|err| anyhow::anyhow!("WGSL validation failed: {err}"))?;
-    let source = naga::back::wgsl::write_string(&module, &info, Default::default())
-        .map_err(|err| anyhow::anyhow!("WGSL serialization failed: {err}"))?;
+    let source =
+        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+            .map_err(|err| anyhow::anyhow!("WGSL serialization failed: {err}"))?;
 
     Ok((
         source,

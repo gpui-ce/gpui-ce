@@ -3478,7 +3478,7 @@ impl Window {
     pub fn dispatch_custom_compute(&mut self, params: CustomComputeDispatch) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        if params.workgroup_count.iter().any(|count| *count == 0) {
+        if params.workgroup_count.contains(&0) {
             return Ok(());
         }
 

@@ -5,9 +5,9 @@ use super::{
     BladeAtlas, BladeBufferSnapshot, BladeContext, BladeCustomDrawRegistry, CustomBindings,
 };
 use crate::{
-    Background, Bounds, CustomBindingKind, CustomBufferSource, CustomIndexFormat, DevicePixels,
-    GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
-    Scene, Shadow, Size, Underline, get_gamma_correction_ratios,
+    Background, Bounds, CustomBufferSource, CustomDraw, CustomIndexFormat, DevicePixels, GpuSpecs,
+    MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene,
+    Shadow, Size, Underline, get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
 use blade_util::{BufferBelt, BufferBeltDescriptor};
@@ -1028,10 +1028,10 @@ impl BladeRenderer {
                                      }
                                      let mut missing_buffer = false;
                                      for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
-                                         match &buffer.source {
+                                         match buffer.source.clone() {
                                              CustomBufferSource::Inline(data) => {
                                                  let buf =
-                                                     self.instance_belt.alloc_bytes(data, &self.gpu);
+                                                     self.instance_belt.alloc_bytes(data.as_ref(), &self.gpu);
                                                  encoder.bind_vertex(index as u32, buf);
                                              }
                                              CustomBufferSource::Buffer(id) => {
@@ -1057,12 +1057,12 @@ impl BladeRenderer {
                                                      missing_buffer = true;
                                                      break;
                                                  };
-                                                 if *size == 0 {
+                                                 if size == 0 {
                                                      log::warn!("custom draw buffer slice is empty");
                                                      missing_buffer = true;
                                                      break;
                                                  }
-                                                 if offset.saturating_add(*size) > buffer.size {
+                                                 if offset.saturating_add(size) > buffer.size {
                                                      log::warn!("custom draw buffer slice out of range");
                                                      missing_buffer = true;
                                                      break;
@@ -1071,7 +1071,7 @@ impl BladeRenderer {
                                                      index as u32,
                                                      gpu::BufferPiece {
                                                          buffer: buffer.buffer,
-                                                         offset: *offset,
+                                                         offset,
                                                      },
                                                  );
                                              }
@@ -1084,7 +1084,7 @@ impl BladeRenderer {
                                          if draw.index_count == 0 {
                                              continue;
                                          }
-                                         let index_piece = match &index_buffer.source {
+                                         let index_piece = match index_buffer.source.clone() {
                                              CustomBufferSource::Inline(data) => {
                                                  let expected_len = draw.index_count as usize
                                                      * index_format_size(index_buffer.format);
@@ -1096,7 +1096,7 @@ impl BladeRenderer {
                                                      );
                                                      continue;
                                                  }
-                                                 self.instance_belt.alloc_bytes(data, &self.gpu)
+                                                 self.instance_belt.alloc_bytes(data.as_ref(), &self.gpu)
                                              }
                                              CustomBufferSource::Buffer(id) => {
                                                  let Some(buffer) = buffers_snapshot
@@ -1128,17 +1128,17 @@ impl BladeRenderer {
                                                      log::warn!("custom draw index buffer missing");
                                                      continue;
                                                  };
-                                                 if *size == 0 {
+                                                 if size == 0 {
                                                      log::warn!("custom draw index buffer slice is empty");
                                                      continue;
                                                  }
-                                                 if offset.saturating_add(*size) > buffer.size {
+                                                 if offset.saturating_add(size) > buffer.size {
                                                      log::warn!("custom draw index buffer slice out of range");
                                                      continue;
                                                  }
                                                  let expected_len = draw.index_count as usize
                                                      * index_format_size(index_buffer.format);
-                                                 if expected_len > 0 && *size < expected_len as u64 {
+                                                 if expected_len > 0 && size < expected_len as u64 {
                                                      log::warn!(
                                                          "custom draw index buffer slice too small (expected at least {}, got {})",
                                                          expected_len,
@@ -1148,7 +1148,7 @@ impl BladeRenderer {
                                                  }
                                                  gpu::BufferPiece {
                                                      buffer: buffer.buffer,
-                                                     offset: *offset,
+                                                     offset,
                                                  }
                                              }
                                          };
@@ -1209,7 +1209,7 @@ impl BladeRenderer {
 
         let mut pass = self.command_encoder.compute("custom_compute");
         for compute in scene.custom_computes.iter() {
-            if compute.workgroup_count.iter().any(|count| *count == 0) {
+            if compute.workgroup_count.contains(&0) {
                 continue;
             }
             if let Some(()) = self.custom_draw.with_compute_pipeline(compute.pipeline, |pipeline| {
@@ -1448,10 +1448,10 @@ impl BladeRenderer {
                             }
                             let mut missing_buffer = false;
                             for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
-                                match &buffer.source {
+                                match buffer.source.clone() {
                                     CustomBufferSource::Inline(data) => {
                                         let buf =
-                                            self.instance_belt.alloc_bytes(data, &self.gpu);
+                                            self.instance_belt.alloc_bytes(data.as_ref(), &self.gpu);
                                         encoder.bind_vertex(index as u32, buf);
                                     }
                                     CustomBufferSource::Buffer(id) => {
@@ -1477,12 +1477,12 @@ impl BladeRenderer {
                                             missing_buffer = true;
                                             break;
                                         };
-                                        if *size == 0 {
+                                        if size == 0 {
                                             log::warn!("custom draw buffer slice is empty");
                                             missing_buffer = true;
                                             break;
                                         }
-                                        if offset.saturating_add(*size) > buffer.size {
+                                        if offset.saturating_add(size) > buffer.size {
                                             log::warn!("custom draw buffer slice out of range");
                                             missing_buffer = true;
                                             break;
@@ -1491,7 +1491,7 @@ impl BladeRenderer {
                                             index as u32,
                                             gpu::BufferPiece {
                                                 buffer: buffer.buffer,
-                                                offset: *offset,
+                                                offset,
                                             },
                                         );
                                     }
@@ -1504,7 +1504,7 @@ impl BladeRenderer {
                                 if draw.index_count == 0 {
                                     continue;
                                 }
-                                let index_piece = match &index_buffer.source {
+                                let index_piece = match index_buffer.source.clone() {
                                     CustomBufferSource::Inline(data) => {
                                         let expected_len = draw.index_count as usize
                                             * index_format_size(index_buffer.format);
@@ -1516,7 +1516,7 @@ impl BladeRenderer {
                                             );
                                             continue;
                                         }
-                                        self.instance_belt.alloc_bytes(data, &self.gpu)
+                                        self.instance_belt.alloc_bytes(data.as_ref(), &self.gpu)
                                     }
                                     CustomBufferSource::Buffer(id) => {
                                         let Some(buffer) = buffers_snapshot
@@ -1546,17 +1546,17 @@ impl BladeRenderer {
                                             log::warn!("custom draw index buffer missing");
                                             continue;
                                         };
-                                        if *size == 0 {
+                                        if size == 0 {
                                             log::warn!("custom draw index buffer slice is empty");
                                             continue;
                                         }
-                                        if offset.saturating_add(*size) > buffer.size {
+                                        if offset.saturating_add(size) > buffer.size {
                                             log::warn!("custom draw index buffer slice out of range");
                                             continue;
                                         }
                                         let expected_len = draw.index_count as usize
                                             * index_format_size(index_buffer.format);
-                                        if expected_len > 0 && *size < expected_len as u64 {
+                                        if expected_len > 0 && size < expected_len as u64 {
                                             log::warn!(
                                                 "custom draw index buffer slice too small (expected at least {}, got {})",
                                                 expected_len,
@@ -1566,7 +1566,7 @@ impl BladeRenderer {
                                         }
                                         gpu::BufferPiece {
                                             buffer: buffer.buffer,
-                                            offset: *offset,
+                                            offset,
                                         }
                                     }
                                 };

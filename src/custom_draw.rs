@@ -44,24 +44,20 @@ pub enum CustomPrimitiveTopology {
 }
 
 /// Front face winding order for custom pipelines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomFrontFace {
     /// Counter-clockwise front face.
+    #[default]
     Ccw,
     /// Clockwise front face.
     Cw,
 }
 
-impl Default for CustomFrontFace {
-    fn default() -> Self {
-        Self::Ccw
-    }
-}
-
 /// Face culling mode for custom pipelines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomCullMode {
     /// Disable face culling.
+    #[default]
     None,
     /// Cull front-facing triangles.
     Front,
@@ -69,16 +65,11 @@ pub enum CustomCullMode {
     Back,
 }
 
-impl Default for CustomCullMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 /// Blend mode for custom pipelines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomBlendMode {
     /// Backend default blend configuration.
+    #[default]
     Default,
     /// Disable blending (opaque output).
     Opaque,
@@ -88,31 +79,20 @@ pub enum CustomBlendMode {
     PremultipliedAlpha,
 }
 
-impl Default for CustomBlendMode {
-    fn default() -> Self {
-        Self::Default
-    }
-}
-
 /// Depth compare function for custom pipelines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomDepthCompare {
     /// Always passes.
     Always,
     /// Passes when the new depth is less.
     Less,
     /// Passes when the new depth is less than or equal.
+    #[default]
     LessEqual,
     /// Passes when the new depth is greater.
     Greater,
     /// Passes when the new depth is greater than or equal.
     GreaterEqual,
-}
-
-impl Default for CustomDepthCompare {
-    fn default() -> Self {
-        Self::LessEqual
-    }
 }
 
 /// Depth formats supported for custom render targets.

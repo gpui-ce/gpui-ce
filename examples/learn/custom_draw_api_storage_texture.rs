@@ -288,7 +288,7 @@ impl Render for StorageTextureExample {
                 {
                     log::error!("custom draw vertex update failed: {err}");
                 }
-                let group_count = (STORAGE_TEXTURE_SIZE + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+                let group_count = STORAGE_TEXTURE_SIZE.div_ceil(WORKGROUP_SIZE);
                 StorageTextureFrame {
                     compute: CustomComputeDispatch {
                         pipeline: compute_pipeline,
