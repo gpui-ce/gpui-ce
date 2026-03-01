@@ -247,7 +247,7 @@ impl StressHarness {
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
-            data: checker_texture_data(),
+            data: vec![checker_texture_data()],
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {

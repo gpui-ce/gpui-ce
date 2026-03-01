@@ -825,6 +825,10 @@ pub enum CustomTextureFormat {
     Rgba8Unorm,
     /// BGRA8 unorm.
     Bgra8Unorm,
+    /// RGBA8 unorm sRGB.
+    Rgba8UnormSrgb,
+    /// BGRA8 unorm sRGB.
+    Bgra8UnormSrgb,
 }
 
 /// Texture description for custom GPU rendering.
@@ -838,8 +842,24 @@ pub struct CustomTextureDesc {
     pub height: u32,
     /// Texture format.
     pub format: CustomTextureFormat,
-    /// Initial texture contents.
+    /// Initial texture contents for each mip level (level 0 first).
+    pub data: Vec<Arc<[u8]>>,
+}
+
+/// Texture update for a specific mip level.
+#[derive(Debug, Clone)]
+pub struct CustomTextureUpdate {
+    /// Mip level to update (0 = base level).
+    pub level: u32,
+    /// Texture data for the mip level.
     pub data: Arc<[u8]>,
+}
+
+impl CustomTextureUpdate {
+    /// Convenience for updating the base mip level.
+    pub fn base_level(data: Arc<[u8]>) -> Self {
+        Self { level: 0, data }
+    }
 }
 
 /// Offscreen render target description.
@@ -941,7 +961,7 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn remove_buffer(&self, id: CustomBufferId);
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId>;
     fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId>;
-    fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()>;
+    fn update_texture(&self, id: CustomTextureId, update: CustomTextureUpdate) -> Result<()>;
     fn remove_texture(&self, id: CustomTextureId);
     fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId>;
     fn remove_depth_target(&self, id: CustomDepthTargetId);

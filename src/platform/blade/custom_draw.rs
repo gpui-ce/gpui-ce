@@ -10,7 +10,7 @@ use crate::{
     CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode,
     CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
     CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexFormat, Result,
+    CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -48,6 +48,7 @@ pub(crate) struct BladeCustomTexture {
     pub(crate) view: gpu::TextureView,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) mip_level_count: u32,
     pub(crate) bytes_per_pixel: u32,
     pub(crate) format: gpu::TextureFormat,
     pub(crate) is_render_target: bool,
@@ -66,6 +67,10 @@ pub(crate) struct BladeCustomDepthTarget {
 struct PendingUpload {
     texture_id: CustomTextureId,
     data: gpu::BufferPiece,
+    mip_level: u32,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
 }
 
 impl BladeCustomDrawRegistry {
@@ -193,16 +198,16 @@ impl BladeCustomDrawRegistry {
             let mut transfers = encoder.transfer("custom_draw_texture");
             transfers.copy_buffer_to_texture(
                 upload.data,
-                texture.width * texture.bytes_per_pixel,
+                upload.bytes_per_row,
                 gpu::TexturePiece {
                     texture: texture.texture,
-                    mip_level: 0,
+                    mip_level: upload.mip_level,
                     array_layer: 0,
                     origin: [0, 0, 0],
                 },
                 gpu::Extent {
-                    width: texture.width,
-                    height: texture.height,
+                    width: upload.width,
+                    height: upload.height,
                     depth: 1,
                 },
             );
@@ -480,7 +485,33 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         let (format, bytes_per_pixel) = match desc.format {
             CustomTextureFormat::Rgba8Unorm => (gpu::TextureFormat::Rgba8Unorm, 4),
             CustomTextureFormat::Bgra8Unorm => (gpu::TextureFormat::Bgra8Unorm, 4),
+            CustomTextureFormat::Rgba8UnormSrgb => (gpu::TextureFormat::Rgba8UnormSrgb, 4),
+            CustomTextureFormat::Bgra8UnormSrgb => (gpu::TextureFormat::Bgra8UnormSrgb, 4),
         };
+        if desc.data.is_empty() {
+            return Err(anyhow::anyhow!(
+                "custom texture data must include at least one mip level"
+            ));
+        }
+        let max_levels = max_mip_levels(desc.width, desc.height);
+        if desc.data.len() as u32 > max_levels {
+            return Err(anyhow::anyhow!(
+                "custom texture mip level count {} exceeds maximum {}",
+                desc.data.len(),
+                max_levels
+            ));
+        }
+        for (level, data) in desc.data.iter().enumerate() {
+            let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
+            let expected_len = (width * height * bytes_per_pixel) as usize;
+            if data.len() < expected_len {
+                return Err(anyhow::anyhow!(
+                    "custom texture mip level {} data is smaller than texture size",
+                    level
+                ));
+            }
+        }
+
         let raw = self.gpu.create_texture(gpu::TextureDesc {
             name: &desc.name,
             format,
@@ -490,7 +521,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 depth: 1,
             },
             array_layer_count: 1,
-            mip_level_count: 1,
+            mip_level_count: desc.data.len() as u32,
             sample_count: 1,
             dimension: gpu::TextureDimension::D2,
             usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
@@ -510,6 +541,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             view,
             width: desc.width,
             height: desc.height,
+            mip_level_count: desc.data.len() as u32,
             bytes_per_pixel,
             format,
             is_render_target: false,
@@ -518,7 +550,15 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         let mut textures = self.textures.lock().unwrap();
         let id = Self::alloc_slot(&mut textures, texture);
         drop(textures);
-        self.update_texture(CustomTextureId(id), desc.data)?;
+        for (level, data) in desc.data.iter().enumerate() {
+            self.update_texture(
+                CustomTextureId(id),
+                CustomTextureUpdate {
+                    level: level as u32,
+                    data: Arc::clone(data),
+                },
+            )?;
+        }
         Ok(CustomTextureId(id))
     }
 
@@ -526,6 +566,8 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         let (format, bytes_per_pixel) = match desc.format {
             CustomTextureFormat::Rgba8Unorm => (gpu::TextureFormat::Rgba8Unorm, 4),
             CustomTextureFormat::Bgra8Unorm => (gpu::TextureFormat::Bgra8Unorm, 4),
+            CustomTextureFormat::Rgba8UnormSrgb => (gpu::TextureFormat::Rgba8UnormSrgb, 4),
+            CustomTextureFormat::Bgra8UnormSrgb => (gpu::TextureFormat::Bgra8UnormSrgb, 4),
         };
         let raw = self.gpu.create_texture(gpu::TextureDesc {
             name: &desc.name,
@@ -556,6 +598,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             view,
             width: desc.width,
             height: desc.height,
+            mip_level_count: 1,
             bytes_per_pixel,
             format,
             is_render_target: true,
@@ -566,27 +609,49 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         Ok(CustomTextureId(id))
     }
 
-    fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
-        if data.is_empty() {
+    fn update_texture(&self, id: CustomTextureId, update: CustomTextureUpdate) -> Result<()> {
+        if update.data.is_empty() {
             return Err(anyhow::anyhow!("custom texture data is empty"));
         }
-        let is_render_target = self
-            .textures
-            .lock()
-            .unwrap()
-            .get(id.0 as usize)
-            .and_then(|slot| slot.as_ref())
-            .map(|entry| entry.is_render_target)
-            .unwrap_or(false);
+        let (is_render_target, width, height, bytes_per_pixel, mip_level_count) = {
+            let textures = self.textures.lock().unwrap();
+            let Some(entry) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                return Err(anyhow::anyhow!("custom texture id out of range"));
+            };
+            (
+                entry.is_render_target,
+                entry.width,
+                entry.height,
+                entry.bytes_per_pixel,
+                entry.mip_level_count,
+            )
+        };
         if is_render_target {
             return Err(anyhow::anyhow!("custom render targets cannot be updated"));
         }
+        if update.level >= mip_level_count {
+            return Err(anyhow::anyhow!(
+                "custom texture mip level {} out of range",
+                update.level
+            ));
+        }
+        let (level_width, level_height) = mip_level_size(width, height, update.level);
+        let expected_len = (level_width * level_height * bytes_per_pixel) as usize;
+        if update.data.len() < expected_len {
+            return Err(anyhow::anyhow!(
+                "custom texture data is smaller than texture size"
+            ));
+        }
         let mut upload_belt = self.upload_belt.lock().unwrap();
-        let piece = upload_belt.alloc_bytes(&data, &self.gpu);
+        let piece = upload_belt.alloc_bytes(&update.data, &self.gpu);
         let mut pending = self.pending_uploads.lock().unwrap();
         pending.push(PendingUpload {
             texture_id: id,
             data: piece,
+            mip_level: update.level,
+            width: level_width,
+            height: level_height,
+            bytes_per_row: level_width.saturating_mul(bytes_per_pixel),
         });
         Ok(())
     }
@@ -731,7 +796,29 @@ fn blade_color_format(format: CustomTextureFormat) -> gpu::TextureFormat {
     match format {
         CustomTextureFormat::Rgba8Unorm => gpu::TextureFormat::Rgba8Unorm,
         CustomTextureFormat::Bgra8Unorm => gpu::TextureFormat::Bgra8Unorm,
+        CustomTextureFormat::Rgba8UnormSrgb => gpu::TextureFormat::Rgba8UnormSrgb,
+        CustomTextureFormat::Bgra8UnormSrgb => gpu::TextureFormat::Bgra8UnormSrgb,
     }
+}
+
+fn max_mip_levels(width: u32, height: u32) -> u32 {
+    let mut levels = 1;
+    let mut size = width.max(height);
+    while size > 1 {
+        size /= 2;
+        levels += 1;
+    }
+    levels
+}
+
+fn mip_level_size(width: u32, height: u32, level: u32) -> (u32, u32) {
+    let mut level_width = width.max(1);
+    let mut level_height = height.max(1);
+    for _ in 0..level {
+        level_width = (level_width / 2).max(1);
+        level_height = (level_height / 2).max(1);
+    }
+    (level_width, level_height)
 }
 
 fn blade_depth_format(format: CustomDepthFormat) -> gpu::TextureFormat {

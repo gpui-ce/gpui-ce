@@ -154,7 +154,7 @@ impl CustomDrawExample {
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
-            data: texture_data,
+            data: vec![texture_data],
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {

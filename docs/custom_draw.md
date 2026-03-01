@@ -11,6 +11,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Uniform bindings (per-draw data).
 - Storage buffers (read/write) with buffer slices for dynamic offsets.
 - Texture + sampler bindings.
+- sRGB formats + mipmapped textures.
 - Configurable pipeline state (blend, cull, front face, depth).
 - Offscreen render targets + depth testing.
 - Batching by pipeline + bindings.
@@ -97,6 +98,11 @@ Use `CustomBufferSource::BufferSlice { id, offset, size }` to bind a sub-range o
 for uniforms, storage buffers, or vertex/index data. Offsets and sizes are in bytes; the slice must
 fit inside the buffer and uniform slices must be at least the declared uniform size.
 
+## Mipmap textures
+
+Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first). Use
+`CustomTextureUpdate { level, data }` to update a specific level.
+
 ## Error semantics
 
 - **Pipeline creation** (`create_custom_pipeline`) returns `Err` for:
@@ -169,7 +175,7 @@ cargo run --release --example custom_draw_stress -- \
 - No MSAA/sample count control or custom viewport/scissor state.
 - No push constants or binding arrays (texture/buffer arrays).
 - No storage textures or compute pipelines.
-- Texture support is limited to 2D RGBA/BGRA without mipmaps, arrays, or sRGB control.
+- Texture support is limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
 
 ## Core roadmap (triage)
 

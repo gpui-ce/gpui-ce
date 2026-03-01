@@ -10,7 +10,7 @@ use crate::{
     CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
     CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
     CustomPipelineState, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId,
+    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
     CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat,
     Result,
 };
@@ -112,6 +112,7 @@ pub(crate) struct MetalCustomTexture {
     pub(crate) texture: metal::Texture,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) mip_level_count: u32,
     pub(crate) bytes_per_pixel: u32,
     pub(crate) format: metal::MTLPixelFormat,
     pub(crate) is_render_target: bool,
@@ -478,24 +479,42 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
         let (pixel_format, bytes_per_pixel) = metal_color_format(desc.format);
 
-        if desc.data.len() < (desc.width * desc.height * bytes_per_pixel) as usize {
-            return Err(anyhow!("custom texture data is smaller than texture size"));
+        if desc.data.is_empty() {
+            return Err(anyhow!(
+                "custom texture data must include at least one mip level"
+            ));
+        }
+        let max_levels = max_mip_levels(desc.width, desc.height);
+        if desc.data.len() as u32 > max_levels {
+            return Err(anyhow!(
+                "custom texture mip level count {} exceeds maximum {}",
+                desc.data.len(),
+                max_levels
+            ));
+        }
+        for (level, data) in desc.data.iter().enumerate() {
+            let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
+            let expected_len = (width * height * bytes_per_pixel) as usize;
+            if data.len() < expected_len {
+                return Err(anyhow!(
+                    "custom texture mip level {} data is smaller than texture size",
+                    level
+                ));
+            }
         }
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(pixel_format);
         descriptor.set_width(desc.width as u64);
         descriptor.set_height(desc.height as u64);
+        descriptor.set_mipmap_level_count(desc.data.len() as u64);
         descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
 
         let texture = self.device.new_texture(&descriptor);
-        upload_texture_data(
-            &texture,
-            desc.width,
-            desc.height,
-            bytes_per_pixel,
-            &desc.data,
-        );
+        for (level, data) in desc.data.iter().enumerate() {
+            let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
+            upload_texture_data(&texture, width, height, bytes_per_pixel, level as u64, data);
+        }
 
         let mut textures = self.textures.lock().unwrap();
         let id = Self::alloc_slot(
@@ -504,6 +523,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 texture,
                 width: desc.width,
                 height: desc.height,
+                mip_level_count: desc.data.len() as u32,
                 bytes_per_pixel,
                 format: pixel_format,
                 is_render_target: false,
@@ -519,6 +539,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         descriptor.set_pixel_format(pixel_format);
         descriptor.set_width(desc.width as u64);
         descriptor.set_height(desc.height as u64);
+        descriptor.set_mipmap_level_count(1);
         descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         descriptor.set_storage_mode(metal::MTLStorageMode::Private);
@@ -533,6 +554,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 texture,
                 width: desc.width,
                 height: desc.height,
+                mip_level_count: 1,
                 bytes_per_pixel,
                 format: pixel_format,
                 is_render_target: true,
@@ -542,7 +564,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         Ok(CustomTextureId(id))
     }
 
-    fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
+    fn update_texture(&self, id: CustomTextureId, update: CustomTextureUpdate) -> Result<()> {
         let mut textures = self.textures.lock().unwrap();
         let Some(slot) = textures.get_mut(id.0 as usize) else {
             return Err(anyhow!("custom texture id out of range"));
@@ -553,16 +575,24 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         if entry.is_render_target {
             return Err(anyhow!("custom render targets cannot be updated"));
         }
-        let expected_len = (entry.width * entry.height * entry.bytes_per_pixel) as usize;
-        if data.len() < expected_len {
+        if update.level >= entry.mip_level_count {
+            return Err(anyhow!(
+                "custom texture mip level {} out of range",
+                update.level
+            ));
+        }
+        let (width, height) = mip_level_size(entry.width, entry.height, update.level);
+        let expected_len = (width * height * entry.bytes_per_pixel) as usize;
+        if update.data.len() < expected_len {
             return Err(anyhow!("custom texture data is smaller than texture size"));
         }
         upload_texture_data(
             &entry.texture,
-            entry.width,
-            entry.height,
+            width,
+            height,
             entry.bytes_per_pixel,
-            &data,
+            update.level as u64,
+            &update.data,
         );
         Ok(())
     }
@@ -1163,6 +1193,8 @@ fn metal_color_format(format: CustomTextureFormat) -> (metal::MTLPixelFormat, u3
     match format {
         CustomTextureFormat::Rgba8Unorm => (metal::MTLPixelFormat::RGBA8Unorm, 4),
         CustomTextureFormat::Bgra8Unorm => (metal::MTLPixelFormat::BGRA8Unorm, 4),
+        CustomTextureFormat::Rgba8UnormSrgb => (metal::MTLPixelFormat::RGBA8Unorm_sRGB, 4),
+        CustomTextureFormat::Bgra8UnormSrgb => (metal::MTLPixelFormat::BGRA8Unorm_sRGB, 4),
     }
 }
 
@@ -1174,6 +1206,26 @@ fn resolve_color_format(
         return Ok(metal_color_format(format).0);
     }
     Ok(default_format)
+}
+
+fn max_mip_levels(width: u32, height: u32) -> u32 {
+    let mut levels = 1;
+    let mut size = width.max(height);
+    while size > 1 {
+        size /= 2;
+        levels += 1;
+    }
+    levels
+}
+
+fn mip_level_size(width: u32, height: u32, level: u32) -> (u32, u32) {
+    let mut level_width = width.max(1);
+    let mut level_height = height.max(1);
+    for _ in 0..level {
+        level_width = (level_width / 2).max(1);
+        level_height = (level_height / 2).max(1);
+    }
+    (level_width, level_height)
 }
 
 fn metal_depth_format(format: CustomDepthFormat) -> metal::MTLPixelFormat {
@@ -1286,12 +1338,13 @@ fn upload_texture_data(
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
+    mip_level: u64,
     data: &[u8],
 ) {
     let region = metal::MTLRegion::new_2d(0, 0, width as u64, height as u64);
     texture.replace_region(
         region,
-        0,
+        mip_level,
         data.as_ptr() as *const _,
         (width * bytes_per_pixel) as u64,
     );
