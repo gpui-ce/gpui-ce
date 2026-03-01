@@ -1619,11 +1619,23 @@ impl MetalRenderer {
                 pipeline.bindings.len(),
                 bindings.len()
             );
-            return CustomDrawBindOutcome::SkipBatch;
         }
 
         for (index, kind) in pipeline.bindings.iter().enumerate() {
-            let binding = &bindings[index];
+            let Some(binding) = bindings.get(index) else {
+                match kind {
+                    CustomBindingKind::Texture => {
+                        command_encoder.set_vertex_texture(index as u64, None);
+                        command_encoder.set_fragment_texture(index as u64, None);
+                    }
+                    CustomBindingKind::Sampler => {
+                        command_encoder.set_vertex_sampler_state(index as u64, None);
+                        command_encoder.set_fragment_sampler_state(index as u64, None);
+                    }
+                    _ => {}
+                }
+                continue;
+            };
             let binding_index = index as u64;
             match (kind, binding) {
                 (CustomBindingKind::Buffer, CustomBindingValue::Buffer(source)) => {
@@ -1701,11 +1713,21 @@ impl MetalRenderer {
                 pipeline.bindings.len(),
                 bindings.len()
             );
-            return CustomDrawBindOutcome::SkipBatch;
         }
 
         for (index, kind) in pipeline.bindings.iter().enumerate() {
-            let binding = &bindings[index];
+            let Some(binding) = bindings.get(index) else {
+                match kind {
+                    CustomBindingKind::Texture => {
+                        command_encoder.set_texture(index as u64, None);
+                    }
+                    CustomBindingKind::Sampler => {
+                        command_encoder.set_sampler_state(index as u64, None);
+                    }
+                    _ => {}
+                }
+                continue;
+            };
             let binding_index = index as u64;
             match (kind, binding) {
                 (CustomBindingKind::Buffer, CustomBindingValue::Buffer(source)) => {
