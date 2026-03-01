@@ -15,10 +15,10 @@ use gpui::{
     CustomBufferSource, CustomComputeDispatch, CustomComputePipelineDesc, CustomComputePipelineId,
     CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
     CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomTextureUsage, CustomUniformBuilder,
-    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
-    CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
-    WindowOptions, canvas, div, prelude::*, px, size,
+    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
+    CustomUniformBuilder, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer,
+    CustomVertexFetch, CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window,
+    WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
 };
 
 const STORAGE_TEXTURE_SIZE: u32 = 256;
@@ -201,6 +201,7 @@ impl StorageTextureExample {
 
         let texture = window.create_custom_texture(CustomTextureDesc {
             name: "storage_texture".to_string(),
+            dimension: CustomTextureDimension::D2,
             width: STORAGE_TEXTURE_SIZE,
             height: STORAGE_TEXTURE_SIZE,
             format: CustomTextureFormat::Rgba8Unorm,

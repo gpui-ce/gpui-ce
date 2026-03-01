@@ -1,24 +1,25 @@
-# Custom Draw (Metal + Blade)
+# Custom Draw (Metal and Blade)
 
 The custom draw API is supported on Metal (default on macOS) and Blade (`macos-blade`).
 
 ## Features
 
 - Custom WGSL render pipelines.
-- Vertex buffers (inline + static GPU buffers).
-- Index buffers + indexed draws.
+- Vertex buffers (inline and static GPU buffers).
+- Index buffers and indexed draws.
 - Instanced rendering.
 - Uniform bindings (per-draw data).
 - Push constants.
 - Storage buffers (read/write) with buffer slices for dynamic offsets.
-- Storage textures (compute write) + sampled textures.
-- Texture + sampler bindings.
+- Storage textures (compute write) and sampled textures.
+- Texture and sampler bindings.
 - Binding arrays (texture/buffer).
-- sRGB formats + mipmapped textures.
-- Compute pipelines + dispatch.
+- Texture arrays and cubemaps.
+- sRGB formats and mipmapped textures.
+- Compute pipelines and dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
-- Offscreen render targets + depth testing.
-- Batching by pipeline + bindings.
+- Offscreen render targets and depth testing.
+- Batching by pipeline and bindings.
 - Stress harness for throughput testing.
 
 ## Quick start
@@ -33,10 +34,10 @@ cargo run --example custom_draw_api_animated
 # Instanced rendering example
 cargo run --example custom_draw_api_instanced
 
-# Offscreen render target + depth example
+# Offscreen render target and depth example
 cargo run --example custom_draw_api_offscreen
 
-# Compute pipeline + storage buffer example
+# Compute pipeline and storage buffer example
 cargo run --example custom_draw_api_compute
 
 # Storage texture example
@@ -45,7 +46,10 @@ cargo run --example custom_draw_api_storage_texture
 # Binding arrays example
 cargo run --example custom_draw_api_binding_arrays
 
-# Explicit @location + @group/@binding example
+# Texture array example
+cargo run --example custom_draw_api_texture_arrays
+
+# Explicit @location and @group/@binding example
 cargo run --example custom_draw_api_conformance
 
 # Stress harness (many instanced quads)
@@ -66,7 +70,7 @@ You can opt into explicit `@location` and `@group/@binding` if you follow these 
 
 - Set `CustomVertexAttribute.location` for any attribute that should map to an explicit `@location`.
   Field names in WGSL can then be arbitrary.
-- Bindings can use explicit `@group/@binding` via `CustomBindingDesc.slot` (group 0+ supported).
+- Bindings can use explicit `@group/@binding` via `CustomBindingDesc.slot` (group 0 and higher supported).
 - Binding indices can be sparse; unused slots are permitted.
 - Binding indices are capped at 4096 to prevent accidental huge layouts.
 
@@ -75,7 +79,7 @@ See `custom_draw_api_conformance` (explicit), `custom_draw_api_mixed` (mixed exp
 `custom_draw_api_missing_binding` (logs missing binding warnings) for examples.
 The mixed example computes its quad from the canvas bounds so it stays inside the rounded border on resize.
 
-## Metal pipeline caching + precompiled MSL
+## Metal pipeline caching and precompiled MSL
 
 - Metal custom draw pipelines are cached by shader source, entry points, layouts, and bindings.
 - You can bypass WGSL→MSL translation with precompiled MSL:
@@ -86,7 +90,7 @@ let pipeline = window.create_custom_pipeline_msl(desc, msl_source)?;
 
 MSL slot mapping follows the binding order used in `CustomPipelineDesc`:
 - Textures/samplers use the binding index (0..N)
-- Buffers/uniforms use `vertex_fetch_count + binding_index`
+- Buffers/uniforms use `vertex_fetch_count` offset by the binding index
 - Binding groups are ignored on Metal (slots are flat)
 
 ## Uniform helper (16-byte alignment)
@@ -133,6 +137,13 @@ Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first
 Create textures with `CustomTextureUsage::STORAGE` (optionally combined with `SAMPLED`). Bind them
 using `CustomBindingKind::StorageTexture` and `CustomBindingValue::Texture`.
 
+## Texture arrays and cubemaps
+
+Set `CustomTextureDesc.dimension` to `CustomTextureDimension::D2Array { layers }` or
+`CustomTextureDimension::Cube` (cube textures must be square). Array and cube textures expect each
+mip level’s data to pack all layers sequentially (layer 0 first). Storage textures currently only
+support `CustomTextureDimension::D2`.
+
 ## Binding arrays
 
 Use WGSL `binding_array<T, N>` (N ≤ 16) with `CustomBindingKind::TextureArray`,
@@ -140,12 +151,12 @@ Use WGSL `binding_array<T, N>` (N ≤ 16) with `CustomBindingKind::TextureArray`
 via `CustomBindingValue::TextureArray` or `CustomBindingValue::BufferArray`.
 
 See `custom_draw_api_binding_arrays` for a working example. Binding arrays use Metal argument
-buffers on macOS (Metal 2.0+). WGSL-to-MSL translation currently supports texture binding arrays;
+buffers on macOS (Metal 2.0 and later). WGSL-to-MSL translation currently supports texture binding arrays;
 buffer binding arrays require precompiled MSL or Blade.
 
 ## Compute dispatch
 
-Use `CustomComputePipelineDesc` + `create_custom_compute_pipeline` to create a compute pipeline,
+Use `CustomComputePipelineDesc` and `create_custom_compute_pipeline` to create a compute pipeline,
 then call `dispatch_custom_compute` with workgroup counts and bindings. Compute dispatches run
 before custom draw render passes each frame.
 
@@ -187,7 +198,7 @@ var<uniform> b2: Uniforms;
 
 - Prefer static GPU buffers for vertex/instance data; only update on size changes.
 - Use instancing for large numbers of similar quads.
-- Keep bindings stable to maximize batching by pipeline + bindings.
+- Keep bindings stable to maximize batching by pipeline and bindings.
 - Examples inset draw bounds by 1px to keep quads inside rounded borders.
 
 ## Stress harness flags
@@ -221,20 +232,20 @@ cargo run --release --example custom_draw_stress -- \
 - No MSAA/sample count control or custom viewport/scissor state.
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
-- Storage textures are limited to 2D RGBA/BGRA (+ sRGB); no arrays/cubemaps or compressed formats.
+- Storage textures are limited to 2D RGBA/BGRA (with sRGB); no compressed formats yet.
 
 ## Core roadmap (triage)
 
 - **P0 (core primitives)** (done)
-  - Index buffers + indexed draws.
-  - Depth attachments + depth testing (Depth32Float only).
+  - Index buffers and indexed draws.
+  - Depth attachments and depth testing (Depth32Float only).
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
-  - More texture formats/types (arrays/cubemaps, compressed formats).
-  - Multiple color attachments (MRT) + MSAA.
+  - More texture formats (compressed formats).
+  - Multiple color attachments (MRT) and MSAA.
 - **P2 (performance/tooling)**
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
   - Persistent pipeline cache / `.metallib` loading for Metal.
-  - GPU profiling (timestamps) + resource lifetime diagnostics.
+  - GPU profiling (timestamps) and resource lifetime diagnostics.
   - Frame pacing / diagnostics tooling.

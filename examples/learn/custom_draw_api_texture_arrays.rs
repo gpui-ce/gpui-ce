@@ -1,6 +1,6 @@
-//! Custom Draw API (Binding Arrays) Example
+//! Custom Draw API (Texture Arrays) Example
 //!
-//! Demonstrates texture binding arrays.
+//! Demonstrates sampling from a 2D texture array.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
@@ -22,14 +22,16 @@ const SHADER_SOURCE: &str = r#"
 struct VertexInput {
   a0: vec2<f32>,
   a1: vec2<f32>,
+  a2: f32,
 };
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) uv: vec2<f32>,
+  @location(1) layer: i32,
 };
 
-var b0: binding_array<texture_2d<f32>, 2>;
+var b0: texture_2d_array<f32>;
 var b1: sampler;
 
 @vertex
@@ -37,30 +39,30 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   out.position = vec4<f32>(input.a0, 0.0, 1.0);
   out.uv = input.a1;
+  out.layer = i32(input.a2);
   return out;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  let index = select(0u, 1u, input.uv.x > 0.5);
-  return textureSample(b0[index], b1, input.uv);
+  return textureSample(b0, b1, input.uv, input.layer);
 }
 "#;
 
-struct BindingArrayExample {
+struct TextureArrayExample {
     pipeline: Option<CustomPipelineId>,
     vertex_buffer: Option<CustomBufferId>,
-    textures: Option<[CustomTextureId; 2]>,
+    texture: Option<CustomTextureId>,
     sampler: Option<CustomSamplerId>,
     error: Option<String>,
 }
 
-impl BindingArrayExample {
+impl TextureArrayExample {
     fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             pipeline: None,
             vertex_buffer: None,
-            textures: None,
+            texture: None,
             sampler: None,
             error: None,
         }
@@ -72,10 +74,10 @@ impl BindingArrayExample {
         }
 
         match self.build_resources(window) {
-            Ok((pipeline, vertex_buffer, textures, sampler)) => {
+            Ok((pipeline, buffer, texture, sampler)) => {
                 self.pipeline = Some(pipeline);
-                self.vertex_buffer = Some(vertex_buffer);
-                self.textures = Some(textures);
+                self.vertex_buffer = Some(buffer);
+                self.texture = Some(texture);
                 self.sampler = Some(sampler);
             }
             Err(err) => {
@@ -90,17 +92,17 @@ impl BindingArrayExample {
     ) -> anyhow::Result<(
         CustomPipelineId,
         CustomBufferId,
-        [CustomTextureId; 2],
+        CustomTextureId,
         CustomSamplerId,
     )> {
         let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
-            name: "custom_draw_binding_arrays".to_string(),
+            name: "custom_draw_texture_arrays".to_string(),
             shader_source: SHADER_SOURCE.to_string(),
             vertex_entry: "vs_main".to_string(),
             fragment_entry: "fs_main".to_string(),
             vertex_fetches: vec![CustomVertexFetch {
                 layout: CustomVertexLayout {
-                    stride: 16,
+                    stride: 20,
                     attributes: vec![
                         CustomVertexAttribute {
                             name: CustomVertexAttributeName::A0,
@@ -114,6 +116,12 @@ impl BindingArrayExample {
                             format: CustomVertexFormat::F32Vec2,
                             location: None,
                         },
+                        CustomVertexAttribute {
+                            name: CustomVertexAttributeName::A2,
+                            offset: 16,
+                            format: CustomVertexFormat::F32,
+                            location: None,
+                        },
                     ],
                 },
                 instanced: false,
@@ -125,7 +133,7 @@ impl BindingArrayExample {
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
-                    kind: CustomBindingKind::TextureArray { count: 2 },
+                    kind: CustomBindingKind::Texture,
                     slot: None,
                 },
                 CustomBindingDesc {
@@ -137,92 +145,81 @@ impl BindingArrayExample {
         })?;
 
         let vertex_buffer = window.create_custom_buffer(CustomBufferDesc {
-            name: "binding_array_vertices".to_string(),
-            data: quad_vertex_data(),
+            name: "texture_array_vertices".to_string(),
+            data: array_quad_vertex_data(),
         })?;
 
-        let texture_a = window.create_custom_texture(CustomTextureDesc {
-            name: "binding_array_texture_a".to_string(),
-            dimension: CustomTextureDimension::D2,
+        let texture = window.create_custom_texture(CustomTextureDesc {
+            name: "texture_array".to_string(),
+            dimension: CustomTextureDimension::D2Array { layers: 2 },
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,
             usage: CustomTextureUsage::SAMPLED,
-            data: vec![checker_texture_data(
-                [0xff, 0x73, 0x73, 0xff],
-                [0xff, 0xff, 0xff, 0xff],
-            )],
-        })?;
-
-        let texture_b = window.create_custom_texture(CustomTextureDesc {
-            name: "binding_array_texture_b".to_string(),
-            dimension: CustomTextureDimension::D2,
-            width: 2,
-            height: 2,
-            format: CustomTextureFormat::Rgba8Unorm,
-            usage: CustomTextureUsage::SAMPLED,
-            data: vec![checker_texture_data(
-                [0x5f, 0xa8, 0xff, 0xff],
-                [0x6b, 0xff, 0xb4, 0xff],
-            )],
+            data: vec![texture_array_data()],
         })?;
 
         let sampler = window.create_custom_sampler(CustomSamplerDesc {
-            name: "binding_array_sampler".to_string(),
+            name: "texture_array_sampler".to_string(),
             min_filter: CustomFilterMode::Nearest,
             mag_filter: CustomFilterMode::Nearest,
             mipmap_filter: CustomFilterMode::Nearest,
             address_modes: [CustomAddressMode::ClampToEdge; 3],
         })?;
 
-        Ok((pipeline, vertex_buffer, [texture_a, texture_b], sampler))
+        Ok((pipeline, vertex_buffer, texture, sampler))
     }
 }
 
-impl Render for BindingArrayExample {
+impl Render for TextureArrayExample {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
 
         let header = div()
-            .text_lg()
-            .text_color(colors.text)
-            .child("Custom Draw Binding Arrays");
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_xl()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(colors.text)
+                    .child("Custom Draw API (Texture Arrays)"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(colors.text_muted)
+                    .child("Samples two layers from a 2D texture array"),
+            );
 
         let surface: Hsla = colors.surface.into();
-        let content = if let Some(err) = self.error.as_ref() {
-            div()
-                .text_sm()
-                .text_color(colors.error)
-                .child(format!("Custom draw unsupported: {err}"))
-        } else if let (Some(pipeline), Some(vertex_buffer), Some(textures), Some(sampler)) = (
+        let content = if let (Some(pipeline), Some(buffer), Some(texture), Some(sampler)) = (
             self.pipeline,
             self.vertex_buffer,
-            self.textures,
+            self.texture,
             self.sampler,
         ) {
             let prepaint = move |bounds: Bounds<_>, window: &mut Window, _cx: &mut App| {
-                let vertex_data = quad_vertex_data_for_bounds(bounds, window.viewport_size());
-                if let Err(err) =
-                    window.update_custom_buffer(vertex_buffer, Arc::clone(&vertex_data))
-                {
+                let vertex_data = array_quad_vertex_data_for_bounds(bounds, window.viewport_size());
+                if let Err(err) = window.update_custom_buffer(buffer, Arc::clone(&vertex_data)) {
                     log::error!("custom draw vertex update failed: {err}");
                 }
-
                 CustomDrawParams {
                     bounds,
                     pipeline,
                     vertex_buffers: vec![CustomVertexBuffer {
-                        source: CustomBufferSource::Buffer(vertex_buffer),
+                        source: CustomBufferSource::Buffer(buffer),
                     }],
-                    vertex_count: 6,
+                    vertex_count: 12,
                     index_buffer: None,
                     index_count: 0,
                     target: None,
                     instance_count: 1,
                     push_constants: None,
                     bindings: vec![
-                        CustomBindingValue::TextureArray(vec![textures[0], textures[1]]),
+                        CustomBindingValue::Texture(texture),
                         CustomBindingValue::Sampler(sampler),
                     ],
                 }
@@ -245,6 +242,11 @@ impl Render for BindingArrayExample {
                 .border_color(colors.border)
                 .bg(surface.opacity(0.2))
                 .child(canvas(prepaint, paint).size_full())
+        } else if let Some(err) = &self.error {
+            div()
+                .text_sm()
+                .text_color(colors.text_muted)
+                .child(err.clone())
         } else {
             div()
                 .text_sm()
@@ -264,73 +266,104 @@ fn push_f32(data: &mut Vec<u8>, value: f32) {
     data.extend_from_slice(&value.to_le_bytes());
 }
 
-fn quad_vertex_data() -> Arc<[u8]> {
-    let mut data = Vec::with_capacity(6 * 4 * 4);
+fn append_quad_vertices(
+    data: &mut Vec<u8>,
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+    layer: f32,
+) {
     let vertices = [
-        (-0.6, -0.6, 0.0, 1.0),
-        (0.6, -0.6, 1.0, 1.0),
-        (0.6, 0.6, 1.0, 0.0),
-        (-0.6, -0.6, 0.0, 1.0),
-        (0.6, 0.6, 1.0, 0.0),
-        (-0.6, 0.6, 0.0, 0.0),
+        (left, top, 0.0, 0.0),
+        (right, top, 1.0, 0.0),
+        (right, bottom, 1.0, 1.0),
+        (left, top, 0.0, 0.0),
+        (right, bottom, 1.0, 1.0),
+        (left, bottom, 0.0, 1.0),
     ];
 
     for (x, y, u, v) in vertices {
-        push_f32(&mut data, x);
-        push_f32(&mut data, y);
-        push_f32(&mut data, u);
-        push_f32(&mut data, v);
+        push_f32(data, x);
+        push_f32(data, y);
+        push_f32(data, u);
+        push_f32(data, v);
+        push_f32(data, layer);
     }
+}
 
+fn array_quad_vertex_data() -> Arc<[u8]> {
+    let mut data = Vec::with_capacity(12 * 5 * 4);
+    append_quad_vertices(&mut data, -0.9, -0.1, 0.6, -0.6, 0.0);
+    append_quad_vertices(&mut data, 0.1, 0.9, 0.6, -0.6, 1.0);
     Arc::from(data)
 }
 
-fn quad_vertex_data_for_bounds(
+fn array_quad_vertex_data_for_bounds(
     bounds: Bounds<gpui::Pixels>,
     viewport: gpui::Size<gpui::Pixels>,
 ) -> Arc<[u8]> {
-    let mut data = Vec::with_capacity(6 * 4 * 4);
-    let left = bounds.origin.x;
-    let top = bounds.origin.y;
-    let right = bounds.origin.x + bounds.size.width;
-    let bottom = bounds.origin.y + bounds.size.height;
+    let left = f32::from(bounds.origin.x);
+    let top = f32::from(bounds.origin.y);
+    let right = f32::from(bounds.origin.x + bounds.size.width);
+    let bottom = f32::from(bounds.origin.y + bounds.size.height);
+
+    let total_width = (right - left).max(1.0);
+    let gap = total_width * 0.08;
+    let quad_width = (total_width - gap) * 0.5;
+    let left_right = left + quad_width;
+    let right_left = right - quad_width;
 
     let viewport_w = f32::from(viewport.width).max(1.0);
     let viewport_h = f32::from(viewport.height).max(1.0);
 
-    let to_ndc_x = |x: gpui::Pixels| (f32::from(x) / viewport_w) * 2.0 - 1.0;
-    let to_ndc_y = |y: gpui::Pixels| 1.0 - (f32::from(y) / viewport_h) * 2.0;
+    let to_ndc_x = |x: f32| (x / viewport_w) * 2.0 - 1.0;
+    let to_ndc_y = |y: f32| 1.0 - (y / viewport_h) * 2.0;
 
     let left_ndc = to_ndc_x(left);
     let right_ndc = to_ndc_x(right);
+    let left_right_ndc = to_ndc_x(left_right);
+    let right_left_ndc = to_ndc_x(right_left);
     let top_ndc = to_ndc_y(top);
     let bottom_ndc = to_ndc_y(bottom);
 
-    let vertices = [
-        (left_ndc, top_ndc, 0.0, 0.0),
-        (right_ndc, top_ndc, 1.0, 0.0),
-        (right_ndc, bottom_ndc, 1.0, 1.0),
-        (left_ndc, top_ndc, 0.0, 0.0),
-        (right_ndc, bottom_ndc, 1.0, 1.0),
-        (left_ndc, bottom_ndc, 0.0, 1.0),
-    ];
-
-    for (x, y, u, v) in vertices {
-        push_f32(&mut data, x);
-        push_f32(&mut data, y);
-        push_f32(&mut data, u);
-        push_f32(&mut data, v);
-    }
-
+    let mut data = Vec::with_capacity(12 * 5 * 4);
+    append_quad_vertices(
+        &mut data,
+        left_ndc,
+        left_right_ndc,
+        top_ndc,
+        bottom_ndc,
+        0.0,
+    );
+    append_quad_vertices(
+        &mut data,
+        right_left_ndc,
+        right_ndc,
+        top_ndc,
+        bottom_ndc,
+        1.0,
+    );
     Arc::from(data)
 }
 
-fn checker_texture_data(primary: [u8; 4], secondary: [u8; 4]) -> Arc<[u8]> {
-    let mut data = Vec::with_capacity(16);
-    data.extend_from_slice(&primary);
-    data.extend_from_slice(&secondary);
-    data.extend_from_slice(&secondary);
-    data.extend_from_slice(&primary);
+fn texture_array_data() -> Arc<[u8]> {
+    let layer_a: [u8; 16] = [
+        0xff, 0x6b, 0x6b, 0xff, // red
+        0xff, 0x6b, 0x6b, 0xff, // red
+        0xff, 0x6b, 0x6b, 0xff, // red
+        0xff, 0x6b, 0x6b, 0xff, // red
+    ];
+    let layer_b: [u8; 16] = [
+        0x6b, 0xc2, 0xff, 0xff, // blue
+        0x6b, 0xc2, 0xff, 0xff, // blue
+        0x6b, 0xc2, 0xff, 0xff, // blue
+        0x6b, 0xc2, 0xff, 0xff, // blue
+    ];
+
+    let mut data = Vec::with_capacity(layer_a.len() + layer_b.len());
+    data.extend_from_slice(&layer_a);
+    data.extend_from_slice(&layer_b);
     Arc::from(data)
 }
 
@@ -342,10 +375,10 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| BindingArrayExample::new(cx)),
+            |_, cx| cx.new(|cx| TextureArrayExample::new(cx)),
         )
         .expect("Failed to open window");
 
-        example_prelude::init_example(cx, "Custom Draw Binding Arrays");
+        example_prelude::init_example(cx, "Custom Draw API (Texture Arrays)");
     });
 }

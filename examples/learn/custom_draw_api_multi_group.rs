@@ -12,10 +12,10 @@ use gpui::{
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
     CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
     CustomPipelineState, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
-    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
-    CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
-    WindowOptions, canvas, div, prelude::*, px, size,
+    CustomTextureDesc, CustomTextureDimension, CustomTextureFormat, CustomTextureId,
+    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer,
+    CustomVertexFetch, CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window,
+    WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -167,6 +167,7 @@ impl MultiGroupExample {
 
         let texture = window.create_custom_texture(CustomTextureDesc {
             name: "multi_group_texture".to_string(),
+            dimension: CustomTextureDimension::D2,
             width: 2,
             height: 2,
             format: CustomTextureFormat::Rgba8Unorm,

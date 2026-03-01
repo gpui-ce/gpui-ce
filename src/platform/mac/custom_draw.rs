@@ -11,9 +11,9 @@ use crate::{
     CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
     CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
     CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
-    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
-    CustomVertexFormat, Result,
+    CustomSamplerId, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
+    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexAttribute,
+    CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -135,6 +135,7 @@ pub(crate) struct MetalCustomTexture {
     pub(crate) texture: metal::Texture,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) array_layer_count: u32,
     pub(crate) mip_level_count: u32,
     pub(crate) bytes_per_pixel: u32,
     pub(crate) format: metal::MTLPixelFormat,
@@ -860,10 +861,26 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 max_levels
             ));
         }
+        let (texture_type, array_layer_count, array_length) = match desc.dimension {
+            CustomTextureDimension::D2 => (metal::MTLTextureType::D2, 1, 1),
+            CustomTextureDimension::D2Array { layers } => {
+                if layers == 0 {
+                    return Err(anyhow!("custom texture array layer count must be non-zero"));
+                }
+                (metal::MTLTextureType::D2Array, layers, layers)
+            }
+            CustomTextureDimension::Cube => {
+                if desc.width != desc.height {
+                    return Err(anyhow!("custom cube textures must be square"));
+                }
+                (metal::MTLTextureType::Cube, 6, 1)
+            }
+        };
         for (level, data) in desc.data.iter().enumerate() {
             let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
-            let expected_len = (width * height * bytes_per_pixel) as usize;
-            if data.len() < expected_len {
+            let expected_len =
+                width as u64 * height as u64 * bytes_per_pixel as u64 * array_layer_count as u64;
+            if data.len() < expected_len as usize {
                 return Err(anyhow!(
                     "custom texture mip level {} data is smaller than texture size",
                     level
@@ -883,18 +900,31 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 "custom texture usage must include sampled or storage"
             ));
         }
+        if desc.usage.contains(CustomTextureUsage::STORAGE) && desc.dimension.is_array() {
+            return Err(anyhow!("custom storage textures must be 2D"));
+        }
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(pixel_format);
+        descriptor.set_texture_type(texture_type);
         descriptor.set_width(desc.width as u64);
         descriptor.set_height(desc.height as u64);
+        descriptor.set_array_length(array_length as u64);
         descriptor.set_mipmap_level_count(desc.data.len() as u64);
         descriptor.set_usage(usage);
 
         let texture = self.device.new_texture(&descriptor);
         for (level, data) in desc.data.iter().enumerate() {
             let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
-            upload_texture_data(&texture, width, height, bytes_per_pixel, level as u64, data);
+            upload_texture_data(
+                &texture,
+                width,
+                height,
+                bytes_per_pixel,
+                level as u64,
+                array_layer_count,
+                data,
+            );
         }
 
         let mut textures = self.textures.lock().unwrap();
@@ -904,6 +934,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 texture,
                 width: desc.width,
                 height: desc.height,
+                array_layer_count,
                 mip_level_count: desc.data.len() as u32,
                 bytes_per_pixel,
                 format: pixel_format,
@@ -935,6 +966,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 texture,
                 width: desc.width,
                 height: desc.height,
+                array_layer_count: 1,
                 mip_level_count: 1,
                 bytes_per_pixel,
                 format: pixel_format,
@@ -963,8 +995,11 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             ));
         }
         let (width, height) = mip_level_size(entry.width, entry.height, update.level);
-        let expected_len = (width * height * entry.bytes_per_pixel) as usize;
-        if update.data.len() < expected_len {
+        let expected_len = width as u64
+            * height as u64
+            * entry.bytes_per_pixel as u64
+            * entry.array_layer_count as u64;
+        if update.data.len() < expected_len as usize {
             return Err(anyhow!("custom texture data is smaller than texture size"));
         }
         upload_texture_data(
@@ -973,6 +1008,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             height,
             entry.bytes_per_pixel,
             update.level as u64,
+            entry.array_layer_count,
             &update.data,
         );
         Ok(())
@@ -2009,13 +2045,32 @@ fn upload_texture_data(
     height: u32,
     bytes_per_pixel: u32,
     mip_level: u64,
+    array_layer_count: u32,
     data: &[u8],
 ) {
+    let bytes_per_row = width * bytes_per_pixel;
+    let layer_size = (bytes_per_row * height) as usize;
     let region = metal::MTLRegion::new_2d(0, 0, width as u64, height as u64);
-    texture.replace_region(
-        region,
-        mip_level,
-        data.as_ptr() as *const _,
-        (width * bytes_per_pixel) as u64,
-    );
+    if array_layer_count == 1 {
+        texture.replace_region(
+            region,
+            mip_level,
+            data.as_ptr() as *const _,
+            bytes_per_row as u64,
+        );
+        return;
+    }
+
+    for layer in 0..array_layer_count {
+        let start = layer as usize * layer_size;
+        let end = start + layer_size;
+        texture.replace_region_in_slice(
+            region,
+            mip_level,
+            layer as u64,
+            data[start..end].as_ptr() as *const _,
+            bytes_per_row as u64,
+            layer_size as u64,
+        );
+    }
 }

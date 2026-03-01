@@ -11,8 +11,8 @@ use crate::{
     CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
     CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
     CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
-    CustomTextureUsage, CustomVertexFormat, Result,
+    CustomSamplerId, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
+    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -57,6 +57,7 @@ pub(crate) struct BladeCustomTexture {
     pub(crate) view: gpu::TextureView,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) array_layer_count: u32,
     pub(crate) mip_level_count: u32,
     pub(crate) bytes_per_pixel: u32,
     pub(crate) format: gpu::TextureFormat,
@@ -75,6 +76,7 @@ struct PendingUpload {
     texture_id: CustomTextureId,
     data: gpu::BufferPiece,
     mip_level: u32,
+    array_layer: u32,
     width: u32,
     height: u32,
     bytes_per_row: u32,
@@ -225,7 +227,7 @@ impl BladeCustomDrawRegistry {
                 gpu::TexturePiece {
                     texture: texture.texture,
                     mip_level: upload.mip_level,
-                    array_layer: 0,
+                    array_layer: upload.array_layer,
                     origin: [0, 0, 0],
                 },
                 gpu::Extent {
@@ -720,10 +722,28 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 max_levels
             ));
         }
+        let (view_dimension, array_layer_count) = match desc.dimension {
+            CustomTextureDimension::D2 => (gpu::ViewDimension::D2, 1),
+            CustomTextureDimension::D2Array { layers } => {
+                if layers == 0 {
+                    return Err(anyhow::anyhow!(
+                        "custom texture array layer count must be non-zero"
+                    ));
+                }
+                (gpu::ViewDimension::D2Array, layers)
+            }
+            CustomTextureDimension::Cube => {
+                if desc.width != desc.height {
+                    return Err(anyhow::anyhow!("custom cube textures must be square"));
+                }
+                (gpu::ViewDimension::Cube, 6)
+            }
+        };
         for (level, data) in desc.data.iter().enumerate() {
             let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
-            let expected_len = (width * height * bytes_per_pixel) as usize;
-            if data.len() < expected_len {
+            let expected_len =
+                width as u64 * height as u64 * bytes_per_pixel as u64 * array_layer_count as u64;
+            if data.len() < expected_len as usize {
                 return Err(anyhow::anyhow!(
                     "custom texture mip level {} data is smaller than texture size",
                     level
@@ -737,6 +757,9 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             return Err(anyhow::anyhow!(
                 "custom texture usage must include sampled or storage"
             ));
+        }
+        if is_storage && desc.dimension.is_array() {
+            return Err(anyhow::anyhow!("custom storage textures must be 2D"));
         }
         let mut usage = gpu::TextureUsage::COPY;
         if is_sampled {
@@ -754,7 +777,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 height: desc.height,
                 depth: 1,
             },
-            array_layer_count: 1,
+            array_layer_count,
             mip_level_count: desc.data.len() as u32,
             sample_count: 1,
             dimension: gpu::TextureDimension::D2,
@@ -766,7 +789,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             gpu::TextureViewDesc {
                 name: &desc.name,
                 format,
-                dimension: gpu::ViewDimension::D2,
+                dimension: view_dimension,
                 subresources: &Default::default(),
             },
         );
@@ -775,6 +798,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             view,
             width: desc.width,
             height: desc.height,
+            array_layer_count,
             mip_level_count: desc.data.len() as u32,
             bytes_per_pixel,
             format,
@@ -832,6 +856,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             view,
             width: desc.width,
             height: desc.height,
+            array_layer_count: 1,
             mip_level_count: 1,
             bytes_per_pixel,
             format,
@@ -847,7 +872,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         if update.data.is_empty() {
             return Err(anyhow::anyhow!("custom texture data is empty"));
         }
-        let (is_render_target, width, height, bytes_per_pixel, mip_level_count) = {
+        let (is_render_target, width, height, bytes_per_pixel, mip_level_count, array_layer_count) = {
             let textures = self.textures.lock().unwrap();
             let Some(entry) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
                 return Err(anyhow::anyhow!("custom texture id out of range"));
@@ -858,6 +883,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 entry.height,
                 entry.bytes_per_pixel,
                 entry.mip_level_count,
+                entry.array_layer_count,
             )
         };
         if is_render_target {
@@ -870,23 +896,32 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             ));
         }
         let (level_width, level_height) = mip_level_size(width, height, update.level);
-        let expected_len = (level_width * level_height * bytes_per_pixel) as usize;
-        if update.data.len() < expected_len {
+        let expected_len = level_width as u64
+            * level_height as u64
+            * bytes_per_pixel as u64
+            * array_layer_count as u64;
+        if update.data.len() < expected_len as usize {
             return Err(anyhow::anyhow!(
                 "custom texture data is smaller than texture size"
             ));
         }
+        let layer_size = (level_width * level_height * bytes_per_pixel) as usize;
         let mut upload_belt = self.upload_belt.lock().unwrap();
-        let piece = upload_belt.alloc_bytes(&update.data, &self.gpu);
         let mut pending = self.pending_uploads.lock().unwrap();
-        pending.push(PendingUpload {
-            texture_id: id,
-            data: piece,
-            mip_level: update.level,
-            width: level_width,
-            height: level_height,
-            bytes_per_row: level_width.saturating_mul(bytes_per_pixel),
-        });
+        for layer in 0..array_layer_count {
+            let start = layer as usize * layer_size;
+            let end = start + layer_size;
+            let piece = upload_belt.alloc_bytes(&update.data[start..end], &self.gpu);
+            pending.push(PendingUpload {
+                texture_id: id,
+                data: piece,
+                mip_level: update.level,
+                array_layer: layer,
+                width: level_width,
+                height: level_height,
+                bytes_per_row: level_width.saturating_mul(bytes_per_pixel),
+            });
+        }
         Ok(())
     }
 

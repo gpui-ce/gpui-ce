@@ -1002,6 +1002,45 @@ pub enum CustomTextureFormat {
     Bgra8UnormSrgb,
 }
 
+/// Texture dimensions supported by custom draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomTextureDimension {
+    /// 2D texture.
+    #[default]
+    D2,
+    /// 2D texture array.
+    D2Array {
+        /// Number of array layers.
+        layers: u32,
+    },
+    /// Cube texture (6 layers; width and height must match).
+    Cube,
+}
+
+impl CustomTextureDimension {
+    /// Number of array layers for this dimension.
+    pub const fn array_layers(self) -> u32 {
+        match self {
+            CustomTextureDimension::D2 => 1,
+            CustomTextureDimension::D2Array { layers } => layers,
+            CustomTextureDimension::Cube => 6,
+        }
+    }
+
+    /// Returns true if this dimension is a cube texture.
+    pub const fn is_cube(self) -> bool {
+        matches!(self, CustomTextureDimension::Cube)
+    }
+
+    /// Returns true if this dimension includes multiple array layers.
+    pub const fn is_array(self) -> bool {
+        matches!(
+            self,
+            CustomTextureDimension::D2Array { .. } | CustomTextureDimension::Cube
+        )
+    }
+}
+
 bitflags::bitflags! {
     /// Usage flags for custom textures.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1024,6 +1063,8 @@ impl Default for CustomTextureUsage {
 pub struct CustomTextureDesc {
     /// Debug name for the texture.
     pub name: String,
+    /// Texture dimension.
+    pub dimension: CustomTextureDimension,
     /// Texture width in pixels.
     pub width: u32,
     /// Texture height in pixels.
@@ -1033,6 +1074,9 @@ pub struct CustomTextureDesc {
     /// Texture usage flags.
     pub usage: CustomTextureUsage,
     /// Initial texture contents for each mip level (level 0 first).
+    ///
+    /// For array or cube textures, each mip level contains all layers packed
+    /// sequentially.
     pub data: Vec<Arc<[u8]>>,
 }
 
@@ -1042,6 +1086,9 @@ pub struct CustomTextureUpdate {
     /// Mip level to update (0 = base level).
     pub level: u32,
     /// Texture data for the mip level.
+    ///
+    /// For array or cube textures, the data must include all layers packed
+    /// sequentially.
     pub data: Arc<[u8]>,
 }
 
