@@ -3,8 +3,9 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId, CustomDraw,
-    CustomDrawParams, CustomPipelineDesc, CustomPipelineId, CustomSamplerDesc, CustomSamplerId,
+    Context, Corners, CursorStyle, CustomBatchKey, CustomBufferDesc, CustomBufferId,
+    CustomDepthTargetDesc, CustomDepthTargetId, CustomDraw, CustomDrawParams, CustomPipelineDesc,
+    CustomPipelineId, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
     CustomTextureDesc, CustomTextureId, Decorations, DevicePixels, DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
     FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
@@ -3370,6 +3371,19 @@ impl Window {
         registry.create_texture(desc)
     }
 
+    /// Create an offscreen render target texture.
+    pub fn create_custom_render_target(
+        &mut self,
+        desc: CustomRenderTargetDesc,
+    ) -> Result<CustomTextureId> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw render targets not supported on this platform"
+            ));
+        };
+        registry.create_render_target(desc)
+    }
+
     /// Update a previously created custom texture.
     pub fn update_custom_texture(&mut self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {
@@ -3388,6 +3402,35 @@ impl Window {
             ));
         };
         registry.remove_texture(id);
+        Ok(())
+    }
+
+    /// Remove a previously created custom render target.
+    pub fn remove_custom_render_target(&mut self, id: CustomTextureId) -> Result<()> {
+        self.remove_custom_texture(id)
+    }
+
+    /// Create an offscreen depth target.
+    pub fn create_custom_depth_target(
+        &mut self,
+        desc: CustomDepthTargetDesc,
+    ) -> Result<CustomDepthTargetId> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw depth targets not supported on this platform"
+            ));
+        };
+        registry.create_depth_target(desc)
+    }
+
+    /// Remove a previously created custom depth target.
+    pub fn remove_custom_depth_target(&mut self, id: CustomDepthTargetId) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw depth targets not supported on this platform"
+            ));
+        };
+        registry.remove_depth_target(id);
         Ok(())
     }
 
@@ -3436,6 +3479,7 @@ impl Window {
             .fold(1469598103934665603u64, |hash, binding| {
                 hash.wrapping_mul(1099511628211) ^ binding.hash()
             });
+        let target_hash = params.target.as_ref().map_or(0, |target| target.hash());
         self.next_frame.scene.insert_primitive(CustomDraw {
             order: 0,
             bounds,
@@ -3445,10 +3489,12 @@ impl Window {
             vertex_count: params.vertex_count,
             index_buffer: params.index_buffer,
             index_count: params.index_count,
+            target: params.target,
             instance_count: params.instance_count,
             bindings: params.bindings,
             batch_key: CustomBatchKey {
                 pipeline: params.pipeline,
+                target_hash,
                 bindings_hash,
             },
         });

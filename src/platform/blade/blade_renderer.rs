@@ -12,6 +12,7 @@ use blade_util::{BufferBelt, BufferBeltDescriptor};
 use bytemuck::{Pod, Zeroable};
 #[cfg(target_os = "macos")]
 use media::core_video::CVMetalTextureCache;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const MAX_FRAME_TIME_MS: u32 = 10000;
@@ -657,6 +658,16 @@ impl BladeRenderer {
         self.atlas.before_frame(&mut self.command_encoder);
         self.custom_draw.before_frame(&mut self.command_encoder);
 
+        let buffers_snapshot = self.custom_draw.buffers_snapshot();
+        let textures_snapshot = self.custom_draw.textures_snapshot();
+        let samplers_snapshot = self.custom_draw.samplers_snapshot();
+        self.draw_custom_render_targets(
+            scene,
+            &buffers_snapshot,
+            &textures_snapshot,
+            &samplers_snapshot,
+        );
+
         let frame = {
             profiling::scope!("acquire frame");
             self.surface.acquire_frame()
@@ -916,9 +927,11 @@ impl BladeRenderer {
                     }
                 }
                 PrimitiveBatch::CustomDraws(draws) => {
-                    let buffers_snapshot = self.custom_draw.buffers_snapshot();
-                    let textures_snapshot = self.custom_draw.textures_snapshot();
-                    let samplers_snapshot = self.custom_draw.samplers_snapshot();
+                    let draws: Vec<&CustomDraw> =
+                        draws.iter().filter(|draw| draw.target.is_none()).collect();
+                    if draws.is_empty() {
+                        continue;
+                    }
                     let mut index = 0;
                     while index < draws.len() {
                         let batch_key = draws[index].batch_key;
@@ -931,33 +944,47 @@ impl BladeRenderer {
                         let pipeline_id = batch[0].pipeline;
                         let bindings = &batch[0].bindings;
 
-                        if let Some(()) = self.custom_draw.with_pipeline(
-                            pipeline_id,
-                            |pipeline,
-                             binding_kinds: &[Vec<CustomBindingKind>],
-                             binding_indices: &[Vec<Option<usize>>]| {
-                                let mut encoder = pass.with(pipeline);
-                                let mut max_index = 0usize;
-                                for indices in binding_indices {
-                                    for index in indices.iter().flatten() {
-                                        max_index = max_index.max(*index);
-                                    }
+                        if let Some(()) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
+                            let binding_kinds = pipeline.bindings.as_slice();
+                            let binding_indices = pipeline.binding_indices.as_slice();
+                            if pipeline.color_format != self.surface.info().format {
+                                log::warn!(
+                                    "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                                    pipeline_id.0,
+                                    pipeline.color_format,
+                                    self.surface.info().format
+                                );
+                                return;
+                            }
+                            if pipeline.depth_format.is_some() {
+                                log::warn!(
+                                    "custom draw pipeline {:?} requires a depth target",
+                                    pipeline_id.0
+                                );
+                                return;
+                            }
+                            let mut encoder = pass.with(&pipeline.pipeline);
+                            let mut max_index = 0usize;
+                            for indices in binding_indices {
+                                for index in indices.iter().flatten() {
+                                    max_index = max_index.max(*index);
                                 }
-                                if !binding_kinds.is_empty() && bindings.len() <= max_index {
-                                    log::warn!(
-                                        "custom draw bindings missing (expected at least {}, got {})",
-                                        max_index + 1,
-                                        bindings.len()
-                                    );
+                            }
+                            if !binding_kinds.is_empty() && bindings.len() <= max_index {
+                                log::warn!(
+                                    "custom draw bindings missing (expected at least {}, got {})",
+                                    max_index + 1,
+                                    bindings.len()
+                                );
+                            }
+                            for (group_index, group_kinds) in binding_kinds.iter().enumerate() {
+                                if group_kinds.is_empty() {
+                                    continue;
                                 }
-                                for (group_index, group_kinds) in binding_kinds.iter().enumerate() {
-                                    if group_kinds.is_empty() {
-                                        continue;
-                                    }
-                                    let group_indices = binding_indices
-                                        .get(group_index)
-                                        .map(|indices| indices.as_slice())
-                                        .unwrap_or(&[]);
+                                let group_indices = binding_indices
+                                    .get(group_index)
+                                    .map(|indices| indices.as_slice())
+                                    .unwrap_or(&[]);
                                     for (slot_index, binding_index) in
                                         group_indices.iter().enumerate()
                                     {
@@ -1088,6 +1115,255 @@ impl BladeRenderer {
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
     }
+
+    fn draw_custom_render_targets(
+        &mut self,
+        scene: &Scene,
+        buffers_snapshot: &[Option<gpu::Buffer>],
+        textures_snapshot: &[Option<gpu::TextureView>],
+        samplers_snapshot: &[Option<gpu::Sampler>],
+    ) {
+        struct RenderTargetInfo {
+            view: gpu::TextureView,
+            format: gpu::TextureFormat,
+            clear_color: gpu::TextureColor,
+            is_render_target: bool,
+        }
+
+        struct DepthTargetInfo {
+            view: gpu::TextureView,
+            format: gpu::TextureFormat,
+            clear_depth: f32,
+        }
+
+        let mut draws_by_target = BTreeMap::new();
+        for draw in scene.custom_draws.iter() {
+            let Some(target) = draw.target else {
+                continue;
+            };
+            draws_by_target
+                .entry((target.color.0, target.depth.map(|depth| depth.0)))
+                .or_insert_with(Vec::new)
+                .push(draw);
+        }
+
+        for (_, draws) in draws_by_target {
+            let Some(target) = draws.first().and_then(|draw| draw.target) else {
+                continue;
+            };
+            let Some(color_target) =
+                self.custom_draw
+                    .with_texture(target.color, |entry| RenderTargetInfo {
+                        view: entry.view,
+                        format: entry.format,
+                        clear_color: entry.clear_color,
+                        is_render_target: entry.is_render_target,
+                    })
+            else {
+                log::warn!("custom render target {:?} missing", target.color.0);
+                continue;
+            };
+            if !color_target.is_render_target {
+                log::warn!(
+                    "custom draw target {:?} is not a render target",
+                    target.color.0
+                );
+                continue;
+            }
+
+            let depth_target = if let Some(depth_id) = target.depth {
+                match self
+                    .custom_draw
+                    .with_depth_target(depth_id, |entry| DepthTargetInfo {
+                        view: entry.view,
+                        format: entry.format,
+                        clear_depth: entry.clear_depth,
+                    }) {
+                    Some(target) => Some(target),
+                    None => {
+                        log::warn!("custom depth target {:?} missing", depth_id.0);
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let depth_stencil = depth_target.as_ref().map(|target| gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(blade_depth_clear_color(target.clear_depth)),
+                finish_op: gpu::FinishOp::Store,
+            });
+
+            let mut pass = self.command_encoder.render(
+                "custom_draw_target",
+                gpu::RenderTargetSet {
+                    colors: &[gpu::RenderTarget {
+                        view: color_target.view,
+                        init_op: gpu::InitOp::Clear(color_target.clear_color),
+                        finish_op: gpu::FinishOp::Store,
+                    }],
+                    depth_stencil,
+                },
+            );
+
+            let mut index = 0;
+            while index < draws.len() {
+                let batch_key = draws[index].batch_key;
+                let mut end = index + 1;
+                while end < draws.len() && draws[end].batch_key == batch_key {
+                    end += 1;
+                }
+
+                let batch = &draws[index..end];
+                let pipeline_id = batch[0].pipeline;
+                let bindings = &batch[0].bindings;
+
+                if let Some(()) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
+                    let binding_kinds = pipeline.bindings.as_slice();
+                    let binding_indices = pipeline.binding_indices.as_slice();
+                    if pipeline.color_format != color_target.format {
+                        log::warn!(
+                            "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                            pipeline_id.0,
+                            pipeline.color_format,
+                            color_target.format
+                        );
+                        return;
+                    }
+                    if let Some(pipeline_depth_format) = pipeline.depth_format {
+                        if Some(pipeline_depth_format) != depth_target.as_ref().map(|d| d.format) {
+                            log::warn!("custom draw pipeline {:?} depth format mismatch", pipeline_id.0);
+                            return;
+                        }
+                    }
+                    let mut encoder = pass.with(&pipeline.pipeline);
+                    let mut max_index = 0usize;
+                    for indices in binding_indices {
+                        for index in indices.iter().flatten() {
+                            max_index = max_index.max(*index);
+                        }
+                    }
+                    if !binding_kinds.is_empty() && bindings.len() <= max_index {
+                        log::warn!(
+                            "custom draw bindings missing (expected at least {}, got {})",
+                            max_index + 1,
+                            bindings.len()
+                        );
+                    }
+                    for (group_index, group_kinds) in binding_kinds.iter().enumerate() {
+                        if group_kinds.is_empty() {
+                            continue;
+                        }
+                        let group_indices = binding_indices
+                            .get(group_index)
+                            .map(|indices| indices.as_slice())
+                            .unwrap_or(&[]);
+                            for (slot_index, binding_index) in group_indices.iter().enumerate() {
+                                let Some(binding_index) = binding_index else {
+                                    continue;
+                                };
+                                if bindings.get(*binding_index).is_none() {
+                                    log::warn!(
+                                        "custom draw missing binding value for group {} binding {} (value index {})",
+                                        group_index,
+                                        slot_index,
+                                        binding_index
+                                    );
+                                    break;
+                                }
+                            }
+                            let bindings = CustomBindings {
+                                bindings,
+                                binding_kinds: group_kinds,
+                                binding_indices: group_indices,
+                                buffers: buffers_snapshot,
+                                textures: textures_snapshot,
+                                samplers: samplers_snapshot,
+                                instance_belt: &mut self.instance_belt as *mut _,
+                                gpu: Arc::as_ptr(&self.gpu),
+                            };
+                            encoder.bind(group_index as u32, &bindings);
+                        }
+
+                        for draw in batch {
+                            if draw.instance_count == 0 {
+                                continue;
+                            }
+                            let mut missing_buffer = false;
+                            for (index, buffer) in draw.vertex_buffers.iter().enumerate() {
+                                match &buffer.source {
+                                    CustomBufferSource::Inline(data) => {
+                                        let buf =
+                                            self.instance_belt.alloc_bytes(data, &self.gpu);
+                                        encoder.bind_vertex(index as u32, buf);
+                                    }
+                                    CustomBufferSource::Buffer(id) => {
+                                        let Some(buffer) = self.custom_draw.get_buffer(*id) else {
+                                            log::warn!("custom draw buffer missing");
+                                            missing_buffer = true;
+                                            break;
+                                        };
+                                        encoder.bind_vertex(
+                                            index as u32,
+                                            gpu::BufferPiece::from(buffer),
+                                        );
+                                    }
+                                }
+                            }
+                            if missing_buffer {
+                                continue;
+                            }
+                            if let Some(index_buffer) = &draw.index_buffer {
+                                if draw.index_count == 0 {
+                                    continue;
+                                }
+                                let index_piece = match &index_buffer.source {
+                                    CustomBufferSource::Inline(data) => {
+                                        let expected_len = draw.index_count as usize
+                                            * index_format_size(index_buffer.format);
+                                        if expected_len > 0 && data.len() < expected_len {
+                                            log::warn!(
+                                                "custom draw index buffer too small (expected at least {}, got {})",
+                                                expected_len,
+                                                data.len()
+                                            );
+                                            continue;
+                                        }
+                                        self.instance_belt.alloc_bytes(data, &self.gpu)
+                                    }
+                                    CustomBufferSource::Buffer(id) => {
+                                        let Some(buffer) = self.custom_draw.get_buffer(*id) else {
+                                            log::warn!("custom draw index buffer missing");
+                                            continue;
+                                        };
+                                        gpu::BufferPiece::from(buffer)
+                                    }
+                                };
+                                encoder.draw_indexed(
+                                    index_piece,
+                                    blade_index_type(index_buffer.format),
+                                    draw.index_count,
+                                    0,
+                                    0,
+                                    draw.instance_count,
+                                );
+                            } else {
+                                if draw.vertex_count == 0 {
+                                    continue;
+                                }
+                                encoder.draw(0, draw.vertex_count, 0, draw.instance_count);
+                            }
+                        }
+                    },
+                ) {
+                    log::warn!("custom draw pipeline {:?} not found", pipeline_id.0);
+                }
+
+                index = end;
+            }
+        }
+    }
 }
 
 fn create_path_intermediate_texture(
@@ -1172,6 +1448,14 @@ fn blade_index_type(format: CustomIndexFormat) -> gpu::IndexType {
     match format {
         CustomIndexFormat::U16 => gpu::IndexType::U16,
         CustomIndexFormat::U32 => gpu::IndexType::U32,
+    }
+}
+
+fn blade_depth_clear_color(clear_depth: f32) -> gpu::TextureColor {
+    if clear_depth >= 1.0 {
+        gpu::TextureColor::White
+    } else {
+        gpu::TextureColor::TransparentBlack
     }
 }
 

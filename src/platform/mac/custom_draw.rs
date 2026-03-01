@@ -6,11 +6,13 @@ use metal::{self, MTLResourceOptions};
 
 use crate::{
     CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingName, CustomBindingSlot,
-    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomCullMode, CustomDrawRegistry,
-    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
-    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexAttribute, CustomVertexAttributeName,
-    CustomVertexFetch, CustomVertexFormat, Result,
+    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomCullMode, CustomDepthCompare,
+    CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
+    CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
+    CustomPipelineState, CustomPrimitiveTopology, CustomRenderTargetDesc, CustomSamplerDesc,
+    CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId,
+    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat,
+    Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -20,6 +22,7 @@ pub(crate) struct MetalCustomDrawRegistry {
     pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
+    depth_targets: Mutex<Vec<Option<MetalCustomDepthTarget>>>,
     samplers: Mutex<Vec<Option<metal::SamplerState>>>,
 }
 
@@ -32,6 +35,9 @@ pub(crate) struct MetalCustomPipeline {
     pub(crate) primitive: metal::MTLPrimitiveType,
     pub(crate) cull_mode: metal::MTLCullMode,
     pub(crate) front_face: metal::MTLWinding,
+    pub(crate) color_format: metal::MTLPixelFormat,
+    pub(crate) depth_format: Option<metal::MTLPixelFormat>,
+    pub(crate) depth_state: Option<metal::DepthStencilState>,
     pub(crate) vertex_fetch_count: usize,
     pub(crate) buffer_binding_base: u64,
 }
@@ -48,6 +54,7 @@ struct PipelineCacheKey {
     vertex_entry: String,
     fragment_entry: String,
     primitive: u8,
+    color_format: u64,
     state: PipelineStateKey,
     vertex_fetches: Vec<VertexFetchKey>,
     bindings: Vec<BindingKey>,
@@ -86,6 +93,9 @@ struct PipelineStateKey {
     blend: u8,
     cull_mode: u8,
     front_face: u8,
+    depth_format: u8,
+    depth_compare: u8,
+    depth_write: u8,
 }
 
 struct MetalCustomBuffer {
@@ -93,11 +103,20 @@ struct MetalCustomBuffer {
     size: u64,
 }
 
-struct MetalCustomTexture {
-    texture: metal::Texture,
-    width: u32,
-    height: u32,
-    bytes_per_pixel: u32,
+pub(crate) struct MetalCustomTexture {
+    pub(crate) texture: metal::Texture,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bytes_per_pixel: u32,
+    pub(crate) format: metal::MTLPixelFormat,
+    pub(crate) is_render_target: bool,
+    pub(crate) clear_color: [f32; 4],
+}
+
+pub(crate) struct MetalCustomDepthTarget {
+    pub(crate) texture: metal::Texture,
+    pub(crate) format: metal::MTLPixelFormat,
+    pub(crate) clear_depth: f64,
 }
 
 impl MetalCustomDrawRegistry {
@@ -109,6 +128,7 @@ impl MetalCustomDrawRegistry {
             pipeline_cache: Mutex::new(HashMap::new()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
+            depth_targets: Mutex::new(Vec::new()),
             samplers: Mutex::new(Vec::new()),
         }
     }
@@ -119,6 +139,24 @@ impl MetalCustomDrawRegistry {
     {
         let pipelines = self.pipelines.lock().unwrap();
         let entry = pipelines.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn with_texture<F, R>(&self, id: CustomTextureId, f: F) -> Option<R>
+    where
+        F: FnOnce(&MetalCustomTexture) -> R,
+    {
+        let textures = self.textures.lock().unwrap();
+        let entry = textures.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn with_depth_target<F, R>(&self, id: CustomDepthTargetId, f: F) -> Option<R>
+    where
+        F: FnOnce(&MetalCustomDepthTarget) -> R,
+    {
+        let depth_targets = self.depth_targets.lock().unwrap();
+        let entry = depth_targets.get(id.0 as usize)?.as_ref()?;
         Some(f(entry))
     }
 
@@ -149,6 +187,10 @@ impl MetalCustomDrawRegistry {
             .collect()
     }
 
+    pub(crate) fn surface_format(&self) -> metal::MTLPixelFormat {
+        self.pixel_format
+    }
+
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> u32 {
         if let Some((index, slot)) = slots
             .iter_mut()
@@ -171,7 +213,8 @@ impl MetalCustomDrawRegistry {
             Some(source) => PipelineSourceKey::Msl(source.clone()),
             None => PipelineSourceKey::Wgsl(desc.shader_source.clone()),
         };
-        let cache_key = pipeline_cache_key(&desc, source_key);
+        let color_format = resolve_color_format(desc.target_format, self.pixel_format)?;
+        let cache_key = pipeline_cache_key(&desc, source_key, color_format);
         if let Some(existing) = self.pipeline_cache.lock().unwrap().get(&cache_key).copied() {
             return Ok(existing);
         }
@@ -300,7 +343,18 @@ impl MetalCustomDrawRegistry {
             .color_attachments()
             .object_at(0)
             .ok_or_else(|| anyhow!("missing color attachment"))?;
-        apply_blend_state(color_attachment, self.pixel_format, desc.state.blend);
+        apply_blend_state(color_attachment, color_format, desc.state.blend);
+
+        let (depth_state, depth_format) = if let Some(depth_state) = desc.state.depth {
+            let depth_format = metal_depth_format(depth_state.format);
+            pipeline_descriptor.set_depth_attachment_pixel_format(depth_format);
+            (
+                Some(create_depth_state(&self.device, depth_state)),
+                Some(depth_format),
+            )
+        } else {
+            (None, None)
+        };
 
         let pipeline_state = self
             .device
@@ -314,6 +368,9 @@ impl MetalCustomDrawRegistry {
             primitive: metal_primitive(desc.primitive),
             cull_mode: metal_cull_mode(desc.state.cull_mode),
             front_face: metal_front_face(desc.state.front_face),
+            color_format,
+            depth_format,
+            depth_state,
             vertex_fetch_count: desc.vertex_fetches.len(),
             buffer_binding_base: buffer_binding_base as u64,
         };
@@ -409,10 +466,7 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
     }
 
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
-        let (pixel_format, bytes_per_pixel) = match desc.format {
-            CustomTextureFormat::Rgba8Unorm => (metal::MTLPixelFormat::RGBA8Unorm, 4),
-            CustomTextureFormat::Bgra8Unorm => (metal::MTLPixelFormat::BGRA8Unorm, 4),
-        };
+        let (pixel_format, bytes_per_pixel) = metal_color_format(desc.format);
 
         if desc.data.len() < (desc.width * desc.height * bytes_per_pixel) as usize {
             return Err(anyhow!("custom texture data is smaller than texture size"));
@@ -441,6 +495,38 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 width: desc.width,
                 height: desc.height,
                 bytes_per_pixel,
+                format: pixel_format,
+                is_render_target: false,
+                clear_color: [0.0; 4],
+            },
+        );
+        Ok(CustomTextureId(id))
+    }
+
+    fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId> {
+        let (pixel_format, bytes_per_pixel) = metal_color_format(desc.format);
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(pixel_format);
+        descriptor.set_width(desc.width as u64);
+        descriptor.set_height(desc.height as u64);
+        descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+
+        let texture = self.device.new_texture(&descriptor);
+        let clear_color = desc.clear_color.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+
+        let mut textures = self.textures.lock().unwrap();
+        let id = Self::alloc_slot(
+            &mut textures,
+            MetalCustomTexture {
+                texture,
+                width: desc.width,
+                height: desc.height,
+                bytes_per_pixel,
+                format: pixel_format,
+                is_render_target: true,
+                clear_color,
             },
         );
         Ok(CustomTextureId(id))
@@ -454,6 +540,9 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         let Some(entry) = slot.as_mut() else {
             return Err(anyhow!("custom texture id out of range"));
         };
+        if entry.is_render_target {
+            return Err(anyhow!("custom render targets cannot be updated"));
+        }
         let expected_len = (entry.width * entry.height * entry.bytes_per_pixel) as usize;
         if data.len() < expected_len {
             return Err(anyhow!("custom texture data is smaller than texture size"));
@@ -471,6 +560,37 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
     fn remove_texture(&self, id: CustomTextureId) {
         let mut textures = self.textures.lock().unwrap();
         if let Some(slot) = textures.get_mut(id.0 as usize) {
+            slot.take();
+        }
+    }
+
+    fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId> {
+        let pixel_format = metal_depth_format(desc.format);
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(pixel_format);
+        descriptor.set_width(desc.width as u64);
+        descriptor.set_height(desc.height as u64);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+
+        let texture = self.device.new_texture(&descriptor);
+        let clear_depth = desc.clear_depth.unwrap_or(1.0) as f64;
+
+        let mut depth_targets = self.depth_targets.lock().unwrap();
+        let id = Self::alloc_slot(
+            &mut depth_targets,
+            MetalCustomDepthTarget {
+                texture,
+                format: pixel_format,
+                clear_depth,
+            },
+        );
+        Ok(CustomDepthTargetId(id))
+    }
+
+    fn remove_depth_target(&self, id: CustomDepthTargetId) {
+        let mut depth_targets = self.depth_targets.lock().unwrap();
+        if let Some(slot) = depth_targets.get_mut(id.0 as usize) {
             slot.take();
         }
     }
@@ -568,12 +688,17 @@ fn build_binding_maps(
     (by_name, by_slot)
 }
 
-fn pipeline_cache_key(desc: &CustomPipelineDesc, source: PipelineSourceKey) -> PipelineCacheKey {
+fn pipeline_cache_key(
+    desc: &CustomPipelineDesc,
+    source: PipelineSourceKey,
+    color_format: metal::MTLPixelFormat,
+) -> PipelineCacheKey {
     PipelineCacheKey {
         source,
         vertex_entry: desc.vertex_entry.clone(),
         fragment_entry: desc.fragment_entry.clone(),
         primitive: primitive_key(desc.primitive),
+        color_format: color_format as u64,
         state: pipeline_state_key(desc.state),
         vertex_fetches: desc.vertex_fetches.iter().map(vertex_fetch_key).collect(),
         bindings: desc.bindings.iter().map(binding_key).collect(),
@@ -669,10 +794,21 @@ fn primitive_key(primitive: CustomPrimitiveTopology) -> u8 {
 }
 
 fn pipeline_state_key(state: CustomPipelineState) -> PipelineStateKey {
+    let (depth_format, depth_compare, depth_write) = match state.depth {
+        Some(depth) => (
+            depth_format_key(depth.format),
+            depth_compare_key(depth.compare),
+            depth_write_key(depth.write_enabled),
+        ),
+        None => (0, 0, 0),
+    };
     PipelineStateKey {
         blend: blend_mode_key(state.blend),
         cull_mode: cull_mode_key(state.cull_mode),
         front_face: front_face_key(state.front_face),
+        depth_format,
+        depth_compare,
+        depth_write,
     }
 }
 
@@ -698,6 +834,26 @@ fn front_face_key(face: CustomFrontFace) -> u8 {
         CustomFrontFace::Ccw => 0,
         CustomFrontFace::Cw => 1,
     }
+}
+
+fn depth_format_key(format: CustomDepthFormat) -> u8 {
+    match format {
+        CustomDepthFormat::Depth32Float => 1,
+    }
+}
+
+fn depth_compare_key(compare: CustomDepthCompare) -> u8 {
+    match compare {
+        CustomDepthCompare::Always => 0,
+        CustomDepthCompare::Less => 1,
+        CustomDepthCompare::LessEqual => 2,
+        CustomDepthCompare::Greater => 3,
+        CustomDepthCompare::GreaterEqual => 4,
+    }
+}
+
+fn depth_write_key(write_enabled: bool) -> u8 {
+    if write_enabled { 1 } else { 0 }
 }
 
 fn assign_vertex_locations(
@@ -979,6 +1135,49 @@ fn metal_vertex_format(format: CustomVertexFormat) -> metal::MTLVertexFormat {
         CustomVertexFormat::I32Vec3 => metal::MTLVertexFormat::Int3,
         CustomVertexFormat::I32Vec4 => metal::MTLVertexFormat::Int4,
     }
+}
+
+fn metal_color_format(format: CustomTextureFormat) -> (metal::MTLPixelFormat, u32) {
+    match format {
+        CustomTextureFormat::Rgba8Unorm => (metal::MTLPixelFormat::RGBA8Unorm, 4),
+        CustomTextureFormat::Bgra8Unorm => (metal::MTLPixelFormat::BGRA8Unorm, 4),
+    }
+}
+
+fn resolve_color_format(
+    format: Option<CustomTextureFormat>,
+    default_format: metal::MTLPixelFormat,
+) -> Result<metal::MTLPixelFormat> {
+    if let Some(format) = format {
+        return Ok(metal_color_format(format).0);
+    }
+    Ok(default_format)
+}
+
+fn metal_depth_format(format: CustomDepthFormat) -> metal::MTLPixelFormat {
+    match format {
+        CustomDepthFormat::Depth32Float => metal::MTLPixelFormat::Depth32Float,
+    }
+}
+
+fn metal_compare_function(compare: CustomDepthCompare) -> metal::MTLCompareFunction {
+    match compare {
+        CustomDepthCompare::Always => metal::MTLCompareFunction::Always,
+        CustomDepthCompare::Less => metal::MTLCompareFunction::Less,
+        CustomDepthCompare::LessEqual => metal::MTLCompareFunction::LessEqual,
+        CustomDepthCompare::Greater => metal::MTLCompareFunction::Greater,
+        CustomDepthCompare::GreaterEqual => metal::MTLCompareFunction::GreaterEqual,
+    }
+}
+
+fn create_depth_state(
+    device: &metal::DeviceRef,
+    state: CustomDepthState,
+) -> metal::DepthStencilState {
+    let descriptor = metal::DepthStencilDescriptor::new();
+    descriptor.set_depth_compare_function(metal_compare_function(state.compare));
+    descriptor.set_depth_write_enabled(state.write_enabled);
+    device.new_depth_stencil_state(&descriptor)
 }
 
 fn metal_primitive(primitive: CustomPrimitiveTopology) -> metal::MTLPrimitiveType {

@@ -6,9 +6,12 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 
 - Custom WGSL render pipelines.
 - Vertex buffers (inline + static GPU buffers).
+- Index buffers + indexed draws.
 - Instanced rendering.
 - Uniform bindings (per-draw data).
 - Texture + sampler bindings.
+- Configurable pipeline state (blend, cull, front face, depth).
+- Offscreen render targets + depth testing.
 - Batching by pipeline + bindings.
 - Stress harness for throughput testing.
 
@@ -23,6 +26,9 @@ cargo run --example custom_draw_api_animated
 
 # Instanced rendering example
 cargo run --example custom_draw_api_instanced
+
+# Offscreen render target + depth example
+cargo run --example custom_draw_api_offscreen
 
 # Explicit @location + @group/@binding example
 cargo run --example custom_draw_api_conformance
@@ -151,22 +157,20 @@ cargo run --release --example custom_draw_stress -- \
 
 ## Known limitations (current gaps)
 
-- No index buffers or indexed draws.
-- No depth/stencil attachments or depth testing.
+- Depth is limited to Depth32Float; no stencil attachments.
 - Single color target only (no MRT/MSAA resolve).
-- Fixed pipeline state (blend/cull/depth/sample count/viewport not configurable).
+- No MSAA/sample count control or custom viewport/scissor state.
 - Binding model is small and flat (4 bindings; no dynamic offsets or push constants).
 - No storage buffers/textures or compute pipelines.
 - Texture support is limited to 2D RGBA/BGRA without mipmaps, arrays, or sRGB control.
-- No offscreen render targets or multi-pass render workflow.
 
 ## Core roadmap (triage)
 
-- **P0 (core primitives)**
+- **P0 (core primitives)** (done)
   - Index buffers + indexed draws.
-  - Depth/stencil attachments + depth testing.
+  - Depth attachments + depth testing (Depth32Float only).
   - Offscreen render targets / render passes for multi-pass composition.
-  - Configurable pipeline state (blend modes, cull, depth, sample count, viewport/scissor).
+  - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
   - Storage buffers/textures + compute pipelines/passes.
   - Expanded binding model (more bindings, dynamic offsets, push constants).

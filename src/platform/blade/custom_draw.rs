@@ -6,10 +6,11 @@ use blade_util::{BufferBelt, BufferBeltDescriptor};
 
 use crate::{
     CustomAddressMode, CustomBindingKind, CustomBindingValue, CustomBlendMode, CustomBufferDesc,
-    CustomBufferId, CustomBufferSource, CustomCullMode, CustomDrawRegistry, CustomFilterMode,
+    CustomBufferId, CustomBufferSource, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
+    CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry, CustomFilterMode,
     CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
-    CustomSamplerDesc, CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId,
-    CustomVertexFormat, Result,
+    CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
+    CustomTextureFormat, CustomTextureId, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -18,15 +19,18 @@ pub(crate) struct BladeCustomDrawRegistry {
     pipelines: Mutex<Vec<Option<BladeCustomPipeline>>>,
     buffers: Mutex<Vec<Option<BladeCustomBuffer>>>,
     textures: Mutex<Vec<Option<BladeCustomTexture>>>,
+    depth_targets: Mutex<Vec<Option<BladeCustomDepthTarget>>>,
     samplers: Mutex<Vec<Option<gpu::Sampler>>>,
     upload_belt: Mutex<BufferBelt>,
     pending_uploads: Mutex<Vec<PendingUpload>>,
 }
 
-struct BladeCustomPipeline {
-    pipeline: gpu::RenderPipeline,
-    bindings: Vec<Vec<CustomBindingKind>>,
-    binding_indices: Vec<Vec<Option<usize>>>,
+pub(crate) struct BladeCustomPipeline {
+    pub(crate) pipeline: gpu::RenderPipeline,
+    pub(crate) bindings: Vec<Vec<CustomBindingKind>>,
+    pub(crate) binding_indices: Vec<Vec<Option<usize>>>,
+    pub(crate) color_format: gpu::TextureFormat,
+    pub(crate) depth_format: Option<gpu::TextureFormat>,
 }
 
 struct BladeCustomBuffer {
@@ -34,12 +38,24 @@ struct BladeCustomBuffer {
     size: u64,
 }
 
-struct BladeCustomTexture {
-    texture: gpu::Texture,
-    view: gpu::TextureView,
-    width: u32,
-    height: u32,
-    bytes_per_pixel: u32,
+pub(crate) struct BladeCustomTexture {
+    pub(crate) texture: gpu::Texture,
+    pub(crate) view: gpu::TextureView,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bytes_per_pixel: u32,
+    pub(crate) format: gpu::TextureFormat,
+    pub(crate) is_render_target: bool,
+    pub(crate) clear_color: gpu::TextureColor,
+}
+
+pub(crate) struct BladeCustomDepthTarget {
+    pub(crate) texture: gpu::Texture,
+    pub(crate) view: gpu::TextureView,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: gpu::TextureFormat,
+    pub(crate) clear_depth: f32,
 }
 
 struct PendingUpload {
@@ -55,6 +71,7 @@ impl BladeCustomDrawRegistry {
             pipelines: Mutex::new(Vec::new()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
+            depth_targets: Mutex::new(Vec::new()),
             samplers: Mutex::new(Vec::new()),
             upload_belt: Mutex::new(BufferBelt::new(BufferBeltDescriptor {
                 memory: gpu::Memory::Upload,
@@ -87,17 +104,23 @@ impl BladeCustomDrawRegistry {
             self.gpu.destroy_sampler(*sampler);
         }
         samplers.clear();
+        let mut depth_targets = self.depth_targets.lock().unwrap();
+        for depth_target in depth_targets.iter_mut().flatten() {
+            self.gpu.destroy_texture_view(depth_target.view);
+            self.gpu.destroy_texture(depth_target.texture);
+        }
+        depth_targets.clear();
         self.upload_belt.lock().unwrap().destroy(&self.gpu);
         self.pending_uploads.lock().unwrap().clear();
     }
 
     pub(crate) fn with_pipeline<F, R>(&self, id: CustomPipelineId, f: F) -> Option<R>
     where
-        F: FnOnce(&gpu::RenderPipeline, &[Vec<CustomBindingKind>], &[Vec<Option<usize>>]) -> R,
+        F: FnOnce(&BladeCustomPipeline) -> R,
     {
         let pipelines = self.pipelines.lock().unwrap();
         let entry = pipelines.get(id.0 as usize)?.as_ref()?;
-        Some(f(&entry.pipeline, &entry.bindings, &entry.binding_indices))
+        Some(f(entry))
     }
 
     pub(crate) fn get_buffer(&self, id: CustomBufferId) -> Option<gpu::Buffer> {
@@ -106,6 +129,24 @@ impl BladeCustomDrawRegistry {
             .get(id.0 as usize)
             .and_then(|slot| slot.as_ref())
             .map(|entry| entry.buffer)
+    }
+
+    pub(crate) fn with_texture<F, R>(&self, id: CustomTextureId, f: F) -> Option<R>
+    where
+        F: FnOnce(&BladeCustomTexture) -> R,
+    {
+        let textures = self.textures.lock().unwrap();
+        let entry = textures.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
+    }
+
+    pub(crate) fn with_depth_target<F, R>(&self, id: CustomDepthTargetId, f: F) -> Option<R>
+    where
+        F: FnOnce(&BladeCustomDepthTarget) -> R,
+    {
+        let depth_targets = self.depth_targets.lock().unwrap();
+        let entry = depth_targets.get(id.0 as usize)?.as_ref()?;
+        Some(f(entry))
     }
 
     pub(crate) fn buffers_snapshot(&self) -> Vec<Option<gpu::Buffer>> {
@@ -190,8 +231,12 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             source: &desc.shader_source,
         });
 
+        let color_format = desc
+            .target_format
+            .map(blade_color_format)
+            .unwrap_or(self.surface_info.format);
         let color_targets = &[gpu::ColorTargetState {
-            format: self.surface_info.format,
+            format: color_format,
             blend: blade_blend_state(desc.state.blend, self.surface_info.alpha),
             write_mask: gpu::ColorWrites::default(),
         }];
@@ -305,6 +350,18 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
 
         let data_layouts: Vec<&gpu::ShaderDataLayout> = binding_layouts.iter().collect();
 
+        let depth_format = desc
+            .state
+            .depth
+            .map(|depth| blade_depth_format(depth.format));
+        let depth_stencil = desc.state.depth.map(|depth| gpu::DepthStencilState {
+            format: blade_depth_format(depth.format),
+            depth_write_enabled: depth.write_enabled,
+            depth_compare: blade_depth_compare(depth.compare),
+            stencil: gpu::StencilState::default(),
+            bias: gpu::DepthBiasState::default(),
+        });
+
         let pipeline = self.gpu.create_render_pipeline(gpu::RenderPipelineDesc {
             name: &desc.name,
             data_layouts: data_layouts.as_slice(),
@@ -322,7 +379,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 cull_mode: blade_cull_mode(desc.state.cull_mode),
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil,
             fragment: Some(shader.at(&desc.fragment_entry)),
             color_targets,
             multisample_state: gpu::MultisampleState::default(),
@@ -335,6 +392,8 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 pipeline,
                 bindings: binding_kinds_by_group,
                 binding_indices: binding_indices_by_group,
+                color_format,
+                depth_format,
             },
         );
         Ok(CustomPipelineId(id))
@@ -450,6 +509,9 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             width: desc.width,
             height: desc.height,
             bytes_per_pixel,
+            format,
+            is_render_target: false,
+            clear_color: gpu::TextureColor::TransparentBlack,
         };
         let mut textures = self.textures.lock().unwrap();
         let id = Self::alloc_slot(&mut textures, texture);
@@ -458,9 +520,64 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         Ok(CustomTextureId(id))
     }
 
+    fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId> {
+        let (format, bytes_per_pixel) = match desc.format {
+            CustomTextureFormat::Rgba8Unorm => (gpu::TextureFormat::Rgba8Unorm, 4),
+            CustomTextureFormat::Bgra8Unorm => (gpu::TextureFormat::Bgra8Unorm, 4),
+        };
+        let raw = self.gpu.create_texture(gpu::TextureDesc {
+            name: &desc.name,
+            format,
+            size: gpu::Extent {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
+            },
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::TARGET,
+            external: None,
+        });
+        let view = self.gpu.create_texture_view(
+            raw,
+            gpu::TextureViewDesc {
+                name: &desc.name,
+                format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &Default::default(),
+            },
+        );
+        let texture = BladeCustomTexture {
+            texture: raw,
+            view,
+            width: desc.width,
+            height: desc.height,
+            bytes_per_pixel,
+            format,
+            is_render_target: true,
+            clear_color: blade_clear_color(desc.clear_color),
+        };
+        let mut textures = self.textures.lock().unwrap();
+        let id = Self::alloc_slot(&mut textures, texture);
+        Ok(CustomTextureId(id))
+    }
+
     fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()> {
         if data.is_empty() {
             return Err(anyhow::anyhow!("custom texture data is empty"));
+        }
+        let is_render_target = self
+            .textures
+            .lock()
+            .unwrap()
+            .get(id.0 as usize)
+            .and_then(|slot| slot.as_ref())
+            .map(|entry| entry.is_render_target)
+            .unwrap_or(false);
+        if is_render_target {
+            return Err(anyhow::anyhow!("custom render targets cannot be updated"));
         }
         let mut upload_belt = self.upload_belt.lock().unwrap();
         let piece = upload_belt.alloc_bytes(&data, &self.gpu);
@@ -478,6 +595,55 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             if let Some(texture) = slot.take() {
                 self.gpu.destroy_texture_view(texture.view);
                 self.gpu.destroy_texture(texture.texture);
+            }
+        }
+    }
+
+    fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId> {
+        let format = blade_depth_format(desc.format);
+        let raw = self.gpu.create_texture(gpu::TextureDesc {
+            name: &desc.name,
+            format,
+            size: gpu::Extent {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
+            },
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET,
+            external: None,
+        });
+        let view = self.gpu.create_texture_view(
+            raw,
+            gpu::TextureViewDesc {
+                name: &desc.name,
+                format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &Default::default(),
+            },
+        );
+        let target = BladeCustomDepthTarget {
+            texture: raw,
+            view,
+            width: desc.width,
+            height: desc.height,
+            format,
+            clear_depth: desc.clear_depth.unwrap_or(1.0),
+        };
+        let mut depth_targets = self.depth_targets.lock().unwrap();
+        let id = Self::alloc_slot(&mut depth_targets, target);
+        Ok(CustomDepthTargetId(id))
+    }
+
+    fn remove_depth_target(&self, id: CustomDepthTargetId) {
+        let mut depth_targets = self.depth_targets.lock().unwrap();
+        if let Some(slot) = depth_targets.get_mut(id.0 as usize) {
+            if let Some(target) = slot.take() {
+                self.gpu.destroy_texture_view(target.view);
+                self.gpu.destroy_texture(target.texture);
             }
         }
     }
@@ -556,6 +722,38 @@ fn blade_cull_mode(mode: CustomCullMode) -> Option<gpu::Face> {
         CustomCullMode::None => None,
         CustomCullMode::Front => Some(gpu::Face::Front),
         CustomCullMode::Back => Some(gpu::Face::Back),
+    }
+}
+
+fn blade_color_format(format: CustomTextureFormat) -> gpu::TextureFormat {
+    match format {
+        CustomTextureFormat::Rgba8Unorm => gpu::TextureFormat::Rgba8Unorm,
+        CustomTextureFormat::Bgra8Unorm => gpu::TextureFormat::Bgra8Unorm,
+    }
+}
+
+fn blade_depth_format(format: CustomDepthFormat) -> gpu::TextureFormat {
+    match format {
+        CustomDepthFormat::Depth32Float => gpu::TextureFormat::Depth32Float,
+    }
+}
+
+fn blade_depth_compare(compare: CustomDepthCompare) -> gpu::CompareFunction {
+    match compare {
+        CustomDepthCompare::Always => gpu::CompareFunction::Always,
+        CustomDepthCompare::Less => gpu::CompareFunction::Less,
+        CustomDepthCompare::LessEqual => gpu::CompareFunction::LessEqual,
+        CustomDepthCompare::Greater => gpu::CompareFunction::Greater,
+        CustomDepthCompare::GreaterEqual => gpu::CompareFunction::GreaterEqual,
+    }
+}
+
+fn blade_clear_color(color: Option<[f32; 4]>) -> gpu::TextureColor {
+    match color {
+        Some([0.0, 0.0, 0.0, 0.0]) | None => gpu::TextureColor::TransparentBlack,
+        Some([0.0, 0.0, 0.0, 1.0]) => gpu::TextureColor::OpaqueBlack,
+        Some([1.0, 1.0, 1.0, 1.0]) => gpu::TextureColor::White,
+        _ => gpu::TextureColor::TransparentBlack,
     }
 }
 

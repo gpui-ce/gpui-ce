@@ -8,7 +8,7 @@ use crate::{
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
     ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use block::ConcreteBlock;
 use cocoa::{
     base::{NO, YES},
@@ -29,7 +29,7 @@ use metal::{
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+use std::{cell::Cell, collections::BTreeMap, ffi::c_void, mem, ptr, sync::Arc};
 
 // Exported to metal
 pub(crate) type PointF = crate::Point<f32>;
@@ -451,6 +451,13 @@ impl MetalRenderer {
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.layer.is_opaque() { 1. } else { 0. };
         let mut instance_offset = 0;
+
+        self.draw_custom_render_targets(
+            scene,
+            command_buffer,
+            instance_buffer,
+            &mut instance_offset,
+        )?;
 
         let mut command_encoder = new_command_encoder(
             command_buffer,
@@ -1185,6 +1192,144 @@ impl MetalRenderer {
         true
     }
 
+    fn draw_custom_render_targets(
+        &mut self,
+        scene: &Scene,
+        command_buffer: &metal::CommandBufferRef,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+    ) -> Result<()> {
+        struct RenderTargetInfo {
+            texture: metal::Texture,
+            width: u32,
+            height: u32,
+            format: metal::MTLPixelFormat,
+            clear_color: [f32; 4],
+            is_render_target: bool,
+        }
+
+        struct DepthTargetInfo {
+            texture: metal::Texture,
+            format: metal::MTLPixelFormat,
+            clear_depth: f64,
+        }
+
+        let mut draws_by_target = BTreeMap::new();
+        for draw in scene.custom_draws.iter() {
+            let Some(target) = draw.target else {
+                continue;
+            };
+            draws_by_target
+                .entry((target.color.0, target.depth.map(|depth| depth.0)))
+                .or_insert_with(Vec::new)
+                .push(draw);
+        }
+        if draws_by_target.is_empty() {
+            return Ok(());
+        }
+
+        let buffers_snapshot = self.custom_draw.buffers_snapshot();
+        let textures_snapshot = self.custom_draw.textures_snapshot();
+        let samplers_snapshot = self.custom_draw.samplers_snapshot();
+
+        for (_, draws) in draws_by_target {
+            let Some(target) = draws.first().and_then(|draw| draw.target) else {
+                continue;
+            };
+            let Some(color_target) =
+                self.custom_draw
+                    .with_texture(target.color, |entry| RenderTargetInfo {
+                        texture: entry.texture.clone(),
+                        width: entry.width,
+                        height: entry.height,
+                        format: entry.format,
+                        clear_color: entry.clear_color,
+                        is_render_target: entry.is_render_target,
+                    })
+            else {
+                log::warn!("custom render target {:?} missing", target.color.0);
+                continue;
+            };
+            if !color_target.is_render_target {
+                log::warn!(
+                    "custom draw target {:?} is not a render target",
+                    target.color.0
+                );
+                continue;
+            }
+
+            let depth_target = if let Some(depth_id) = target.depth {
+                match self
+                    .custom_draw
+                    .with_depth_target(depth_id, |entry| DepthTargetInfo {
+                        texture: entry.texture.clone(),
+                        format: entry.format,
+                        clear_depth: entry.clear_depth,
+                    }) {
+                    Some(target) => Some(target),
+                    None => {
+                        log::warn!("custom depth target {:?} missing", depth_id.0);
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let render_pass_descriptor = metal::RenderPassDescriptor::new();
+            let color_attachment = render_pass_descriptor
+                .color_attachments()
+                .object_at(0)
+                .unwrap();
+            color_attachment.set_texture(Some(&color_target.texture));
+            color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+            color_attachment.set_store_action(metal::MTLStoreAction::Store);
+            color_attachment.set_clear_color(metal::MTLClearColor::new(
+                color_target.clear_color[0] as f64,
+                color_target.clear_color[1] as f64,
+                color_target.clear_color[2] as f64,
+                color_target.clear_color[3] as f64,
+            ));
+
+            if let Some(depth_target) = depth_target.as_ref() {
+                let depth_attachment = render_pass_descriptor.depth_attachment().unwrap();
+                depth_attachment.set_texture(Some(&depth_target.texture));
+                depth_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                depth_attachment.set_store_action(metal::MTLStoreAction::Store);
+                depth_attachment.set_clear_depth(depth_target.clear_depth);
+            }
+
+            let command_encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
+            command_encoder.set_viewport(metal::MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: color_target.width as f64,
+                height: color_target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+
+            let outcome = self.draw_custom_draws_for_target(
+                &draws,
+                instance_buffer,
+                instance_offset,
+                command_encoder,
+                color_target.format,
+                depth_target.as_ref().map(|target| target.format),
+                &buffers_snapshot,
+                &textures_snapshot,
+                &samplers_snapshot,
+            );
+            command_encoder.end_encoding();
+
+            if matches!(outcome, CustomDrawBindOutcome::OutOfSpace) {
+                return Err(anyhow!("custom draw out of space"));
+            }
+        }
+
+        Ok(())
+    }
+
     fn draw_custom_draws(
         &mut self,
         draws: &[CustomDraw],
@@ -1192,6 +1337,7 @@ impl MetalRenderer {
         instance_offset: &mut usize,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
+        let draws: Vec<&CustomDraw> = draws.iter().filter(|draw| draw.target.is_none()).collect();
         if draws.is_empty() {
             return true;
         }
@@ -1200,6 +1346,33 @@ impl MetalRenderer {
         let textures_snapshot = self.custom_draw.textures_snapshot();
         let samplers_snapshot = self.custom_draw.samplers_snapshot();
 
+        let outcome = self.draw_custom_draws_for_target(
+            &draws,
+            instance_buffer,
+            instance_offset,
+            command_encoder,
+            self.custom_draw.surface_format(),
+            None,
+            &buffers_snapshot,
+            &textures_snapshot,
+            &samplers_snapshot,
+        );
+
+        !matches!(outcome, CustomDrawBindOutcome::OutOfSpace)
+    }
+
+    fn draw_custom_draws_for_target(
+        &mut self,
+        draws: &[&CustomDraw],
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        command_encoder: &metal::RenderCommandEncoderRef,
+        target_format: metal::MTLPixelFormat,
+        depth_format: Option<metal::MTLPixelFormat>,
+        buffers_snapshot: &[Option<metal::Buffer>],
+        textures_snapshot: &[Option<metal::Texture>],
+        samplers_snapshot: &[Option<metal::SamplerState>],
+    ) -> CustomDrawBindOutcome {
         let mut index = 0;
         while index < draws.len() {
             let batch_key = draws[index].batch_key;
@@ -1213,6 +1386,30 @@ impl MetalRenderer {
             let bindings = &batch[0].bindings;
 
             let Some(outcome) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
+                if pipeline.color_format != target_format {
+                    log::warn!(
+                        "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                        pipeline_id.0,
+                        pipeline.color_format,
+                        target_format
+                    );
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                if let Some(pipeline_depth_format) = pipeline.depth_format {
+                    if Some(pipeline_depth_format) != depth_format {
+                        log::warn!(
+                            "custom draw pipeline {:?} depth format mismatch",
+                            pipeline_id.0
+                        );
+                        return CustomDrawBindOutcome::SkipBatch;
+                    }
+                }
+                if pipeline.depth_format.is_some() {
+                    if let Some(depth_state) = pipeline.depth_state.as_ref() {
+                        command_encoder.set_depth_stencil_state(depth_state);
+                    }
+                }
+
                 command_encoder.set_render_pipeline_state(&pipeline.pipeline_state);
                 command_encoder.set_cull_mode(pipeline.cull_mode);
                 command_encoder.set_front_facing_winding(pipeline.front_face);
@@ -1221,9 +1418,9 @@ impl MetalRenderer {
                     command_encoder,
                     pipeline,
                     bindings,
-                    &buffers_snapshot,
-                    &textures_snapshot,
-                    &samplers_snapshot,
+                    buffers_snapshot,
+                    textures_snapshot,
+                    samplers_snapshot,
                     instance_buffer,
                     instance_offset,
                 ) {
@@ -1255,7 +1452,7 @@ impl MetalRenderer {
                             command_encoder,
                             buffer_index,
                             &buffer.source,
-                            &buffers_snapshot,
+                            buffers_snapshot,
                             instance_buffer,
                             instance_offset,
                         ) {
@@ -1276,7 +1473,7 @@ impl MetalRenderer {
                                 match self.bind_index_buffer(
                                     index_buffer,
                                     draw.index_count,
-                                    &buffers_snapshot,
+                                    buffers_snapshot,
                                     instance_buffer,
                                     instance_offset,
                                 ) {
@@ -1322,13 +1519,13 @@ impl MetalRenderer {
             };
 
             if matches!(outcome, CustomDrawBindOutcome::OutOfSpace) {
-                return false;
+                return CustomDrawBindOutcome::OutOfSpace;
             }
 
             index = end;
         }
 
-        true
+        CustomDrawBindOutcome::Ready
     }
 
     fn bind_custom_resources(

@@ -125,6 +125,7 @@ impl MixedExample {
                 instanced: false,
             }],
             primitive: CustomPrimitiveTopology::TriangleList,
+            target_format: None,
             state: CustomPipelineState::default(),
             bindings: vec![
                 CustomBindingDesc {
@@ -224,6 +225,7 @@ impl Render for MixedExample {
                     vertex_count: 6,
                     index_buffer: None,
                     index_count: 0,
+                    target: None,
                     instance_count: 1,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),

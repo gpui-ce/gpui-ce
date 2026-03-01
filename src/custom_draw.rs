@@ -20,6 +20,10 @@ pub struct CustomTextureId(pub(crate) u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CustomSamplerId(pub(crate) u32);
 
+/// Identifier for a registered custom depth target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CustomDepthTargetId(pub(crate) u32);
+
 /// Primitive topology for custom pipelines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomPrimitiveTopology {
@@ -86,6 +90,55 @@ impl Default for CustomBlendMode {
     }
 }
 
+/// Depth compare function for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomDepthCompare {
+    /// Always passes.
+    Always,
+    /// Passes when the new depth is less.
+    Less,
+    /// Passes when the new depth is less than or equal.
+    LessEqual,
+    /// Passes when the new depth is greater.
+    Greater,
+    /// Passes when the new depth is greater than or equal.
+    GreaterEqual,
+}
+
+impl Default for CustomDepthCompare {
+    fn default() -> Self {
+        Self::LessEqual
+    }
+}
+
+/// Depth formats supported for custom render targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomDepthFormat {
+    /// 32-bit float depth.
+    Depth32Float,
+}
+
+/// Depth state for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomDepthState {
+    /// Depth format.
+    pub format: CustomDepthFormat,
+    /// Depth compare function.
+    pub compare: CustomDepthCompare,
+    /// Whether depth writes are enabled.
+    pub write_enabled: bool,
+}
+
+impl Default for CustomDepthState {
+    fn default() -> Self {
+        Self {
+            format: CustomDepthFormat::Depth32Float,
+            compare: CustomDepthCompare::LessEqual,
+            write_enabled: true,
+        }
+    }
+}
+
 /// Fixed-function pipeline state for custom pipelines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomPipelineState {
@@ -95,6 +148,8 @@ pub struct CustomPipelineState {
     pub cull_mode: CustomCullMode,
     /// Front face winding.
     pub front_face: CustomFrontFace,
+    /// Optional depth state.
+    pub depth: Option<CustomDepthState>,
 }
 
 impl Default for CustomPipelineState {
@@ -103,6 +158,7 @@ impl Default for CustomPipelineState {
             blend: CustomBlendMode::Default,
             cull_mode: CustomCullMode::None,
             front_face: CustomFrontFace::Ccw,
+            depth: None,
         }
     }
 }
@@ -228,6 +284,8 @@ pub struct CustomPipelineDesc {
     pub vertex_fetches: Vec<CustomVertexFetch>,
     /// Primitive topology.
     pub primitive: CustomPrimitiveTopology,
+    /// Optional color target format (defaults to the surface format).
+    pub target_format: Option<CustomTextureFormat>,
     /// Fixed-function pipeline state.
     pub state: CustomPipelineState,
     /// Optional shader bindings (buffers only for now).
@@ -449,6 +507,7 @@ mod tests {
             fragment_entry: "fs".to_string(),
             vertex_fetches: Vec::new(),
             primitive: CustomPrimitiveTopology::TriangleList,
+            target_format: None,
             state: CustomPipelineState::default(),
             bindings: Vec::new(),
         }
@@ -594,6 +653,28 @@ pub struct CustomIndexBuffer {
     pub format: CustomIndexFormat,
 }
 
+/// Render target selection for custom draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CustomRenderTarget {
+    /// Color target texture.
+    pub color: CustomTextureId,
+    /// Optional depth target.
+    pub depth: Option<CustomDepthTargetId>,
+}
+
+impl CustomRenderTarget {
+    pub(crate) fn hash(&self) -> u64 {
+        let mut hash = 1469598103934665603u64;
+        hash = hash.wrapping_mul(1099511628211);
+        hash ^= self.color.0 as u64;
+        if let Some(depth) = self.depth {
+            hash = hash.wrapping_mul(1099511628211);
+            hash ^= depth.0 as u64;
+        }
+        hash
+    }
+}
+
 /// Parameters for a custom draw call.
 #[derive(Debug, Clone)]
 pub struct CustomDrawParams {
@@ -609,6 +690,8 @@ pub struct CustomDrawParams {
     pub index_buffer: Option<CustomIndexBuffer>,
     /// Number of indices to draw when using an index buffer.
     pub index_count: u32,
+    /// Optional render target for offscreen passes.
+    pub target: Option<CustomRenderTarget>,
     /// Number of instances to draw.
     pub instance_count: u32,
     /// Optional shader bindings (buffers only for now).
@@ -685,6 +768,36 @@ pub struct CustomTextureDesc {
     pub data: Arc<[u8]>,
 }
 
+/// Offscreen render target description.
+#[derive(Debug, Clone)]
+pub struct CustomRenderTargetDesc {
+    /// Debug name for the target.
+    pub name: String,
+    /// Target width in pixels.
+    pub width: u32,
+    /// Target height in pixels.
+    pub height: u32,
+    /// Target format.
+    pub format: CustomTextureFormat,
+    /// Optional clear color for each frame (defaults to transparent black).
+    pub clear_color: Option<[f32; 4]>,
+}
+
+/// Offscreen depth target description.
+#[derive(Debug, Clone)]
+pub struct CustomDepthTargetDesc {
+    /// Debug name for the target.
+    pub name: String,
+    /// Target width in pixels.
+    pub width: u32,
+    /// Target height in pixels.
+    pub height: u32,
+    /// Depth format.
+    pub format: CustomDepthFormat,
+    /// Optional clear depth value (defaults to 1.0).
+    pub clear_depth: Option<f32>,
+}
+
 /// Sampler filter modes supported by custom draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomFilterMode {
@@ -729,6 +842,7 @@ pub(crate) struct CustomDraw {
     pub(crate) vertex_count: u32,
     pub(crate) index_buffer: Option<CustomIndexBuffer>,
     pub(crate) index_count: u32,
+    pub(crate) target: Option<CustomRenderTarget>,
     pub(crate) instance_count: u32,
     pub(crate) bindings: Vec<CustomBindingValue>,
     pub(crate) batch_key: CustomBatchKey,
@@ -737,6 +851,7 @@ pub(crate) struct CustomDraw {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CustomBatchKey {
     pub(crate) pipeline: CustomPipelineId,
+    pub(crate) target_hash: u64,
     pub(crate) bindings_hash: u64,
 }
 
@@ -751,8 +866,11 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn update_buffer(&self, id: CustomBufferId, data: Arc<[u8]>) -> Result<()>;
     fn remove_buffer(&self, id: CustomBufferId);
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId>;
+    fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId>;
     fn update_texture(&self, id: CustomTextureId, data: Arc<[u8]>) -> Result<()>;
     fn remove_texture(&self, id: CustomTextureId);
+    fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId>;
+    fn remove_depth_target(&self, id: CustomDepthTargetId);
     fn create_sampler(&self, desc: CustomSamplerDesc) -> Result<CustomSamplerId>;
     fn remove_sampler(&self, id: CustomSamplerId);
 }

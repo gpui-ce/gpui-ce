@@ -229,6 +229,7 @@ impl InstancedCustomDrawExample {
                 },
             ],
             primitive: CustomPrimitiveTopology::TriangleList,
+            target_format: None,
             state: CustomPipelineState::default(),
             bindings: vec![
                 CustomBindingDesc {
@@ -379,6 +380,7 @@ impl Render for InstancedCustomDrawExample {
                     vertex_count: 6,
                     index_buffer: None,
                     index_count: 0,
+                    target: None,
                     instance_count: config.instances as u32,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),
