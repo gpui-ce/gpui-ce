@@ -49,6 +49,9 @@ cargo run --example custom_draw_api_binding_arrays
 # Texture array example
 cargo run --example custom_draw_api_texture_arrays
 
+# Cubemap example
+cargo run --example custom_draw_api_cubemap
+
 # Explicit @location and @group/@binding example
 cargo run --example custom_draw_api_conformance
 

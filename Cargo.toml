@@ -367,6 +367,10 @@ name = "custom_draw_api_texture_arrays"
 path = "examples/learn/custom_draw_api_texture_arrays.rs"
 
 [[example]]
+name = "custom_draw_api_cubemap"
+path = "examples/learn/custom_draw_api_cubemap.rs"
+
+[[example]]
 name = "custom_draw_api_conformance"
 path = "examples/learn/custom_draw_api_conformance.rs"
 
