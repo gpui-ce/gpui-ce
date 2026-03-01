@@ -35,6 +35,78 @@ pub enum CustomPrimitiveTopology {
     TriangleStrip,
 }
 
+/// Front face winding order for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomFrontFace {
+    /// Counter-clockwise front face.
+    Ccw,
+    /// Clockwise front face.
+    Cw,
+}
+
+impl Default for CustomFrontFace {
+    fn default() -> Self {
+        Self::Ccw
+    }
+}
+
+/// Face culling mode for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomCullMode {
+    /// Disable face culling.
+    None,
+    /// Cull front-facing triangles.
+    Front,
+    /// Cull back-facing triangles.
+    Back,
+}
+
+impl Default for CustomCullMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// Blend mode for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomBlendMode {
+    /// Backend default blend configuration.
+    Default,
+    /// Disable blending (opaque output).
+    Opaque,
+    /// Standard alpha blending.
+    Alpha,
+    /// Premultiplied alpha blending.
+    PremultipliedAlpha,
+}
+
+impl Default for CustomBlendMode {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+/// Fixed-function pipeline state for custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomPipelineState {
+    /// Blend mode for the primary color attachment.
+    pub blend: CustomBlendMode,
+    /// Face culling mode.
+    pub cull_mode: CustomCullMode,
+    /// Front face winding.
+    pub front_face: CustomFrontFace,
+}
+
+impl Default for CustomPipelineState {
+    fn default() -> Self {
+        Self {
+            blend: CustomBlendMode::Default,
+            cull_mode: CustomCullMode::None,
+            front_face: CustomFrontFace::Ccw,
+        }
+    }
+}
+
 /// Vertex attribute formats supported by custom pipelines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomVertexFormat {
@@ -62,6 +134,15 @@ pub enum CustomVertexFormat {
     I32Vec3,
     /// 4x 32-bit signed int.
     I32Vec4,
+}
+
+/// Index formats supported by custom pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomIndexFormat {
+    /// Unsigned 16-bit indices.
+    U16,
+    /// Unsigned 32-bit indices.
+    U32,
 }
 
 /// Fixed set of attribute names for custom vertex layouts.
@@ -147,6 +228,8 @@ pub struct CustomPipelineDesc {
     pub vertex_fetches: Vec<CustomVertexFetch>,
     /// Primitive topology.
     pub primitive: CustomPrimitiveTopology,
+    /// Fixed-function pipeline state.
+    pub state: CustomPipelineState,
     /// Optional shader bindings (buffers only for now).
     pub bindings: Vec<CustomBindingDesc>,
 }
@@ -360,14 +443,15 @@ mod tests {
 
     fn base_desc() -> CustomPipelineDesc {
         CustomPipelineDesc {
-             name: "test_pipeline".to_string(),
-             shader_source: "@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }".to_string(),
-             vertex_entry: "vs".to_string(),
-             fragment_entry: "fs".to_string(),
-             vertex_fetches: Vec::new(),
-             primitive: CustomPrimitiveTopology::TriangleList,
-             bindings: Vec::new(),
-         }
+            name: "test_pipeline".to_string(),
+            shader_source: "@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }".to_string(),
+            vertex_entry: "vs".to_string(),
+            fragment_entry: "fs".to_string(),
+            vertex_fetches: Vec::new(),
+            primitive: CustomPrimitiveTopology::TriangleList,
+            state: CustomPipelineState::default(),
+            bindings: Vec::new(),
+        }
     }
 
     #[test]
@@ -501,6 +585,15 @@ pub struct CustomVertexBuffer {
     pub source: CustomBufferSource,
 }
 
+/// Index buffer binding for a draw call.
+#[derive(Debug, Clone)]
+pub struct CustomIndexBuffer {
+    /// Buffer source.
+    pub source: CustomBufferSource,
+    /// Index format.
+    pub format: CustomIndexFormat,
+}
+
 /// Parameters for a custom draw call.
 #[derive(Debug, Clone)]
 pub struct CustomDrawParams {
@@ -510,8 +603,12 @@ pub struct CustomDrawParams {
     pub pipeline: CustomPipelineId,
     /// Vertex buffers bound for the draw.
     pub vertex_buffers: Vec<CustomVertexBuffer>,
-    /// Number of vertices to draw.
+    /// Number of vertices to draw (non-indexed draws only).
     pub vertex_count: u32,
+    /// Optional index buffer for indexed draws.
+    pub index_buffer: Option<CustomIndexBuffer>,
+    /// Number of indices to draw when using an index buffer.
+    pub index_count: u32,
     /// Number of instances to draw.
     pub instance_count: u32,
     /// Optional shader bindings (buffers only for now).
@@ -630,6 +727,8 @@ pub(crate) struct CustomDraw {
     pub(crate) pipeline: CustomPipelineId,
     pub(crate) vertex_buffers: Vec<CustomVertexBuffer>,
     pub(crate) vertex_count: u32,
+    pub(crate) index_buffer: Option<CustomIndexBuffer>,
+    pub(crate) index_count: u32,
     pub(crate) instance_count: u32,
     pub(crate) bindings: Vec<CustomBindingValue>,
     pub(crate) batch_key: CustomBatchKey,

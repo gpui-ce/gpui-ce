@@ -3,9 +3,9 @@
 
 use super::{BladeAtlas, BladeContext, BladeCustomDrawRegistry, CustomBindings};
 use crate::{
-    Background, Bounds, CustomBindingKind, CustomBufferSource, DevicePixels, GpuSpecs,
-    MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene,
-    Shadow, Size, Underline, get_gamma_correction_ratios,
+    Background, Bounds, CustomBindingKind, CustomBufferSource, CustomIndexFormat, DevicePixels,
+    GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
+    Scene, Shadow, Size, Underline, get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
 use blade_util::{BufferBelt, BufferBeltDescriptor};
@@ -988,7 +988,7 @@ impl BladeRenderer {
                                 }
 
                                 for draw in batch {
-                                     if draw.vertex_count == 0 || draw.instance_count == 0 {
+                                     if draw.instance_count == 0 {
                                          continue;
                                      }
                                      let mut missing_buffer = false;
@@ -1017,7 +1017,53 @@ impl BladeRenderer {
                                      if missing_buffer {
                                          continue;
                                      }
-                                     encoder.draw(0, draw.vertex_count, 0, draw.instance_count);
+                                     if let Some(index_buffer) = &draw.index_buffer {
+                                         if draw.index_count == 0 {
+                                             continue;
+                                         }
+                                         let index_piece = match &index_buffer.source {
+                                             CustomBufferSource::Inline(data) => {
+                                                 let expected_len = draw.index_count as usize
+                                                     * index_format_size(index_buffer.format);
+                                                 if expected_len > 0 && data.len() < expected_len {
+                                                     log::warn!(
+                                                         "custom draw index buffer too small (expected at least {}, got {})",
+                                                         expected_len,
+                                                         data.len()
+                                                     );
+                                                     continue;
+                                                 }
+                                                 self.instance_belt.alloc_bytes(data, &self.gpu)
+                                             }
+                                             CustomBufferSource::Buffer(id) => {
+                                                 let Some(buffer) =
+                                                     self.custom_draw.get_buffer(*id)
+                                                 else {
+                                                     log::warn!("custom draw index buffer missing");
+                                                     continue;
+                                                 };
+                                                 gpu::BufferPiece::from(buffer)
+                                             }
+                                         };
+                                         encoder.draw_indexed(
+                                             index_piece,
+                                             blade_index_type(index_buffer.format),
+                                             draw.index_count,
+                                             0,
+                                             0,
+                                             draw.instance_count,
+                                         );
+                                     } else {
+                                         if draw.vertex_count == 0 {
+                                             continue;
+                                         }
+                                         encoder.draw(
+                                             0,
+                                             draw.vertex_count,
+                                             0,
+                                             draw.instance_count,
+                                         );
+                                     }
                                  }
                              },
                          ) {
@@ -1113,6 +1159,20 @@ fn create_msaa_texture_if_needed(
     );
 
     Some((texture_msaa, texture_view_msaa))
+}
+
+fn index_format_size(format: CustomIndexFormat) -> usize {
+    match format {
+        CustomIndexFormat::U16 => 2,
+        CustomIndexFormat::U32 => 4,
+    }
+}
+
+fn blade_index_type(format: CustomIndexFormat) -> gpu::IndexType {
+    match format {
+        CustomIndexFormat::U16 => gpu::IndexType::U16,
+        CustomIndexFormat::U32 => gpu::IndexType::U32,
+    }
 }
 
 /// A set of parameters that can be set using a corresponding environment variable.

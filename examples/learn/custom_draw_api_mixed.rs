@@ -11,10 +11,11 @@ use gpui::{
     App, AppContext, Application, Bounds, Colors, Context, CustomAddressMode, CustomBindingDesc,
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
     CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
-    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexAttribute, CustomVertexAttributeName,
-    CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat, CustomVertexLayout, Hsla, Render,
-    Styled, Window, WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
+    CustomPipelineState, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomVertexAttribute,
+    CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat,
+    CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds, WindowOptions, canvas, div,
+    prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -124,6 +125,7 @@ impl MixedExample {
                 instanced: false,
             }],
             primitive: CustomPrimitiveTopology::TriangleList,
+            state: CustomPipelineState::default(),
             bindings: vec![
                 CustomBindingDesc {
                     name: CustomBindingName::B0,
@@ -220,6 +222,8 @@ impl Render for MixedExample {
                         source: CustomBufferSource::Buffer(buffer),
                     }],
                     vertex_count: 6,
+                    index_buffer: None,
+                    index_count: 0,
                     instance_count: 1,
                     bindings: vec![
                         CustomBindingValue::Texture(texture),

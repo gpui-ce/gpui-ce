@@ -5,10 +5,11 @@ use blade_graphics::{self as gpu, ShaderBindable as _};
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 
 use crate::{
-    CustomAddressMode, CustomBindingKind, CustomBindingValue, CustomBufferDesc, CustomBufferId,
-    CustomBufferSource, CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc, CustomPipelineId,
-    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureFormat, CustomTextureId, CustomVertexFormat, Result,
+    CustomAddressMode, CustomBindingKind, CustomBindingValue, CustomBlendMode, CustomBufferDesc,
+    CustomBufferId, CustomBufferSource, CustomCullMode, CustomDrawRegistry, CustomFilterMode,
+    CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
+    CustomSamplerDesc, CustomSamplerId, CustomTextureDesc, CustomTextureFormat, CustomTextureId,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -191,11 +192,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
 
         let color_targets = &[gpu::ColorTargetState {
             format: self.surface_info.format,
-            blend: Some(match self.surface_info.alpha {
-                gpu::AlphaMode::Ignored => gpu::BlendState::ALPHA_BLENDING,
-                gpu::AlphaMode::PreMultiplied => gpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-                gpu::AlphaMode::PostMultiplied => gpu::BlendState::ALPHA_BLENDING,
-            }),
+            blend: blade_blend_state(desc.state.blend, self.surface_info.alpha),
             write_mask: gpu::ColorWrites::default(),
         }];
 
@@ -321,6 +318,8 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                     CustomPrimitiveTopology::TriangleList => gpu::PrimitiveTopology::TriangleList,
                     CustomPrimitiveTopology::TriangleStrip => gpu::PrimitiveTopology::TriangleStrip,
                 },
+                front_face: blade_front_face(desc.state.front_face),
+                cull_mode: blade_cull_mode(desc.state.cull_mode),
                 ..Default::default()
             },
             depth_stencil: None,
@@ -526,6 +525,37 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 self.gpu.destroy_sampler(sampler);
             }
         }
+    }
+}
+
+fn blade_blend_state(
+    blend: CustomBlendMode,
+    alpha_mode: gpu::AlphaMode,
+) -> Option<gpu::BlendState> {
+    match blend {
+        CustomBlendMode::Default => Some(match alpha_mode {
+            gpu::AlphaMode::Ignored => gpu::BlendState::ALPHA_BLENDING,
+            gpu::AlphaMode::PreMultiplied => gpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            gpu::AlphaMode::PostMultiplied => gpu::BlendState::ALPHA_BLENDING,
+        }),
+        CustomBlendMode::Opaque => None,
+        CustomBlendMode::Alpha => Some(gpu::BlendState::ALPHA_BLENDING),
+        CustomBlendMode::PremultipliedAlpha => Some(gpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+    }
+}
+
+fn blade_front_face(face: CustomFrontFace) -> gpu::FrontFace {
+    match face {
+        CustomFrontFace::Ccw => gpu::FrontFace::Ccw,
+        CustomFrontFace::Cw => gpu::FrontFace::Cw,
+    }
+}
+
+fn blade_cull_mode(mode: CustomCullMode) -> Option<gpu::Face> {
+    match mode {
+        CustomCullMode::None => None,
+        CustomCullMode::Front => Some(gpu::Face::Front),
+        CustomCullMode::Back => Some(gpu::Face::Back),
     }
 }
 

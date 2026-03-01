@@ -6,10 +6,11 @@ use metal::{self, MTLResourceOptions};
 
 use crate::{
     CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingName, CustomBindingSlot,
-    CustomBufferDesc, CustomBufferId, CustomDrawRegistry, CustomFilterMode, CustomPipelineDesc,
-    CustomPipelineId, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
-    CustomTextureDesc, CustomTextureFormat, CustomTextureId, CustomVertexAttribute,
-    CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat, Result,
+    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomCullMode, CustomDrawRegistry,
+    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
+    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
+    CustomTextureFormat, CustomTextureId, CustomVertexAttribute, CustomVertexAttributeName,
+    CustomVertexFetch, CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -29,6 +30,8 @@ pub(crate) struct MetalCustomPipeline {
     pub(crate) pipeline_state: metal::RenderPipelineState,
     pub(crate) bindings: Vec<CustomBindingKind>,
     pub(crate) primitive: metal::MTLPrimitiveType,
+    pub(crate) cull_mode: metal::MTLCullMode,
+    pub(crate) front_face: metal::MTLWinding,
     pub(crate) vertex_fetch_count: usize,
     pub(crate) buffer_binding_base: u64,
 }
@@ -45,6 +48,7 @@ struct PipelineCacheKey {
     vertex_entry: String,
     fragment_entry: String,
     primitive: u8,
+    state: PipelineStateKey,
     vertex_fetches: Vec<VertexFetchKey>,
     bindings: Vec<BindingKey>,
 }
@@ -75,6 +79,13 @@ struct BindingKey {
 struct BindingKindKey {
     kind: u8,
     size: u32,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct PipelineStateKey {
+    blend: u8,
+    cull_mode: u8,
+    front_face: u8,
 }
 
 struct MetalCustomBuffer {
@@ -289,15 +300,7 @@ impl MetalCustomDrawRegistry {
             .color_attachments()
             .object_at(0)
             .ok_or_else(|| anyhow!("missing color attachment"))?;
-        color_attachment.set_pixel_format(self.pixel_format);
-        color_attachment.set_blending_enabled(true);
-        color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
-        color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
-        color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
-        color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
-        color_attachment
-            .set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-        color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+        apply_blend_state(color_attachment, self.pixel_format, desc.state.blend);
 
         let pipeline_state = self
             .device
@@ -309,6 +312,8 @@ impl MetalCustomDrawRegistry {
             pipeline_state,
             bindings: binding_kinds,
             primitive: metal_primitive(desc.primitive),
+            cull_mode: metal_cull_mode(desc.state.cull_mode),
+            front_face: metal_front_face(desc.state.front_face),
             vertex_fetch_count: desc.vertex_fetches.len(),
             buffer_binding_base: buffer_binding_base as u64,
         };
@@ -569,6 +574,7 @@ fn pipeline_cache_key(desc: &CustomPipelineDesc, source: PipelineSourceKey) -> P
         vertex_entry: desc.vertex_entry.clone(),
         fragment_entry: desc.fragment_entry.clone(),
         primitive: primitive_key(desc.primitive),
+        state: pipeline_state_key(desc.state),
         vertex_fetches: desc.vertex_fetches.iter().map(vertex_fetch_key).collect(),
         bindings: desc.bindings.iter().map(binding_key).collect(),
     }
@@ -659,6 +665,38 @@ fn primitive_key(primitive: CustomPrimitiveTopology) -> u8 {
         CustomPrimitiveTopology::LineStrip => 2,
         CustomPrimitiveTopology::TriangleList => 3,
         CustomPrimitiveTopology::TriangleStrip => 4,
+    }
+}
+
+fn pipeline_state_key(state: CustomPipelineState) -> PipelineStateKey {
+    PipelineStateKey {
+        blend: blend_mode_key(state.blend),
+        cull_mode: cull_mode_key(state.cull_mode),
+        front_face: front_face_key(state.front_face),
+    }
+}
+
+fn blend_mode_key(mode: CustomBlendMode) -> u8 {
+    match mode {
+        CustomBlendMode::Default => 0,
+        CustomBlendMode::Opaque => 1,
+        CustomBlendMode::Alpha => 2,
+        CustomBlendMode::PremultipliedAlpha => 3,
+    }
+}
+
+fn cull_mode_key(mode: CustomCullMode) -> u8 {
+    match mode {
+        CustomCullMode::None => 0,
+        CustomCullMode::Front => 1,
+        CustomCullMode::Back => 2,
+    }
+}
+
+fn front_face_key(face: CustomFrontFace) -> u8 {
+    match face {
+        CustomFrontFace::Ccw => 0,
+        CustomFrontFace::Cw => 1,
     }
 }
 
@@ -950,6 +988,54 @@ fn metal_primitive(primitive: CustomPrimitiveTopology) -> metal::MTLPrimitiveTyp
         CustomPrimitiveTopology::LineStrip => metal::MTLPrimitiveType::LineStrip,
         CustomPrimitiveTopology::TriangleList => metal::MTLPrimitiveType::Triangle,
         CustomPrimitiveTopology::TriangleStrip => metal::MTLPrimitiveType::TriangleStrip,
+    }
+}
+
+fn metal_cull_mode(mode: CustomCullMode) -> metal::MTLCullMode {
+    match mode {
+        CustomCullMode::None => metal::MTLCullMode::None,
+        CustomCullMode::Front => metal::MTLCullMode::Front,
+        CustomCullMode::Back => metal::MTLCullMode::Back,
+    }
+}
+
+fn metal_front_face(face: CustomFrontFace) -> metal::MTLWinding {
+    match face {
+        CustomFrontFace::Ccw => metal::MTLWinding::CounterClockwise,
+        CustomFrontFace::Cw => metal::MTLWinding::Clockwise,
+    }
+}
+
+fn apply_blend_state(
+    color_attachment: &metal::RenderPipelineColorAttachmentDescriptorRef,
+    pixel_format: metal::MTLPixelFormat,
+    blend: CustomBlendMode,
+) {
+    color_attachment.set_pixel_format(pixel_format);
+    match blend {
+        CustomBlendMode::Opaque => {
+            color_attachment.set_blending_enabled(false);
+        }
+        CustomBlendMode::Default | CustomBlendMode::Alpha => {
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+            color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
+            color_attachment
+                .set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+        }
+        CustomBlendMode::PremultipliedAlpha => {
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+            color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
+            color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
+            color_attachment
+                .set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+            color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+        }
     }
 }
 

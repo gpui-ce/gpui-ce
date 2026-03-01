@@ -3420,6 +3420,16 @@ impl Window {
         let content_mask = self.content_mask();
         let bounds = params.bounds.scale(scale_factor);
         let content_mask = content_mask.scale(scale_factor);
+        if params.index_buffer.is_some() && params.index_count == 0 {
+            return Err(anyhow!(
+                "custom draw index count must be non-zero when an index buffer is provided"
+            ));
+        }
+        if params.index_buffer.is_none() && params.index_count != 0 {
+            return Err(anyhow!(
+                "custom draw index count provided without an index buffer"
+            ));
+        }
         let bindings_hash = params
             .bindings
             .iter()
@@ -3433,6 +3443,8 @@ impl Window {
             pipeline: params.pipeline,
             vertex_buffers: params.vertex_buffers,
             vertex_count: params.vertex_count,
+            index_buffer: params.index_buffer,
+            index_count: params.index_count,
             instance_count: params.instance_count,
             bindings: params.bindings,
             batch_key: CustomBatchKey {

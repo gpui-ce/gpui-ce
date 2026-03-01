@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     AtlasTextureId, Background, Bounds, ContentMask, CustomBindingKind, CustomBindingValue,
-    CustomBufferSource, CustomDraw, DevicePixels, MonochromeSprite, PaintSurface, Path, Point,
-    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Surface, Underline,
-    point, size,
+    CustomBufferSource, CustomDraw, CustomIndexBuffer, CustomIndexFormat, DevicePixels,
+    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
 use anyhow::Result;
 use block::ConcreteBlock;
@@ -1214,6 +1214,8 @@ impl MetalRenderer {
 
             let Some(outcome) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
                 command_encoder.set_render_pipeline_state(&pipeline.pipeline_state);
+                command_encoder.set_cull_mode(pipeline.cull_mode);
+                command_encoder.set_front_facing_winding(pipeline.front_face);
 
                 match self.bind_custom_resources(
                     command_encoder,
@@ -1230,7 +1232,7 @@ impl MetalRenderer {
                 }
 
                 for draw in batch {
-                    if draw.vertex_count == 0 || draw.instance_count == 0 {
+                    if draw.instance_count == 0 {
                         continue;
                     }
                     if draw.vertex_buffers.len() < pipeline.vertex_fetch_count {
@@ -1267,12 +1269,43 @@ impl MetalRenderer {
 
                     match vertex_binding_outcome {
                         CustomDrawBindOutcome::Ready => {
-                            command_encoder.draw_primitives_instanced(
-                                pipeline.primitive,
-                                0,
-                                draw.vertex_count as u64,
-                                draw.instance_count as u64,
-                            );
+                            if let Some(index_buffer) = &draw.index_buffer {
+                                if draw.index_count == 0 {
+                                    continue;
+                                }
+                                match self.bind_index_buffer(
+                                    index_buffer,
+                                    draw.index_count,
+                                    &buffers_snapshot,
+                                    instance_buffer,
+                                    instance_offset,
+                                ) {
+                                    IndexBufferBindOutcome::Ready(binding) => {
+                                        command_encoder.draw_indexed_primitives_instanced(
+                                            pipeline.primitive,
+                                            draw.index_count as u64,
+                                            metal_index_type(index_buffer.format),
+                                            binding.buffer.as_ref(),
+                                            binding.offset,
+                                            draw.instance_count as u64,
+                                        );
+                                    }
+                                    IndexBufferBindOutcome::SkipBatch => continue,
+                                    IndexBufferBindOutcome::OutOfSpace => {
+                                        return CustomDrawBindOutcome::OutOfSpace;
+                                    }
+                                }
+                            } else {
+                                if draw.vertex_count == 0 {
+                                    continue;
+                                }
+                                command_encoder.draw_primitives_instanced(
+                                    pipeline.primitive,
+                                    0,
+                                    draw.vertex_count as u64,
+                                    draw.instance_count as u64,
+                                );
+                            }
                         }
                         CustomDrawBindOutcome::SkipBatch => continue,
                         CustomDrawBindOutcome::OutOfSpace => {
@@ -1418,6 +1451,50 @@ impl MetalRenderer {
         }
     }
 
+    fn bind_index_buffer(
+        &self,
+        index_buffer: &CustomIndexBuffer,
+        index_count: u32,
+        buffers: &[Option<metal::Buffer>],
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+    ) -> IndexBufferBindOutcome {
+        let expected_len = index_count as usize * index_format_size(index_buffer.format);
+        match &index_buffer.source {
+            CustomBufferSource::Inline(data) => {
+                if expected_len > 0 && data.len() < expected_len {
+                    log::warn!(
+                        "custom draw index buffer too small (expected at least {}, got {})",
+                        expected_len,
+                        data.len()
+                    );
+                    return IndexBufferBindOutcome::SkipBatch;
+                }
+                match allocate_inline_bytes(instance_buffer, instance_offset, data) {
+                    Ok(offset) => IndexBufferBindOutcome::Ready(IndexBufferBinding {
+                        buffer: instance_buffer.metal_buffer.clone(),
+                        offset,
+                    }),
+                    Err(InlineAllocationError::EmptyData) => {
+                        log::warn!("custom draw inline index buffer is empty");
+                        IndexBufferBindOutcome::SkipBatch
+                    }
+                    Err(InlineAllocationError::OutOfSpace) => IndexBufferBindOutcome::OutOfSpace,
+                }
+            }
+            CustomBufferSource::Buffer(id) => {
+                let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                    log::warn!("custom draw index buffer {:?} missing", id.0);
+                    return IndexBufferBindOutcome::SkipBatch;
+                };
+                IndexBufferBindOutcome::Ready(IndexBufferBinding {
+                    buffer: buffer.clone(),
+                    offset: 0,
+                })
+            }
+        }
+    }
+
     fn bind_buffer_source(
         &self,
         command_encoder: &metal::RenderCommandEncoderRef,
@@ -1474,6 +1551,17 @@ impl MetalRenderer {
     }
 }
 
+struct IndexBufferBinding {
+    buffer: metal::Buffer,
+    offset: u64,
+}
+
+enum IndexBufferBindOutcome {
+    Ready(IndexBufferBinding),
+    SkipBatch,
+    OutOfSpace,
+}
+
 enum CustomDrawBindOutcome {
     Ready,
     SkipBatch,
@@ -1508,6 +1596,20 @@ fn allocate_inline_bytes(
     *instance_offset = next;
 
     Ok(start as u64)
+}
+
+fn index_format_size(format: CustomIndexFormat) -> usize {
+    match format {
+        CustomIndexFormat::U16 => 2,
+        CustomIndexFormat::U32 => 4,
+    }
+}
+
+fn metal_index_type(format: CustomIndexFormat) -> metal::MTLIndexType {
+    match format {
+        CustomIndexFormat::U16 => metal::MTLIndexType::UInt16,
+        CustomIndexFormat::U32 => metal::MTLIndexType::UInt32,
+    }
 }
 
 fn new_command_encoder<'a>(
