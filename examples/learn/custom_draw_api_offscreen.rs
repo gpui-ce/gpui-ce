@@ -379,7 +379,10 @@ impl Render for OffscreenCustomDrawExample {
                 ]
             };
 
-            let paint = move |_bounds: Bounds<_>, params: Vec<CustomDrawParams>, window: &mut Window, _cx: &mut App| {
+            let paint = move |_bounds: Bounds<_>,
+                              params: Vec<CustomDrawParams>,
+                              window: &mut Window,
+                              _cx: &mut App| {
                 for params in params {
                     if let Err(err) = window.paint_custom(params) {
                         log::error!("custom draw paint failed: {err}");

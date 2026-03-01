@@ -9,6 +9,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Index buffers + indexed draws.
 - Instanced rendering.
 - Uniform bindings (per-draw data).
+- Storage buffers (read/write) with buffer slices for dynamic offsets.
 - Texture + sampler bindings.
 - Configurable pipeline state (blend, cull, front face, depth).
 - Offscreen render targets + depth testing.
@@ -41,7 +42,7 @@ cargo run --example custom_draw_stress
 
 - Vertex inputs can use `a0..a7` naming (implicit mapping) or explicit `@location` with
   `CustomVertexAttribute.location`.
-- Bindings use `b0..b3` naming when you are **not** using explicit `@group/@binding`.
+- Bindings use `b0..b15` naming when you are **not** using explicit `@group/@binding`.
 
 ## Explicit location/binding support
 
@@ -89,6 +90,12 @@ builder
 
 let uniform = builder.finish(); // padded to 16 bytes
 ```
+
+## Buffer slices (dynamic offsets)
+
+Use `CustomBufferSource::BufferSlice { id, offset, size }` to bind a sub-range of a larger buffer
+for uniforms, storage buffers, or vertex/index data. Offsets and sizes are in bytes; the slice must
+fit inside the buffer and uniform slices must be at least the declared uniform size.
 
 ## Error semantics
 
@@ -160,8 +167,8 @@ cargo run --release --example custom_draw_stress -- \
 - Depth is limited to Depth32Float; no stencil attachments.
 - Single color target only (no MRT/MSAA resolve).
 - No MSAA/sample count control or custom viewport/scissor state.
-- Binding model is small and flat (4 bindings; no dynamic offsets or push constants).
-- No storage buffers/textures or compute pipelines.
+- No push constants or binding arrays (texture/buffer arrays).
+- No storage textures or compute pipelines.
 - Texture support is limited to 2D RGBA/BGRA without mipmaps, arrays, or sRGB control.
 
 ## Core roadmap (triage)
@@ -172,8 +179,8 @@ cargo run --release --example custom_draw_stress -- \
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
-  - Storage buffers/textures + compute pipelines/passes.
-  - Expanded binding model (more bindings, dynamic offsets, push constants).
+  - Storage textures + compute pipelines/passes.
+  - Push constants + binding arrays (texture/buffer arrays).
   - More texture formats/types (mips, sRGB, arrays/cubemaps).
   - Multiple color attachments (MRT) + MSAA.
 - **P2 (performance/tooling)**

@@ -293,7 +293,7 @@ pub struct CustomPipelineDesc {
 }
 
 pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result<()> {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
 
     if desc.vertex_entry.trim().is_empty() {
         return Err(anyhow!("custom draw vertex entry is empty"));
@@ -310,6 +310,16 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
                     size
                 ));
             }
+        }
+    }
+
+    let mut seen_binding_names = HashSet::new();
+    for binding in &desc.bindings {
+        if !seen_binding_names.insert(binding.name) {
+            return Err(anyhow!(
+                "custom draw binding names must be unique (duplicate {})",
+                binding.name.as_str()
+            ));
         }
     }
 
@@ -365,6 +375,30 @@ pub enum CustomBindingName {
     B2,
     /// Binding slot b3.
     B3,
+    /// Binding slot b4.
+    B4,
+    /// Binding slot b5.
+    B5,
+    /// Binding slot b6.
+    B6,
+    /// Binding slot b7.
+    B7,
+    /// Binding slot b8.
+    B8,
+    /// Binding slot b9.
+    B9,
+    /// Binding slot b10.
+    B10,
+    /// Binding slot b11.
+    B11,
+    /// Binding slot b12.
+    B12,
+    /// Binding slot b13.
+    B13,
+    /// Binding slot b14.
+    B14,
+    /// Binding slot b15.
+    B15,
 }
 
 impl CustomBindingName {
@@ -375,6 +409,18 @@ impl CustomBindingName {
             CustomBindingName::B1 => "b1",
             CustomBindingName::B2 => "b2",
             CustomBindingName::B3 => "b3",
+            CustomBindingName::B4 => "b4",
+            CustomBindingName::B5 => "b5",
+            CustomBindingName::B6 => "b6",
+            CustomBindingName::B7 => "b7",
+            CustomBindingName::B8 => "b8",
+            CustomBindingName::B9 => "b9",
+            CustomBindingName::B10 => "b10",
+            CustomBindingName::B11 => "b11",
+            CustomBindingName::B12 => "b12",
+            CustomBindingName::B13 => "b13",
+            CustomBindingName::B14 => "b14",
+            CustomBindingName::B15 => "b15",
         }
     }
 
@@ -385,6 +431,18 @@ impl CustomBindingName {
             CustomBindingName::B1 => 1,
             CustomBindingName::B2 => 2,
             CustomBindingName::B3 => 3,
+            CustomBindingName::B4 => 4,
+            CustomBindingName::B5 => 5,
+            CustomBindingName::B6 => 6,
+            CustomBindingName::B7 => 7,
+            CustomBindingName::B8 => 8,
+            CustomBindingName::B9 => 9,
+            CustomBindingName::B10 => 10,
+            CustomBindingName::B11 => 11,
+            CustomBindingName::B12 => 12,
+            CustomBindingName::B13 => 13,
+            CustomBindingName::B14 => 14,
+            CustomBindingName::B15 => 15,
         }
     }
 }
@@ -612,11 +670,20 @@ pub struct CustomBufferDesc {
     pub data: Arc<[u8]>,
 }
 
-/// Source for a vertex buffer binding.
+/// Source for a custom buffer binding.
 #[derive(Debug, Clone)]
 pub enum CustomBufferSource {
     /// Buffer previously registered in the custom draw registry.
     Buffer(CustomBufferId),
+    /// Slice of a registered buffer.
+    BufferSlice {
+        /// Buffer identifier.
+        id: CustomBufferId,
+        /// Byte offset into the buffer.
+        offset: u64,
+        /// Byte size of the slice.
+        size: u64,
+    },
     /// Inline buffer contents embedded in the draw call.
     Inline(Arc<[u8]>),
 }
@@ -625,6 +692,13 @@ impl CustomBufferSource {
     pub(crate) fn hash(&self) -> u64 {
         match self {
             CustomBufferSource::Buffer(id) => (id.0 as u64).wrapping_mul(1099511628211),
+            CustomBufferSource::BufferSlice { id, offset, size } => {
+                let mut hash = (id.0 as u64).wrapping_mul(1099511628211);
+                hash ^= *offset;
+                hash = hash.wrapping_mul(1099511628211);
+                hash ^= *size;
+                hash
+            }
             CustomBufferSource::Inline(data) => {
                 let mut hash = 1469598103934665603u64;
                 for byte in data.iter().take(64) {

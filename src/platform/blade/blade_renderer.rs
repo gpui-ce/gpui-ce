@@ -1,7 +1,9 @@
 // Doing `if let` gives you nice scoping with passes/encoders
 #![allow(irrefutable_let_patterns)]
 
-use super::{BladeAtlas, BladeContext, BladeCustomDrawRegistry, CustomBindings};
+use super::{
+    BladeAtlas, BladeBufferSnapshot, BladeContext, BladeCustomDrawRegistry, CustomBindings,
+};
 use crate::{
     Background, Bounds, CustomBindingKind, CustomBufferSource, CustomIndexFormat, DevicePixels,
     GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
@@ -1027,8 +1029,9 @@ impl BladeRenderer {
                                                  encoder.bind_vertex(index as u32, buf);
                                              }
                                              CustomBufferSource::Buffer(id) => {
-                                                 let Some(buffer) =
-                                                     self.custom_draw.get_buffer(*id)
+                                                 let Some(buffer) = buffers_snapshot
+                                                     .get(id.0 as usize)
+                                                     .and_then(|slot| slot.as_ref())
                                                  else {
                                                      log::warn!("custom draw buffer missing");
                                                      missing_buffer = true;
@@ -1036,7 +1039,34 @@ impl BladeRenderer {
                                                  };
                                                  encoder.bind_vertex(
                                                      index as u32,
-                                                     gpu::BufferPiece::from(buffer),
+                                                     gpu::BufferPiece::from(buffer.buffer),
+                                                 );
+                                             }
+                                             CustomBufferSource::BufferSlice { id, offset, size } => {
+                                                 let Some(buffer) = buffers_snapshot
+                                                     .get(id.0 as usize)
+                                                     .and_then(|slot| slot.as_ref())
+                                                 else {
+                                                     log::warn!("custom draw buffer missing");
+                                                     missing_buffer = true;
+                                                     break;
+                                                 };
+                                                 if *size == 0 {
+                                                     log::warn!("custom draw buffer slice is empty");
+                                                     missing_buffer = true;
+                                                     break;
+                                                 }
+                                                 if offset.saturating_add(*size) > buffer.size {
+                                                     log::warn!("custom draw buffer slice out of range");
+                                                     missing_buffer = true;
+                                                     break;
+                                                 }
+                                                 encoder.bind_vertex(
+                                                     index as u32,
+                                                     gpu::BufferPiece {
+                                                         buffer: buffer.buffer,
+                                                         offset: *offset,
+                                                     },
                                                  );
                                              }
                                          }
@@ -1063,13 +1093,57 @@ impl BladeRenderer {
                                                  self.instance_belt.alloc_bytes(data, &self.gpu)
                                              }
                                              CustomBufferSource::Buffer(id) => {
-                                                 let Some(buffer) =
-                                                     self.custom_draw.get_buffer(*id)
+                                                 let Some(buffer) = buffers_snapshot
+                                                     .get(id.0 as usize)
+                                                     .and_then(|slot| slot.as_ref())
                                                  else {
                                                      log::warn!("custom draw index buffer missing");
                                                      continue;
                                                  };
-                                                 gpu::BufferPiece::from(buffer)
+                                                 let expected_len = draw.index_count as usize
+                                                     * index_format_size(index_buffer.format);
+                                                 if expected_len > 0
+                                                     && buffer.size < expected_len as u64
+                                                 {
+                                                     log::warn!(
+                                                         "custom draw index buffer too small (expected at least {}, got {})",
+                                                         expected_len,
+                                                         buffer.size
+                                                     );
+                                                     continue;
+                                                 }
+                                                 gpu::BufferPiece::from(buffer.buffer)
+                                             }
+                                             CustomBufferSource::BufferSlice { id, offset, size } => {
+                                                 let Some(buffer) = buffers_snapshot
+                                                     .get(id.0 as usize)
+                                                     .and_then(|slot| slot.as_ref())
+                                                 else {
+                                                     log::warn!("custom draw index buffer missing");
+                                                     continue;
+                                                 };
+                                                 if *size == 0 {
+                                                     log::warn!("custom draw index buffer slice is empty");
+                                                     continue;
+                                                 }
+                                                 if offset.saturating_add(*size) > buffer.size {
+                                                     log::warn!("custom draw index buffer slice out of range");
+                                                     continue;
+                                                 }
+                                                 let expected_len = draw.index_count as usize
+                                                     * index_format_size(index_buffer.format);
+                                                 if expected_len > 0 && *size < expected_len as u64 {
+                                                     log::warn!(
+                                                         "custom draw index buffer slice too small (expected at least {}, got {})",
+                                                         expected_len,
+                                                         size
+                                                     );
+                                                     continue;
+                                                 }
+                                                 gpu::BufferPiece {
+                                                     buffer: buffer.buffer,
+                                                     offset: *offset,
+                                                 }
                                              }
                                          };
                                          encoder.draw_indexed(
@@ -1119,7 +1193,7 @@ impl BladeRenderer {
     fn draw_custom_render_targets(
         &mut self,
         scene: &Scene,
-        buffers_snapshot: &[Option<gpu::Buffer>],
+        buffers_snapshot: &[Option<BladeBufferSnapshot>],
         textures_snapshot: &[Option<gpu::TextureView>],
         samplers_snapshot: &[Option<gpu::Sampler>],
     ) {
@@ -1299,14 +1373,44 @@ impl BladeRenderer {
                                         encoder.bind_vertex(index as u32, buf);
                                     }
                                     CustomBufferSource::Buffer(id) => {
-                                        let Some(buffer) = self.custom_draw.get_buffer(*id) else {
+                                        let Some(buffer) = buffers_snapshot
+                                            .get(id.0 as usize)
+                                            .and_then(|slot| slot.as_ref())
+                                        else {
                                             log::warn!("custom draw buffer missing");
                                             missing_buffer = true;
                                             break;
                                         };
                                         encoder.bind_vertex(
                                             index as u32,
-                                            gpu::BufferPiece::from(buffer),
+                                            gpu::BufferPiece::from(buffer.buffer),
+                                        );
+                                    }
+                                    CustomBufferSource::BufferSlice { id, offset, size } => {
+                                        let Some(buffer) = buffers_snapshot
+                                            .get(id.0 as usize)
+                                            .and_then(|slot| slot.as_ref())
+                                        else {
+                                            log::warn!("custom draw buffer missing");
+                                            missing_buffer = true;
+                                            break;
+                                        };
+                                        if *size == 0 {
+                                            log::warn!("custom draw buffer slice is empty");
+                                            missing_buffer = true;
+                                            break;
+                                        }
+                                        if offset.saturating_add(*size) > buffer.size {
+                                            log::warn!("custom draw buffer slice out of range");
+                                            missing_buffer = true;
+                                            break;
+                                        }
+                                        encoder.bind_vertex(
+                                            index as u32,
+                                            gpu::BufferPiece {
+                                                buffer: buffer.buffer,
+                                                offset: *offset,
+                                            },
                                         );
                                     }
                                 }
@@ -1333,11 +1437,55 @@ impl BladeRenderer {
                                         self.instance_belt.alloc_bytes(data, &self.gpu)
                                     }
                                     CustomBufferSource::Buffer(id) => {
-                                        let Some(buffer) = self.custom_draw.get_buffer(*id) else {
+                                        let Some(buffer) = buffers_snapshot
+                                            .get(id.0 as usize)
+                                            .and_then(|slot| slot.as_ref())
+                                        else {
                                             log::warn!("custom draw index buffer missing");
                                             continue;
                                         };
-                                        gpu::BufferPiece::from(buffer)
+                                        let expected_len = draw.index_count as usize
+                                            * index_format_size(index_buffer.format);
+                                        if expected_len > 0 && buffer.size < expected_len as u64 {
+                                            log::warn!(
+                                                "custom draw index buffer too small (expected at least {}, got {})",
+                                                expected_len,
+                                                buffer.size
+                                            );
+                                            continue;
+                                        }
+                                        gpu::BufferPiece::from(buffer.buffer)
+                                    }
+                                    CustomBufferSource::BufferSlice { id, offset, size } => {
+                                        let Some(buffer) = buffers_snapshot
+                                            .get(id.0 as usize)
+                                            .and_then(|slot| slot.as_ref())
+                                        else {
+                                            log::warn!("custom draw index buffer missing");
+                                            continue;
+                                        };
+                                        if *size == 0 {
+                                            log::warn!("custom draw index buffer slice is empty");
+                                            continue;
+                                        }
+                                        if offset.saturating_add(*size) > buffer.size {
+                                            log::warn!("custom draw index buffer slice out of range");
+                                            continue;
+                                        }
+                                        let expected_len = draw.index_count as usize
+                                            * index_format_size(index_buffer.format);
+                                        if expected_len > 0 && *size < expected_len as u64 {
+                                            log::warn!(
+                                                "custom draw index buffer slice too small (expected at least {}, got {})",
+                                                expected_len,
+                                                size
+                                            );
+                                            continue;
+                                        }
+                                        gpu::BufferPiece {
+                                            buffer: buffer.buffer,
+                                            offset: *offset,
+                                        }
                                     }
                                 };
                                 encoder.draw_indexed(

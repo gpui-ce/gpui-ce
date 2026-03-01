@@ -1,5 +1,5 @@
 use super::{
-    custom_draw::{MetalCustomDrawRegistry, MetalCustomPipeline},
+    custom_draw::{MetalBufferSnapshot, MetalCustomDrawRegistry, MetalCustomPipeline},
     metal_atlas::MetalAtlas,
 };
 use crate::{
@@ -1369,7 +1369,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
         target_format: metal::MTLPixelFormat,
         depth_format: Option<metal::MTLPixelFormat>,
-        buffers_snapshot: &[Option<metal::Buffer>],
+        buffers_snapshot: &[Option<MetalBufferSnapshot>],
         textures_snapshot: &[Option<metal::Texture>],
         samplers_snapshot: &[Option<metal::SamplerState>],
     ) -> CustomDrawBindOutcome {
@@ -1533,7 +1533,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
         pipeline: &MetalCustomPipeline,
         bindings: &[CustomBindingValue],
-        buffers: &[Option<metal::Buffer>],
+        buffers: &[Option<MetalBufferSnapshot>],
         textures: &[Option<metal::Texture>],
         samplers: &[Option<metal::SamplerState>],
         instance_buffer: &mut InstanceBuffer,
@@ -1615,7 +1615,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
         buffer_index: usize,
         source: &CustomBufferSource,
-        buffers: &[Option<metal::Buffer>],
+        buffers: &[Option<MetalBufferSnapshot>],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
     ) -> CustomDrawBindOutcome {
@@ -1642,7 +1642,27 @@ impl MetalRenderer {
                     log::warn!("custom draw vertex buffer {:?} missing", id.0);
                     return CustomDrawBindOutcome::SkipBatch;
                 };
-                command_encoder.set_vertex_buffer(buffer_index as u64, Some(buffer), 0);
+                command_encoder.set_vertex_buffer(buffer_index as u64, Some(&buffer.buffer), 0);
+                CustomDrawBindOutcome::Ready
+            }
+            CustomBufferSource::BufferSlice { id, offset, size } => {
+                let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                    log::warn!("custom draw vertex buffer {:?} missing", id.0);
+                    return CustomDrawBindOutcome::SkipBatch;
+                };
+                if *size == 0 {
+                    log::warn!("custom draw vertex buffer slice is empty");
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                if offset.saturating_add(*size) > buffer.size {
+                    log::warn!("custom draw vertex buffer slice out of range");
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                command_encoder.set_vertex_buffer(
+                    buffer_index as u64,
+                    Some(&buffer.buffer),
+                    *offset,
+                );
                 CustomDrawBindOutcome::Ready
             }
         }
@@ -1652,7 +1672,7 @@ impl MetalRenderer {
         &self,
         index_buffer: &CustomIndexBuffer,
         index_count: u32,
-        buffers: &[Option<metal::Buffer>],
+        buffers: &[Option<MetalBufferSnapshot>],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
     ) -> IndexBufferBindOutcome {
@@ -1684,9 +1704,43 @@ impl MetalRenderer {
                     log::warn!("custom draw index buffer {:?} missing", id.0);
                     return IndexBufferBindOutcome::SkipBatch;
                 };
+                if expected_len > 0 && buffer.size < expected_len as u64 {
+                    log::warn!(
+                        "custom draw index buffer too small (expected at least {}, got {})",
+                        expected_len,
+                        buffer.size
+                    );
+                    return IndexBufferBindOutcome::SkipBatch;
+                }
                 IndexBufferBindOutcome::Ready(IndexBufferBinding {
-                    buffer: buffer.clone(),
+                    buffer: buffer.buffer.clone(),
                     offset: 0,
+                })
+            }
+            CustomBufferSource::BufferSlice { id, offset, size } => {
+                let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                    log::warn!("custom draw index buffer {:?} missing", id.0);
+                    return IndexBufferBindOutcome::SkipBatch;
+                };
+                if *size == 0 {
+                    log::warn!("custom draw index buffer slice is empty");
+                    return IndexBufferBindOutcome::SkipBatch;
+                }
+                if offset.saturating_add(*size) > buffer.size {
+                    log::warn!("custom draw index buffer slice out of range");
+                    return IndexBufferBindOutcome::SkipBatch;
+                }
+                if expected_len > 0 && *size < expected_len as u64 {
+                    log::warn!(
+                        "custom draw index buffer slice too small (expected at least {}, got {})",
+                        expected_len,
+                        size
+                    );
+                    return IndexBufferBindOutcome::SkipBatch;
+                }
+                IndexBufferBindOutcome::Ready(IndexBufferBinding {
+                    buffer: buffer.buffer.clone(),
+                    offset: *offset,
                 })
             }
         }
@@ -1697,7 +1751,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
         buffer_slot: u64,
         source: &CustomBufferSource,
-        buffers: &[Option<metal::Buffer>],
+        buffers: &[Option<MetalBufferSnapshot>],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         expected_size: Option<usize>,
@@ -1740,8 +1794,45 @@ impl MetalRenderer {
                     log::warn!("custom draw buffer {:?} missing", id.0);
                     return CustomDrawBindOutcome::SkipBatch;
                 };
-                command_encoder.set_vertex_buffer(buffer_slot, Some(buffer), 0);
-                command_encoder.set_fragment_buffer(buffer_slot, Some(buffer), 0);
+                if let Some(expected_size) = expected_size {
+                    if buffer.size < expected_size as u64 {
+                        log::warn!(
+                            "custom draw uniform buffer too small (expected at least {}, got {})",
+                            expected_size,
+                            buffer.size
+                        );
+                        return CustomDrawBindOutcome::SkipBatch;
+                    }
+                }
+                command_encoder.set_vertex_buffer(buffer_slot, Some(&buffer.buffer), 0);
+                command_encoder.set_fragment_buffer(buffer_slot, Some(&buffer.buffer), 0);
+                CustomDrawBindOutcome::Ready
+            }
+            CustomBufferSource::BufferSlice { id, offset, size } => {
+                let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                    log::warn!("custom draw buffer {:?} missing", id.0);
+                    return CustomDrawBindOutcome::SkipBatch;
+                };
+                if *size == 0 {
+                    log::warn!("custom draw buffer slice is empty");
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                if offset.saturating_add(*size) > buffer.size {
+                    log::warn!("custom draw buffer slice out of range");
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                if let Some(expected_size) = expected_size {
+                    if *size < expected_size as u64 {
+                        log::warn!(
+                            "custom draw uniform buffer slice too small (expected at least {}, got {})",
+                            expected_size,
+                            size
+                        );
+                        return CustomDrawBindOutcome::SkipBatch;
+                    }
+                }
+                command_encoder.set_vertex_buffer(buffer_slot, Some(&buffer.buffer), *offset);
+                command_encoder.set_fragment_buffer(buffer_slot, Some(&buffer.buffer), *offset);
                 CustomDrawBindOutcome::Ready
             }
         }

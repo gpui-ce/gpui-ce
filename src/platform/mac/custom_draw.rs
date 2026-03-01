@@ -103,6 +103,11 @@ struct MetalCustomBuffer {
     size: u64,
 }
 
+pub(crate) struct MetalBufferSnapshot {
+    pub(crate) buffer: metal::Buffer,
+    pub(crate) size: u64,
+}
+
 pub(crate) struct MetalCustomTexture {
     pub(crate) texture: metal::Texture,
     pub(crate) width: u32,
@@ -160,12 +165,17 @@ impl MetalCustomDrawRegistry {
         Some(f(entry))
     }
 
-    pub(crate) fn buffers_snapshot(&self) -> Vec<Option<metal::Buffer>> {
+    pub(crate) fn buffers_snapshot(&self) -> Vec<Option<MetalBufferSnapshot>> {
         self.buffers
             .lock()
             .unwrap()
             .iter()
-            .map(|slot| slot.as_ref().map(|entry| entry.buffer.clone()))
+            .map(|slot| {
+                slot.as_ref().map(|entry| MetalBufferSnapshot {
+                    buffer: entry.buffer.clone(),
+                    size: entry.size,
+                })
+            })
             .collect()
     }
 
@@ -763,6 +773,18 @@ fn binding_name_key(name: CustomBindingName) -> u8 {
         CustomBindingName::B1 => 1,
         CustomBindingName::B2 => 2,
         CustomBindingName::B3 => 3,
+        CustomBindingName::B4 => 4,
+        CustomBindingName::B5 => 5,
+        CustomBindingName::B6 => 6,
+        CustomBindingName::B7 => 7,
+        CustomBindingName::B8 => 8,
+        CustomBindingName::B9 => 9,
+        CustomBindingName::B10 => 10,
+        CustomBindingName::B11 => 11,
+        CustomBindingName::B12 => 12,
+        CustomBindingName::B13 => 13,
+        CustomBindingName::B14 => 14,
+        CustomBindingName::B15 => 15,
     }
 }
 

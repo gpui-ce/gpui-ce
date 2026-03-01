@@ -38,6 +38,11 @@ struct BladeCustomBuffer {
     size: u64,
 }
 
+pub(crate) struct BladeBufferSnapshot {
+    pub(crate) buffer: gpu::Buffer,
+    pub(crate) size: u64,
+}
+
 pub(crate) struct BladeCustomTexture {
     pub(crate) texture: gpu::Texture,
     pub(crate) view: gpu::TextureView,
@@ -123,14 +128,6 @@ impl BladeCustomDrawRegistry {
         Some(f(entry))
     }
 
-    pub(crate) fn get_buffer(&self, id: CustomBufferId) -> Option<gpu::Buffer> {
-        let buffers = self.buffers.lock().unwrap();
-        buffers
-            .get(id.0 as usize)
-            .and_then(|slot| slot.as_ref())
-            .map(|entry| entry.buffer)
-    }
-
     pub(crate) fn with_texture<F, R>(&self, id: CustomTextureId, f: F) -> Option<R>
     where
         F: FnOnce(&BladeCustomTexture) -> R,
@@ -149,12 +146,17 @@ impl BladeCustomDrawRegistry {
         Some(f(entry))
     }
 
-    pub(crate) fn buffers_snapshot(&self) -> Vec<Option<gpu::Buffer>> {
+    pub(crate) fn buffers_snapshot(&self) -> Vec<Option<BladeBufferSnapshot>> {
         self.buffers
             .lock()
             .unwrap()
             .iter()
-            .map(|slot| slot.as_ref().map(|entry| entry.buffer))
+            .map(|slot| {
+                slot.as_ref().map(|entry| BladeBufferSnapshot {
+                    buffer: entry.buffer,
+                    size: entry.size,
+                })
+            })
             .collect()
     }
 
@@ -761,7 +763,7 @@ pub(crate) struct CustomBindings<'a> {
     pub(crate) bindings: &'a [CustomBindingValue],
     pub(crate) binding_kinds: &'a [CustomBindingKind],
     pub(crate) binding_indices: &'a [Option<usize>],
-    pub(crate) buffers: &'a [Option<gpu::Buffer>],
+    pub(crate) buffers: &'a [Option<BladeBufferSnapshot>],
     pub(crate) textures: &'a [Option<gpu::TextureView>],
     pub(crate) samplers: &'a [Option<gpu::Sampler>],
     pub(crate) instance_belt: *mut blade_util::BufferBelt,
@@ -798,8 +800,31 @@ impl gpu::ShaderData for CustomBindings<'_> {
                             .get(id.0 as usize)
                             .and_then(|slot| slot.as_ref())
                         {
-                            let piece = gpu::BufferPiece::from(*buffer);
+                            let piece = gpu::BufferPiece::from(buffer.buffer);
                             piece.bind_to(&mut context, i as u32);
+                        } else {
+                            log::warn!("custom draw buffer {:?} missing", id.0);
+                        }
+                    }
+                    CustomBufferSource::BufferSlice { id, offset, size } => {
+                        if let Some(buffer) = self
+                            .buffers
+                            .get(id.0 as usize)
+                            .and_then(|slot| slot.as_ref())
+                        {
+                            if *size == 0 {
+                                log::warn!("custom draw buffer slice is empty");
+                            } else if offset.saturating_add(*size) > buffer.size {
+                                log::warn!("custom draw buffer slice out of range");
+                            } else {
+                                let piece = gpu::BufferPiece {
+                                    buffer: buffer.buffer,
+                                    offset: *offset,
+                                };
+                                piece.bind_to(&mut context, i as u32);
+                            }
+                        } else {
+                            log::warn!("custom draw buffer {:?} missing", id.0);
                         }
                     }
                 },
@@ -821,24 +846,72 @@ impl gpu::ShaderData for CustomBindings<'_> {
                         sampler.bind_to(&mut context, i as u32);
                     }
                 }
-                (CustomBindingKind::Uniform { .. }, CustomBindingValue::Uniform(source)) => {
-                    match source {
-                        CustomBufferSource::Inline(data) => {
+                (
+                    CustomBindingKind::Uniform {
+                        size: expected_size,
+                    },
+                    CustomBindingValue::Uniform(source),
+                ) => match source {
+                    CustomBufferSource::Inline(data) => {
+                        if data.len() != *expected_size as usize {
+                            log::warn!(
+                                "custom draw uniform size mismatch (expected {}, got {})",
+                                expected_size,
+                                data.len()
+                            );
+                        } else {
                             let piece = instance_belt.alloc_bytes(data, gpu);
                             piece.bind_to(&mut context, i as u32);
                         }
-                        CustomBufferSource::Buffer(id) => {
-                            if let Some(buffer) = self
-                                .buffers
-                                .get(id.0 as usize)
-                                .and_then(|slot| slot.as_ref())
-                            {
-                                let piece = gpu::BufferPiece::from(*buffer);
+                    }
+                    CustomBufferSource::Buffer(id) => {
+                        if let Some(buffer) = self
+                            .buffers
+                            .get(id.0 as usize)
+                            .and_then(|slot| slot.as_ref())
+                        {
+                            if buffer.size < *expected_size as u64 {
+                                log::warn!(
+                                    "custom draw uniform buffer too small (expected {}, got {})",
+                                    expected_size,
+                                    buffer.size
+                                );
+                            } else {
+                                let piece = gpu::BufferPiece::from(buffer.buffer);
                                 piece.bind_to(&mut context, i as u32);
                             }
+                        } else {
+                            log::warn!("custom draw uniform buffer {:?} missing", id.0);
                         }
                     }
-                }
+                    CustomBufferSource::BufferSlice { id, offset, size } => {
+                        if let Some(buffer) = self
+                            .buffers
+                            .get(id.0 as usize)
+                            .and_then(|slot| slot.as_ref())
+                        {
+                            if *size == 0 {
+                                log::warn!("custom draw uniform buffer slice is empty");
+                            } else if offset.saturating_add(*size) > buffer.size {
+                                log::warn!("custom draw uniform buffer slice out of range");
+                            } else if *size < *expected_size as u64 {
+                                log::warn!(
+                                    "custom draw uniform buffer slice too small (expected {}, got {})",
+                                    expected_size,
+                                    size
+                                );
+                            } else {
+                                let piece = gpu::BufferPiece {
+                                    buffer: buffer.buffer,
+                                    offset: *offset,
+                                };
+                                piece.bind_to(&mut context, i as u32);
+                            }
+                        } else {
+                            log::warn!("custom draw uniform buffer {:?} missing", id.0);
+                        }
+                    }
+                },
                 _ => {}
             }
         }
