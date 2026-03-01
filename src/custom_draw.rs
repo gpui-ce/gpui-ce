@@ -134,6 +134,8 @@ pub struct CustomPipelineState {
     pub front_face: CustomFrontFace,
     /// Optional depth state.
     pub depth: Option<CustomDepthState>,
+    /// Number of MSAA samples for this pipeline.
+    pub sample_count: u32,
 }
 
 impl Default for CustomPipelineState {
@@ -143,6 +145,7 @@ impl Default for CustomPipelineState {
             cull_mode: CustomCullMode::None,
             front_face: CustomFrontFace::Ccw,
             depth: None,
+            sample_count: 1,
         }
     }
 }
@@ -275,8 +278,8 @@ pub struct CustomPipelineDesc {
     pub vertex_fetches: Vec<CustomVertexFetch>,
     /// Primitive topology.
     pub primitive: CustomPrimitiveTopology,
-    /// Optional color target format (defaults to the surface format).
-    pub target_format: Option<CustomTextureFormat>,
+    /// Color target formats (empty defaults to the surface format).
+    pub color_targets: Vec<CustomTextureFormat>,
     /// Fixed-function pipeline state.
     pub state: CustomPipelineState,
     /// Optional push constants block.
@@ -317,6 +320,25 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
                 push_constants.size
             ));
         }
+    }
+
+    if desc.state.sample_count == 0
+        || desc.state.sample_count > MAX_SAMPLE_COUNT
+        || !desc.state.sample_count.is_power_of_two()
+    {
+        return Err(anyhow!(
+            "custom draw sample count must be a power of two between 1 and {} (got {})",
+            MAX_SAMPLE_COUNT,
+            desc.state.sample_count
+        ));
+    }
+
+    if desc.color_targets.len() > MAX_COLOR_TARGETS {
+        return Err(anyhow!(
+            "custom draw color target count must be at most {} (got {})",
+            MAX_COLOR_TARGETS,
+            desc.color_targets.len()
+        ));
     }
 
     for binding in &desc.bindings {
@@ -560,6 +582,10 @@ impl CustomBindingName {
 
 /// Maximum number of resources in a binding array.
 pub(crate) const MAX_BINDING_ARRAY_COUNT: u32 = 16;
+/// Maximum number of color targets in a render pipeline.
+pub(crate) const MAX_COLOR_TARGETS: usize = 8;
+/// Maximum supported MSAA sample count for custom pipelines.
+pub(crate) const MAX_SAMPLE_COUNT: u32 = 8;
 
 /// Binding kinds supported by custom pipelines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,7 +722,7 @@ mod tests {
             fragment_entry: "fs".to_string(),
             vertex_fetches: Vec::new(),
             primitive: CustomPrimitiveTopology::TriangleList,
-            target_format: None,
+            color_targets: Vec::new(),
             state: CustomPipelineState::default(),
             push_constants: None,
             bindings: Vec::new(),
@@ -860,10 +886,10 @@ pub struct CustomIndexBuffer {
 }
 
 /// Render target selection for custom draws.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CustomRenderTarget {
-    /// Color target texture.
-    pub color: CustomTextureId,
+    /// Color target textures.
+    pub colors: Vec<CustomTextureId>,
     /// Optional depth target.
     pub depth: Option<CustomDepthTargetId>,
 }
@@ -871,8 +897,10 @@ pub struct CustomRenderTarget {
 impl CustomRenderTarget {
     pub(crate) fn hash(&self) -> u64 {
         let mut hash = 1469598103934665603u64;
-        hash = hash.wrapping_mul(1099511628211);
-        hash ^= self.color.0 as u64;
+        for color in &self.colors {
+            hash = hash.wrapping_mul(1099511628211);
+            hash ^= color.0 as u64;
+        }
         if let Some(depth) = self.depth {
             hash = hash.wrapping_mul(1099511628211);
             hash ^= depth.0 as u64;
@@ -1110,6 +1138,8 @@ pub struct CustomRenderTargetDesc {
     pub height: u32,
     /// Target format.
     pub format: CustomTextureFormat,
+    /// Number of MSAA samples for the target.
+    pub sample_count: u32,
     /// Optional clear color for each frame (defaults to transparent black).
     pub clear_color: Option<[f32; 4]>,
 }
@@ -1125,6 +1155,8 @@ pub struct CustomDepthTargetDesc {
     pub height: u32,
     /// Depth format.
     pub format: CustomDepthFormat,
+    /// Number of MSAA samples for the target.
+    pub sample_count: u32,
     /// Optional clear depth value (defaults to 1.0).
     pub clear_depth: Option<f32>,
 }

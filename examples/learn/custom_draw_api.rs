@@ -126,7 +126,7 @@ impl CustomDrawExample {
                 instanced: false,
             }],
             primitive: CustomPrimitiveTopology::TriangleList,
-            target_format: None,
+            color_targets: Vec::new(),
             state: CustomPipelineState::default(),
             push_constants: None,
             bindings: vec![

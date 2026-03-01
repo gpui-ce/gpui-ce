@@ -1210,26 +1210,32 @@ impl MetalRenderer {
     ) -> Result<()> {
         struct RenderTargetInfo {
             texture: metal::Texture,
+            msaa_texture: Option<metal::Texture>,
             width: u32,
             height: u32,
             format: metal::MTLPixelFormat,
             clear_color: [f32; 4],
             is_render_target: bool,
+            sample_count: u32,
         }
 
         struct DepthTargetInfo {
             texture: metal::Texture,
             format: metal::MTLPixelFormat,
             clear_depth: f64,
+            width: u32,
+            height: u32,
+            sample_count: u32,
         }
 
         let mut draws_by_target = BTreeMap::new();
         for draw in scene.custom_draws.iter() {
-            let Some(target) = draw.target else {
+            let Some(target) = draw.target.as_ref() else {
                 continue;
             };
+            let colors: Vec<u32> = target.colors.iter().map(|color| color.0).collect();
             draws_by_target
-                .entry((target.color.0, target.depth.map(|depth| depth.0)))
+                .entry((colors, target.depth.map(|depth| depth.0)))
                 .or_insert_with(Vec::new)
                 .push(draw);
         }
@@ -1241,30 +1247,52 @@ impl MetalRenderer {
         let textures_snapshot = self.custom_draw.textures_snapshot();
         let samplers_snapshot = self.custom_draw.samplers_snapshot();
 
-        for (_, draws) in draws_by_target {
-            let Some(target) = draws.first().and_then(|draw| draw.target) else {
+        'render_target: for (_, draws) in draws_by_target {
+            let Some(target) = draws.first().and_then(|draw| draw.target.as_ref()) else {
                 continue;
             };
-            let Some(color_target) =
-                self.custom_draw
-                    .with_texture(target.color, |entry| RenderTargetInfo {
-                        texture: entry.texture.clone(),
-                        width: entry.width,
-                        height: entry.height,
-                        format: entry.format,
-                        clear_color: entry.clear_color,
-                        is_render_target: entry.is_render_target,
-                    })
-            else {
-                log::warn!("custom render target {:?} missing", target.color.0);
+            let mut color_targets = Vec::with_capacity(target.colors.len());
+            for color_id in &target.colors {
+                let Some(color_target) =
+                    self.custom_draw
+                        .with_texture(*color_id, |entry| RenderTargetInfo {
+                            texture: entry.texture.clone(),
+                            msaa_texture: entry.msaa_texture.clone(),
+                            width: entry.width,
+                            height: entry.height,
+                            format: entry.format,
+                            clear_color: entry.clear_color,
+                            is_render_target: entry.is_render_target,
+                            sample_count: entry.sample_count,
+                        })
+                else {
+                    log::warn!("custom render target {:?} missing", color_id.0);
+                    continue 'render_target;
+                };
+                if !color_target.is_render_target {
+                    log::warn!("custom draw target {:?} is not a render target", color_id.0);
+                    continue 'render_target;
+                }
+                if color_target.sample_count > 1 && color_target.msaa_texture.is_none() {
+                    log::warn!("custom draw target {:?} missing MSAA texture", color_id.0);
+                    continue 'render_target;
+                }
+                color_targets.push(color_target);
+            }
+            let Some(first_target) = color_targets.first() else {
                 continue;
             };
-            if !color_target.is_render_target {
-                log::warn!(
-                    "custom draw target {:?} is not a render target",
-                    target.color.0
-                );
-                continue;
+            for target_info in &color_targets[1..] {
+                if target_info.width != first_target.width
+                    || target_info.height != first_target.height
+                {
+                    log::warn!("custom render targets must match in size");
+                    continue 'render_target;
+                }
+                if target_info.sample_count != first_target.sample_count {
+                    log::warn!("custom render targets must match in sample count");
+                    continue 'render_target;
+                }
             }
 
             let depth_target = if let Some(depth_id) = target.depth {
@@ -1274,34 +1302,62 @@ impl MetalRenderer {
                         texture: entry.texture.clone(),
                         format: entry.format,
                         clear_depth: entry.clear_depth,
+                        width: entry.width,
+                        height: entry.height,
+                        sample_count: entry.sample_count,
                     }) {
                     Some(target) => Some(target),
                     None => {
                         log::warn!("custom depth target {:?} missing", depth_id.0);
-                        continue;
+                        continue 'render_target;
                     }
                 }
             } else {
                 None
             };
 
+            if let Some(depth_target) = depth_target.as_ref() {
+                if depth_target.width != first_target.width
+                    || depth_target.height != first_target.height
+                {
+                    log::warn!("custom depth target size mismatch");
+                    continue 'render_target;
+                }
+                if depth_target.sample_count != first_target.sample_count {
+                    log::warn!("custom depth target sample count mismatch");
+                    continue 'render_target;
+                }
+            }
+
             let render_pass_descriptor = metal::RenderPassDescriptor::new();
-            let color_attachment = render_pass_descriptor
-                .color_attachments()
-                .object_at(0)
-                .unwrap();
-            color_attachment.set_texture(Some(&color_target.texture));
-            color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-            color_attachment.set_store_action(metal::MTLStoreAction::Store);
-            color_attachment.set_clear_color(metal::MTLClearColor::new(
-                color_target.clear_color[0] as f64,
-                color_target.clear_color[1] as f64,
-                color_target.clear_color[2] as f64,
-                color_target.clear_color[3] as f64,
-            ));
+            let color_attachments = render_pass_descriptor.color_attachments();
+            for (index, color_target) in color_targets.iter().enumerate() {
+                let Some(color_attachment) = color_attachments.object_at(index as u64) else {
+                    log::warn!("custom draw color attachment {} missing", index);
+                    continue 'render_target;
+                };
+                color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                if let Some(msaa_texture) = color_target.msaa_texture.as_ref() {
+                    color_attachment.set_texture(Some(msaa_texture));
+                    color_attachment.set_resolve_texture(Some(&color_target.texture));
+                    color_attachment.set_store_action(metal::MTLStoreAction::MultisampleResolve);
+                } else {
+                    color_attachment.set_texture(Some(&color_target.texture));
+                    color_attachment.set_store_action(metal::MTLStoreAction::Store);
+                }
+                color_attachment.set_clear_color(metal::MTLClearColor::new(
+                    color_target.clear_color[0] as f64,
+                    color_target.clear_color[1] as f64,
+                    color_target.clear_color[2] as f64,
+                    color_target.clear_color[3] as f64,
+                ));
+            }
 
             if let Some(depth_target) = depth_target.as_ref() {
-                let depth_attachment = render_pass_descriptor.depth_attachment().unwrap();
+                let Some(depth_attachment) = render_pass_descriptor.depth_attachment() else {
+                    log::warn!("custom draw depth attachment missing");
+                    continue 'render_target;
+                };
                 depth_attachment.set_texture(Some(&depth_target.texture));
                 depth_attachment.set_load_action(metal::MTLLoadAction::Clear);
                 depth_attachment.set_store_action(metal::MTLStoreAction::Store);
@@ -1312,18 +1368,21 @@ impl MetalRenderer {
             command_encoder.set_viewport(metal::MTLViewport {
                 originX: 0.0,
                 originY: 0.0,
-                width: color_target.width as f64,
-                height: color_target.height as f64,
+                width: first_target.width as f64,
+                height: first_target.height as f64,
                 znear: 0.0,
                 zfar: 1.0,
             });
 
+            let color_formats: Vec<metal::MTLPixelFormat> =
+                color_targets.iter().map(|target| target.format).collect();
             let outcome = self.draw_custom_draws_for_target(
                 &draws,
                 instance_buffer,
                 instance_offset,
                 command_encoder,
-                color_target.format,
+                color_formats.as_slice(),
+                first_target.sample_count,
                 depth_target.as_ref().map(|target| target.format),
                 &buffers_snapshot,
                 &textures_snapshot,
@@ -1420,12 +1479,14 @@ impl MetalRenderer {
         let textures_snapshot = self.custom_draw.textures_snapshot();
         let samplers_snapshot = self.custom_draw.samplers_snapshot();
 
+        let color_formats = [self.custom_draw.surface_format()];
         let outcome = self.draw_custom_draws_for_target(
             &draws,
             instance_buffer,
             instance_offset,
             command_encoder,
-            self.custom_draw.surface_format(),
+            color_formats.as_slice(),
+            1,
             None,
             &buffers_snapshot,
             &textures_snapshot,
@@ -1441,7 +1502,8 @@ impl MetalRenderer {
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         command_encoder: &metal::RenderCommandEncoderRef,
-        target_format: metal::MTLPixelFormat,
+        color_formats: &[metal::MTLPixelFormat],
+        sample_count: u32,
         depth_format: Option<metal::MTLPixelFormat>,
         buffers_snapshot: &[Option<MetalBufferSnapshot>],
         textures_snapshot: &[Option<metal::Texture>],
@@ -1460,12 +1522,28 @@ impl MetalRenderer {
             let bindings = &batch[0].bindings;
 
             let Some(outcome) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
-                if pipeline.color_format != target_format {
+                if pipeline.color_formats.len() != color_formats.len() {
                     log::warn!(
-                        "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                        "custom draw pipeline {:?} expects {} color targets, got {}",
                         pipeline_id.0,
-                        pipeline.color_format,
-                        target_format
+                        pipeline.color_formats.len(),
+                        color_formats.len()
+                    );
+                    return CustomDrawBindOutcome::SkipBatch;
+                }
+                for (expected, actual) in pipeline.color_formats.iter().zip(color_formats.iter()) {
+                    if *expected != *actual {
+                        log::warn!(
+                            "custom draw pipeline {:?} color format mismatch",
+                            pipeline_id.0
+                        );
+                        return CustomDrawBindOutcome::SkipBatch;
+                    }
+                }
+                if pipeline.sample_count != sample_count {
+                    log::warn!(
+                        "custom draw pipeline {:?} sample count mismatch",
+                        pipeline_id.0
                     );
                     return CustomDrawBindOutcome::SkipBatch;
                 }

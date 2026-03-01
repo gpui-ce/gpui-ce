@@ -38,9 +38,10 @@ pub(crate) struct MetalCustomPipeline {
     pub(crate) primitive: metal::MTLPrimitiveType,
     pub(crate) cull_mode: metal::MTLCullMode,
     pub(crate) front_face: metal::MTLWinding,
-    pub(crate) color_format: metal::MTLPixelFormat,
+    pub(crate) color_formats: Vec<metal::MTLPixelFormat>,
     pub(crate) depth_format: Option<metal::MTLPixelFormat>,
     pub(crate) depth_state: Option<metal::DepthStencilState>,
+    pub(crate) sample_count: u32,
     pub(crate) vertex_fetch_count: usize,
     pub(crate) buffer_binding_base: u64,
 }
@@ -69,7 +70,7 @@ struct PipelineCacheKey {
     vertex_entry: String,
     fragment_entry: String,
     primitive: u8,
-    color_format: u64,
+    color_formats: Vec<u64>,
     state: PipelineStateKey,
     vertex_fetches: Vec<VertexFetchKey>,
     push_constants: Option<u32>,
@@ -119,6 +120,7 @@ struct PipelineStateKey {
     depth_format: u8,
     depth_compare: u8,
     depth_write: u8,
+    sample_count: u32,
 }
 
 struct MetalCustomBuffer {
@@ -137,15 +139,20 @@ pub(crate) struct MetalCustomTexture {
     pub(crate) height: u32,
     pub(crate) array_layer_count: u32,
     pub(crate) mip_level_count: u32,
+    pub(crate) sample_count: u32,
     pub(crate) bytes_per_pixel: u32,
     pub(crate) format: metal::MTLPixelFormat,
     pub(crate) is_render_target: bool,
     pub(crate) clear_color: [f32; 4],
+    pub(crate) msaa_texture: Option<metal::Texture>,
 }
 
 pub(crate) struct MetalCustomDepthTarget {
     pub(crate) texture: metal::Texture,
     pub(crate) format: metal::MTLPixelFormat,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) sample_count: u32,
     pub(crate) clear_depth: f64,
 }
 
@@ -258,8 +265,8 @@ impl MetalCustomDrawRegistry {
             Some(source) => PipelineSourceKey::Msl(source.clone()),
             None => PipelineSourceKey::Wgsl(desc.shader_source.clone()),
         };
-        let color_format = resolve_color_format(desc.target_format, self.pixel_format)?;
-        let cache_key = pipeline_cache_key(&desc, source_key, color_format);
+        let color_formats = resolve_color_formats(&desc.color_targets, self.pixel_format)?;
+        let cache_key = pipeline_cache_key(&desc, source_key, &color_formats);
         if let Some(existing) = self.pipeline_cache.lock().unwrap().get(&cache_key).copied() {
             return Ok(existing);
         }
@@ -494,11 +501,14 @@ impl MetalCustomDrawRegistry {
         pipeline_descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
         pipeline_descriptor.set_vertex_descriptor(Some(vertex_descriptor));
 
-        let color_attachment = pipeline_descriptor
-            .color_attachments()
-            .object_at(0)
-            .ok_or_else(|| anyhow!("missing color attachment"))?;
-        apply_blend_state(color_attachment, color_format, desc.state.blend);
+        let color_attachments = pipeline_descriptor.color_attachments();
+        for (index, format) in color_formats.iter().enumerate() {
+            let color_attachment = color_attachments
+                .object_at(index as u64)
+                .ok_or_else(|| anyhow!("missing color attachment"))?;
+            apply_blend_state(color_attachment, *format, desc.state.blend);
+        }
+        pipeline_descriptor.set_sample_count(desc.state.sample_count as u64);
 
         let (depth_state, depth_format) = if let Some(depth_state) = desc.state.depth {
             let depth_format = metal_depth_format(depth_state.format);
@@ -530,9 +540,10 @@ impl MetalCustomDrawRegistry {
             primitive: metal_primitive(desc.primitive),
             cull_mode: metal_cull_mode(desc.state.cull_mode),
             front_face: metal_front_face(desc.state.front_face),
-            color_format,
+            color_formats,
             depth_format,
             depth_state,
+            sample_count: desc.state.sample_count,
             vertex_fetch_count: desc.vertex_fetches.len(),
             buffer_binding_base: buffer_binding_base as u64,
         };
@@ -936,10 +947,12 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 height: desc.height,
                 array_layer_count,
                 mip_level_count: desc.data.len() as u32,
+                sample_count: 1,
                 bytes_per_pixel,
                 format: pixel_format,
                 is_render_target: false,
                 clear_color: [0.0; 4],
+                msaa_texture: None,
             },
         );
         Ok(CustomTextureId(id))
@@ -947,16 +960,44 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
     fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId> {
         let (pixel_format, bytes_per_pixel) = metal_color_format(desc.format);
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(pixel_format);
-        descriptor.set_width(desc.width as u64);
-        descriptor.set_height(desc.height as u64);
-        descriptor.set_mipmap_level_count(1);
-        descriptor
-            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
-        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        if desc.sample_count == 0
+            || desc.sample_count > crate::MAX_SAMPLE_COUNT
+            || !desc.sample_count.is_power_of_two()
+        {
+            return Err(anyhow!(
+                "custom draw render target sample count must be a power of two between 1 and {} (got {})",
+                crate::MAX_SAMPLE_COUNT,
+                desc.sample_count
+            ));
+        }
 
-        let texture = self.device.new_texture(&descriptor);
+        let resolve_descriptor = metal::TextureDescriptor::new();
+        resolve_descriptor.set_pixel_format(pixel_format);
+        resolve_descriptor.set_texture_type(metal::MTLTextureType::D2);
+        resolve_descriptor.set_width(desc.width as u64);
+        resolve_descriptor.set_height(desc.height as u64);
+        resolve_descriptor.set_mipmap_level_count(1);
+        resolve_descriptor.set_sample_count(1);
+        resolve_descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        resolve_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+
+        let texture = self.device.new_texture(&resolve_descriptor);
+
+        let msaa_texture = if desc.sample_count > 1 {
+            let msaa_descriptor = metal::TextureDescriptor::new();
+            msaa_descriptor.set_pixel_format(pixel_format);
+            msaa_descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
+            msaa_descriptor.set_width(desc.width as u64);
+            msaa_descriptor.set_height(desc.height as u64);
+            msaa_descriptor.set_mipmap_level_count(1);
+            msaa_descriptor.set_sample_count(desc.sample_count as u64);
+            msaa_descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+            msaa_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+            Some(self.device.new_texture(&msaa_descriptor))
+        } else {
+            None
+        };
         let clear_color = desc.clear_color.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 
         let mut textures = self.textures.lock().unwrap();
@@ -968,10 +1009,12 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
                 height: desc.height,
                 array_layer_count: 1,
                 mip_level_count: 1,
+                sample_count: desc.sample_count,
                 bytes_per_pixel,
                 format: pixel_format,
                 is_render_target: true,
                 clear_color,
+                msaa_texture,
             },
         );
         Ok(CustomTextureId(id))
@@ -1023,10 +1066,26 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
     fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId> {
         let pixel_format = metal_depth_format(desc.format);
+        if desc.sample_count == 0
+            || desc.sample_count > crate::MAX_SAMPLE_COUNT
+            || !desc.sample_count.is_power_of_two()
+        {
+            return Err(anyhow!(
+                "custom draw depth target sample count must be a power of two between 1 and {} (got {})",
+                crate::MAX_SAMPLE_COUNT,
+                desc.sample_count
+            ));
+        }
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(pixel_format);
+        descriptor.set_texture_type(if desc.sample_count > 1 {
+            metal::MTLTextureType::D2Multisample
+        } else {
+            metal::MTLTextureType::D2
+        });
         descriptor.set_width(desc.width as u64);
         descriptor.set_height(desc.height as u64);
+        descriptor.set_sample_count(desc.sample_count as u64);
         descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
         descriptor.set_storage_mode(metal::MTLStorageMode::Private);
 
@@ -1039,6 +1098,9 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             MetalCustomDepthTarget {
                 texture,
                 format: pixel_format,
+                width: desc.width,
+                height: desc.height,
+                sample_count: desc.sample_count,
                 clear_depth,
             },
         );
@@ -1195,14 +1257,14 @@ fn normalize_binding_array_address_space(module: &mut naga::Module) {
 fn pipeline_cache_key(
     desc: &CustomPipelineDesc,
     source: PipelineSourceKey,
-    color_format: metal::MTLPixelFormat,
+    color_formats: &[metal::MTLPixelFormat],
 ) -> PipelineCacheKey {
     PipelineCacheKey {
         source,
         vertex_entry: desc.vertex_entry.clone(),
         fragment_entry: desc.fragment_entry.clone(),
         primitive: primitive_key(desc.primitive),
-        color_format: color_format as u64,
+        color_formats: color_formats.iter().map(|format| *format as u64).collect(),
         state: pipeline_state_key(desc.state),
         vertex_fetches: desc.vertex_fetches.iter().map(vertex_fetch_key).collect(),
         push_constants: desc.push_constants.map(|push| push.size),
@@ -1447,6 +1509,7 @@ fn pipeline_state_key(state: CustomPipelineState) -> PipelineStateKey {
         depth_format,
         depth_compare,
         depth_write,
+        sample_count: state.sample_count,
     }
 }
 
@@ -1904,14 +1967,18 @@ fn metal_color_format(format: CustomTextureFormat) -> (metal::MTLPixelFormat, u3
     }
 }
 
-fn resolve_color_format(
-    format: Option<CustomTextureFormat>,
+fn resolve_color_formats(
+    formats: &[CustomTextureFormat],
     default_format: metal::MTLPixelFormat,
-) -> Result<metal::MTLPixelFormat> {
-    if let Some(format) = format {
-        return Ok(metal_color_format(format).0);
+) -> Result<Vec<metal::MTLPixelFormat>> {
+    if formats.is_empty() {
+        return Ok(vec![default_format]);
     }
-    Ok(default_format)
+    Ok(formats
+        .iter()
+        .copied()
+        .map(|format| metal_color_format(format).0)
+        .collect())
 }
 
 fn max_mip_levels(width: u32, height: u32) -> u32 {

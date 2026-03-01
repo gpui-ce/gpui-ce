@@ -3526,6 +3526,20 @@ impl Window {
             .fold(1469598103934665603u64, |hash, binding| {
                 hash.wrapping_mul(1099511628211) ^ binding.hash()
             });
+        if let Some(target) = params.target.as_ref() {
+            if target.colors.is_empty() {
+                return Err(anyhow!(
+                    "custom draw render targets must include at least one color attachment"
+                ));
+            }
+            if target.colors.len() > crate::MAX_COLOR_TARGETS {
+                return Err(anyhow!(
+                    "custom draw color target count must be at most {} (got {})",
+                    crate::MAX_COLOR_TARGETS,
+                    target.colors.len()
+                ));
+            }
+        }
         let target_hash = params.target.as_ref().map_or(0, |target| target.hash());
         self.next_frame.scene.insert_primitive(CustomDraw {
             order: 0,

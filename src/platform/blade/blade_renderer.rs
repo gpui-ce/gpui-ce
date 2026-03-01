@@ -955,12 +955,20 @@ impl BladeRenderer {
                         if let Some(()) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
                             let binding_kinds = pipeline.bindings.as_slice();
                             let binding_indices = pipeline.binding_indices.as_slice();
-                            if pipeline.color_format != self.surface.info().format {
+                            if pipeline.color_formats.len() != 1
+                                || pipeline.color_formats[0] != self.surface.info().format
+                            {
                                 log::warn!(
-                                    "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                                    "custom draw pipeline {:?} expects surface format {:?}",
                                     pipeline_id.0,
-                                    pipeline.color_format,
                                     self.surface.info().format
+                                );
+                                return;
+                            }
+                            if pipeline.sample_count != 1 {
+                                log::warn!(
+                                    "custom draw pipeline {:?} sample count does not match the surface",
+                                    pipeline_id.0
                                 );
                                 return;
                             }
@@ -1281,50 +1289,82 @@ impl BladeRenderer {
     ) {
         struct RenderTargetInfo {
             view: gpu::TextureView,
+            msaa_view: Option<gpu::TextureView>,
             format: gpu::TextureFormat,
             clear_color: gpu::TextureColor,
             is_render_target: bool,
+            width: u32,
+            height: u32,
+            sample_count: u32,
         }
 
         struct DepthTargetInfo {
             view: gpu::TextureView,
             format: gpu::TextureFormat,
             clear_depth: f32,
+            width: u32,
+            height: u32,
+            sample_count: u32,
         }
 
         let mut draws_by_target = BTreeMap::new();
         for draw in scene.custom_draws.iter() {
-            let Some(target) = draw.target else {
+            let Some(target) = draw.target.as_ref() else {
                 continue;
             };
+            let colors: Vec<u32> = target.colors.iter().map(|color| color.0).collect();
             draws_by_target
-                .entry((target.color.0, target.depth.map(|depth| depth.0)))
+                .entry((colors, target.depth.map(|depth| depth.0)))
                 .or_insert_with(Vec::new)
                 .push(draw);
         }
 
-        for (_, draws) in draws_by_target {
-            let Some(target) = draws.first().and_then(|draw| draw.target) else {
+        'render_target: for (_, draws) in draws_by_target {
+            let Some(target) = draws.first().and_then(|draw| draw.target.as_ref()) else {
                 continue;
             };
-            let Some(color_target) =
-                self.custom_draw
-                    .with_texture(target.color, |entry| RenderTargetInfo {
-                        view: entry.view,
-                        format: entry.format,
-                        clear_color: entry.clear_color,
-                        is_render_target: entry.is_render_target,
-                    })
-            else {
-                log::warn!("custom render target {:?} missing", target.color.0);
+            let mut color_targets = Vec::with_capacity(target.colors.len());
+            for color_id in &target.colors {
+                let Some(color_target) =
+                    self.custom_draw
+                        .with_texture(*color_id, |entry| RenderTargetInfo {
+                            view: entry.view,
+                            msaa_view: entry.msaa_view,
+                            format: entry.format,
+                            clear_color: entry.clear_color,
+                            is_render_target: entry.is_render_target,
+                            width: entry.width,
+                            height: entry.height,
+                            sample_count: entry.sample_count,
+                        })
+                else {
+                    log::warn!("custom render target {:?} missing", color_id.0);
+                    continue 'render_target;
+                };
+                if !color_target.is_render_target {
+                    log::warn!("custom draw target {:?} is not a render target", color_id.0);
+                    continue 'render_target;
+                }
+                if color_target.sample_count > 1 && color_target.msaa_view.is_none() {
+                    log::warn!("custom draw target {:?} missing MSAA storage", color_id.0);
+                    continue 'render_target;
+                }
+                color_targets.push(color_target);
+            }
+            let Some(first_target) = color_targets.first() else {
                 continue;
             };
-            if !color_target.is_render_target {
-                log::warn!(
-                    "custom draw target {:?} is not a render target",
-                    target.color.0
-                );
-                continue;
+            for target_info in &color_targets[1..] {
+                if target_info.width != first_target.width
+                    || target_info.height != first_target.height
+                {
+                    log::warn!("custom render targets must match in size");
+                    continue 'render_target;
+                }
+                if target_info.sample_count != first_target.sample_count {
+                    log::warn!("custom render targets must match in sample count");
+                    continue 'render_target;
+                }
             }
 
             let depth_target = if let Some(depth_id) = target.depth {
@@ -1334,16 +1374,32 @@ impl BladeRenderer {
                         view: entry.view,
                         format: entry.format,
                         clear_depth: entry.clear_depth,
+                        width: entry.width,
+                        height: entry.height,
+                        sample_count: entry.sample_count,
                     }) {
                     Some(target) => Some(target),
                     None => {
                         log::warn!("custom depth target {:?} missing", depth_id.0);
-                        continue;
+                        continue 'render_target;
                     }
                 }
             } else {
                 None
             };
+
+            if let Some(depth_target) = depth_target.as_ref() {
+                if depth_target.width != first_target.width
+                    || depth_target.height != first_target.height
+                {
+                    log::warn!("custom depth target size mismatch");
+                    continue 'render_target;
+                }
+                if depth_target.sample_count != first_target.sample_count {
+                    log::warn!("custom depth target sample count mismatch");
+                    continue 'render_target;
+                }
+            }
 
             let depth_stencil = depth_target.as_ref().map(|target| gpu::RenderTarget {
                 view: target.view,
@@ -1351,14 +1407,24 @@ impl BladeRenderer {
                 finish_op: gpu::FinishOp::Store,
             });
 
+            let mut color_attachments = Vec::with_capacity(color_targets.len());
+            for color_target in &color_targets {
+                let (view, finish_op) = if let Some(msaa_view) = color_target.msaa_view {
+                    (msaa_view, gpu::FinishOp::ResolveTo(color_target.view))
+                } else {
+                    (color_target.view, gpu::FinishOp::Store)
+                };
+                color_attachments.push(gpu::RenderTarget {
+                    view,
+                    init_op: gpu::InitOp::Clear(color_target.clear_color),
+                    finish_op,
+                });
+            }
+
             let mut pass = self.command_encoder.render(
                 "custom_draw_target",
                 gpu::RenderTargetSet {
-                    colors: &[gpu::RenderTarget {
-                        view: color_target.view,
-                        init_op: gpu::InitOp::Clear(color_target.clear_color),
-                        finish_op: gpu::FinishOp::Store,
-                    }],
+                    colors: color_attachments.as_slice(),
                     depth_stencil,
                 },
             );
@@ -1378,13 +1444,25 @@ impl BladeRenderer {
                 if let Some(()) = self.custom_draw.with_pipeline(pipeline_id, |pipeline| {
                     let binding_kinds = pipeline.bindings.as_slice();
                     let binding_indices = pipeline.binding_indices.as_slice();
-                    if pipeline.color_format != color_target.format {
+                    if pipeline.color_formats.len() != color_targets.len() {
                         log::warn!(
-                            "custom draw pipeline {:?} expects format {:?}, got {:?}",
+                            "custom draw pipeline {:?} expects {} color targets, got {}",
                             pipeline_id.0,
-                            pipeline.color_format,
-                            color_target.format
+                            pipeline.color_formats.len(),
+                            color_targets.len()
                         );
+                        return;
+                    }
+                    for (expected, actual) in
+                        pipeline.color_formats.iter().zip(color_targets.iter())
+                    {
+                        if *expected != actual.format {
+                            log::warn!("custom draw pipeline {:?} color format mismatch", pipeline_id.0);
+                            return;
+                        }
+                    }
+                    if pipeline.sample_count != first_target.sample_count {
+                        log::warn!("custom draw pipeline {:?} sample count mismatch", pipeline_id.0);
                         return;
                     }
                     if let Some(pipeline_depth_format) = pipeline.depth_format {

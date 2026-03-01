@@ -19,6 +19,8 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Compute pipelines and dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
 - Offscreen render targets and depth testing.
+- Multiple color attachments (MRT).
+- MSAA sample counts for offscreen render targets.
 - Batching by pipeline and bindings.
 - Stress harness for throughput testing.
 
@@ -34,7 +36,7 @@ cargo run --example custom_draw_api_animated
 # Instanced rendering example
 cargo run --example custom_draw_api_instanced
 
-# Offscreen render target and depth example
+# Offscreen render target, depth, and MSAA example
 cargo run --example custom_draw_api_offscreen
 
 # Compute pipeline and storage buffer example
@@ -147,6 +149,17 @@ Set `CustomTextureDesc.dimension` to `CustomTextureDimension::D2Array { layers }
 mip level’s data to pack all layers sequentially (layer 0 first). Storage textures currently only
 support `CustomTextureDimension::D2`.
 
+## Multiple render targets and MSAA
+
+Set `CustomPipelineDesc.color_targets` to the list of color formats that match your fragment outputs
+(`@location(0..)`). When rendering offscreen, create a `CustomRenderTarget` with
+`colors: vec![...]` and an optional depth target. All color and depth targets must share the same
+size and sample count.
+
+Use `sample_count` on `CustomRenderTargetDesc`, `CustomDepthTargetDesc`, and
+`CustomPipelineState.sample_count` to enable MSAA. The multisample buffer resolves into the render
+target texture each frame. The window surface currently requires `sample_count` to be 1.
+
 ## Binding arrays
 
 Use WGSL `binding_array<T, N>` (N ≤ 16) with `CustomBindingKind::TextureArray`,
@@ -231,8 +244,8 @@ cargo run --release --example custom_draw_stress -- \
 ## Known limitations (current gaps)
 
 - Depth is limited to Depth32Float; no stencil attachments.
-- Single color target only (no MRT/MSAA resolve).
-- No MSAA/sample count control or custom viewport/scissor state.
+- MSAA is only supported for offscreen render targets (the window surface uses one sample).
+- Custom viewport and scissor state are not configurable.
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
 - Storage textures are limited to 2D RGBA/BGRA (with sRGB); no compressed formats yet.
@@ -246,7 +259,6 @@ cargo run --release --example custom_draw_stress -- \
   - Configurable pipeline state (blend, cull, front face, depth).
 - **P1 (feature growth)**
   - More texture formats (compressed formats).
-  - Multiple color attachments (MRT) and MSAA.
 - **P2 (performance/tooling)**
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
   - Persistent pipeline cache / `.metallib` loading for Metal.

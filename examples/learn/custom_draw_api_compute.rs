@@ -157,7 +157,7 @@ impl ComputeDrawExample {
             fragment_entry: "fs_main".to_string(),
             vertex_fetches: Vec::new(),
             primitive: CustomPrimitiveTopology::TriangleList,
-            target_format: None,
+            color_targets: Vec::new(),
             state: CustomPipelineState::default(),
             push_constants: None,
             bindings: vec![

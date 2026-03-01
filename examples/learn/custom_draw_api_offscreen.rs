@@ -1,7 +1,7 @@
 //! Custom Draw Offscreen Example
 //!
-//! Demonstrates offscreen render targets + depth testing, then samples the
-//! target onto the main window surface.
+//! Demonstrates offscreen render targets, multiple color attachments, depth testing,
+//! and MSAA, then samples the resolved targets onto the main window surface.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
@@ -32,6 +32,11 @@ struct VertexOutput {
   @location(0) color: vec3<f32>,
 };
 
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) mask: vec4<f32>,
+};
+
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
   var out: VertexOutput;
@@ -41,8 +46,12 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  return vec4<f32>(input.color, 1.0);
+fn fs_main(input: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  out.color = vec4<f32>(input.color, 1.0);
+  let luminance = dot(input.color, vec3<f32>(0.299, 0.587, 0.114));
+  out.mask = vec4<f32>(vec3<f32>(luminance), 1.0);
+  return out;
 }
 "#;
 
@@ -58,7 +67,8 @@ struct VertexOutput {
 };
 
 var b0: texture_2d<f32>;
-var b1: sampler;
+var b1: texture_2d<f32>;
+var b2: sampler;
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
@@ -70,7 +80,13 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  return textureSample(b0, b1, input.uv);
+  var uv = input.uv;
+  if (uv.x < 0.5) {
+    uv.x = uv.x * 2.0;
+    return textureSample(b0, b2, uv);
+  }
+  uv.x = (uv.x - 0.5) * 2.0;
+  return textureSample(b1, b2, uv);
 }
 "#;
 
@@ -81,6 +97,7 @@ struct OffscreenCustomDrawExample {
     offscreen_index_buffer: Option<CustomBufferId>,
     onscreen_vertex_buffer: Option<CustomBufferId>,
     render_target: Option<CustomTextureId>,
+    render_target_secondary: Option<CustomTextureId>,
     depth_target: Option<CustomDepthTargetId>,
     sampler: Option<CustomSamplerId>,
     error: Option<String>,
@@ -95,6 +112,7 @@ impl OffscreenCustomDrawExample {
             offscreen_index_buffer: None,
             onscreen_vertex_buffer: None,
             render_target: None,
+            render_target_secondary: None,
             depth_target: None,
             sampler: None,
             error: None,
@@ -114,6 +132,7 @@ impl OffscreenCustomDrawExample {
                 offscreen_index_buffer,
                 onscreen_vertex_buffer,
                 render_target,
+                render_target_secondary,
                 depth_target,
                 sampler,
             )) => {
@@ -123,6 +142,7 @@ impl OffscreenCustomDrawExample {
                 self.offscreen_index_buffer = Some(offscreen_index_buffer);
                 self.onscreen_vertex_buffer = Some(onscreen_vertex_buffer);
                 self.render_target = Some(render_target);
+                self.render_target_secondary = Some(render_target_secondary);
                 self.depth_target = Some(depth_target);
                 self.sampler = Some(sampler);
             }
@@ -142,26 +162,40 @@ impl OffscreenCustomDrawExample {
         CustomBufferId,
         CustomBufferId,
         CustomTextureId,
+        CustomTextureId,
         CustomDepthTargetId,
         CustomSamplerId,
     )> {
         let target_format = CustomTextureFormat::Rgba8Unorm;
         let target_width = 256;
         let target_height = 256;
+        let sample_count = 4;
 
         let render_target = window.create_custom_render_target(CustomRenderTargetDesc {
             name: "custom_draw_offscreen_color".to_string(),
             width: target_width,
             height: target_height,
             format: target_format,
+            sample_count,
             clear_color: Some([0.08, 0.08, 0.1, 1.0]),
         })?;
+
+        let render_target_secondary =
+            window.create_custom_render_target(CustomRenderTargetDesc {
+                name: "custom_draw_offscreen_color_secondary".to_string(),
+                width: target_width,
+                height: target_height,
+                format: target_format,
+                sample_count,
+                clear_color: Some([0.08, 0.08, 0.1, 1.0]),
+            })?;
 
         let depth_target = window.create_custom_depth_target(CustomDepthTargetDesc {
             name: "custom_draw_offscreen_depth".to_string(),
             width: target_width,
             height: target_height,
             format: CustomDepthFormat::Depth32Float,
+            sample_count,
             clear_depth: Some(1.0),
         })?;
 
@@ -191,7 +225,7 @@ impl OffscreenCustomDrawExample {
                 instanced: false,
             }],
             primitive: CustomPrimitiveTopology::TriangleList,
-            target_format: Some(target_format),
+            color_targets: vec![target_format, target_format],
             state: CustomPipelineState {
                 blend: CustomBlendMode::Opaque,
                 depth: Some(CustomDepthState {
@@ -199,6 +233,7 @@ impl OffscreenCustomDrawExample {
                     compare: CustomDepthCompare::LessEqual,
                     write_enabled: true,
                 }),
+                sample_count,
                 ..CustomPipelineState::default()
             },
             push_constants: None,
@@ -231,7 +266,7 @@ impl OffscreenCustomDrawExample {
                 instanced: false,
             }],
             primitive: CustomPrimitiveTopology::TriangleList,
-            target_format: None,
+            color_targets: Vec::new(),
             state: CustomPipelineState::default(),
             push_constants: None,
             bindings: vec![
@@ -242,6 +277,11 @@ impl OffscreenCustomDrawExample {
                 },
                 CustomBindingDesc {
                     name: CustomBindingName::B1,
+                    kind: CustomBindingKind::Texture,
+                    slot: None,
+                },
+                CustomBindingDesc {
+                    name: CustomBindingName::B2,
                     kind: CustomBindingKind::Sampler,
                     slot: None,
                 },
@@ -278,6 +318,7 @@ impl OffscreenCustomDrawExample {
             offscreen_index_buffer,
             onscreen_vertex_buffer,
             render_target,
+            render_target_secondary,
             depth_target,
             sampler,
         ))
@@ -320,6 +361,7 @@ impl Render for OffscreenCustomDrawExample {
             Some(offscreen_index_buffer),
             Some(onscreen_vertex_buffer),
             Some(render_target),
+            Some(render_target_secondary),
             Some(depth_target),
             Some(sampler),
         ) = (
@@ -329,6 +371,7 @@ impl Render for OffscreenCustomDrawExample {
             self.offscreen_index_buffer,
             self.onscreen_vertex_buffer,
             self.render_target,
+            self.render_target_secondary,
             self.depth_target,
             self.sampler,
         ) {
@@ -341,7 +384,7 @@ impl Render for OffscreenCustomDrawExample {
                 }
 
                 let target = CustomRenderTarget {
-                    color: render_target,
+                    colors: vec![render_target, render_target_secondary],
                     depth: Some(depth_target),
                 };
 
@@ -377,6 +420,7 @@ impl Render for OffscreenCustomDrawExample {
                         push_constants: None,
                         bindings: vec![
                             CustomBindingValue::Texture(render_target),
+                            CustomBindingValue::Texture(render_target_secondary),
                             CustomBindingValue::Sampler(sampler),
                         ],
                     },
