@@ -1201,12 +1201,46 @@ pub struct CustomTextureUpdate {
     /// sequentially. For block-compressed formats, each mip level is packed by
     /// block in row-major order.
     pub data: Arc<[u8]>,
+    /// Row stride in bytes for the mip level.
+    ///
+    /// When unset, the data is tightly packed. When set, the stride must be at
+    /// least the packed row size and a multiple of the texel block size.
+    pub bytes_per_row: Option<u32>,
 }
 
 impl CustomTextureUpdate {
     /// Convenience for updating the base mip level.
     pub fn base_level(data: Arc<[u8]>) -> Self {
-        Self { level: 0, data }
+        Self {
+            level: 0,
+            data,
+            bytes_per_row: None,
+        }
+    }
+}
+
+/// Texture update that sources data from a custom buffer.
+#[derive(Debug, Clone)]
+pub struct CustomTextureBufferUpdate {
+    /// Mip level to update (0 = base level).
+    pub level: u32,
+    /// Buffer source that holds the texture data.
+    pub buffer: CustomBufferSource,
+    /// Row stride in bytes for the mip level.
+    ///
+    /// When unset, the data is tightly packed. When set, the stride must be at
+    /// least the packed row size and a multiple of the texel block size.
+    pub bytes_per_row: Option<u32>,
+}
+
+impl CustomTextureBufferUpdate {
+    /// Convenience for updating the base mip level.
+    pub fn base_level(buffer: CustomBufferSource) -> Self {
+        Self {
+            level: 0,
+            buffer,
+            bytes_per_row: None,
+        }
     }
 }
 
@@ -1326,6 +1360,11 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId>;
     fn create_render_target(&self, desc: CustomRenderTargetDesc) -> Result<CustomTextureId>;
     fn update_texture(&self, id: CustomTextureId, update: CustomTextureUpdate) -> Result<()>;
+    fn update_texture_from_buffer(
+        &self,
+        id: CustomTextureId,
+        update: CustomTextureBufferUpdate,
+    ) -> Result<()>;
     fn remove_texture(&self, id: CustomTextureId);
     fn create_depth_target(&self, desc: CustomDepthTargetDesc) -> Result<CustomDepthTargetId>;
     fn remove_depth_target(&self, id: CustomDepthTargetId);

@@ -6,14 +6,15 @@ use metal::{self, MTLResourceOptions};
 
 use crate::{
     CustomAddressMode, CustomBindingDesc, CustomBindingKind, CustomBindingName, CustomBindingSlot,
-    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomComputePipelineDesc,
-    CustomComputePipelineId, CustomCullMode, CustomDepthCompare, CustomDepthFormat,
-    CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
-    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
-    CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
-    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexAttribute,
-    CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat, Result,
+    CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
+    CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
+    CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
+    CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
+    CustomPipelineState, CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc,
+    CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc,
+    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -949,15 +950,16 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         let texture = self.device.new_texture(&descriptor);
         for (level, data) in desc.data.iter().enumerate() {
             let (width, height) = mip_level_size(desc.width, desc.height, level as u32);
+            let blocks_w = width.div_ceil(block_width);
+            let bytes_per_row = blocks_w * bytes_per_block;
             upload_texture_data(
                 &texture,
                 width,
                 height,
-                block_width,
                 block_height,
-                bytes_per_block,
                 level as u64,
                 array_layer_count,
+                bytes_per_row,
                 data,
             );
         }
@@ -1074,10 +1076,24 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         let (width, height) = mip_level_size(entry.width, entry.height, update.level);
         let blocks_w = width.div_ceil(entry.block_width);
         let blocks_h = height.div_ceil(entry.block_height);
-        let expected_len = blocks_w as u64
-            * blocks_h as u64
-            * entry.bytes_per_block as u64
-            * entry.array_layer_count as u64;
+        let packed_bytes_per_row = blocks_w * entry.bytes_per_block;
+        let bytes_per_row = update.bytes_per_row.unwrap_or(packed_bytes_per_row);
+        if bytes_per_row < packed_bytes_per_row {
+            return Err(anyhow!(
+                "custom texture bytes per row {} is smaller than packed row size {}",
+                bytes_per_row,
+                packed_bytes_per_row
+            ));
+        }
+        if bytes_per_row % entry.bytes_per_block != 0 {
+            return Err(anyhow!(
+                "custom texture bytes per row {} is not a multiple of texel block size {}",
+                bytes_per_row,
+                entry.bytes_per_block
+            ));
+        }
+        let bytes_per_image = bytes_per_row as u64 * blocks_h as u64;
+        let expected_len = bytes_per_image * entry.array_layer_count as u64;
         if update.data.len() < expected_len as usize {
             return Err(anyhow!("custom texture data is smaller than texture size"));
         }
@@ -1085,12 +1101,135 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
             &entry.texture,
             width,
             height,
-            entry.block_width,
             entry.block_height,
-            entry.bytes_per_block,
             update.level as u64,
             entry.array_layer_count,
+            bytes_per_row,
             &update.data,
+        );
+        Ok(())
+    }
+
+    fn update_texture_from_buffer(
+        &self,
+        id: CustomTextureId,
+        update: CustomTextureBufferUpdate,
+    ) -> Result<()> {
+        let CustomTextureBufferUpdate {
+            level,
+            buffer,
+            bytes_per_row: bytes_per_row_override,
+        } = update;
+        let (
+            texture,
+            width,
+            height,
+            block_width,
+            block_height,
+            bytes_per_block,
+            array_layer_count,
+            mip_level_count,
+            is_render_target,
+        ) = {
+            let textures = self.textures.lock().unwrap();
+            let Some(entry) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                return Err(anyhow!("custom texture id out of range"));
+            };
+            (
+                entry.texture.clone(),
+                entry.width,
+                entry.height,
+                entry.block_width,
+                entry.block_height,
+                entry.bytes_per_block,
+                entry.array_layer_count,
+                entry.mip_level_count,
+                entry.is_render_target,
+            )
+        };
+        if is_render_target {
+            return Err(anyhow!("custom render targets cannot be updated"));
+        }
+        if level >= mip_level_count {
+            return Err(anyhow!("custom texture mip level {} out of range", level));
+        }
+        let (level_width, level_height) = mip_level_size(width, height, level);
+        let blocks_w = level_width.div_ceil(block_width);
+        let blocks_h = level_height.div_ceil(block_height);
+        let packed_bytes_per_row = blocks_w * bytes_per_block;
+        let bytes_per_row = bytes_per_row_override.unwrap_or(packed_bytes_per_row);
+        if bytes_per_row < packed_bytes_per_row {
+            return Err(anyhow!(
+                "custom texture bytes per row {} is smaller than packed row size {}",
+                bytes_per_row,
+                packed_bytes_per_row
+            ));
+        }
+        if !bytes_per_row.is_multiple_of(bytes_per_block) {
+            return Err(anyhow!(
+                "custom texture bytes per row {} is not a multiple of texel block size {}",
+                bytes_per_row,
+                bytes_per_block
+            ));
+        }
+        let bytes_per_image = bytes_per_row as u64 * blocks_h as u64;
+        let expected_len = bytes_per_image * array_layer_count as u64;
+        let (buffer, buffer_offset, buffer_size) = {
+            let buffers = self.buffers.lock().unwrap();
+            match buffer {
+                CustomBufferSource::Buffer(id) => {
+                    let Some(entry) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref())
+                    else {
+                        return Err(anyhow!("custom buffer id out of range"));
+                    };
+                    (entry.buffer.clone(), 0, entry.size)
+                }
+                CustomBufferSource::BufferSlice { id, offset, size } => {
+                    let Some(entry) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref())
+                    else {
+                        return Err(anyhow!("custom buffer id out of range"));
+                    };
+                    if size == 0 {
+                        return Err(anyhow!("custom texture buffer slice is empty"));
+                    }
+                    if offset.saturating_add(size) > entry.size {
+                        return Err(anyhow!("custom texture buffer slice out of range"));
+                    }
+                    (entry.buffer.clone(), offset, size)
+                }
+                CustomBufferSource::Inline(_) => {
+                    return Err(anyhow!(
+                        "custom texture buffer updates require a buffer source"
+                    ));
+                }
+            }
+        };
+        if expected_len > buffer_size {
+            return Err(anyhow!(
+                "custom texture buffer data is smaller than texture size"
+            ));
+        }
+        let base = buffer.contents();
+        if base.is_null() {
+            return Err(anyhow!("custom texture buffer is not CPU accessible"));
+        }
+        let offset = usize::try_from(buffer_offset)
+            .map_err(|_| anyhow!("custom texture buffer offset is too large"))?;
+        let length = usize::try_from(expected_len)
+            .map_err(|_| anyhow!("custom texture buffer size is too large"))?;
+        if offset.checked_add(length).is_none() {
+            return Err(anyhow!("custom texture buffer range is too large"));
+        }
+        let data = unsafe { std::slice::from_raw_parts((base as *const u8).add(offset), length) };
+        upload_texture_data(
+            &texture,
+            level_width,
+            level_height,
+            block_height,
+            level as u64,
+            array_layer_count,
+            bytes_per_row,
+            data,
         );
         Ok(())
     }
@@ -2241,16 +2380,13 @@ fn upload_texture_data(
     texture: &metal::TextureRef,
     width: u32,
     height: u32,
-    block_width: u32,
     block_height: u32,
-    bytes_per_block: u32,
     mip_level: u64,
     array_layer_count: u32,
+    bytes_per_row: u32,
     data: &[u8],
 ) {
-    let blocks_w = width.div_ceil(block_width);
     let blocks_h = height.div_ceil(block_height);
-    let bytes_per_row = blocks_w * bytes_per_block;
     let bytes_per_image = bytes_per_row as usize * blocks_h as usize;
     let region = metal::MTLRegion::new_2d(0, 0, width as u64, height as u64);
     if array_layer_count == 1 {

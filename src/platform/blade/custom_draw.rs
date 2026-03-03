@@ -11,8 +11,9 @@ use crate::{
     CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
     CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
     CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
-    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexFormat, Result,
+    CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension,
+    CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomTextureUsage,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -81,14 +82,20 @@ pub(crate) struct BladeCustomDepthTarget {
     pub(crate) clear_depth: f32,
 }
 
+enum PendingUploadSource {
+    Staging(gpu::BufferPiece),
+    Buffer { id: CustomBufferId, offset: u64 },
+}
+
 struct PendingUpload {
     texture_id: CustomTextureId,
-    data: gpu::BufferPiece,
+    source: PendingUploadSource,
     mip_level: u32,
     array_layer: u32,
     width: u32,
     height: u32,
     bytes_per_row: u32,
+    bytes_per_image: u64,
 }
 
 impl BladeCustomDrawRegistry {
@@ -227,20 +234,42 @@ impl BladeCustomDrawRegistry {
             return;
         }
         for upload in uploads {
-            let textures = self.textures.lock().unwrap();
-            let Some(texture) = textures
-                .get(upload.texture_id.0 as usize)
-                .and_then(|slot| slot.as_ref())
-            else {
+            let texture = {
+                let textures = self.textures.lock().unwrap();
+                let Some(texture) = textures
+                    .get(upload.texture_id.0 as usize)
+                    .and_then(|slot| slot.as_ref())
+                else {
+                    continue;
+                };
+                texture.texture
+            };
+            let data = match upload.source {
+                PendingUploadSource::Staging(piece) => Some(piece),
+                PendingUploadSource::Buffer { id, offset } => {
+                    let buffers = self.buffers.lock().unwrap();
+                    let Some(buffer) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref())
+                    else {
+                        log::warn!("custom draw buffer {:?} missing", id.0);
+                        continue;
+                    };
+                    if offset.saturating_add(upload.bytes_per_image) > buffer.size {
+                        log::warn!("custom draw buffer slice out of range");
+                        continue;
+                    }
+                    Some(buffer.buffer.at(offset))
+                }
+            };
+            let Some(data) = data else {
                 continue;
             };
-            encoder.init_texture(texture.texture);
+            encoder.init_texture(texture);
             let mut transfers = encoder.transfer("custom_draw_texture");
             transfers.copy_buffer_to_texture(
-                upload.data,
+                data,
                 upload.bytes_per_row,
                 gpu::TexturePiece {
-                    texture: texture.texture,
+                    texture,
                     mip_level: upload.mip_level,
                     array_layer: upload.array_layer,
                     origin: [0, 0, 0],
@@ -855,6 +884,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 CustomTextureUpdate {
                     level: level as u32,
                     data: Arc::clone(data),
+                    bytes_per_row: None,
                 },
             )?;
         }
@@ -999,29 +1029,165 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         let (level_width, level_height) = mip_level_size(width, height, update.level);
         let blocks_w = level_width.div_ceil(block_width);
         let blocks_h = level_height.div_ceil(block_height);
-        let expected_len =
-            blocks_w as u64 * blocks_h as u64 * bytes_per_block as u64 * array_layer_count as u64;
+        let packed_bytes_per_row = blocks_w * bytes_per_block;
+        let bytes_per_row = update.bytes_per_row.unwrap_or(packed_bytes_per_row);
+        if bytes_per_row < packed_bytes_per_row {
+            return Err(anyhow::anyhow!(
+                "custom texture bytes per row {} is smaller than packed row size {}",
+                bytes_per_row,
+                packed_bytes_per_row
+            ));
+        }
+        if !bytes_per_row.is_multiple_of(bytes_per_block) {
+            return Err(anyhow::anyhow!(
+                "custom texture bytes per row {} is not a multiple of texel block size {}",
+                bytes_per_row,
+                bytes_per_block
+            ));
+        }
+        let bytes_per_image = bytes_per_row as u64 * blocks_h as u64;
+        let expected_len = bytes_per_image * array_layer_count as u64;
         if update.data.len() < expected_len as usize {
             return Err(anyhow::anyhow!(
                 "custom texture data is smaller than texture size"
             ));
         }
-        let bytes_per_row = blocks_w * bytes_per_block;
-        let layer_size = bytes_per_row as usize * blocks_h as usize;
+        let bytes_per_image_usize = bytes_per_image as usize;
         let mut upload_belt = self.upload_belt.lock().unwrap();
         let mut pending = self.pending_uploads.lock().unwrap();
         for layer in 0..array_layer_count {
-            let start = layer as usize * layer_size;
-            let end = start + layer_size;
+            let start = layer as usize * bytes_per_image_usize;
+            let end = start + bytes_per_image_usize;
             let piece = upload_belt.alloc_bytes(&update.data[start..end], &self.gpu);
             pending.push(PendingUpload {
                 texture_id: id,
-                data: piece,
+                source: PendingUploadSource::Staging(piece),
                 mip_level: update.level,
                 array_layer: layer,
                 width: level_width,
                 height: level_height,
                 bytes_per_row,
+                bytes_per_image,
+            });
+        }
+        Ok(())
+    }
+
+    fn update_texture_from_buffer(
+        &self,
+        id: CustomTextureId,
+        update: CustomTextureBufferUpdate,
+    ) -> Result<()> {
+        let CustomTextureBufferUpdate {
+            level,
+            buffer,
+            bytes_per_row: bytes_per_row_override,
+        } = update;
+        let (
+            is_render_target,
+            width,
+            height,
+            block_width,
+            block_height,
+            bytes_per_block,
+            mip_level_count,
+            array_layer_count,
+        ) = {
+            let textures = self.textures.lock().unwrap();
+            let Some(entry) = textures.get(id.0 as usize).and_then(|slot| slot.as_ref()) else {
+                return Err(anyhow::anyhow!("custom texture id out of range"));
+            };
+            (
+                entry.is_render_target,
+                entry.width,
+                entry.height,
+                entry.block_width,
+                entry.block_height,
+                entry.bytes_per_block,
+                entry.mip_level_count,
+                entry.array_layer_count,
+            )
+        };
+        if is_render_target {
+            return Err(anyhow::anyhow!("custom render targets cannot be updated"));
+        }
+        if level >= mip_level_count {
+            return Err(anyhow::anyhow!(
+                "custom texture mip level {} out of range",
+                level
+            ));
+        }
+        let (level_width, level_height) = mip_level_size(width, height, level);
+        let blocks_w = level_width.div_ceil(block_width);
+        let blocks_h = level_height.div_ceil(block_height);
+        let packed_bytes_per_row = blocks_w * bytes_per_block;
+        let bytes_per_row = bytes_per_row_override.unwrap_or(packed_bytes_per_row);
+        if bytes_per_row < packed_bytes_per_row {
+            return Err(anyhow::anyhow!(
+                "custom texture bytes per row {} is smaller than packed row size {}",
+                bytes_per_row,
+                packed_bytes_per_row
+            ));
+        }
+        if !bytes_per_row.is_multiple_of(bytes_per_block) {
+            return Err(anyhow::anyhow!(
+                "custom texture bytes per row {} is not a multiple of texel block size {}",
+                bytes_per_row,
+                bytes_per_block
+            ));
+        }
+        let bytes_per_image = bytes_per_row as u64 * blocks_h as u64;
+        let expected_len = bytes_per_image * array_layer_count as u64;
+        let (buffer_id, buffer_offset, buffer_size) = {
+            let buffers = self.buffers.lock().unwrap();
+            match buffer {
+                CustomBufferSource::Buffer(id) => {
+                    let Some(entry) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref())
+                    else {
+                        return Err(anyhow::anyhow!("custom buffer id out of range"));
+                    };
+                    (id, 0, entry.size)
+                }
+                CustomBufferSource::BufferSlice { id, offset, size } => {
+                    let Some(entry) = buffers.get(id.0 as usize).and_then(|slot| slot.as_ref())
+                    else {
+                        return Err(anyhow::anyhow!("custom buffer id out of range"));
+                    };
+                    if size == 0 {
+                        return Err(anyhow::anyhow!("custom texture buffer slice is empty"));
+                    }
+                    if offset.saturating_add(size) > entry.size {
+                        return Err(anyhow::anyhow!("custom texture buffer slice out of range"));
+                    }
+                    (id, offset, size)
+                }
+                CustomBufferSource::Inline(_) => {
+                    return Err(anyhow::anyhow!(
+                        "custom texture buffer updates require a buffer source"
+                    ));
+                }
+            }
+        };
+        if expected_len > buffer_size {
+            return Err(anyhow::anyhow!(
+                "custom texture buffer data is smaller than texture size"
+            ));
+        }
+        let mut pending = self.pending_uploads.lock().unwrap();
+        for layer in 0..array_layer_count {
+            let offset = buffer_offset + bytes_per_image * layer as u64;
+            pending.push(PendingUpload {
+                texture_id: id,
+                source: PendingUploadSource::Buffer {
+                    id: buffer_id,
+                    offset,
+                },
+                mip_level: level,
+                array_layer: layer,
+                width: level_width,
+                height: level_height,
+                bytes_per_row,
+                bytes_per_image,
             });
         }
         Ok(())

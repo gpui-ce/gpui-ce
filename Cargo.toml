@@ -375,6 +375,10 @@ name = "custom_draw_api_compressed_texture"
 path = "examples/learn/custom_draw_api_compressed_texture.rs"
 
 [[example]]
+name = "custom_draw_api_streaming_texture"
+path = "examples/learn/custom_draw_api_streaming_texture.rs"
+
+[[example]]
 name = "custom_draw_api_conformance"
 path = "examples/learn/custom_draw_api_conformance.rs"
 

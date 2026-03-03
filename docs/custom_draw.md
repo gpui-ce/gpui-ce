@@ -58,6 +58,9 @@ cargo run --example custom_draw_api_cubemap
 # Compressed texture example
 cargo run --example custom_draw_api_compressed_texture
 
+# Streaming texture upload example
+cargo run --example custom_draw_api_streaming_texture
+
 # Explicit @location and @group/@binding example
 cargo run --example custom_draw_api_conformance
 
@@ -139,7 +142,12 @@ fit inside the buffer and uniform slices must be at least the declared uniform s
 ## Mipmap textures
 
 Provide one `Arc<[u8]>` per mip level in `CustomTextureDesc.data` (level 0 first). Use
-`CustomTextureUpdate { level, data }` to update a specific level.
+`CustomTextureUpdate { level, data, bytes_per_row: None }` to update a specific level. When
+your data includes row padding, set `bytes_per_row` to the stride in bytes.
+
+For streaming updates, upload into a custom buffer and call
+`update_custom_texture_from_buffer` with `CustomTextureBufferUpdate`. The buffer must contain
+packed data for all layers in the mip level.
 
 ## Storage textures
 
@@ -283,3 +291,9 @@ cargo run --release --example custom_draw_stress -- \
   - Persistent pipeline cache / `.metallib` loading for Metal.
   - GPU profiling (timestamps) and resource lifetime diagnostics.
   - Frame pacing / diagnostics tooling.
+
+## Streaming texture uploads plan (done)
+
+- Add row-stride support for texture updates to avoid repacking video frames (done).
+- Add buffer-backed texture uploads for per-frame streaming (done).
+- Provide an example that updates a texture each frame from a buffer (done).
