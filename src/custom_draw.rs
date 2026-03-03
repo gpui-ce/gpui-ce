@@ -1050,6 +1050,18 @@ pub enum CustomTextureFormat {
     Bc7Unorm,
     /// BC7 RGBA sRGB.
     Bc7UnormSrgb,
+    /// ETC2 RGB8.
+    Etc2Rgb8Unorm,
+    /// ETC2 RGB8 sRGB.
+    Etc2Rgb8UnormSrgb,
+    /// ETC2 RGBA8.
+    Etc2Rgba8Unorm,
+    /// ETC2 RGBA8 sRGB.
+    Etc2Rgba8UnormSrgb,
+    /// ASTC 4x4 LDR.
+    Astc4x4Unorm,
+    /// ASTC 4x4 LDR sRGB.
+    Astc4x4UnormSrgb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1070,17 +1082,22 @@ impl CustomTextureFormat {
                 height: 1,
                 bytes: 4,
             },
-            CustomTextureFormat::Bc1Unorm | CustomTextureFormat::Bc1UnormSrgb => {
-                CustomTexelBlockInfo {
-                    width: 4,
-                    height: 4,
-                    bytes: 8,
-                }
-            }
+            CustomTextureFormat::Bc1Unorm
+            | CustomTextureFormat::Bc1UnormSrgb
+            | CustomTextureFormat::Etc2Rgb8Unorm
+            | CustomTextureFormat::Etc2Rgb8UnormSrgb => CustomTexelBlockInfo {
+                width: 4,
+                height: 4,
+                bytes: 8,
+            },
             CustomTextureFormat::Bc3Unorm
             | CustomTextureFormat::Bc3UnormSrgb
             | CustomTextureFormat::Bc7Unorm
-            | CustomTextureFormat::Bc7UnormSrgb => CustomTexelBlockInfo {
+            | CustomTextureFormat::Bc7UnormSrgb
+            | CustomTextureFormat::Etc2Rgba8Unorm
+            | CustomTextureFormat::Etc2Rgba8UnormSrgb
+            | CustomTextureFormat::Astc4x4Unorm
+            | CustomTextureFormat::Astc4x4UnormSrgb => CustomTexelBlockInfo {
                 width: 4,
                 height: 4,
                 bytes: 16,

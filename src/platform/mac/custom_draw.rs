@@ -865,6 +865,13 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         let block_height = format_info.block_height;
         let bytes_per_block = format_info.bytes_per_block;
 
+        if !metal_texture_format_supported(&self.device, desc.format) {
+            return Err(anyhow!(
+                "custom texture format {:?} is not supported by this device",
+                desc.format
+            ));
+        }
+
         if desc.data.is_empty() {
             return Err(anyhow!(
                 "custom texture data must include at least one mip level"
@@ -2009,12 +2016,85 @@ fn metal_texture_format_info(format: CustomTextureFormat) -> MetalTextureFormatI
         CustomTextureFormat::Bc3UnormSrgb => metal::MTLPixelFormat::BC3_RGBA_sRGB,
         CustomTextureFormat::Bc7Unorm => metal::MTLPixelFormat::BC7_RGBAUnorm,
         CustomTextureFormat::Bc7UnormSrgb => metal::MTLPixelFormat::BC7_RGBAUnorm_sRGB,
+        CustomTextureFormat::Etc2Rgb8Unorm => metal::MTLPixelFormat::ETC2_RGB8,
+        CustomTextureFormat::Etc2Rgb8UnormSrgb => metal::MTLPixelFormat::ETC2_RGB8_sRGB,
+        CustomTextureFormat::Etc2Rgba8Unorm => metal::MTLPixelFormat::EAC_RGBA8,
+        CustomTextureFormat::Etc2Rgba8UnormSrgb => metal::MTLPixelFormat::EAC_RGBA8_sRGB,
+        CustomTextureFormat::Astc4x4Unorm => metal::MTLPixelFormat::ASTC_4x4_LDR,
+        CustomTextureFormat::Astc4x4UnormSrgb => metal::MTLPixelFormat::ASTC_4x4_sRGB,
     };
     MetalTextureFormatInfo {
         pixel_format,
         block_width: block_info.width,
         block_height: block_info.height,
         bytes_per_block: block_info.bytes,
+    }
+}
+
+#[allow(deprecated)]
+const METAL_FEATURE_SETS: &[metal::MTLFeatureSet] = &[
+    metal::MTLFeatureSet::iOS_GPUFamily1_v1,
+    metal::MTLFeatureSet::iOS_GPUFamily2_v1,
+    metal::MTLFeatureSet::iOS_GPUFamily1_v2,
+    metal::MTLFeatureSet::iOS_GPUFamily2_v2,
+    metal::MTLFeatureSet::iOS_GPUFamily3_v1,
+    metal::MTLFeatureSet::iOS_GPUFamily1_v3,
+    metal::MTLFeatureSet::iOS_GPUFamily2_v3,
+    metal::MTLFeatureSet::iOS_GPUFamily3_v2,
+    metal::MTLFeatureSet::iOS_GPUFamily1_v4,
+    metal::MTLFeatureSet::iOS_GPUFamily2_v4,
+    metal::MTLFeatureSet::iOS_GPUFamily3_v3,
+    metal::MTLFeatureSet::iOS_GPUFamily4_v1,
+    metal::MTLFeatureSet::iOS_GPUFamily1_v5,
+    metal::MTLFeatureSet::iOS_GPUFamily2_v5,
+    metal::MTLFeatureSet::iOS_GPUFamily3_v4,
+    metal::MTLFeatureSet::iOS_GPUFamily4_v2,
+    metal::MTLFeatureSet::iOS_GPUFamily5_v1,
+    metal::MTLFeatureSet::tvOS_GPUFamily1_v1,
+    metal::MTLFeatureSet::tvOS_GPUFamily1_v2,
+    metal::MTLFeatureSet::tvOS_GPUFamily1_v3,
+    metal::MTLFeatureSet::tvOS_GPUFamily2_v1,
+    metal::MTLFeatureSet::tvOS_GPUFamily1_v4,
+    metal::MTLFeatureSet::tvOS_GPUFamily2_v2,
+    metal::MTLFeatureSet::macOS_GPUFamily1_v1,
+    metal::MTLFeatureSet::macOS_GPUFamily1_v2,
+    metal::MTLFeatureSet::macOS_ReadWriteTextureTier2,
+    metal::MTLFeatureSet::macOS_GPUFamily1_v3,
+    metal::MTLFeatureSet::macOS_GPUFamily1_v4,
+    metal::MTLFeatureSet::macOS_GPUFamily2_v1,
+];
+
+#[allow(deprecated)]
+fn metal_supports_pixel_formats(
+    device: &metal::Device,
+    predicate: impl Fn(metal::MTLFeatureSet) -> bool,
+) -> bool {
+    METAL_FEATURE_SETS
+        .iter()
+        .copied()
+        .any(|set| device.supports_feature_set(set) && predicate(set))
+}
+
+fn metal_texture_format_supported(device: &metal::Device, format: CustomTextureFormat) -> bool {
+    match format {
+        CustomTextureFormat::Bc1Unorm
+        | CustomTextureFormat::Bc1UnormSrgb
+        | CustomTextureFormat::Bc3Unorm
+        | CustomTextureFormat::Bc3UnormSrgb
+        | CustomTextureFormat::Bc7Unorm
+        | CustomTextureFormat::Bc7UnormSrgb => {
+            metal_supports_pixel_formats(device, |set| set.supports_bc_pixel_formats())
+        }
+        CustomTextureFormat::Etc2Rgb8Unorm
+        | CustomTextureFormat::Etc2Rgb8UnormSrgb
+        | CustomTextureFormat::Etc2Rgba8Unorm
+        | CustomTextureFormat::Etc2Rgba8UnormSrgb => {
+            metal_supports_pixel_formats(device, |set| set.supports_eac_etc_pixel_formats())
+        }
+        CustomTextureFormat::Astc4x4Unorm | CustomTextureFormat::Astc4x4UnormSrgb => {
+            metal_supports_pixel_formats(device, |set| set.supports_astc_pixel_formats())
+        }
+        _ => true,
     }
 }
 

@@ -15,7 +15,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Texture and sampler bindings.
 - Binding arrays (texture/buffer).
 - Texture arrays and cubemaps.
-- Block-compressed textures (BC1, BC3, BC7).
+- Block-compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4).
 - sRGB formats and mipmapped textures.
 - Compute pipelines and dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
@@ -155,11 +155,13 @@ support `CustomTextureDimension::D2`.
 
 ## Compressed textures
 
-Use `CustomTextureFormat::Bc1Unorm`, `CustomTextureFormat::Bc3Unorm`, or
-`CustomTextureFormat::Bc7Unorm` (and their sRGB variants) for block-compressed textures. Each mip
-level is packed in 4×4 blocks using the format’s block size. Compressed formats are sampled only
-and cannot be used as storage textures or render targets. Creation fails if the GPU does not
-support the requested format.
+Use `CustomTextureFormat::Bc1Unorm`, `CustomTextureFormat::Bc3Unorm`,
+`CustomTextureFormat::Bc7Unorm`, `CustomTextureFormat::Etc2Rgb8Unorm`,
+`CustomTextureFormat::Etc2Rgba8Unorm`, or `CustomTextureFormat::Astc4x4Unorm`
+(and their sRGB variants) for block-compressed textures. Each mip level is packed in 4×4 blocks
+using the format’s block size. Compressed formats are sampled only and cannot be used as storage
+textures or render targets. Creation fails if the GPU does not support the requested format.
+Blade currently supports BC formats only.
 
 ## Multiple render targets and MSAA
 
@@ -260,7 +262,7 @@ cargo run --release --example custom_draw_stress -- \
 - Custom viewport and scissor state are not configurable.
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
-- Compressed textures are limited to BC1, BC3, and BC7 (no ASTC/ETC).
+- ASTC and ETC2 textures require Metal support and are not available on Blade.
 - Storage textures are limited to 2D RGBA/BGRA (with sRGB).
 
 ## Core roadmap (triage)
@@ -270,9 +272,13 @@ cargo run --release --example custom_draw_stress -- \
   - Depth attachments and depth testing (Depth32Float only).
   - Offscreen render targets / render passes for multi-pass composition.
   - Configurable pipeline state (blend, cull, front face, depth).
-- **P1 (feature growth)**
-  - More compressed texture formats (ASTC/ETC).
+- **P1 (feature growth)** (done)
+  - Binding arrays.
+  - Texture arrays and cubemaps.
+  - Multiple color attachments and MSAA.
+  - Compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4).
 - **P2 (performance/tooling)**
+  - More compressed texture formats (additional ASTC sizes, PVRTC).
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
   - Persistent pipeline cache / `.metallib` loading for Metal.
   - GPU profiling (timestamps) and resource lifetime diagnostics.

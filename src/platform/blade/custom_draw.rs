@@ -293,7 +293,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 .iter()
                 .copied()
                 .map(blade_color_format)
-                .collect()
+                .collect::<Result<Vec<_>>>()?
         };
         let color_targets: Vec<gpu::ColorTargetState> = color_formats
             .iter()
@@ -731,7 +731,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
     }
 
     fn create_texture(&self, desc: CustomTextureDesc) -> Result<CustomTextureId> {
-        let format = blade_color_format(desc.format);
+        let format = blade_color_format(desc.format)?;
         let block_info = desc.format.block_info();
         let block_width = block_info.width;
         let block_height = block_info.height;
@@ -867,7 +867,7 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
                 "custom render targets must not use compressed formats"
             ));
         }
-        let format = blade_color_format(desc.format);
+        let format = blade_color_format(desc.format)?;
         let block_info = desc.format.block_info();
         if desc.sample_count == 0
             || desc.sample_count > crate::MAX_SAMPLE_COUNT
@@ -1318,18 +1318,27 @@ fn blade_cull_mode(mode: CustomCullMode) -> Option<gpu::Face> {
     }
 }
 
-fn blade_color_format(format: CustomTextureFormat) -> gpu::TextureFormat {
+fn blade_color_format(format: CustomTextureFormat) -> Result<gpu::TextureFormat> {
     match format {
-        CustomTextureFormat::Rgba8Unorm => gpu::TextureFormat::Rgba8Unorm,
-        CustomTextureFormat::Bgra8Unorm => gpu::TextureFormat::Bgra8Unorm,
-        CustomTextureFormat::Rgba8UnormSrgb => gpu::TextureFormat::Rgba8UnormSrgb,
-        CustomTextureFormat::Bgra8UnormSrgb => gpu::TextureFormat::Bgra8UnormSrgb,
-        CustomTextureFormat::Bc1Unorm => gpu::TextureFormat::Bc1Unorm,
-        CustomTextureFormat::Bc1UnormSrgb => gpu::TextureFormat::Bc1UnormSrgb,
-        CustomTextureFormat::Bc3Unorm => gpu::TextureFormat::Bc3Unorm,
-        CustomTextureFormat::Bc3UnormSrgb => gpu::TextureFormat::Bc3UnormSrgb,
-        CustomTextureFormat::Bc7Unorm => gpu::TextureFormat::Bc7Unorm,
-        CustomTextureFormat::Bc7UnormSrgb => gpu::TextureFormat::Bc7UnormSrgb,
+        CustomTextureFormat::Rgba8Unorm => Ok(gpu::TextureFormat::Rgba8Unorm),
+        CustomTextureFormat::Bgra8Unorm => Ok(gpu::TextureFormat::Bgra8Unorm),
+        CustomTextureFormat::Rgba8UnormSrgb => Ok(gpu::TextureFormat::Rgba8UnormSrgb),
+        CustomTextureFormat::Bgra8UnormSrgb => Ok(gpu::TextureFormat::Bgra8UnormSrgb),
+        CustomTextureFormat::Bc1Unorm => Ok(gpu::TextureFormat::Bc1Unorm),
+        CustomTextureFormat::Bc1UnormSrgb => Ok(gpu::TextureFormat::Bc1UnormSrgb),
+        CustomTextureFormat::Bc3Unorm => Ok(gpu::TextureFormat::Bc3Unorm),
+        CustomTextureFormat::Bc3UnormSrgb => Ok(gpu::TextureFormat::Bc3UnormSrgb),
+        CustomTextureFormat::Bc7Unorm => Ok(gpu::TextureFormat::Bc7Unorm),
+        CustomTextureFormat::Bc7UnormSrgb => Ok(gpu::TextureFormat::Bc7UnormSrgb),
+        CustomTextureFormat::Etc2Rgb8Unorm
+        | CustomTextureFormat::Etc2Rgb8UnormSrgb
+        | CustomTextureFormat::Etc2Rgba8Unorm
+        | CustomTextureFormat::Etc2Rgba8UnormSrgb
+        | CustomTextureFormat::Astc4x4Unorm
+        | CustomTextureFormat::Astc4x4UnormSrgb => Err(anyhow::anyhow!(
+            "custom texture format {:?} is not supported by Blade",
+            format
+        )),
     }
 }
 
