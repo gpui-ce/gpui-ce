@@ -341,6 +341,16 @@ pub(crate) fn validate_custom_pipeline_desc(desc: &CustomPipelineDesc) -> Result
         ));
     }
 
+    if desc
+        .color_targets
+        .iter()
+        .any(|format| format.is_compressed())
+    {
+        return Err(anyhow!(
+            "custom draw color targets must not use compressed formats"
+        ));
+    }
+
     for binding in &desc.bindings {
         match binding.kind {
             CustomBindingKind::Uniform { size } => {
@@ -1028,6 +1038,60 @@ pub enum CustomTextureFormat {
     Rgba8UnormSrgb,
     /// BGRA8 unorm sRGB.
     Bgra8UnormSrgb,
+    /// BC1/DXT1 RGBA.
+    Bc1Unorm,
+    /// BC1/DXT1 RGBA sRGB.
+    Bc1UnormSrgb,
+    /// BC3/DXT5 RGBA.
+    Bc3Unorm,
+    /// BC3/DXT5 RGBA sRGB.
+    Bc3UnormSrgb,
+    /// BC7 RGBA.
+    Bc7Unorm,
+    /// BC7 RGBA sRGB.
+    Bc7UnormSrgb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CustomTexelBlockInfo {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bytes: u32,
+}
+
+impl CustomTextureFormat {
+    pub(crate) const fn block_info(self) -> CustomTexelBlockInfo {
+        match self {
+            CustomTextureFormat::Rgba8Unorm
+            | CustomTextureFormat::Bgra8Unorm
+            | CustomTextureFormat::Rgba8UnormSrgb
+            | CustomTextureFormat::Bgra8UnormSrgb => CustomTexelBlockInfo {
+                width: 1,
+                height: 1,
+                bytes: 4,
+            },
+            CustomTextureFormat::Bc1Unorm | CustomTextureFormat::Bc1UnormSrgb => {
+                CustomTexelBlockInfo {
+                    width: 4,
+                    height: 4,
+                    bytes: 8,
+                }
+            }
+            CustomTextureFormat::Bc3Unorm
+            | CustomTextureFormat::Bc3UnormSrgb
+            | CustomTextureFormat::Bc7Unorm
+            | CustomTextureFormat::Bc7UnormSrgb => CustomTexelBlockInfo {
+                width: 4,
+                height: 4,
+                bytes: 16,
+            },
+        }
+    }
+
+    pub(crate) const fn is_compressed(self) -> bool {
+        let info = self.block_info();
+        info.width > 1 || info.height > 1
+    }
 }
 
 /// Texture dimensions supported by custom draw.
@@ -1104,7 +1168,8 @@ pub struct CustomTextureDesc {
     /// Initial texture contents for each mip level (level 0 first).
     ///
     /// For array or cube textures, each mip level contains all layers packed
-    /// sequentially.
+    /// sequentially. For block-compressed formats, each mip level is packed by
+    /// block in row-major order.
     pub data: Vec<Arc<[u8]>>,
 }
 
@@ -1116,7 +1181,8 @@ pub struct CustomTextureUpdate {
     /// Texture data for the mip level.
     ///
     /// For array or cube textures, the data must include all layers packed
-    /// sequentially.
+    /// sequentially. For block-compressed formats, each mip level is packed by
+    /// block in row-major order.
     pub data: Arc<[u8]>,
 }
 
