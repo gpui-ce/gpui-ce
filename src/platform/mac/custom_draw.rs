@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -63,6 +64,13 @@ pub(crate) struct ArgumentBufferBinding {
 enum PipelineSourceKey {
     Wgsl(String),
     Msl(String),
+    Metallib { hash: u64, len: usize },
+}
+
+enum PipelineLibrarySource {
+    Wgsl,
+    Msl(String),
+    Metallib(Arc<[u8]>),
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -262,11 +270,15 @@ impl MetalCustomDrawRegistry {
     fn create_pipeline_internal(
         &self,
         desc: CustomPipelineDesc,
-        msl_source: Option<String>,
+        source: PipelineLibrarySource,
     ) -> Result<CustomPipelineId> {
-        let source_key = match &msl_source {
-            Some(source) => PipelineSourceKey::Msl(source.clone()),
-            None => PipelineSourceKey::Wgsl(desc.shader_source.clone()),
+        let source_key = match &source {
+            PipelineLibrarySource::Wgsl => PipelineSourceKey::Wgsl(desc.shader_source.clone()),
+            PipelineLibrarySource::Msl(source) => PipelineSourceKey::Msl(source.clone()),
+            PipelineLibrarySource::Metallib(data) => PipelineSourceKey::Metallib {
+                hash: metal_library_data_hash(data.as_ref()),
+                len: data.len(),
+            },
         };
         let color_formats = resolve_color_formats(&desc.color_targets, self.pixel_format)?;
         let cache_key = pipeline_cache_key(&desc, source_key, &color_formats);
@@ -364,87 +376,115 @@ impl MetalCustomDrawRegistry {
         let buffer_binding_base = u8::try_from(desc.vertex_fetches.len())
             .map_err(|_| anyhow!("custom draw supports up to {} vertex buffers", u8::MAX))?;
 
-        let (msl_source, vertex_name, fragment_name) = if let Some(source) = msl_source {
-            if source.trim().is_empty() {
-                return Err(anyhow!("MSL source is empty"));
+        let (library, vertex_name, fragment_name) = match source {
+            PipelineLibrarySource::Wgsl => {
+                let mut entry_point_resources =
+                    build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
+                if let Some(push_constants) = &push_constants {
+                    let binding_index = u8::try_from(desc.bindings.len()).map_err(|_| {
+                        anyhow!("custom draw binding index exceeds Metal slot limit")
+                    })?;
+                    let buffer_slot = buffer_binding_base
+                        .checked_add(binding_index)
+                        .ok_or_else(|| anyhow!("custom draw push constants slot overflow"))?;
+                    entry_point_resources.resources.insert(
+                        naga::ResourceBinding {
+                            group: push_constants.slot.group,
+                            binding: push_constants.slot.binding,
+                        },
+                        naga::back::msl::BindTarget {
+                            buffer: Some(buffer_slot),
+                            ..Default::default()
+                        },
+                    );
+                }
+                normalize_binding_array_address_space(&mut module);
+                let mut naga_options = naga::back::msl::Options::default();
+                naga_options.lang_version = msl_lang_version;
+                naga_options.fake_missing_bindings = false;
+                naga_options.zero_initialize_workgroup_memory = false;
+                naga_options.force_loop_bounding = false;
+                naga_options
+                    .per_entry_point_map
+                    .insert(desc.vertex_entry.clone(), entry_point_resources.clone());
+                naga_options
+                    .per_entry_point_map
+                    .insert(desc.fragment_entry.clone(), entry_point_resources);
+
+                let pipeline_options = naga::back::msl::PipelineOptions {
+                    allow_and_force_point_size: matches!(
+                        desc.primitive,
+                        CustomPrimitiveTopology::PointList
+                    ),
+                    vertex_pulling_transform: false,
+                    vertex_buffer_mappings: Vec::new(),
+                };
+
+                let (msl_source, translation) =
+                    naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
+                        .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
+
+                let vertex_name = translation
+                    .entry_point_names
+                    .get(vertex_entry_index)
+                    .ok_or_else(|| anyhow!("missing translated vertex entry"))
+                    .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
+                    .to_string();
+                let fragment_name = translation
+                    .entry_point_names
+                    .get(fragment_entry_index)
+                    .ok_or_else(|| anyhow!("missing translated fragment entry"))
+                    .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
+                    .to_string();
+
+                let compile_options = metal::CompileOptions::new();
+                compile_options.set_language_version(if has_binding_arrays {
+                    metal::MTLLanguageVersion::V2_0
+                } else {
+                    metal::MTLLanguageVersion::V1_2
+                });
+                let library = self
+                    .device
+                    .new_library_with_source(&msl_source, &compile_options)
+                    .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
+
+                (library, vertex_name, fragment_name)
             }
-            (
-                source,
-                desc.vertex_entry.clone(),
-                desc.fragment_entry.clone(),
-            )
-        } else {
-            let mut entry_point_resources =
-                build_entry_point_resources(&desc.bindings, buffer_binding_base)?;
-            if let Some(push_constants) = &push_constants {
-                let binding_index = u8::try_from(desc.bindings.len())
-                    .map_err(|_| anyhow!("custom draw binding index exceeds Metal slot limit"))?;
-                let buffer_slot = buffer_binding_base
-                    .checked_add(binding_index)
-                    .ok_or_else(|| anyhow!("custom draw push constants slot overflow"))?;
-                entry_point_resources.resources.insert(
-                    naga::ResourceBinding {
-                        group: push_constants.slot.group,
-                        binding: push_constants.slot.binding,
-                    },
-                    naga::back::msl::BindTarget {
-                        buffer: Some(buffer_slot),
-                        ..Default::default()
-                    },
-                );
+            PipelineLibrarySource::Msl(msl_source) => {
+                if msl_source.trim().is_empty() {
+                    return Err(anyhow!("MSL source is empty"));
+                }
+                let compile_options = metal::CompileOptions::new();
+                compile_options.set_language_version(if has_binding_arrays {
+                    metal::MTLLanguageVersion::V2_0
+                } else {
+                    metal::MTLLanguageVersion::V1_2
+                });
+                let library = self
+                    .device
+                    .new_library_with_source(&msl_source, &compile_options)
+                    .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
+                (
+                    library,
+                    desc.vertex_entry.clone(),
+                    desc.fragment_entry.clone(),
+                )
             }
-            normalize_binding_array_address_space(&mut module);
-            let mut naga_options = naga::back::msl::Options::default();
-            naga_options.lang_version = msl_lang_version;
-            naga_options.fake_missing_bindings = false;
-            naga_options.zero_initialize_workgroup_memory = false;
-            naga_options.force_loop_bounding = false;
-            naga_options
-                .per_entry_point_map
-                .insert(desc.vertex_entry.clone(), entry_point_resources.clone());
-            naga_options
-                .per_entry_point_map
-                .insert(desc.fragment_entry.clone(), entry_point_resources);
-
-            let pipeline_options = naga::back::msl::PipelineOptions {
-                allow_and_force_point_size: matches!(
-                    desc.primitive,
-                    CustomPrimitiveTopology::PointList
-                ),
-                vertex_pulling_transform: false,
-                vertex_buffer_mappings: Vec::new(),
-            };
-
-            let (msl_source, translation) =
-                naga::back::msl::write_string(&module, &info, &naga_options, &pipeline_options)
-                    .map_err(|err| anyhow!("MSL translation failed: {err}"))?;
-
-            let vertex_name = translation
-                .entry_point_names
-                .get(vertex_entry_index)
-                .ok_or_else(|| anyhow!("missing translated vertex entry"))
-                .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
-                .to_string();
-            let fragment_name = translation
-                .entry_point_names
-                .get(fragment_entry_index)
-                .ok_or_else(|| anyhow!("missing translated fragment entry"))
-                .and_then(|result| result.as_ref().map_err(|err| anyhow!("{err}")))?
-                .to_string();
-
-            (msl_source, vertex_name, fragment_name)
+            PipelineLibrarySource::Metallib(metallib_data) => {
+                if metallib_data.is_empty() {
+                    return Err(anyhow!("Metal library data is empty"));
+                }
+                let library = self
+                    .device
+                    .new_library_with_data(metallib_data.as_ref())
+                    .map_err(|err| anyhow!("Metal library load failed: {err}"))?;
+                (
+                    library,
+                    desc.vertex_entry.clone(),
+                    desc.fragment_entry.clone(),
+                )
+            }
         };
-
-        let compile_options = metal::CompileOptions::new();
-        compile_options.set_language_version(if has_binding_arrays {
-            metal::MTLLanguageVersion::V2_0
-        } else {
-            metal::MTLLanguageVersion::V1_2
-        });
-        let library = self
-            .device
-            .new_library_with_source(&msl_source, &compile_options)
-            .map_err(|err| anyhow!("MSL compilation failed: {err}"))?;
 
         let vertex_fn = library
             .get_function(&vertex_name, None)
@@ -775,7 +815,7 @@ impl MetalCustomDrawRegistry {
 
 impl CustomDrawRegistry for MetalCustomDrawRegistry {
     fn create_pipeline(&self, desc: CustomPipelineDesc) -> Result<CustomPipelineId> {
-        self.create_pipeline_internal(desc, None)
+        self.create_pipeline_internal(desc, PipelineLibrarySource::Wgsl)
     }
 
     fn create_pipeline_msl(
@@ -783,7 +823,15 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         desc: CustomPipelineDesc,
         msl_source: String,
     ) -> Result<CustomPipelineId> {
-        self.create_pipeline_internal(desc, Some(msl_source))
+        self.create_pipeline_internal(desc, PipelineLibrarySource::Msl(msl_source))
+    }
+
+    fn create_pipeline_metallib(
+        &self,
+        desc: CustomPipelineDesc,
+        metallib_data: Arc<[u8]>,
+    ) -> Result<CustomPipelineId> {
+        self.create_pipeline_internal(desc, PipelineLibrarySource::Metallib(metallib_data))
     }
 
     fn create_compute_pipeline(
@@ -1429,6 +1477,12 @@ fn normalize_binding_array_address_space(module: &mut naga::Module) {
             var.space = naga::AddressSpace::Handle;
         }
     }
+}
+
+fn metal_library_data_hash(data: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn pipeline_cache_key(

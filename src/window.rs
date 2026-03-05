@@ -3346,6 +3346,37 @@ impl Window {
         registry.create_pipeline_msl(desc, msl_source)
     }
 
+    /// Create a custom GPU pipeline from precompiled Metal library bytes (`.metallib`).
+    ///
+    /// The `CustomPipelineDesc` WGSL source is still validated to ensure bindings and layouts are
+    /// consistent. The entry names are read from `desc.vertex_entry` and `desc.fragment_entry`.
+    pub fn create_custom_pipeline_metallib(
+        &mut self,
+        desc: CustomPipelineDesc,
+        metallib_data: Arc<[u8]>,
+    ) -> Result<CustomPipelineId> {
+        crate::custom_draw::validate_custom_pipeline_desc(&desc)?;
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        registry.create_pipeline_metallib(desc, metallib_data)
+    }
+
+    /// Create a custom GPU pipeline from a precompiled Metal library file (`.metallib`).
+    pub fn create_custom_pipeline_metallib_file(
+        &mut self,
+        desc: CustomPipelineDesc,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<CustomPipelineId> {
+        let path = path.as_ref();
+        let metallib_data: Arc<[u8]> = std::fs::read(path)
+            .with_context(|| format!("failed to read Metal library file {}", path.display()))?
+            .into();
+        self.create_custom_pipeline_metallib(desc, metallib_data)
+    }
+
     /// Create a custom buffer for GPU-backed drawing.
     pub fn create_custom_buffer(&mut self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {

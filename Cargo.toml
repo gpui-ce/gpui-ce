@@ -339,6 +339,10 @@ name = "custom_draw_api"
 path = "examples/learn/custom_draw_api.rs"
 
 [[example]]
+name = "custom_draw_api_metallib"
+path = "examples/learn/custom_draw_api_metallib.rs"
+
+[[example]]
 name = "custom_draw_api_animated"
 path = "examples/learn/custom_draw_api_animated.rs"
 

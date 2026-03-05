@@ -694,6 +694,16 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         ))
     }
 
+    fn create_pipeline_metallib(
+        &self,
+        _desc: CustomPipelineDesc,
+        _metallib_data: Arc<[u8]>,
+    ) -> Result<CustomPipelineId> {
+        Err(anyhow::anyhow!(
+            "precompiled Metal libraries are only supported on the Metal backend"
+        ))
+    }
+
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let size = desc.data.len() as u64;
         let buffer = self.gpu.create_buffer(gpu::BufferDesc {

@@ -1350,6 +1350,11 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
         desc: CustomPipelineDesc,
         msl_source: String,
     ) -> Result<CustomPipelineId>;
+    fn create_pipeline_metallib(
+        &self,
+        desc: CustomPipelineDesc,
+        metallib_data: Arc<[u8]>,
+    ) -> Result<CustomPipelineId>;
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

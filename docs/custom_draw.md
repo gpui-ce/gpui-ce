@@ -31,6 +31,9 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 # Base example (Metal default on macOS; add --features macos-blade for Blade)
 cargo run --example custom_draw_api
 
+# Precompiled .metallib pipeline example (Metal backend)
+cargo run --example custom_draw_api_metallib
+
 # Animated uniform example
 cargo run --example custom_draw_api_animated
 
@@ -94,11 +97,20 @@ The mixed example computes its quad from the canvas bounds so it stays inside th
 ## Metal pipeline caching and precompiled MSL
 
 - Metal custom draw pipelines are cached by shader source, entry points, layouts, and bindings.
-- You can bypass WGSL→MSL translation with precompiled MSL:
+- You can bypass WGSL→MSL translation with precompiled MSL source:
 
 ```rust
 let pipeline = window.create_custom_pipeline_msl(desc, msl_source)?;
 ```
+
+- You can also load precompiled `.metallib` bytes:
+
+```rust
+let pipeline = window.create_custom_pipeline_metallib_file(desc, "path/to/custom.metallib")?;
+```
+
+See `custom_draw_api_metallib` for a complete example that compiles MSL to `.metallib`
+and loads it via this API.
 
 MSL slot mapping follows the binding order used in `CustomPipelineDesc`:
 - Textures/samplers use the binding index (0..N)
@@ -288,7 +300,8 @@ cargo run --release --example custom_draw_stress -- \
 - **P2 (performance/tooling)**
   - More compressed texture formats (additional ASTC sizes, PVRTC).
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
-  - Persistent pipeline cache / `.metallib` loading for Metal.
+  - Persistent pipeline cache for Metal.
+  - `.metallib` loading for Metal (done).
   - GPU profiling (timestamps) and resource lifetime diagnostics.
   - Frame pacing / diagnostics tooling.
 
