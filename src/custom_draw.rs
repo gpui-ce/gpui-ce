@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
 
@@ -1355,6 +1355,7 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
         desc: CustomPipelineDesc,
         metallib_data: Arc<[u8]>,
     ) -> Result<CustomPipelineId>;
+    fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()>;
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

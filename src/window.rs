@@ -3377,6 +3377,29 @@ impl Window {
         self.create_custom_pipeline_metallib(desc, metallib_data)
     }
 
+    /// Set the custom draw pipeline cache file path for persistent Metal pipeline archives.
+    pub fn set_custom_pipeline_cache_path(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        registry.set_pipeline_cache_path(Some(path.as_ref().to_path_buf()))
+    }
+
+    /// Disable the custom draw pipeline cache path.
+    pub fn clear_custom_pipeline_cache_path(&mut self) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        registry.set_pipeline_cache_path(None)
+    }
+
     /// Create a custom buffer for GPU-backed drawing.
     pub fn create_custom_buffer(&mut self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let Some(registry) = self.platform_window.custom_draw_registry() else {

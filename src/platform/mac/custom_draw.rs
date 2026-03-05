@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -24,6 +25,7 @@ pub(crate) struct MetalCustomDrawRegistry {
     pipelines: Mutex<Vec<Option<MetalCustomPipeline>>>,
     compute_pipelines: Mutex<Vec<Option<MetalCustomComputePipeline>>>,
     pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
+    pipeline_archive: Mutex<Option<MetalPipelineArchiveState>>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
     depth_targets: Mutex<Vec<Option<MetalCustomDepthTarget>>>,
@@ -132,6 +134,16 @@ struct PipelineStateKey {
     sample_count: u32,
 }
 
+struct MetalPipelineArchiveState {
+    archive: metal::BinaryArchive,
+    path: PathBuf,
+}
+
+struct MetalPipelineArchiveSnapshot {
+    archive: metal::BinaryArchive,
+    path: PathBuf,
+}
+
 struct MetalCustomBuffer {
     buffer: metal::Buffer,
     size: u64,
@@ -175,6 +187,7 @@ impl MetalCustomDrawRegistry {
             pipelines: Mutex::new(Vec::new()),
             compute_pipelines: Mutex::new(Vec::new()),
             pipeline_cache: Mutex::new(HashMap::new()),
+            pipeline_archive: Mutex::new(None),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
             depth_targets: Mutex::new(Vec::new()),
@@ -252,6 +265,132 @@ impl MetalCustomDrawRegistry {
 
     pub(crate) fn surface_format(&self) -> metal::MTLPixelFormat {
         self.pixel_format
+    }
+
+    fn set_pipeline_cache_path_internal(&self, path: Option<PathBuf>) -> Result<()> {
+        let mut pipeline_archive = self.pipeline_archive.lock().unwrap();
+        let Some(path) = path else {
+            *pipeline_archive = None;
+            return Ok(());
+        };
+
+        let absolute_path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        if let Some(parent) = absolute_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        let descriptor = metal::BinaryArchiveDescriptor::new();
+        if absolute_path.is_file() {
+            let url = metal_file_url(&absolute_path)?;
+            descriptor.set_url(url.as_ref());
+        }
+        let archive = self
+            .device
+            .new_binary_archive_with_descriptor(descriptor.as_ref())
+            .map_err(|err| {
+                anyhow!(
+                    "custom draw pipeline cache open failed at {}: {err}",
+                    absolute_path.display()
+                )
+            })?;
+
+        *pipeline_archive = Some(MetalPipelineArchiveState {
+            archive,
+            path: absolute_path,
+        });
+        Ok(())
+    }
+
+    fn pipeline_archive_snapshot(&self) -> Option<MetalPipelineArchiveSnapshot> {
+        let pipeline_archive = self.pipeline_archive.lock().unwrap();
+        pipeline_archive
+            .as_ref()
+            .map(|entry| MetalPipelineArchiveSnapshot {
+                archive: entry.archive.clone(),
+                path: entry.path.clone(),
+            })
+    }
+
+    fn persist_render_pipeline_archive(
+        pipeline_archive: Option<&MetalPipelineArchiveSnapshot>,
+        descriptor: &metal::RenderPipelineDescriptorRef,
+    ) -> Result<()> {
+        let Some(pipeline_archive) = pipeline_archive else {
+            return Ok(());
+        };
+
+        pipeline_archive
+            .archive
+            .add_render_pipeline_functions_with_descriptor(descriptor)
+            .map_err(|err| {
+                anyhow!(
+                    "custom draw pipeline cache update failed at {}: {err}",
+                    pipeline_archive.path.display()
+                )
+            })?;
+
+        let archive_url = metal_file_url(&pipeline_archive.path)?;
+        let did_serialize = pipeline_archive
+            .archive
+            .serialize_to_url(archive_url.as_ref())
+            .map_err(|err| {
+                anyhow!(
+                    "custom draw pipeline cache serialize failed at {}: {err}",
+                    pipeline_archive.path.display()
+                )
+            })?;
+        if !did_serialize {
+            return Err(anyhow!(
+                "custom draw pipeline cache serialize returned false at {}",
+                pipeline_archive.path.display()
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn persist_compute_pipeline_archive(
+        pipeline_archive: Option<&MetalPipelineArchiveSnapshot>,
+        descriptor: &metal::ComputePipelineDescriptorRef,
+    ) -> Result<()> {
+        let Some(pipeline_archive) = pipeline_archive else {
+            return Ok(());
+        };
+
+        pipeline_archive
+            .archive
+            .add_compute_pipeline_functions_with_descriptor(descriptor)
+            .map_err(|err| {
+                anyhow!(
+                    "custom compute pipeline cache update failed at {}: {err}",
+                    pipeline_archive.path.display()
+                )
+            })?;
+
+        let archive_url = metal_file_url(&pipeline_archive.path)?;
+        let did_serialize = pipeline_archive
+            .archive
+            .serialize_to_url(archive_url.as_ref())
+            .map_err(|err| {
+                anyhow!(
+                    "custom compute pipeline cache serialize failed at {}: {err}",
+                    pipeline_archive.path.display()
+                )
+            })?;
+        if !did_serialize {
+            return Err(anyhow!(
+                "custom compute pipeline cache serialize returned false at {}",
+                pipeline_archive.path.display()
+            ));
+        }
+
+        Ok(())
     }
 
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> u32 {
@@ -538,11 +677,15 @@ impl MetalCustomDrawRegistry {
         let vertex_descriptor =
             build_vertex_descriptor(&desc.vertex_fetches, &attribute_locations)?;
 
+        let pipeline_archive = self.pipeline_archive_snapshot();
         let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
         pipeline_descriptor.set_label(&desc.name);
         pipeline_descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
         pipeline_descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
         pipeline_descriptor.set_vertex_descriptor(Some(vertex_descriptor));
+        if let Some(pipeline_archive) = pipeline_archive.as_ref() {
+            pipeline_descriptor.set_binary_archives(&[pipeline_archive.archive.as_ref()]);
+        }
 
         let color_attachments = pipeline_descriptor.color_attachments();
         for (index, format) in color_formats.iter().enumerate() {
@@ -568,6 +711,10 @@ impl MetalCustomDrawRegistry {
             .device
             .new_render_pipeline_state(&pipeline_descriptor)
             .map_err(|err| anyhow!("custom draw pipeline failed: {err}"))?;
+        Self::persist_render_pipeline_archive(
+            pipeline_archive.as_ref(),
+            pipeline_descriptor.as_ref(),
+        )?;
 
         let mut binding_kinds: Vec<CustomBindingKind> =
             desc.bindings.iter().map(|binding| binding.kind).collect();
@@ -787,10 +934,22 @@ impl MetalCustomDrawRegistry {
             argument_buffers.push(None);
         }
 
+        let pipeline_archive = self.pipeline_archive_snapshot();
+        let pipeline_descriptor = metal::ComputePipelineDescriptor::new();
+        pipeline_descriptor.set_label(&desc.name);
+        pipeline_descriptor.set_compute_function(Some(compute_fn.as_ref()));
+        if let Some(pipeline_archive) = pipeline_archive.as_ref() {
+            pipeline_descriptor.set_binary_archives(&[pipeline_archive.archive.as_ref()]);
+        }
+
         let pipeline_state = self
             .device
-            .new_compute_pipeline_state_with_function(compute_fn.as_ref())
+            .new_compute_pipeline_state(&pipeline_descriptor)
             .map_err(|err| anyhow!("custom compute pipeline failed: {err}"))?;
+        Self::persist_compute_pipeline_archive(
+            pipeline_archive.as_ref(),
+            pipeline_descriptor.as_ref(),
+        )?;
 
         let mut binding_kinds: Vec<CustomBindingKind> =
             desc.bindings.iter().map(|binding| binding.kind).collect();
@@ -832,6 +991,10 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         metallib_data: Arc<[u8]>,
     ) -> Result<CustomPipelineId> {
         self.create_pipeline_internal(desc, PipelineLibrarySource::Metallib(metallib_data))
+    }
+
+    fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()> {
+        self.set_pipeline_cache_path_internal(path)
     }
 
     fn create_compute_pipeline(
@@ -2266,6 +2429,49 @@ fn metal_supports_pixel_formats(
         .iter()
         .copied()
         .any(|set| device.supports_feature_set(set) && predicate(set))
+}
+
+fn metal_file_url(path: &Path) -> Result<metal::URL> {
+    let path_string = path
+        .to_str()
+        .ok_or_else(|| anyhow!("custom draw pipeline cache path is not valid UTF-8"))?;
+    let encoded_path = percent_encode_url_path(path_string);
+    let url_string = format!("file://{encoded_path}");
+    let url = metal::URL::new_with_string(&url_string);
+    if url.path().is_empty() {
+        return Err(anyhow!(
+            "failed to build file URL for custom draw pipeline cache path {}",
+            path.display()
+        ));
+    }
+
+    let retained_url = url.clone();
+    std::mem::forget(url);
+    Ok(retained_url)
+}
+
+fn percent_encode_url_path(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                encoded.push(char::from(byte));
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push(hex_nibble(byte >> 4));
+                encoded.push(hex_nibble(byte & 0x0f));
+            }
+        }
+    }
+    encoded
+}
+
+fn hex_nibble(value: u8) -> char {
+    match value {
+        0..=9 => char::from(b'0' + value),
+        _ => char::from(b'A' + (value - 10)),
+    }
 }
 
 fn metal_texture_format_supported(device: &metal::Device, format: CustomTextureFormat) -> bool {

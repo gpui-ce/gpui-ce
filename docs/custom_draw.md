@@ -97,6 +97,15 @@ The mixed example computes its quad from the canvas bounds so it stays inside th
 ## Metal pipeline caching and precompiled MSL
 
 - Metal custom draw pipelines are cached by shader source, entry points, layouts, and bindings.
+- You can persist custom draw pipeline cache data across runs with a Metal binary archive path:
+
+```rust
+window.set_custom_pipeline_cache_path("/tmp/gpui_custom_draw_pipeline_cache.binarchive")?;
+```
+
+Call `window.clear_custom_pipeline_cache_path()?` to disable persistent cache usage.
+Persistent cache uses Metal binary archives and requires macOS 11 or newer.
+
 - You can bypass WGSL→MSL translation with precompiled MSL source:
 
 ```rust
@@ -110,7 +119,8 @@ let pipeline = window.create_custom_pipeline_metallib_file(desc, "path/to/custom
 ```
 
 See `custom_draw_api_metallib` for a complete example that compiles MSL to `.metallib`
-and loads it via this API.
+and loads it via this API. Set `GPUI_EXAMPLE_ENABLE_PIPELINE_CACHE=1` when running that
+example to exercise persistent pipeline cache path setup.
 
 MSL slot mapping follows the binding order used in `CustomPipelineDesc`:
 - Textures/samplers use the binding index (0..N)
@@ -300,7 +310,7 @@ cargo run --release --example custom_draw_stress -- \
 - **P2 (performance/tooling)**
   - More compressed texture formats (additional ASTC sizes, PVRTC).
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
-  - Persistent pipeline cache for Metal.
+  - Persistent pipeline cache for Metal (done).
   - `.metallib` loading for Metal (done).
   - GPU profiling (timestamps) and resource lifetime diagnostics.
   - Frame pacing / diagnostics tooling.

@@ -704,6 +704,15 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         ))
     }
 
+    fn set_pipeline_cache_path(&self, path: Option<std::path::PathBuf>) -> Result<()> {
+        if path.is_some() {
+            return Err(anyhow::anyhow!(
+                "custom draw pipeline cache is only supported on the Metal backend"
+            ));
+        }
+        Ok(())
+    }
+
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let size = desc.data.len() as u64;
         let buffer = self.gpu.create_buffer(gpu::BufferDesc {

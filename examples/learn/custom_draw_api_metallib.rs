@@ -5,6 +5,7 @@
 //! Notes:
 //! - This example is intended for the default Metal backend on macOS.
 //! - With `--features macos-blade`, pipeline creation from `.metallib` is expected to fail.
+//! - Set `GPUI_EXAMPLE_ENABLE_PIPELINE_CACHE=1` to also exercise persistent pipeline cache.
 
 #[path = "../prelude.rs"]
 mod example_prelude;
@@ -138,6 +139,17 @@ impl MetallibCustomDrawExample {
         CustomSamplerId,
         &'static str,
     )> {
+        #[cfg(target_os = "macos")]
+        {
+            if std::env::var_os("GPUI_EXAMPLE_ENABLE_PIPELINE_CACHE").is_some() {
+                let cache_path =
+                    std::env::temp_dir().join("gpui_custom_draw_pipeline_cache.binarchive");
+                if let Err(err) = window.set_custom_pipeline_cache_path(&cache_path) {
+                    log::warn!("custom draw pipeline cache unavailable: {err}");
+                }
+            }
+        }
+
         let pipeline = create_pipeline_from_metallib(window)?;
 
         let vertex_data = quad_vertex_data();
