@@ -1259,6 +1259,31 @@ pub struct CustomGpuFrameProfile {
     pub gpu_time_ns: Option<u64>,
 }
 
+/// Snapshot of custom draw GPU resources currently held by the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CustomDrawResourceStats {
+    /// Number of custom render pipelines.
+    pub pipeline_count: u32,
+    /// Number of custom compute pipelines.
+    pub compute_pipeline_count: u32,
+    /// Number of custom buffers.
+    pub buffer_count: u32,
+    /// Total custom buffer bytes.
+    pub buffer_bytes: u64,
+    /// Number of custom textures, including render targets.
+    pub texture_count: u32,
+    /// Total estimated custom texture bytes.
+    pub texture_bytes: u64,
+    /// Number of custom render target textures.
+    pub render_target_count: u32,
+    /// Number of custom depth targets.
+    pub depth_target_count: u32,
+    /// Total estimated custom depth target bytes.
+    pub depth_target_bytes: u64,
+    /// Number of custom samplers.
+    pub sampler_count: u32,
+}
+
 /// Offscreen render target description.
 #[derive(Debug, Clone)]
 pub struct CustomRenderTargetDesc {
@@ -1373,6 +1398,7 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()>;
     fn set_gpu_profiling_enabled(&self, enabled: bool) -> Result<()>;
     fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile>;
+    fn resource_stats(&self) -> CustomDrawResourceStats;
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

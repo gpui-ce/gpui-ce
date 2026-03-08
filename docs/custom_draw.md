@@ -151,6 +151,27 @@ if let Some(sample) = window.take_last_custom_gpu_profile()? {
 
 `gpu_time_ns` is currently sourced from Metal command buffer timestamps.
 
+## Custom resource diagnostics
+
+You can snapshot custom draw resource counts and estimated memory usage:
+
+```rust
+let stats = window.custom_draw_resource_stats()?;
+log::info!(
+    "custom pipelines={}, compute pipelines={}, buffers={} ({} bytes), textures={} ({} bytes), depth targets={} ({} bytes)",
+    stats.pipeline_count,
+    stats.compute_pipeline_count,
+    stats.buffer_count,
+    stats.buffer_bytes,
+    stats.texture_count,
+    stats.texture_bytes,
+    stats.depth_target_count,
+    stats.depth_target_bytes,
+);
+```
+
+The memory values are estimates based on texture formats, mip chains, array layers, and sample counts.
+
 ## Uniform helper (16-byte alignment)
 
 Use `CustomUniformBuilder` to avoid the common "uniform size must be 16-byte aligned" error:
@@ -338,7 +359,7 @@ cargo run --release --example custom_draw_stress -- \
   - Persistent pipeline cache for Metal (done).
   - `.metallib` loading for Metal (done).
   - GPU profiling (timestamps) for custom draw and custom compute on Metal (initial, done).
-  - Resource lifetime diagnostics.
+  - Resource lifetime diagnostics (initial, done).
   - Frame pacing / diagnostics tooling.
 
 ## Streaming texture uploads plan (done)

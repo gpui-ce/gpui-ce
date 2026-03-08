@@ -9,11 +9,11 @@ use crate::{
     CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
     CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
-    CustomFilterMode, CustomFrontFace, CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId,
-    CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension,
-    CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomTextureUsage,
-    CustomVertexFormat, Result,
+    CustomDrawResourceStats, CustomFilterMode, CustomFrontFace, CustomGpuFrameProfile,
+    CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology, CustomPushConstantsDesc,
+    CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate,
+    CustomTextureDesc, CustomTextureDimension, CustomTextureFormat, CustomTextureId,
+    CustomTextureUpdate, CustomTextureUsage, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -719,6 +719,110 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
 
     fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile> {
         None
+    }
+
+    fn resource_stats(&self) -> CustomDrawResourceStats {
+        let pipeline_count = self
+            .pipelines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.is_some())
+            .count() as u32;
+        let compute_pipeline_count = self
+            .compute_pipelines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.is_some())
+            .count() as u32;
+
+        let (buffer_count, buffer_bytes) = self
+            .buffers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .fold((0u32, 0u64), |(count, bytes), entry| {
+                (count + 1, bytes.saturating_add(entry.size))
+            });
+
+        let (texture_count, texture_bytes, render_target_count) = self
+            .textures
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .fold(
+                (0u32, 0u64, 0u32),
+                |(count, bytes, render_targets), entry| {
+                    let mut texture_bytes = bytes.saturating_add(texture_mip_chain_estimate_bytes(
+                        entry.width,
+                        entry.height,
+                        entry.array_layer_count,
+                        entry.mip_level_count,
+                        entry.block_width,
+                        entry.block_height,
+                        entry.bytes_per_block,
+                    ));
+                    if entry.msaa_texture.is_some() && entry.sample_count > 1 {
+                        texture_bytes = texture_bytes.saturating_add(
+                            texture_level_estimate_bytes(
+                                entry.width,
+                                entry.height,
+                                entry.array_layer_count,
+                                entry.block_width,
+                                entry.block_height,
+                                entry.bytes_per_block,
+                            )
+                            .saturating_mul(entry.sample_count as u64),
+                        );
+                    }
+                    (
+                        count + 1,
+                        texture_bytes,
+                        render_targets + u32::from(entry.is_render_target),
+                    )
+                },
+            );
+
+        let (depth_target_count, depth_target_bytes) = self
+            .depth_targets
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .fold((0u32, 0u64), |(count, bytes), entry| {
+                (
+                    count + 1,
+                    bytes.saturating_add(depth_target_estimate_bytes(
+                        entry.width,
+                        entry.height,
+                        entry.sample_count,
+                    )),
+                )
+            });
+
+        let sampler_count = self
+            .samplers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.is_some())
+            .count() as u32;
+
+        CustomDrawResourceStats {
+            pipeline_count,
+            compute_pipeline_count,
+            buffer_count,
+            buffer_bytes,
+            texture_count,
+            texture_bytes,
+            render_target_count,
+            depth_target_count,
+            depth_target_bytes,
+            sampler_count,
+        }
     }
 
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
@@ -1553,6 +1657,53 @@ fn mip_level_size(width: u32, height: u32, level: u32) -> (u32, u32) {
         level_height = (level_height / 2).max(1);
     }
     (level_width, level_height)
+}
+
+fn texture_level_estimate_bytes(
+    width: u32,
+    height: u32,
+    array_layer_count: u32,
+    block_width: u32,
+    block_height: u32,
+    bytes_per_block: u32,
+) -> u64 {
+    let blocks_w = width.div_ceil(block_width);
+    let blocks_h = height.div_ceil(block_height);
+    (blocks_w as u64)
+        .saturating_mul(blocks_h as u64)
+        .saturating_mul(bytes_per_block as u64)
+        .saturating_mul(array_layer_count as u64)
+}
+
+fn texture_mip_chain_estimate_bytes(
+    width: u32,
+    height: u32,
+    array_layer_count: u32,
+    mip_level_count: u32,
+    block_width: u32,
+    block_height: u32,
+    bytes_per_block: u32,
+) -> u64 {
+    let mut total_bytes = 0u64;
+    for level in 0..mip_level_count {
+        let (level_width, level_height) = mip_level_size(width, height, level);
+        total_bytes = total_bytes.saturating_add(texture_level_estimate_bytes(
+            level_width,
+            level_height,
+            array_layer_count,
+            block_width,
+            block_height,
+            bytes_per_block,
+        ));
+    }
+    total_bytes
+}
+
+fn depth_target_estimate_bytes(width: u32, height: u32, sample_count: u32) -> u64 {
+    (width.max(1) as u64)
+        .saturating_mul(height.max(1) as u64)
+        .saturating_mul(4)
+        .saturating_mul(sample_count.max(1) as u64)
 }
 
 fn blade_depth_format(format: CustomDepthFormat) -> gpu::TextureFormat {

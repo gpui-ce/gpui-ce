@@ -16,13 +16,13 @@ use std::time::Instant;
 use gpui::{
     App, AppContext, Application, Bounds, Colors, Context, CustomAddressMode, CustomBindingDesc,
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
-    CustomBufferSource, CustomDrawParams, CustomFilterMode, CustomGpuFrameProfile,
-    CustomPipelineDesc, CustomPipelineId, CustomPipelineState, CustomPrimitiveTopology,
-    CustomSamplerDesc, CustomSamplerId, CustomTextureDesc, CustomTextureDimension,
-    CustomTextureFormat, CustomTextureId, CustomTextureUsage, CustomVertexAttribute,
-    CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch, CustomVertexFormat,
-    CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds, WindowOptions, canvas, div,
-    prelude::*, px, size,
+    CustomBufferSource, CustomDrawParams, CustomDrawResourceStats, CustomFilterMode,
+    CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
+    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
+    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
+    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
+    CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
+    WindowOptions, canvas, div, prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -67,6 +67,7 @@ struct GpuProfilingCustomDrawExample {
     sampler: Option<CustomSamplerId>,
     start: Instant,
     profile_summary: String,
+    resource_summary: String,
     error: Option<String>,
 }
 
@@ -79,6 +80,7 @@ impl GpuProfilingCustomDrawExample {
             sampler: None,
             start: Instant::now(),
             profile_summary: "Waiting for GPU profile samples...".to_string(),
+            resource_summary: "Waiting for resource stats...".to_string(),
             error: None,
         }
     }
@@ -210,6 +212,17 @@ impl GpuProfilingCustomDrawExample {
             }
         }
     }
+
+    fn update_resource_summary(&mut self, window: &mut Window) {
+        match window.custom_draw_resource_stats() {
+            Ok(stats) => {
+                self.resource_summary = format_resource_summary(stats);
+            }
+            Err(err) => {
+                self.resource_summary = format!("Resource stats unavailable: {err}");
+            }
+        }
+    }
 }
 
 impl Render for GpuProfilingCustomDrawExample {
@@ -217,6 +230,7 @@ impl Render for GpuProfilingCustomDrawExample {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
         self.update_profile_summary(window);
+        self.update_resource_summary(window);
         window.request_animation_frame();
 
         let header = div()
@@ -241,6 +255,12 @@ impl Render for GpuProfilingCustomDrawExample {
                     .text_sm()
                     .text_color(colors.text_muted)
                     .child(self.profile_summary.clone()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(colors.text_muted)
+                    .child(self.resource_summary.clone()),
             );
 
         let surface: Hsla = colors.surface.into();
@@ -329,6 +349,22 @@ fn format_profile_summary(profile: CustomGpuFrameProfile) -> String {
         profile.custom_render_pass_count,
         profile.custom_compute_pass_count,
         gpu_time_ms
+    )
+}
+
+fn format_resource_summary(stats: CustomDrawResourceStats) -> String {
+    format!(
+        "pipelines={} (compute {}), buffers={} ({:.2} MiB), textures={} ({:.2} MiB), render targets={}, depth targets={} ({:.2} MiB), samplers={}",
+        stats.pipeline_count,
+        stats.compute_pipeline_count,
+        stats.buffer_count,
+        stats.buffer_bytes as f64 / (1024.0 * 1024.0),
+        stats.texture_count,
+        stats.texture_bytes as f64 / (1024.0 * 1024.0),
+        stats.render_target_count,
+        stats.depth_target_count,
+        stats.depth_target_bytes as f64 / (1024.0 * 1024.0),
+        stats.sampler_count,
     )
 }
 
