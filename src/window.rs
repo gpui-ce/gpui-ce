@@ -6,23 +6,23 @@ use crate::{
     Context, Corners, CursorStyle, CustomBatchKey, CustomBindingValue, CustomBufferDesc,
     CustomBufferId, CustomBufferSource, CustomCompute, CustomComputeDispatch,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomDepthTargetDesc, CustomDepthTargetId,
-    CustomDraw, CustomDrawParams, CustomPipelineDesc, CustomPipelineId, CustomRenderTargetDesc,
-    CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc,
-    CustomTextureId, CustomTextureUpdate, Decorations, DevicePixels, DispatchActionListener,
-    DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
-    FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
-    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
-    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubscriberSet,
-    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-    TextStyle, TextStyleRefinement, TransformationMatrix, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, px, rems, size,
-    transparent_black,
+    CustomDraw, CustomDrawParams, CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId,
+    CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate,
+    CustomTextureDesc, CustomTextureId, CustomTextureUpdate, Decorations, DevicePixels,
+    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
+    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
+    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
+    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, prelude::*, px, rems, size, transparent_black,
 };
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -3398,6 +3398,26 @@ impl Window {
             ));
         };
         registry.set_pipeline_cache_path(None)
+    }
+
+    /// Enable or disable GPU profiling for custom draw and custom compute work.
+    pub fn set_custom_gpu_profiling_enabled(&mut self, enabled: bool) -> Result<()> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        registry.set_gpu_profiling_enabled(enabled)
+    }
+
+    /// Take the latest custom GPU frame profile sample, if one is available.
+    pub fn take_last_custom_gpu_profile(&mut self) -> Result<Option<CustomGpuFrameProfile>> {
+        let Some(registry) = self.platform_window.custom_draw_registry() else {
+            return Err(anyhow!(
+                "custom draw pipeline not supported on this platform"
+            ));
+        };
+        Ok(registry.take_last_gpu_profile())
     }
 
     /// Create a custom buffer for GPU-backed drawing.

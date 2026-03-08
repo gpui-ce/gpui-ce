@@ -1244,6 +1244,21 @@ impl CustomTextureBufferUpdate {
     }
 }
 
+/// GPU profiling result for custom draw and compute work in one frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CustomGpuFrameProfile {
+    /// Number of custom draw commands submitted in the frame.
+    pub custom_draw_count: u32,
+    /// Number of custom compute dispatches submitted in the frame.
+    pub custom_compute_count: u32,
+    /// Number of custom render passes submitted in the frame.
+    pub custom_render_pass_count: u32,
+    /// Number of custom compute passes submitted in the frame.
+    pub custom_compute_pass_count: u32,
+    /// Total GPU time in nanoseconds for the command buffer when available.
+    pub gpu_time_ns: Option<u64>,
+}
+
 /// Offscreen render target description.
 #[derive(Debug, Clone)]
 pub struct CustomRenderTargetDesc {
@@ -1356,6 +1371,8 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
         metallib_data: Arc<[u8]>,
     ) -> Result<CustomPipelineId>;
     fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()>;
+    fn set_gpu_profiling_enabled(&self, enabled: bool) -> Result<()>;
+    fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile>;
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

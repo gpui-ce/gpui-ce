@@ -37,6 +37,9 @@ cargo run --example custom_draw_api_metallib
 # Animated uniform example
 cargo run --example custom_draw_api_animated
 
+# GPU profiling example
+cargo run --example custom_draw_api_gpu_profiling
+
 # Instanced rendering example
 cargo run --example custom_draw_api_instanced
 
@@ -126,6 +129,27 @@ MSL slot mapping follows the binding order used in `CustomPipelineDesc`:
 - Textures/samplers use the binding index (0..N)
 - Buffers/uniforms use `vertex_fetch_count` offset by the binding index
 - Binding groups are ignored on Metal (slots are flat)
+
+## Custom GPU profiling (timestamps)
+
+You can enable per-frame GPU profiling for custom draw and custom compute work:
+
+```rust
+window.set_custom_gpu_profiling_enabled(true)?;
+
+if let Some(sample) = window.take_last_custom_gpu_profile()? {
+    log::info!(
+        "custom draws={}, custom computes={}, render passes={}, compute passes={}, gpu_time_ns={:?}",
+        sample.custom_draw_count,
+        sample.custom_compute_count,
+        sample.custom_render_pass_count,
+        sample.custom_compute_pass_count,
+        sample.gpu_time_ns,
+    );
+}
+```
+
+`gpu_time_ns` is currently sourced from Metal command buffer timestamps.
 
 ## Uniform helper (16-byte alignment)
 
@@ -293,6 +317,7 @@ cargo run --release --example custom_draw_stress -- \
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
 - ASTC and ETC2 textures require Metal support and are not available on Blade.
+- Custom GPU timestamp profiling is currently available on Metal.
 - Storage textures are limited to 2D RGBA/BGRA (with sRGB).
 
 ## Core roadmap (triage)
@@ -312,7 +337,8 @@ cargo run --release --example custom_draw_stress -- \
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
   - Persistent pipeline cache for Metal (done).
   - `.metallib` loading for Metal (done).
-  - GPU profiling (timestamps) and resource lifetime diagnostics.
+  - GPU profiling (timestamps) for custom draw and custom compute on Metal (initial, done).
+  - Resource lifetime diagnostics.
   - Frame pacing / diagnostics tooling.
 
 ## Streaming texture uploads plan (done)

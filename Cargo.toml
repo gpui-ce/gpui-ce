@@ -347,6 +347,10 @@ name = "custom_draw_api_animated"
 path = "examples/learn/custom_draw_api_animated.rs"
 
 [[example]]
+name = "custom_draw_api_gpu_profiling"
+path = "examples/learn/custom_draw_api_gpu_profiling.rs"
+
+[[example]]
 name = "custom_draw_api_instanced"
 path = "examples/learn/custom_draw_api_instanced.rs"
 

@@ -7,9 +7,9 @@ use super::{
 };
 use crate::{
     AtlasTextureId, Background, Bounds, ContentMask, CustomBindingKind, CustomBindingValue,
-    CustomBufferSource, CustomDraw, CustomIndexBuffer, CustomIndexFormat, CustomTextureId,
-    DevicePixels, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch,
-    Quad, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    CustomBufferSource, CustomDraw, CustomGpuFrameProfile, CustomIndexBuffer, CustomIndexFormat,
+    CustomTextureId, DevicePixels, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
+    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
 use anyhow::{Result, anyhow};
 use block::ConcreteBlock;
@@ -396,17 +396,28 @@ impl MetalRenderer {
 
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+            let custom_gpu_profile = if self.custom_draw.gpu_profiling_enabled() {
+                build_custom_gpu_profile(scene)
+            } else {
+                None
+            };
 
             let command_buffer =
                 self.draw_primitives(scene, &mut instance_buffer, drawable, viewport_size);
 
             match command_buffer {
                 Ok(command_buffer) => {
+                    let custom_draw = self.custom_draw.clone();
                     let instance_buffer_pool = self.instance_buffer_pool.clone();
                     let instance_buffer = Cell::new(Some(instance_buffer));
-                    let block = ConcreteBlock::new(move |_| {
+                    let block = ConcreteBlock::new(move |completed_command_buffer| {
                         if let Some(instance_buffer) = instance_buffer.take() {
                             instance_buffer_pool.lock().release(instance_buffer);
+                        }
+                        if let Some(mut custom_gpu_profile) = custom_gpu_profile {
+                            custom_gpu_profile.gpu_time_ns =
+                                metal_command_buffer_gpu_time_ns(completed_command_buffer);
+                            custom_draw.record_gpu_profile(custom_gpu_profile);
                         }
                     });
                     let block = block.copy();
@@ -2851,6 +2862,60 @@ fn build_path_rasterization_pipeline_state(
     device
         .new_render_pipeline_state(&descriptor)
         .expect("could not create render pipeline state")
+}
+
+fn build_custom_gpu_profile(scene: &Scene) -> Option<CustomGpuFrameProfile> {
+    if scene.custom_draws.is_empty() && scene.custom_computes.is_empty() {
+        return None;
+    }
+
+    let mut has_window_custom_draw = false;
+    let mut offscreen_target_hashes = std::collections::HashSet::new();
+    for draw in scene.custom_draws.iter() {
+        if draw.target.is_some() {
+            offscreen_target_hashes.insert(draw.batch_key.target_hash);
+        } else {
+            has_window_custom_draw = true;
+        }
+    }
+
+    let custom_render_pass_count =
+        offscreen_target_hashes.len() as u32 + u32::from(has_window_custom_draw);
+    let custom_compute_pass_count = u32::from(!scene.custom_computes.is_empty());
+
+    Some(CustomGpuFrameProfile {
+        custom_draw_count: scene.custom_draws.len() as u32,
+        custom_compute_count: scene.custom_computes.len() as u32,
+        custom_render_pass_count,
+        custom_compute_pass_count,
+        gpu_time_ns: None,
+    })
+}
+
+fn metal_command_buffer_gpu_time_ns(command_buffer: &metal::CommandBufferRef) -> Option<u64> {
+    #[allow(clippy::disallowed_methods)]
+    unsafe {
+        let has_gpu_start_time: bool =
+            msg_send![command_buffer, respondsToSelector: sel!(GPUStartTime)];
+        let has_gpu_end_time: bool =
+            msg_send![command_buffer, respondsToSelector: sel!(GPUEndTime)];
+        if !has_gpu_start_time || !has_gpu_end_time {
+            return None;
+        }
+
+        let gpu_start_time: f64 = msg_send![command_buffer, GPUStartTime];
+        let gpu_end_time: f64 = msg_send![command_buffer, GPUEndTime];
+        if gpu_start_time <= 0.0 || gpu_end_time < gpu_start_time {
+            return None;
+        }
+
+        let gpu_time_ns = ((gpu_end_time - gpu_start_time) * 1_000_000_000.0).round();
+        if !gpu_time_ns.is_finite() || gpu_time_ns < 0.0 {
+            return None;
+        }
+
+        Some(gpu_time_ns as u64)
+    }
 }
 
 fn align_offset_to(offset: &mut usize, alignment: usize) {

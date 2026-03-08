@@ -9,7 +9,7 @@ use crate::{
     CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
     CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
-    CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
+    CustomFilterMode, CustomFrontFace, CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId,
     CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
     CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension,
     CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomTextureUsage,
@@ -711,6 +711,14 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
             ));
         }
         Ok(())
+    }
+
+    fn set_gpu_profiling_enabled(&self, _enabled: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile> {
+        None
     }
 
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {

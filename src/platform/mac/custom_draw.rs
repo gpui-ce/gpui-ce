@@ -11,12 +11,12 @@ use crate::{
     CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
     CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
-    CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomPipelineDesc, CustomPipelineId,
-    CustomPipelineState, CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc,
-    CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc,
-    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
-    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
-    CustomVertexFormat, Result,
+    CustomDrawRegistry, CustomFilterMode, CustomFrontFace, CustomGpuFrameProfile,
+    CustomPipelineDesc, CustomPipelineId, CustomPipelineState, CustomPrimitiveTopology,
+    CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
+    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexAttribute,
+    CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -26,6 +26,7 @@ pub(crate) struct MetalCustomDrawRegistry {
     compute_pipelines: Mutex<Vec<Option<MetalCustomComputePipeline>>>,
     pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
     pipeline_archive: Mutex<Option<MetalPipelineArchiveState>>,
+    gpu_profiling: Mutex<MetalCustomGpuProfilingState>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
     depth_targets: Mutex<Vec<Option<MetalCustomDepthTarget>>>,
@@ -144,6 +145,12 @@ struct MetalPipelineArchiveSnapshot {
     path: PathBuf,
 }
 
+#[derive(Default)]
+struct MetalCustomGpuProfilingState {
+    enabled: bool,
+    last_profile: Option<CustomGpuFrameProfile>,
+}
+
 struct MetalCustomBuffer {
     buffer: metal::Buffer,
     size: u64,
@@ -188,6 +195,7 @@ impl MetalCustomDrawRegistry {
             compute_pipelines: Mutex::new(Vec::new()),
             pipeline_cache: Mutex::new(HashMap::new()),
             pipeline_archive: Mutex::new(None),
+            gpu_profiling: Mutex::new(MetalCustomGpuProfilingState::default()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
             depth_targets: Mutex::new(Vec::new()),
@@ -265,6 +273,17 @@ impl MetalCustomDrawRegistry {
 
     pub(crate) fn surface_format(&self) -> metal::MTLPixelFormat {
         self.pixel_format
+    }
+
+    pub(crate) fn gpu_profiling_enabled(&self) -> bool {
+        self.gpu_profiling.lock().unwrap().enabled
+    }
+
+    pub(crate) fn record_gpu_profile(&self, profile: CustomGpuFrameProfile) {
+        let mut gpu_profiling = self.gpu_profiling.lock().unwrap();
+        if gpu_profiling.enabled {
+            gpu_profiling.last_profile = Some(profile);
+        }
     }
 
     fn set_pipeline_cache_path_internal(&self, path: Option<PathBuf>) -> Result<()> {
@@ -995,6 +1014,19 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
     fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()> {
         self.set_pipeline_cache_path_internal(path)
+    }
+
+    fn set_gpu_profiling_enabled(&self, enabled: bool) -> Result<()> {
+        let mut gpu_profiling = self.gpu_profiling.lock().unwrap();
+        gpu_profiling.enabled = enabled;
+        if !enabled {
+            gpu_profiling.last_profile = None;
+        }
+        Ok(())
+    }
+
+    fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile> {
+        self.gpu_profiling.lock().unwrap().last_profile.take()
     }
 
     fn create_compute_pipeline(
