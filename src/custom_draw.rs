@@ -1062,6 +1062,34 @@ pub enum CustomTextureFormat {
     Astc4x4Unorm,
     /// ASTC 4x4 LDR sRGB.
     Astc4x4UnormSrgb,
+    /// ASTC 5x5 LDR.
+    Astc5x5Unorm,
+    /// ASTC 5x5 LDR sRGB.
+    Astc5x5UnormSrgb,
+    /// ASTC 6x6 LDR.
+    Astc6x6Unorm,
+    /// ASTC 6x6 LDR sRGB.
+    Astc6x6UnormSrgb,
+    /// ASTC 8x8 LDR.
+    Astc8x8Unorm,
+    /// ASTC 8x8 LDR sRGB.
+    Astc8x8UnormSrgb,
+    /// PVRTC RGB 2bpp.
+    PvrtcRgb2bppUnorm,
+    /// PVRTC RGB 2bpp sRGB.
+    PvrtcRgb2bppUnormSrgb,
+    /// PVRTC RGBA 2bpp.
+    PvrtcRgba2bppUnorm,
+    /// PVRTC RGBA 2bpp sRGB.
+    PvrtcRgba2bppUnormSrgb,
+    /// PVRTC RGB 4bpp.
+    PvrtcRgb4bppUnorm,
+    /// PVRTC RGB 4bpp sRGB.
+    PvrtcRgb4bppUnormSrgb,
+    /// PVRTC RGBA 4bpp.
+    PvrtcRgba4bppUnorm,
+    /// PVRTC RGBA 4bpp sRGB.
+    PvrtcRgba4bppUnormSrgb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1101,6 +1129,43 @@ impl CustomTextureFormat {
                 width: 4,
                 height: 4,
                 bytes: 16,
+            },
+            CustomTextureFormat::Astc5x5Unorm | CustomTextureFormat::Astc5x5UnormSrgb => {
+                CustomTexelBlockInfo {
+                    width: 5,
+                    height: 5,
+                    bytes: 16,
+                }
+            }
+            CustomTextureFormat::Astc6x6Unorm | CustomTextureFormat::Astc6x6UnormSrgb => {
+                CustomTexelBlockInfo {
+                    width: 6,
+                    height: 6,
+                    bytes: 16,
+                }
+            }
+            CustomTextureFormat::Astc8x8Unorm | CustomTextureFormat::Astc8x8UnormSrgb => {
+                CustomTexelBlockInfo {
+                    width: 8,
+                    height: 8,
+                    bytes: 16,
+                }
+            }
+            CustomTextureFormat::PvrtcRgb2bppUnorm
+            | CustomTextureFormat::PvrtcRgb2bppUnormSrgb
+            | CustomTextureFormat::PvrtcRgba2bppUnorm
+            | CustomTextureFormat::PvrtcRgba2bppUnormSrgb => CustomTexelBlockInfo {
+                width: 16,
+                height: 8,
+                bytes: 8,
+            },
+            CustomTextureFormat::PvrtcRgb4bppUnorm
+            | CustomTextureFormat::PvrtcRgb4bppUnormSrgb
+            | CustomTextureFormat::PvrtcRgba4bppUnorm
+            | CustomTextureFormat::PvrtcRgba4bppUnormSrgb => CustomTexelBlockInfo {
+                width: 8,
+                height: 4,
+                bytes: 8,
             },
         }
     }

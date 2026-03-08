@@ -1640,7 +1640,21 @@ fn blade_color_format(format: CustomTextureFormat) -> Result<gpu::TextureFormat>
         | CustomTextureFormat::Etc2Rgba8Unorm
         | CustomTextureFormat::Etc2Rgba8UnormSrgb
         | CustomTextureFormat::Astc4x4Unorm
-        | CustomTextureFormat::Astc4x4UnormSrgb => Err(anyhow::anyhow!(
+        | CustomTextureFormat::Astc4x4UnormSrgb
+        | CustomTextureFormat::Astc5x5Unorm
+        | CustomTextureFormat::Astc5x5UnormSrgb
+        | CustomTextureFormat::Astc6x6Unorm
+        | CustomTextureFormat::Astc6x6UnormSrgb
+        | CustomTextureFormat::Astc8x8Unorm
+        | CustomTextureFormat::Astc8x8UnormSrgb
+        | CustomTextureFormat::PvrtcRgb2bppUnorm
+        | CustomTextureFormat::PvrtcRgb2bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgba2bppUnorm
+        | CustomTextureFormat::PvrtcRgba2bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgb4bppUnorm
+        | CustomTextureFormat::PvrtcRgb4bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgba4bppUnorm
+        | CustomTextureFormat::PvrtcRgba4bppUnormSrgb => Err(anyhow::anyhow!(
             "custom texture format {:?} is not supported by Blade",
             format
         )),

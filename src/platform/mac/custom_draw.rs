@@ -2551,6 +2551,20 @@ fn metal_texture_format_info(format: CustomTextureFormat) -> MetalTextureFormatI
         CustomTextureFormat::Etc2Rgba8UnormSrgb => metal::MTLPixelFormat::EAC_RGBA8_sRGB,
         CustomTextureFormat::Astc4x4Unorm => metal::MTLPixelFormat::ASTC_4x4_LDR,
         CustomTextureFormat::Astc4x4UnormSrgb => metal::MTLPixelFormat::ASTC_4x4_sRGB,
+        CustomTextureFormat::Astc5x5Unorm => metal::MTLPixelFormat::ASTC_5x5_LDR,
+        CustomTextureFormat::Astc5x5UnormSrgb => metal::MTLPixelFormat::ASTC_5x5_sRGB,
+        CustomTextureFormat::Astc6x6Unorm => metal::MTLPixelFormat::ASTC_6x6_LDR,
+        CustomTextureFormat::Astc6x6UnormSrgb => metal::MTLPixelFormat::ASTC_6x6_sRGB,
+        CustomTextureFormat::Astc8x8Unorm => metal::MTLPixelFormat::ASTC_8x8_LDR,
+        CustomTextureFormat::Astc8x8UnormSrgb => metal::MTLPixelFormat::ASTC_8x8_sRGB,
+        CustomTextureFormat::PvrtcRgb2bppUnorm => metal::MTLPixelFormat::PVRTC_RGB_2BPP,
+        CustomTextureFormat::PvrtcRgb2bppUnormSrgb => metal::MTLPixelFormat::PVRTC_RGB_2BPP_sRGB,
+        CustomTextureFormat::PvrtcRgba2bppUnorm => metal::MTLPixelFormat::PVRTC_RGBA_2BPP,
+        CustomTextureFormat::PvrtcRgba2bppUnormSrgb => metal::MTLPixelFormat::PVRTC_RGBA_2BPP_sRGB,
+        CustomTextureFormat::PvrtcRgb4bppUnorm => metal::MTLPixelFormat::PVRTC_RGB_4BPP,
+        CustomTextureFormat::PvrtcRgb4bppUnormSrgb => metal::MTLPixelFormat::PVRTC_RGB_4BPP_sRGB,
+        CustomTextureFormat::PvrtcRgba4bppUnorm => metal::MTLPixelFormat::PVRTC_RGBA_4BPP,
+        CustomTextureFormat::PvrtcRgba4bppUnormSrgb => metal::MTLPixelFormat::PVRTC_RGBA_4BPP_sRGB,
     };
     MetalTextureFormatInfo {
         pixel_format,
@@ -2663,8 +2677,25 @@ fn metal_texture_format_supported(device: &metal::Device, format: CustomTextureF
         | CustomTextureFormat::Etc2Rgba8UnormSrgb => {
             metal_supports_pixel_formats(device, |set| set.supports_eac_etc_pixel_formats())
         }
-        CustomTextureFormat::Astc4x4Unorm | CustomTextureFormat::Astc4x4UnormSrgb => {
+        CustomTextureFormat::Astc4x4Unorm
+        | CustomTextureFormat::Astc4x4UnormSrgb
+        | CustomTextureFormat::Astc5x5Unorm
+        | CustomTextureFormat::Astc5x5UnormSrgb
+        | CustomTextureFormat::Astc6x6Unorm
+        | CustomTextureFormat::Astc6x6UnormSrgb
+        | CustomTextureFormat::Astc8x8Unorm
+        | CustomTextureFormat::Astc8x8UnormSrgb => {
             metal_supports_pixel_formats(device, |set| set.supports_astc_pixel_formats())
+        }
+        CustomTextureFormat::PvrtcRgb2bppUnorm
+        | CustomTextureFormat::PvrtcRgb2bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgba2bppUnorm
+        | CustomTextureFormat::PvrtcRgba2bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgb4bppUnorm
+        | CustomTextureFormat::PvrtcRgb4bppUnormSrgb
+        | CustomTextureFormat::PvrtcRgba4bppUnorm
+        | CustomTextureFormat::PvrtcRgba4bppUnormSrgb => {
+            metal_supports_pixel_formats(device, |set| set.supports_pvrtc_pixel_formats())
         }
         _ => true,
     }

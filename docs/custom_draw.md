@@ -15,7 +15,7 @@ The custom draw API is supported on Metal (default on macOS) and Blade (`macos-b
 - Texture and sampler bindings.
 - Binding arrays (texture/buffer).
 - Texture arrays and cubemaps.
-- Block-compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4).
+- Block-compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4/5x5/6x6/8x8, PVRTC 2bpp/4bpp).
 - sRGB formats and mipmapped textures.
 - Compute pipelines and dispatch.
 - Configurable pipeline state (blend, cull, front face, depth).
@@ -253,11 +253,15 @@ support `CustomTextureDimension::D2`.
 
 Use `CustomTextureFormat::Bc1Unorm`, `CustomTextureFormat::Bc3Unorm`,
 `CustomTextureFormat::Bc7Unorm`, `CustomTextureFormat::Etc2Rgb8Unorm`,
-`CustomTextureFormat::Etc2Rgba8Unorm`, or `CustomTextureFormat::Astc4x4Unorm`
-(and their sRGB variants) for block-compressed textures. Each mip level is packed in 4×4 blocks
-using the format’s block size. Compressed formats are sampled only and cannot be used as storage
-textures or render targets. Creation fails if the GPU does not support the requested format.
-Blade currently supports BC formats only.
+`CustomTextureFormat::Etc2Rgba8Unorm`, `CustomTextureFormat::Astc4x4Unorm`,
+`CustomTextureFormat::Astc5x5Unorm`, `CustomTextureFormat::Astc6x6Unorm`,
+`CustomTextureFormat::Astc8x8Unorm`, `CustomTextureFormat::PvrtcRgb2bppUnorm`,
+`CustomTextureFormat::PvrtcRgba2bppUnorm`, `CustomTextureFormat::PvrtcRgb4bppUnorm`,
+or `CustomTextureFormat::PvrtcRgba4bppUnorm` (and their sRGB variants) for
+block-compressed textures. Each mip level is packed using the format block size.
+Compressed formats are sampled only and cannot be used as storage textures or render targets.
+Creation fails if the GPU does not support the requested format. PVRTC is typically available on
+Apple mobile GPU families. Blade currently supports BC formats only.
 
 ## Multiple render targets and MSAA
 
@@ -358,7 +362,7 @@ cargo run --release --example custom_draw_stress -- \
 - Custom viewport and scissor state are not configurable.
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
-- ASTC and ETC2 textures require Metal support and are not available on Blade.
+- ASTC, ETC2, and PVRTC textures require Metal support and are not available on Blade.
 - Custom GPU timestamp profiling and frame diagnostics are currently available on Metal.
 - Storage textures are limited to 2D RGBA/BGRA (with sRGB).
 
@@ -373,9 +377,9 @@ cargo run --release --example custom_draw_stress -- \
   - Binding arrays.
   - Texture arrays and cubemaps.
   - Multiple color attachments and MSAA.
-  - Compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4).
+  - Compressed textures (BC1, BC3, BC7, ETC2, ASTC 4x4/5x5/6x6/8x8, PVRTC 2bpp/4bpp).
 - **P2 (performance/tooling)**
-  - More compressed texture formats (additional ASTC sizes, PVRTC).
+  - More compressed texture formats (additional ASTC sizes, PVRTC) (done).
   - Streaming texture uploads for large, per-frame data (e.g., video frames).
   - Persistent pipeline cache for Metal (done).
   - `.metallib` loading for Metal (done).
