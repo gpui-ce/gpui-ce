@@ -9,11 +9,11 @@ use crate::{
     CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
     CustomDepthFormat, CustomDepthTargetDesc, CustomDepthTargetId, CustomDrawRegistry,
-    CustomDrawResourceStats, CustomFilterMode, CustomFrontFace, CustomGpuFrameProfile,
-    CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology, CustomPushConstantsDesc,
-    CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate,
-    CustomTextureDesc, CustomTextureDimension, CustomTextureFormat, CustomTextureId,
-    CustomTextureUpdate, CustomTextureUsage, CustomVertexFormat, Result,
+    CustomDrawResourceStats, CustomFilterMode, CustomFrameDiagnostics, CustomFrontFace,
+    CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId, CustomPrimitiveTopology,
+    CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension, CustomTextureFormat,
+    CustomTextureId, CustomTextureUpdate, CustomTextureUsage, CustomVertexFormat, Result,
 };
 
 pub(crate) struct BladeCustomDrawRegistry {
@@ -718,6 +718,14 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
     }
 
     fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile> {
+        None
+    }
+
+    fn set_frame_diagnostics_enabled(&self, _enabled: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn take_last_frame_diagnostics(&self) -> Option<CustomFrameDiagnostics> {
         None
     }
 

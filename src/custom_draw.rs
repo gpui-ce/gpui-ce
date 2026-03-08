@@ -1284,6 +1284,31 @@ pub struct CustomDrawResourceStats {
     pub sampler_count: u32,
 }
 
+/// Per-frame diagnostics for custom draw and custom compute pacing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CustomFrameDiagnostics {
+    /// Number of custom draw commands submitted in the frame.
+    pub custom_draw_count: u32,
+    /// Number of custom compute dispatches submitted in the frame.
+    pub custom_compute_count: u32,
+    /// Number of custom render passes submitted in the frame.
+    pub custom_render_pass_count: u32,
+    /// Number of custom compute passes submitted in the frame.
+    pub custom_compute_pass_count: u32,
+    /// Number of draw retries due to temporary resource pressure.
+    pub retry_count: u32,
+    /// CPU time in nanoseconds spent encoding the frame command buffer.
+    pub cpu_encode_time_ns: u64,
+    /// Nanoseconds from commit call to command buffer scheduling when available.
+    pub submit_to_scheduled_ns: Option<u64>,
+    /// Nanoseconds from commit call to command buffer completion when available.
+    pub submit_to_completed_ns: Option<u64>,
+    /// Nanoseconds from command buffer scheduling to completion when available.
+    pub scheduled_to_completed_ns: Option<u64>,
+    /// Total GPU time in nanoseconds for the command buffer when available.
+    pub gpu_time_ns: Option<u64>,
+}
+
 /// Offscreen render target description.
 #[derive(Debug, Clone)]
 pub struct CustomRenderTargetDesc {
@@ -1398,6 +1423,8 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn set_pipeline_cache_path(&self, path: Option<PathBuf>) -> Result<()>;
     fn set_gpu_profiling_enabled(&self, enabled: bool) -> Result<()>;
     fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile>;
+    fn set_frame_diagnostics_enabled(&self, enabled: bool) -> Result<()>;
+    fn take_last_frame_diagnostics(&self) -> Option<CustomFrameDiagnostics>;
     fn resource_stats(&self) -> CustomDrawResourceStats;
     fn create_compute_pipeline(
         &self,

@@ -7,9 +7,10 @@ use super::{
 };
 use crate::{
     AtlasTextureId, Background, Bounds, ContentMask, CustomBindingKind, CustomBindingValue,
-    CustomBufferSource, CustomDraw, CustomGpuFrameProfile, CustomIndexBuffer, CustomIndexFormat,
-    CustomTextureId, DevicePixels, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    CustomBufferSource, CustomDraw, CustomFrameDiagnostics, CustomGpuFrameProfile,
+    CustomIndexBuffer, CustomIndexFormat, CustomTextureId, DevicePixels, MonochromeSprite,
+    PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow,
+    Size, Surface, Underline, point, size,
 };
 use anyhow::{Result, anyhow};
 use block::ConcreteBlock;
@@ -32,7 +33,7 @@ use metal::{
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, collections::BTreeMap, ffi::c_void, mem, ptr, sync::Arc};
+use std::{cell::Cell, collections::BTreeMap, ffi::c_void, mem, ptr, sync::Arc, time::Instant};
 
 // Exported to metal
 pub(crate) type PointF = crate::Point<f32>;
@@ -394,10 +395,17 @@ impl MetalRenderer {
             return;
         };
 
+        let frame_encode_start = Instant::now();
+        let mut retry_count = 0u32;
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
             let custom_gpu_profile = if self.custom_draw.gpu_profiling_enabled() {
                 build_custom_gpu_profile(scene)
+            } else {
+                None
+            };
+            let custom_frame_diagnostics = if self.custom_draw.frame_diagnostics_enabled() {
+                build_custom_frame_diagnostics(scene)
             } else {
                 None
             };
@@ -410,18 +418,87 @@ impl MetalRenderer {
                     let custom_draw = self.custom_draw.clone();
                     let instance_buffer_pool = self.instance_buffer_pool.clone();
                     let instance_buffer = Cell::new(Some(instance_buffer));
+                    let cpu_encode_time_ns =
+                        duration_as_u64_nanoseconds(frame_encode_start.elapsed());
+                    let custom_frame_diagnostics =
+                        custom_frame_diagnostics.map(|mut diagnostics| {
+                            diagnostics.retry_count = retry_count;
+                            diagnostics.cpu_encode_time_ns = cpu_encode_time_ns;
+                            diagnostics
+                        });
+                    let submit_instant = Arc::new(std::sync::Mutex::new(None::<Instant>));
+                    let scheduled_instant = Arc::new(std::sync::Mutex::new(None::<Instant>));
+
+                    if custom_frame_diagnostics.is_some() {
+                        let scheduled_instant = Arc::clone(&scheduled_instant);
+                        let scheduled_block = ConcreteBlock::new(move |_| {
+                            if let Ok(mut scheduled_value) = scheduled_instant.lock() {
+                                if scheduled_value.is_none() {
+                                    *scheduled_value = Some(Instant::now());
+                                }
+                            }
+                        });
+                        let scheduled_block = scheduled_block.copy();
+                        command_buffer.add_scheduled_handler(&scheduled_block);
+                    }
+
+                    let completed_submit_instant = Arc::clone(&submit_instant);
+                    let completed_scheduled_instant = Arc::clone(&scheduled_instant);
                     let block = ConcreteBlock::new(move |completed_command_buffer| {
                         if let Some(instance_buffer) = instance_buffer.take() {
                             instance_buffer_pool.lock().release(instance_buffer);
                         }
+
+                        let gpu_time_ns =
+                            metal_command_buffer_gpu_time_ns(completed_command_buffer);
                         if let Some(mut custom_gpu_profile) = custom_gpu_profile {
-                            custom_gpu_profile.gpu_time_ns =
-                                metal_command_buffer_gpu_time_ns(completed_command_buffer);
+                            custom_gpu_profile.gpu_time_ns = gpu_time_ns;
                             custom_draw.record_gpu_profile(custom_gpu_profile);
+                        }
+
+                        if let Some(mut custom_frame_diagnostics) = custom_frame_diagnostics {
+                            let completed_instant = Instant::now();
+                            let submit_instant = completed_submit_instant
+                                .lock()
+                                .ok()
+                                .and_then(|value| *value);
+                            let scheduled_instant = completed_scheduled_instant
+                                .lock()
+                                .ok()
+                                .and_then(|value| *value);
+
+                            custom_frame_diagnostics.gpu_time_ns = gpu_time_ns;
+                            custom_frame_diagnostics.submit_to_scheduled_ns = submit_instant
+                                .and_then(|submit| {
+                                    scheduled_instant.and_then(|scheduled| {
+                                        scheduled
+                                            .checked_duration_since(submit)
+                                            .map(duration_as_u64_nanoseconds)
+                                    })
+                                });
+                            custom_frame_diagnostics.submit_to_completed_ns = submit_instant
+                                .and_then(|submit| {
+                                    completed_instant
+                                        .checked_duration_since(submit)
+                                        .map(duration_as_u64_nanoseconds)
+                                });
+                            custom_frame_diagnostics.scheduled_to_completed_ns = scheduled_instant
+                                .and_then(|scheduled| {
+                                    completed_instant
+                                        .checked_duration_since(scheduled)
+                                        .map(duration_as_u64_nanoseconds)
+                                });
+                            custom_draw.record_frame_diagnostics(custom_frame_diagnostics);
                         }
                     });
                     let block = block.copy();
                     command_buffer.add_completed_handler(&block);
+
+                    if custom_frame_diagnostics.is_some() {
+                        if let Ok(mut submit_value) = submit_instant.lock() {
+                            *submit_value = Some(Instant::now());
+                        }
+                    }
 
                     if self.presents_with_transaction {
                         command_buffer.commit();
@@ -434,6 +511,7 @@ impl MetalRenderer {
                     return;
                 }
                 Err(err) => {
+                    retry_count = retry_count.saturating_add(1);
                     log::error!(
                         "failed to render: {}. retrying with larger instance buffer size",
                         err
@@ -2864,7 +2942,7 @@ fn build_path_rasterization_pipeline_state(
         .expect("could not create render pipeline state")
 }
 
-fn build_custom_gpu_profile(scene: &Scene) -> Option<CustomGpuFrameProfile> {
+fn build_custom_work_counts(scene: &Scene) -> Option<(u32, u32, u32, u32)> {
     if scene.custom_draws.is_empty() && scene.custom_computes.is_empty() {
         return None;
     }
@@ -2883,11 +2961,49 @@ fn build_custom_gpu_profile(scene: &Scene) -> Option<CustomGpuFrameProfile> {
         offscreen_target_hashes.len() as u32 + u32::from(has_window_custom_draw);
     let custom_compute_pass_count = u32::from(!scene.custom_computes.is_empty());
 
-    Some(CustomGpuFrameProfile {
-        custom_draw_count: scene.custom_draws.len() as u32,
-        custom_compute_count: scene.custom_computes.len() as u32,
+    Some((
+        scene.custom_draws.len() as u32,
+        scene.custom_computes.len() as u32,
         custom_render_pass_count,
         custom_compute_pass_count,
+    ))
+}
+
+fn build_custom_gpu_profile(scene: &Scene) -> Option<CustomGpuFrameProfile> {
+    let (
+        custom_draw_count,
+        custom_compute_count,
+        custom_render_pass_count,
+        custom_compute_pass_count,
+    ) = build_custom_work_counts(scene)?;
+
+    Some(CustomGpuFrameProfile {
+        custom_draw_count,
+        custom_compute_count,
+        custom_render_pass_count,
+        custom_compute_pass_count,
+        gpu_time_ns: None,
+    })
+}
+
+fn build_custom_frame_diagnostics(scene: &Scene) -> Option<CustomFrameDiagnostics> {
+    let (
+        custom_draw_count,
+        custom_compute_count,
+        custom_render_pass_count,
+        custom_compute_pass_count,
+    ) = build_custom_work_counts(scene)?;
+
+    Some(CustomFrameDiagnostics {
+        custom_draw_count,
+        custom_compute_count,
+        custom_render_pass_count,
+        custom_compute_pass_count,
+        retry_count: 0,
+        cpu_encode_time_ns: 0,
+        submit_to_scheduled_ns: None,
+        submit_to_completed_ns: None,
+        scheduled_to_completed_ns: None,
         gpu_time_ns: None,
     })
 }
@@ -2916,6 +3032,10 @@ fn metal_command_buffer_gpu_time_ns(command_buffer: &metal::CommandBufferRef) ->
 
         Some(gpu_time_ns as u64)
     }
+}
+
+fn duration_as_u64_nanoseconds(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
 fn align_offset_to(offset: &mut usize, alignment: usize) {

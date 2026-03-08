@@ -17,12 +17,12 @@ use gpui::{
     App, AppContext, Application, Bounds, Colors, Context, CustomAddressMode, CustomBindingDesc,
     CustomBindingKind, CustomBindingName, CustomBindingValue, CustomBufferDesc, CustomBufferId,
     CustomBufferSource, CustomDrawParams, CustomDrawResourceStats, CustomFilterMode,
-    CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
-    CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId, CustomTextureDesc,
-    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUsage,
-    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer, CustomVertexFetch,
-    CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window, WindowBounds,
-    WindowOptions, canvas, div, prelude::*, px, size,
+    CustomFrameDiagnostics, CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId,
+    CustomPipelineState, CustomPrimitiveTopology, CustomSamplerDesc, CustomSamplerId,
+    CustomTextureDesc, CustomTextureDimension, CustomTextureFormat, CustomTextureId,
+    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexBuffer,
+    CustomVertexFetch, CustomVertexFormat, CustomVertexLayout, Hsla, Render, Styled, Window,
+    WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
 };
 
 const SHADER_SOURCE: &str = r#"
@@ -67,6 +67,7 @@ struct GpuProfilingCustomDrawExample {
     sampler: Option<CustomSamplerId>,
     start: Instant,
     profile_summary: String,
+    frame_summary: String,
     resource_summary: String,
     error: Option<String>,
 }
@@ -80,6 +81,7 @@ impl GpuProfilingCustomDrawExample {
             sampler: None,
             start: Instant::now(),
             profile_summary: "Waiting for GPU profile samples...".to_string(),
+            frame_summary: "Waiting for frame diagnostics...".to_string(),
             resource_summary: "Waiting for resource stats...".to_string(),
             error: None,
         }
@@ -113,6 +115,7 @@ impl GpuProfilingCustomDrawExample {
         CustomSamplerId,
     )> {
         window.set_custom_gpu_profiling_enabled(true)?;
+        window.set_custom_frame_diagnostics_enabled(true)?;
 
         let pipeline = window.create_custom_pipeline(CustomPipelineDesc {
             name: "custom_draw_demo_animated".to_string(),
@@ -213,6 +216,18 @@ impl GpuProfilingCustomDrawExample {
         }
     }
 
+    fn update_frame_summary(&mut self, window: &mut Window) {
+        match window.take_last_custom_frame_diagnostics() {
+            Ok(Some(diagnostics)) => {
+                self.frame_summary = format_frame_summary(diagnostics);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.frame_summary = format!("Frame diagnostics unavailable: {err}");
+            }
+        }
+    }
+
     fn update_resource_summary(&mut self, window: &mut Window) {
         match window.custom_draw_resource_stats() {
             Ok(stats) => {
@@ -230,6 +245,7 @@ impl Render for GpuProfilingCustomDrawExample {
         let colors = Colors::for_appearance(window);
         self.ensure_resources(window);
         self.update_profile_summary(window);
+        self.update_frame_summary(window);
         self.update_resource_summary(window);
         window.request_animation_frame();
 
@@ -248,13 +264,19 @@ impl Render for GpuProfilingCustomDrawExample {
                 div()
                     .text_sm()
                     .text_color(colors.text_muted)
-                    .child("Animated uniform with per-frame custom GPU profile samples"),
+                    .child("Animated uniform with per-frame custom GPU and frame pacing samples"),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(colors.text_muted)
                     .child(self.profile_summary.clone()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(colors.text_muted)
+                    .child(self.frame_summary.clone()),
             )
             .child(
                 div()
@@ -349,6 +371,31 @@ fn format_profile_summary(profile: CustomGpuFrameProfile) -> String {
         profile.custom_render_pass_count,
         profile.custom_compute_pass_count,
         gpu_time_ms
+    )
+}
+
+fn format_frame_summary(diagnostics: CustomFrameDiagnostics) -> String {
+    let cpu_encode_ms = diagnostics.cpu_encode_time_ns as f64 / 1_000_000.0;
+    let submit_to_scheduled_ms = diagnostics
+        .submit_to_scheduled_ns
+        .map(|nanoseconds| format!("{:.3} ms", nanoseconds as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "n/a".to_string());
+    let submit_to_completed_ms = diagnostics
+        .submit_to_completed_ns
+        .map(|nanoseconds| format!("{:.3} ms", nanoseconds as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "n/a".to_string());
+    let scheduled_to_completed_ms = diagnostics
+        .scheduled_to_completed_ns
+        .map(|nanoseconds| format!("{:.3} ms", nanoseconds as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "n/a".to_string());
+
+    format!(
+        "frame cpu encode={:.3} ms, retries={}, submit and scheduled={}, submit and completed={}, scheduled and completed={}",
+        cpu_encode_ms,
+        diagnostics.retry_count,
+        submit_to_scheduled_ms,
+        submit_to_completed_ms,
+        scheduled_to_completed_ms,
     )
 }
 

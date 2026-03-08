@@ -151,6 +151,27 @@ if let Some(sample) = window.take_last_custom_gpu_profile()? {
 
 `gpu_time_ns` is currently sourced from Metal command buffer timestamps.
 
+## Custom frame diagnostics
+
+You can enable frame pacing diagnostics for custom draw and custom compute work:
+
+```rust
+window.set_custom_frame_diagnostics_enabled(true)?;
+
+if let Some(sample) = window.take_last_custom_frame_diagnostics()? {
+    log::info!(
+        "cpu_encode_ns={}, retries={}, submit_to_scheduled_ns={:?}, submit_to_completed_ns={:?}, scheduled_to_completed_ns={:?}",
+        sample.cpu_encode_time_ns,
+        sample.retry_count,
+        sample.submit_to_scheduled_ns,
+        sample.submit_to_completed_ns,
+        sample.scheduled_to_completed_ns,
+    );
+}
+```
+
+These diagnostics are currently sourced from Metal command buffer callbacks and timestamps.
+
 ## Custom resource diagnostics
 
 You can snapshot custom draw resource counts and estimated memory usage:
@@ -338,7 +359,7 @@ cargo run --release --example custom_draw_stress -- \
 - Binding arrays require Metal argument buffer support on macOS; WGSL buffer arrays require
   precompiled MSL (texture arrays are supported).
 - ASTC and ETC2 textures require Metal support and are not available on Blade.
-- Custom GPU timestamp profiling is currently available on Metal.
+- Custom GPU timestamp profiling and frame diagnostics are currently available on Metal.
 - Storage textures are limited to 2D RGBA/BGRA (with sRGB).
 
 ## Core roadmap (triage)
@@ -360,7 +381,7 @@ cargo run --release --example custom_draw_stress -- \
   - `.metallib` loading for Metal (done).
   - GPU profiling (timestamps) for custom draw and custom compute on Metal (initial, done).
   - Resource lifetime diagnostics (initial, done).
-  - Frame pacing / diagnostics tooling.
+  - Frame pacing / diagnostics tooling (initial, done).
 
 ## Streaming texture uploads plan (done)
 

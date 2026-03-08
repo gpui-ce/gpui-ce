@@ -11,13 +11,13 @@ use crate::{
     CustomBlendMode, CustomBufferDesc, CustomBufferId, CustomBufferSource,
     CustomComputePipelineDesc, CustomComputePipelineId, CustomCullMode, CustomDepthCompare,
     CustomDepthFormat, CustomDepthState, CustomDepthTargetDesc, CustomDepthTargetId,
-    CustomDrawRegistry, CustomDrawResourceStats, CustomFilterMode, CustomFrontFace,
-    CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId, CustomPipelineState,
-    CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc, CustomSamplerDesc,
-    CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc, CustomTextureDimension,
-    CustomTextureFormat, CustomTextureId, CustomTextureUpdate, CustomTextureUsage,
-    CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch, CustomVertexFormat,
-    Result,
+    CustomDrawRegistry, CustomDrawResourceStats, CustomFilterMode, CustomFrameDiagnostics,
+    CustomFrontFace, CustomGpuFrameProfile, CustomPipelineDesc, CustomPipelineId,
+    CustomPipelineState, CustomPrimitiveTopology, CustomPushConstantsDesc, CustomRenderTargetDesc,
+    CustomSamplerDesc, CustomSamplerId, CustomTextureBufferUpdate, CustomTextureDesc,
+    CustomTextureDimension, CustomTextureFormat, CustomTextureId, CustomTextureUpdate,
+    CustomTextureUsage, CustomVertexAttribute, CustomVertexAttributeName, CustomVertexFetch,
+    CustomVertexFormat, Result,
 };
 
 pub(crate) struct MetalCustomDrawRegistry {
@@ -28,6 +28,7 @@ pub(crate) struct MetalCustomDrawRegistry {
     pipeline_cache: Mutex<HashMap<PipelineCacheKey, CustomPipelineId>>,
     pipeline_archive: Mutex<Option<MetalPipelineArchiveState>>,
     gpu_profiling: Mutex<MetalCustomGpuProfilingState>,
+    frame_diagnostics: Mutex<MetalCustomFrameDiagnosticsState>,
     buffers: Mutex<Vec<Option<MetalCustomBuffer>>>,
     textures: Mutex<Vec<Option<MetalCustomTexture>>>,
     depth_targets: Mutex<Vec<Option<MetalCustomDepthTarget>>>,
@@ -152,6 +153,12 @@ struct MetalCustomGpuProfilingState {
     last_profile: Option<CustomGpuFrameProfile>,
 }
 
+#[derive(Default)]
+struct MetalCustomFrameDiagnosticsState {
+    enabled: bool,
+    last_diagnostics: Option<CustomFrameDiagnostics>,
+}
+
 struct MetalCustomBuffer {
     buffer: metal::Buffer,
     size: u64,
@@ -197,6 +204,7 @@ impl MetalCustomDrawRegistry {
             pipeline_cache: Mutex::new(HashMap::new()),
             pipeline_archive: Mutex::new(None),
             gpu_profiling: Mutex::new(MetalCustomGpuProfilingState::default()),
+            frame_diagnostics: Mutex::new(MetalCustomFrameDiagnosticsState::default()),
             buffers: Mutex::new(Vec::new()),
             textures: Mutex::new(Vec::new()),
             depth_targets: Mutex::new(Vec::new()),
@@ -284,6 +292,17 @@ impl MetalCustomDrawRegistry {
         let mut gpu_profiling = self.gpu_profiling.lock().unwrap();
         if gpu_profiling.enabled {
             gpu_profiling.last_profile = Some(profile);
+        }
+    }
+
+    pub(crate) fn frame_diagnostics_enabled(&self) -> bool {
+        self.frame_diagnostics.lock().unwrap().enabled
+    }
+
+    pub(crate) fn record_frame_diagnostics(&self, diagnostics: CustomFrameDiagnostics) {
+        let mut frame_diagnostics = self.frame_diagnostics.lock().unwrap();
+        if frame_diagnostics.enabled {
+            frame_diagnostics.last_diagnostics = Some(diagnostics);
         }
     }
 
@@ -1028,6 +1047,23 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
 
     fn take_last_gpu_profile(&self) -> Option<CustomGpuFrameProfile> {
         self.gpu_profiling.lock().unwrap().last_profile.take()
+    }
+
+    fn set_frame_diagnostics_enabled(&self, enabled: bool) -> Result<()> {
+        let mut frame_diagnostics = self.frame_diagnostics.lock().unwrap();
+        frame_diagnostics.enabled = enabled;
+        if !enabled {
+            frame_diagnostics.last_diagnostics = None;
+        }
+        Ok(())
+    }
+
+    fn take_last_frame_diagnostics(&self) -> Option<CustomFrameDiagnostics> {
+        self.frame_diagnostics
+            .lock()
+            .unwrap()
+            .last_diagnostics
+            .take()
     }
 
     fn resource_stats(&self) -> CustomDrawResourceStats {
