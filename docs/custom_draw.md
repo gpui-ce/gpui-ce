@@ -263,6 +263,18 @@ Compressed formats are sampled only and cannot be used as storage textures or re
 Creation fails if the GPU does not support the requested format. PVRTC is typically available on
 Apple mobile GPU families. Blade currently supports BC formats only.
 
+Use `window.custom_texture_format_supported(format)` to choose a format at runtime:
+
+```rust
+let format = if window.custom_texture_format_supported(CustomTextureFormat::Astc6x6Unorm)? {
+    CustomTextureFormat::Astc6x6Unorm
+} else if window.custom_texture_format_supported(CustomTextureFormat::Bc7Unorm)? {
+    CustomTextureFormat::Bc7Unorm
+} else {
+    CustomTextureFormat::Rgba8Unorm
+};
+```
+
 ## Multiple render targets and MSAA
 
 Set `CustomPipelineDesc.color_targets` to the list of color formats that match your fragment outputs

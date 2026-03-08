@@ -1491,6 +1491,7 @@ pub(crate) trait CustomDrawRegistry: Send + Sync {
     fn set_frame_diagnostics_enabled(&self, enabled: bool) -> Result<()>;
     fn take_last_frame_diagnostics(&self) -> Option<CustomFrameDiagnostics>;
     fn resource_stats(&self) -> CustomDrawResourceStats;
+    fn texture_format_supported(&self, format: CustomTextureFormat) -> bool;
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

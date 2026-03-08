@@ -1170,6 +1170,10 @@ impl CustomDrawRegistry for MetalCustomDrawRegistry {
         }
     }
 
+    fn texture_format_supported(&self, format: CustomTextureFormat) -> bool {
+        metal_texture_format_supported(&self.device, format)
+    }
+
     fn create_compute_pipeline(
         &self,
         desc: CustomComputePipelineDesc,

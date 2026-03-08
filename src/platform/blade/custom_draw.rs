@@ -833,6 +833,10 @@ impl CustomDrawRegistry for BladeCustomDrawRegistry {
         }
     }
 
+    fn texture_format_supported(&self, format: CustomTextureFormat) -> bool {
+        blade_color_format(format).is_ok()
+    }
+
     fn create_buffer(&self, desc: CustomBufferDesc) -> Result<CustomBufferId> {
         let size = desc.data.len() as u64;
         let buffer = self.gpu.create_buffer(gpu::BufferDesc {
