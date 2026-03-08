@@ -2096,3 +2096,20 @@ fn bind_texture_array_const<const N: gpu::ResourceIndex>(
     }
     (&array).bind_to(context, index);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blade_format_support_contract_for_compressed_formats() {
+        assert!(blade_color_format(CustomTextureFormat::Bc1Unorm).is_ok());
+        assert!(blade_color_format(CustomTextureFormat::Bc3Unorm).is_ok());
+        assert!(blade_color_format(CustomTextureFormat::Bc7Unorm).is_ok());
+
+        assert!(blade_color_format(CustomTextureFormat::Etc2Rgba8Unorm).is_err());
+        assert!(blade_color_format(CustomTextureFormat::Astc4x4Unorm).is_err());
+        assert!(blade_color_format(CustomTextureFormat::Astc8x8Unorm).is_err());
+        assert!(blade_color_format(CustomTextureFormat::PvrtcRgba4bppUnorm).is_err());
+    }
+}

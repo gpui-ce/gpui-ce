@@ -827,6 +827,40 @@ mod tests {
         let data = builder.finish();
         assert_eq!(data.len() % 16, 0);
     }
+
+    #[test]
+    fn compressed_block_info_includes_new_astc_and_pvrtc_formats() {
+        let expected = [
+            (CustomTextureFormat::Astc5x5Unorm, (5, 5, 16)),
+            (CustomTextureFormat::Astc5x5UnormSrgb, (5, 5, 16)),
+            (CustomTextureFormat::Astc6x6Unorm, (6, 6, 16)),
+            (CustomTextureFormat::Astc6x6UnormSrgb, (6, 6, 16)),
+            (CustomTextureFormat::Astc8x8Unorm, (8, 8, 16)),
+            (CustomTextureFormat::Astc8x8UnormSrgb, (8, 8, 16)),
+            (CustomTextureFormat::PvrtcRgb2bppUnorm, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgb2bppUnormSrgb, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgba2bppUnorm, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgba2bppUnormSrgb, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgb4bppUnorm, (8, 4, 8)),
+            (CustomTextureFormat::PvrtcRgb4bppUnormSrgb, (8, 4, 8)),
+            (CustomTextureFormat::PvrtcRgba4bppUnorm, (8, 4, 8)),
+            (CustomTextureFormat::PvrtcRgba4bppUnormSrgb, (8, 4, 8)),
+        ];
+
+        for (format, expected) in expected {
+            let info = format.block_info();
+            assert_eq!((info.width, info.height, info.bytes), expected);
+            assert!(format.is_compressed());
+        }
+    }
+
+    #[test]
+    fn uncompressed_formats_are_not_marked_compressed() {
+        assert!(!CustomTextureFormat::Rgba8Unorm.is_compressed());
+        assert!(!CustomTextureFormat::Bgra8Unorm.is_compressed());
+        assert!(!CustomTextureFormat::Rgba8UnormSrgb.is_compressed());
+        assert!(!CustomTextureFormat::Bgra8UnormSrgb.is_compressed());
+    }
 }
 
 /// Buffer description for custom GPU rendering.

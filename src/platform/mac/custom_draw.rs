@@ -2927,3 +2927,69 @@ fn upload_texture_data(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metal_new_compressed_format_block_info_matches_mapping() {
+        let expected = [
+            (CustomTextureFormat::Astc5x5Unorm, (5, 5, 16)),
+            (CustomTextureFormat::Astc6x6Unorm, (6, 6, 16)),
+            (CustomTextureFormat::Astc8x8Unorm, (8, 8, 16)),
+            (CustomTextureFormat::PvrtcRgb2bppUnorm, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgba2bppUnorm, (16, 8, 8)),
+            (CustomTextureFormat::PvrtcRgb4bppUnorm, (8, 4, 8)),
+            (CustomTextureFormat::PvrtcRgba4bppUnorm, (8, 4, 8)),
+        ];
+
+        for (format, expected_block) in expected {
+            let info = metal_texture_format_info(format);
+            assert_eq!(
+                (info.block_width, info.block_height, info.bytes_per_block),
+                expected_block
+            );
+        }
+    }
+
+    #[test]
+    fn metal_support_query_routes_new_compressed_formats_to_expected_capabilities() {
+        let Some(device) = metal::Device::system_default() else {
+            return;
+        };
+
+        let astc_supported =
+            metal_supports_pixel_formats(&device, |set| set.supports_astc_pixel_formats());
+        for format in [
+            CustomTextureFormat::Astc4x4Unorm,
+            CustomTextureFormat::Astc5x5Unorm,
+            CustomTextureFormat::Astc6x6Unorm,
+            CustomTextureFormat::Astc8x8Unorm,
+        ] {
+            assert_eq!(
+                metal_texture_format_supported(&device, format),
+                astc_supported
+            );
+        }
+
+        let pvrtc_supported =
+            metal_supports_pixel_formats(&device, |set| set.supports_pvrtc_pixel_formats());
+        for format in [
+            CustomTextureFormat::PvrtcRgb2bppUnorm,
+            CustomTextureFormat::PvrtcRgba2bppUnorm,
+            CustomTextureFormat::PvrtcRgb4bppUnorm,
+            CustomTextureFormat::PvrtcRgba4bppUnorm,
+        ] {
+            assert_eq!(
+                metal_texture_format_supported(&device, format),
+                pvrtc_supported
+            );
+        }
+
+        assert!(metal_texture_format_supported(
+            &device,
+            CustomTextureFormat::Rgba8Unorm
+        ));
+    }
+}
