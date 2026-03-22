@@ -466,7 +466,7 @@ pub trait Styled: Sized {
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();
-        style.text.get_or_insert_with(Default::default)
+        &mut style.text
     }
 
     /// Sets the text color of this element.

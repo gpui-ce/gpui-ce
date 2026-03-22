@@ -5,6 +5,7 @@
 #![allow(unused_mut)] // False positives in platform specific code
 
 extern crate self as gpui;
+extern crate gpui_ce_macros as gpui_macros;
 
 #[macro_use]
 mod action;

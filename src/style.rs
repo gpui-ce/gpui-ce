@@ -288,6 +288,7 @@ pub struct Style {
     pub box_shadow: Vec<BoxShadow>,
 
     /// The text style of this element
+    #[refineable]
     pub text: TextStyleRefinement,
 
     /// The mouse cursor style shown when the mouse pointer is over an element.
@@ -437,6 +438,9 @@ pub struct TextStyle {
     /// The number of lines to display before truncating the text
     pub line_clamp: Option<usize>,
 }
+
+/// A workaround for Refineable macro expecting a Refinement of a Refinement
+pub type TextStyleRefinementRefinement = TextStyleRefinement;
 
 impl Default for TextStyle {
     fn default() -> Self {
