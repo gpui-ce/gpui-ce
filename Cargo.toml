@@ -75,7 +75,7 @@ derive_more = "0.99.17"
 etagere = "0.2"
 futures = "0.3"
 futures-concurrency = "7"
-gpui_macros = { package = "gpui-macros", version = "0.2.2" }
+gpui_macros = { package = "gpui-macros", version = "0.2.2", features = ["inspector"] }
 http_client = { package = "gpui_http_client", version = "0.2.2" }
 image = "0.25.1"
 inventory = "0.3.19"
