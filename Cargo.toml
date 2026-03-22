@@ -24,7 +24,7 @@ test-support = [
     "wayland",
     "x11",
 ]
-inspector = ["gpui_macros/inspector"]
+inspector = ["gpui-ce-macros/inspector"]
 leak-detection = ["backtrace"]
 runtime_shaders = []
 wayland = [
@@ -52,10 +52,6 @@ x11 = [
     "x11-clipboard",
     "filedescriptor",
     "open",
-    "scap?/x11",
-]
-screen-capture = [
-    "scap",
 ]
 windows-manifest = []
 
@@ -75,7 +71,7 @@ derive_more = "0.99.17"
 etagere = "0.2"
 futures = "0.3"
 futures-concurrency = "7"
-gpui_macros = { package = "gpui-macros", version = "0.2.2", features = ["inspector"] }
+gpui-ce-macros = { path = "./tooling/macros", features = ["inspector"] }
 http_client = { package = "gpui_http_client", version = "0.2.2" }
 image = "0.25.1"
 inventory = "0.3.19"
@@ -145,9 +141,6 @@ objc2-metal = { version = "0.3", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies]
 pathfinder_geometry = "0.5"
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
-scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 flume = "0.11"
@@ -288,9 +281,6 @@ naga = { version = "29.0", features = ["wgsl-in"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
 naga = { version = "29.0", features = ["wgsl-in"] }
-
-[patch.crates-io]
-calloop = { git = "https://github.com/zed-industries/calloop" }
 
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
