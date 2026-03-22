@@ -6,9 +6,10 @@
 //! 2. Conditional styling - when, when_some, map
 //! 3. Theming patterns - using Colors for consistent styling
 
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Colors, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem,
-    Render, Rgba, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
+    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
 actions!(styling_example, [Quit, Tab, TabPrev]);
@@ -20,9 +21,9 @@ fn interactive_button(
     label: &'static str,
     colors: &Colors,
 ) -> impl IntoElement {
-    let accent = colors.accent;
-    let accent_hover = colors.accent_hover;
-    let accent_active = colors.accent_active;
+    let accent = colors.selected;
+    let accent_hover = colors.selected;
+    let accent_active = colors.selected;
     let text = colors.selected_text;
 
     div()
@@ -45,10 +46,10 @@ fn focus_button(
     focus_handle: &FocusHandle,
     colors: &Colors,
 ) -> impl IntoElement {
-    let surface = colors.surface;
-    let surface_hover = colors.surface_hover;
+    let surface = colors.container;
+    let surface_hover = colors.selected;
     let text = colors.text;
-    let accent = colors.accent;
+    let accent = colors.selected;
     let focus_ring: Rgba = rgb(0x60a5fa);
 
     div()
@@ -77,7 +78,7 @@ fn interactive_states_section(colors: &Colors) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(colors.text_muted)
+                .text_color(colors.disabled)
                 .child("hover() / active() - Mouse interaction states"),
         )
         .child(
@@ -93,10 +94,10 @@ fn interactive_states_section(colors: &Colors) -> impl IntoElement {
 
 fn status_badge(status: &'static str, variant: StatusVariant, colors: &Colors) -> impl IntoElement {
     let (bg, text): (Rgba, Rgba) = match variant {
-        StatusVariant::Success => (colors.success, colors.selected_text),
-        StatusVariant::Warning => (colors.warning, rgb(0x000000)),
-        StatusVariant::Error => (colors.error, colors.selected_text),
-        StatusVariant::Neutral => (colors.surface, colors.text),
+        StatusVariant::Success => (rgb(0x388e3c), colors.selected_text),
+        StatusVariant::Warning => (rgb(0xf9a825), rgb(0x000000)),
+        StatusVariant::Error => (rgb(0xd32f2f), colors.selected_text),
+        StatusVariant::Neutral => (colors.container, colors.text),
     };
 
     div()
@@ -124,11 +125,11 @@ fn list_item(
     is_disabled: bool,
     colors: &Colors,
 ) -> impl IntoElement {
-    let surface = colors.surface;
-    let surface_hover = colors.surface_hover;
+    let surface = colors.container;
+    let surface_hover = colors.selected;
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let accent = colors.accent;
+    let text_muted = colors.disabled;
+    let accent = colors.selected;
 
     div()
         .id(id)
@@ -167,7 +168,7 @@ fn conditional_section(colors: &Colors) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(colors.text_muted)
+                .text_color(colors.disabled)
                 .child("when() - Apply styles conditionally"),
         )
         .child(
@@ -182,7 +183,7 @@ fn conditional_section(colors: &Colors) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(colors.text_muted)
+                .text_color(colors.disabled)
                 .mt_2()
                 .child("Status badges with variant-based styling"),
         )
@@ -205,11 +206,11 @@ fn card_with_group_hover(
     description: &'static str,
     colors: &Colors,
 ) -> impl IntoElement {
-    let surface = colors.surface;
+    let surface = colors.container;
     let border = colors.border;
-    let accent = colors.accent;
+    let accent = colors.selected;
     let text = colors.text;
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
 
     div()
         .id(id)
@@ -259,7 +260,7 @@ fn group_hover_section(colors: &Colors) -> impl IntoElement {
         .child(
             div()
                 .text_xs()
-                .text_color(colors.text_muted)
+                .text_color(colors.disabled)
                 .child("group() / group_hover() - Parent hover affects children"),
         )
         .child(
@@ -292,7 +293,7 @@ struct StylingExample {
 impl StylingExample {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
 
         let buttons = vec![
             cx.focus_handle().tab_index(1).tab_stop(true),
@@ -306,12 +307,12 @@ impl StylingExample {
         }
     }
 
-    fn on_tab(&mut self, _: &Tab, window: &mut Window, _: &mut Context<Self>) {
-        window.focus_next();
+    fn on_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next(cx);
     }
 
-    fn on_tab_prev(&mut self, _: &TabPrev, window: &mut Window, _: &mut Context<Self>) {
-        window.focus_prev();
+    fn on_tab_prev(&mut self, _: &TabPrev, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_prev(cx);
     }
 }
 
@@ -349,7 +350,7 @@ impl Render for StylingExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Interactive states, conditional styling, and theming"),
                             ),
                     )
@@ -368,7 +369,7 @@ impl Render for StylingExample {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("focus() / focus_visible() - Keyboard navigation"),
                             )
                             .child(
@@ -415,7 +416,7 @@ impl Render for StylingExample {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Using Colors::for_appearance() for consistent theming"),
                             )
                             .child(
@@ -424,11 +425,11 @@ impl Render for StylingExample {
                                     .flex_wrap()
                                     .gap_2()
                                     .child(color_swatch(&colors, "background", colors.background))
-                                    .child(color_swatch(&colors, "surface", colors.surface))
-                                    .child(color_swatch(&colors, "accent", colors.accent))
-                                    .child(color_swatch(&colors, "success", colors.success))
-                                    .child(color_swatch(&colors, "warning", colors.warning))
-                                    .child(color_swatch(&colors, "error", colors.error))
+                                    .child(color_swatch(&colors, "container", colors.container))
+                                    .child(color_swatch(&colors, "selected", colors.selected))
+                                    .child(color_swatch(&colors, "success", rgb(0x388e3c)))
+                                    .child(color_swatch(&colors, "warning", rgb(0xf9a825)))
+                                    .child(color_swatch(&colors, "error", rgb(0xd32f2f)))
                                     .child(color_swatch(&colors, "border", colors.border)),
                             ),
                     )),
@@ -437,7 +438,7 @@ impl Render for StylingExample {
 }
 
 fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = colors.surface.into();
+    let surface: Hsla = colors.container.into();
     let border: Hsla = colors.border.into();
 
     div()
@@ -460,7 +461,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 }
 
 fn color_swatch(colors: &Colors, name: &'static str, color: Rgba) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
 
     div()
         .flex()
@@ -490,6 +491,7 @@ fn main() {
         cx.set_menus(vec![Menu {
             name: "Styling".into(),
             items: vec![MenuItem::action("Quit", Quit)],
+            disabled: false,
         }]);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {

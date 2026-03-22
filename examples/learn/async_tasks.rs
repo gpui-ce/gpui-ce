@@ -12,9 +12,10 @@ mod example_prelude;
 
 use std::time::Duration;
 
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Colors, Context, Entity, Render, Task, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Context, Entity, Render, Task, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size,
 };
 
 // Example 1: Simple Foreground Task
@@ -272,7 +273,7 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Spawning, background work, and task management"),
                             ),
                     )
@@ -348,9 +349,9 @@ impl Render for AsyncTasksExample {
                             .child({
                                 let is_running = cancellable.is_running();
                                 let (bg, bg_hover) = if is_running {
-                                    (colors.error, colors.error_hover)
+                                    (rgb(0xd32f2f), rgb(0xe04545))
                                 } else {
-                                    (colors.success, colors.success_hover)
+                                    (rgb(0x388e3c), rgb(0x43a047))
                                 };
                                 div()
                                     .id("cancel-btn")
@@ -381,7 +382,7 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child(format!("Numbers: {:?}", return_demo.numbers)),
                             )
                             .child(
@@ -446,7 +447,7 @@ fn demo_section(
         .gap_3()
         .p_4()
         .rounded_lg()
-        .bg(colors.surface)
+        .bg(colors.container)
         .border_1()
         .border_color(colors.border)
         .child(
@@ -464,7 +465,7 @@ fn demo_section(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(colors.text_muted)
+                        .text_color(colors.disabled)
                         .child(description),
                 ),
         )
@@ -477,10 +478,10 @@ fn button(
     label: &'static str,
     disabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    let disabled_bg = colors.surface_hover;
-    let bg = colors.accent;
-    let bg_hover = colors.accent_hover;
-    let bg_active = colors.accent_active;
+    let disabled_bg = colors.selected;
+    let bg = colors.selected;
+    let bg_hover = colors.selected;
+    let bg_active = colors.selected;
     let text = colors.selected_text;
 
     div()
@@ -507,7 +508,7 @@ fn secondary_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
-    let bg = colors.surface_hover;
+    let bg = colors.selected;
     let bg_hover = colors.border;
     let text = colors.text;
 
@@ -526,8 +527,8 @@ fn secondary_button(
 
 fn progress_bar(colors: &Colors, progress: u32) -> impl IntoElement {
     let clamped = progress.min(100);
-    let bar_bg = colors.surface_hover;
-    let bar_fill = colors.success;
+    let bar_bg = colors.selected;
+    let bar_fill = rgb(0x388e3c);
 
     div()
         .h_2()

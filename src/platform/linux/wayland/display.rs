@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use uuid::Uuid;
 use wayland_backend::client::ObjectId;
 
-use crate::{Bounds, DisplayId, Pixels, PlatformDisplay};
+use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WaylandDisplay {
@@ -25,7 +25,7 @@ impl Hash for WaylandDisplay {
 
 impl PlatformDisplay for WaylandDisplay {
     fn id(&self) -> DisplayId {
-        DisplayId(self.id.protocol_id())
+        DisplayId::new(self.id.protocol_id())
     }
 
     fn uuid(&self) -> anyhow::Result<Uuid> {

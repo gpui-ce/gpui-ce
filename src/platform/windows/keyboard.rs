@@ -10,7 +10,7 @@ use windows::Win32::UI::{
     WindowsAndMessaging::KL_NAMELENGTH,
 };
 
-use crate::{
+use gpui::{
     KeybindingKeystroke, Keystroke, Modifiers, PlatformKeyboardLayout, PlatformKeyboardMapper,
 };
 
@@ -316,7 +316,8 @@ const CANDIDATE_VKEYS: &[VIRTUAL_KEY] = &[
 
 #[cfg(test)]
 mod tests {
-    use crate::{Keystroke, Modifiers, PlatformKeyboardMapper, WindowsKeyboardMapper};
+    use crate::WindowsKeyboardMapper;
+    use gpui::{Keystroke, Modifiers, PlatformKeyboardMapper};
 
     #[test]
     fn test_keyboard_mapper() {

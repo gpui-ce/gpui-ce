@@ -1,6 +1,6 @@
 use gpui::{
-    App, Application, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Timer, Window,
-    WindowBounds, WindowKind, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Window, WindowBounds,
+    WindowKind, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
 struct SubWindow {
@@ -188,7 +188,7 @@ impl Render for WindowDemo {
                 // Restore the application after 3 seconds
                 window
                     .spawn(cx, async move |cx| {
-                        Timer::after(std::time::Duration::from_secs(3)).await;
+                        smol::Timer::after(std::time::Duration::from_secs(3)).await;
                         cx.update(|_, cx| {
                             cx.activate(false);
                         })

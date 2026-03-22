@@ -15,7 +15,8 @@ use windows::{
     core::*,
 };
 
-use crate::{Bounds, DevicePixels, DisplayId, Pixels, PlatformDisplay, logical_point, point, size};
+use crate::logical_point;
+use gpui::{Bounds, DevicePixels, DisplayId, Pixels, PlatformDisplay, point, size};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WindowsDisplay {
@@ -34,7 +35,9 @@ unsafe impl Sync for WindowsDisplay {}
 
 impl WindowsDisplay {
     pub(crate) fn new(display_id: DisplayId) -> Option<Self> {
-        let screen = available_monitors().into_iter().nth(display_id.0 as _)?;
+        let screen = available_monitors()
+            .into_iter()
+            .nth(u32::from(display_id) as _)?;
         let info = get_monitor_info(screen).log_err()?;
         let monitor_size = info.monitorInfo.rcMonitor;
         let work_area = info.monitorInfo.rcWork;
@@ -63,7 +66,7 @@ impl WindowsDisplay {
                     (work_area.right - work_area.left) as f32 / scale_factor,
                     (work_area.bottom - work_area.top) as f32 / scale_factor,
                 )
-                .map(crate::px),
+                .map(gpui::px),
             },
             physical_bounds: Bounds {
                 origin: point(monitor_size.left.into(), monitor_size.top.into()),
@@ -90,7 +93,7 @@ impl WindowsDisplay {
 
         Ok(WindowsDisplay {
             handle: monitor,
-            display_id: DisplayId(display_id as _),
+            display_id: DisplayId::new(display_id as _),
             scale_factor,
             bounds: Bounds {
                 origin: logical_point(
@@ -106,7 +109,7 @@ impl WindowsDisplay {
                     (work_area.right - work_area.left) as f32 / scale_factor,
                     (work_area.bottom - work_area.top) as f32 / scale_factor,
                 )
-                .map(crate::px),
+                .map(gpui::px),
             },
             physical_bounds: Bounds {
                 origin: point(monitor_size.left.into(), monitor_size.top.into()),
@@ -145,7 +148,7 @@ impl WindowsDisplay {
                     (work_area.right - work_area.left) as f32 / scale_factor,
                     (work_area.bottom - work_area.top) as f32 / scale_factor,
                 )
-                .map(crate::px),
+                .map(gpui::px),
             },
             physical_bounds: Bounds {
                 origin: point(monitor_size.left.into(), monitor_size.top.into()),
@@ -173,8 +176,8 @@ impl WindowsDisplay {
     pub fn check_given_bounds(&self, bounds: Bounds<Pixels>) -> bool {
         let center = bounds.center();
         let center = POINT {
-            x: (center.x.0 * self.scale_factor) as i32,
-            y: (center.y.0 * self.scale_factor) as i32,
+            x: (center.x.as_f32() * self.scale_factor) as i32,
+            y: (center.y.as_f32() * self.scale_factor) as i32,
         };
         let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONULL) };
         if monitor.is_invalid() {
@@ -193,15 +196,10 @@ impl WindowsDisplay {
             .enumerate()
             .filter_map(|(id, handle)| {
                 Some(Rc::new(
-                    WindowsDisplay::new_with_handle_and_id(handle, DisplayId(id as _)).ok()?,
+                    WindowsDisplay::new_with_handle_and_id(handle, DisplayId::new(id as _)).ok()?,
                 ) as Rc<dyn PlatformDisplay>)
             })
             .collect()
-    }
-
-    /// Check if this monitor is still online
-    pub fn is_connected(hmonitor: HMONITOR) -> bool {
-        available_monitors().iter().contains(&hmonitor)
     }
 
     pub fn physical_bounds(&self) -> Bounds<DevicePixels> {

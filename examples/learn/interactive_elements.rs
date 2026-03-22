@@ -11,10 +11,11 @@
 mod example_prelude;
 
 use example_prelude::init_example;
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, ClickEvent, Colors, Context, Entity, Half, Hsla, IntoElement,
-    MouseButton, MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, size,
+    App, Application, Bounds, ClickEvent, Context, Entity, Half, Hsla, IntoElement, MouseButton,
+    MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, size,
 };
 
 // ============================================================================
@@ -50,7 +51,7 @@ impl Render for ClickDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -61,7 +62,7 @@ impl Render for ClickDemo {
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("Single click, double click, or triple click the button"),
             )
             .child(
@@ -70,12 +71,12 @@ impl Render for ClickDemo {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(colors.accent)
+                    .bg(colors.selected)
                     .text_color(colors.selected_text)
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|style| style.bg(colors.accent_hover))
-                    .active(|style| style.bg(colors.accent_active))
+                    .hover(|style| style.bg(colors.selected))
+                    .active(|style| style.bg(colors.selected))
                     .child("Click Me!")
                     // on_click receives a ClickEvent with click_count() method
                     .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
@@ -98,13 +99,13 @@ impl Render for ClickDemo {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(colors.text_muted)
+                            .text_color(colors.disabled)
                             .child(format!("Total clicks: {}", self.click_count)),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(colors.text_muted)
+                            .text_color(colors.disabled)
                             .child(format!("Last: {}", self.last_click_type)),
                     ),
             )
@@ -144,7 +145,7 @@ impl Render for HoverDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -155,7 +156,7 @@ impl Render for HoverDemo {
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("Move your mouse in and out of the target"),
             )
             .child(
@@ -166,14 +167,14 @@ impl Render for HoverDemo {
                     .rounded_md()
                     .border_2()
                     .border_color(if is_hovered {
-                        colors.accent
+                        colors.selected
                     } else {
                         colors.border
                     })
                     .bg(if is_hovered {
-                        colors.accent_hover
+                        colors.selected
                     } else {
-                        colors.surface_hover
+                        colors.selected
                     })
                     .text_color(if is_hovered {
                         colors.selected_text
@@ -199,7 +200,7 @@ impl Render for HoverDemo {
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .mt_2()
                     .child(format!("Times hovered: {}", self.hover_count)),
             )
@@ -253,7 +254,7 @@ impl Render for MouseEventsDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -264,7 +265,7 @@ impl Render for MouseEventsDemo {
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("Move and click within the target area"),
             )
             .child(
@@ -274,14 +275,14 @@ impl Render for MouseEventsDemo {
                     .rounded_md()
                     .border_2()
                     .border_color(if is_pressed {
-                        colors.accent
+                        colors.selected
                     } else {
                         colors.border
                     })
                     .bg(if is_pressed {
-                        colors.accent_hover
+                        colors.selected
                     } else {
-                        colors.surface_hover
+                        colors.selected
                     })
                     .flex()
                     .items_center()
@@ -317,7 +318,7 @@ impl Render for MouseEventsDemo {
                     .gap_0p5()
                     .mt_2()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .children(
                         self.event_log
                             .iter()
@@ -396,7 +397,7 @@ impl DragDropDemo {
 impl Render for DragDropDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
-        let item_colors = [colors.error, colors.success, colors.warning];
+        let item_colors = [rgb(0xd32f2f), rgb(0x388e3c), rgb(0xf9a825)];
 
         div()
             .flex()
@@ -404,7 +405,7 @@ impl Render for DragDropDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -415,7 +416,7 @@ impl Render for DragDropDemo {
             .child(
                 div()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("Drag items to the drop zone below"),
             )
             .child(
@@ -464,7 +465,7 @@ impl Render for DragDropDemo {
                     .items_center()
                     .justify_center()
                     .text_xs()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     // on_drop receives the drag data when an item is dropped
                     .on_drop(cx.listener(|this, data: &DragData, _window, cx| {
                         this.dropped_item = Some(*data);
@@ -532,7 +533,7 @@ impl Render for InteractiveElementsExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Click, hover, mouse events, and drag-and-drop in GPUI"),
                             ),
                     )

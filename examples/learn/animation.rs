@@ -13,10 +13,11 @@ mod example_prelude;
 use std::time::Duration;
 
 use anyhow::Result;
+use gpui::colors::Colors;
 use gpui::{
-    Animation, AnimationExt as _, App, Application, AssetSource, Bounds, Colors, Context, Hsla,
+    Animation, AnimationExt as _, App, Application, AssetSource, Bounds, Context, Hsla,
     SharedString, Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out,
-    linear, percentage, prelude::*, px, size as gpui_size, svg,
+    linear, percentage, prelude::*, px, rgb, size as gpui_size, svg,
 };
 
 struct Assets {}
@@ -78,7 +79,7 @@ impl Render for AnimationExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Animations, easing, and transformations in GPUI"),
                             ),
                     )
@@ -99,8 +100,8 @@ impl Render for AnimationExample {
 }
 
 fn rotation_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
-    let accent = colors.accent;
+    let text_muted = colors.disabled;
+    let accent = colors.selected;
 
     div()
         .flex()
@@ -133,8 +134,8 @@ fn rotation_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn bounce_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
-    let success = colors.success;
+    let text_muted = colors.disabled;
+    let success = rgb(0x388e3c);
 
     div()
         .flex()
@@ -167,8 +168,8 @@ fn bounce_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn scale_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
-    let warning = colors.warning;
+    let text_muted = colors.disabled;
+    let warning = rgb(0xf9a825);
 
     div()
         .flex()
@@ -202,8 +203,8 @@ fn scale_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn combined_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
-    let error = colors.error;
+    let text_muted = colors.disabled;
+    let error = rgb(0xd32f2f);
 
     div()
         .flex()
@@ -240,7 +241,7 @@ fn combined_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = colors.surface.into();
+    let surface: Hsla = colors.container.into();
 
     div()
         .flex()

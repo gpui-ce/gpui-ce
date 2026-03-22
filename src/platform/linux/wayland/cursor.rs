@@ -1,4 +1,4 @@
-use crate::Globals;
+use crate::platform::linux::Globals;
 use crate::platform::linux::{DEFAULT_CURSOR_ICON_NAME, log_cursor_icon_warning};
 use anyhow::{Context as _, anyhow};
 use util::ResultExt;
@@ -95,7 +95,7 @@ impl Cursor {
         &mut self,
         wl_pointer: &WlPointer,
         serial_id: u32,
-        mut cursor_icon_names: &[&str],
+        cursor_icon_names: &[&str],
         scale: i32,
     ) {
         self.set_scaled_size(self.size * scale as u32);
@@ -104,9 +104,9 @@ impl Cursor {
             log::warn!("Wayland: Unable to load cursor themes");
             return;
         };
-        let mut theme = &mut loaded_theme.theme;
+        let theme = &mut loaded_theme.theme;
 
-        let mut buffer: &CursorImageBuffer;
+        let buffer: &CursorImageBuffer;
         'outer: {
             for cursor_icon_name in cursor_icon_names {
                 if let Some(cursor) = theme.get_cursor(cursor_icon_name) {

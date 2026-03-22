@@ -7,8 +7,9 @@
 //! 3. `window.paint_*` methods - Drawing quads, paths, and more
 //! 4. Interactive drawing - Responding to mouse events
 
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Colors, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
+    App, Application, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
     WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
@@ -23,9 +24,9 @@ mod example_prelude;
 // - paint: Called during paint to actually draw
 
 fn basic_shapes_canvas(colors: &Colors) -> impl IntoElement {
-    let error = colors.error;
-    let success = colors.success;
-    let accent = colors.accent;
+    let error = rgb(0xd32f2f);
+    let success = rgb(0x388e3c);
+    let accent = colors.selected;
 
     canvas(
         move |_bounds, _window, _cx| {},
@@ -106,8 +107,8 @@ fn create_triangle(p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> P
 }
 
 fn custom_paths_canvas(colors: &Colors) -> impl IntoElement {
-    let warning = colors.warning;
-    let accent = colors.accent;
+    let warning = rgb(0xf9a825);
+    let accent = colors.selected;
 
     canvas(
         move |_bounds, _window, _cx| {},
@@ -169,10 +170,10 @@ impl DrawingCanvas {
 
     fn get_colors(colors: &Colors) -> Vec<Rgba> {
         vec![
-            colors.error,
-            colors.success,
-            colors.accent,
-            colors.warning,
+            rgb(0xd32f2f),
+            rgb(0x388e3c),
+            colors.selected,
+            rgb(0xf9a825),
             rgb(0x8b5cf6), // Purple
             rgb(0x06b6d4), // Cyan
         ]
@@ -277,12 +278,12 @@ impl Render for DrawingCanvas {
         let current_color = self.current_color(&colors);
         let palette = Self::get_colors(&colors);
 
-        let surface = colors.surface;
+        let surface = colors.container;
         let border = colors.border;
-        let error = colors.error;
-        let error_hover = colors.error_hover;
+        let error = rgb(0xd32f2f);
+        let error_hover = rgb(0xe04545);
         let text = colors.selected_text;
-        let text_muted = colors.text_muted;
+        let text_muted = colors.disabled;
 
         div()
             .flex()
@@ -393,7 +394,7 @@ impl Render for CustomDrawingExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Canvas element, paths, and interactive painting"),
                             ),
                     )
@@ -429,7 +430,7 @@ fn section(
     content: impl IntoElement,
     height: Pixels,
 ) -> impl IntoElement {
-    let surface: Hsla = colors.surface.into();
+    let surface: Hsla = colors.container.into();
 
     div()
         .flex()
@@ -455,7 +456,7 @@ fn section(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(colors.text_muted)
+                        .text_color(colors.disabled)
                         .child(description),
                 ),
         )

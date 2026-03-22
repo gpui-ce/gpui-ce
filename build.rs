@@ -1,59 +1,25 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
-#![cfg_attr(any(not(target_os = "macos"), feature = "macos-blade"), allow(unused))]
-
-//TODO: consider generating shader code for WGSL
-//TODO: deprecate "runtime-shaders" and "macos-blade"
 
 use std::env;
 
 fn main() {
-    let target = env::var("CARGO_CFG_TARGET_OS");
     println!("cargo::rustc-check-cfg=cfg(gles)");
 
-    #[cfg(any(
-        not(any(target_os = "macos", target_os = "windows")),
-        all(target_os = "macos", feature = "macos-blade")
-    ))]
-    check_wgsl_shaders();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    match target.as_deref() {
-        Ok("macos") => {
+    match target_os.as_str() {
+        "macos" => {
             #[cfg(target_os = "macos")]
             macos::build();
         }
-        Ok("windows") => {
+        "windows" => {
             #[cfg(target_os = "windows")]
             windows::build();
         }
-        _ => (),
-    };
-}
-
-#[cfg(any(
-    not(any(target_os = "macos", target_os = "windows")),
-    all(target_os = "macos", feature = "macos-blade")
-))]
-fn check_wgsl_shaders() {
-    use std::path::PathBuf;
-    use std::process;
-    use std::str::FromStr;
-
-    let shader_source_path = "./src/platform/blade/shaders.wgsl";
-    let shader_path = PathBuf::from_str(shader_source_path).unwrap();
-    println!("cargo:rerun-if-changed={}", &shader_path.display());
-
-    let shader_source = std::fs::read_to_string(&shader_path).unwrap();
-
-    match naga::front::wgsl::parse_str(&shader_source) {
-        Ok(_) => {
-            // All clear
-        }
-        Err(e) => {
-            println!("cargo::error=WGSL shader compilation failed:\n{}", e);
-            process::exit(1);
-        }
+        _ => {}
     }
 }
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::{
@@ -63,55 +29,19 @@ mod macos {
 
     use cbindgen::Config;
 
-    pub(super) fn build() {
-        generate_dispatch_bindings();
-        #[cfg(not(feature = "macos-blade"))]
-        {
-            let header_path = generate_shader_bindings();
+    pub fn build() {
+        let header_path = generate_shader_bindings();
 
-            #[cfg(feature = "runtime_shaders")]
-            emit_stitched_shaders(&header_path);
-            #[cfg(not(feature = "runtime_shaders"))]
-            compile_metal_shaders(&header_path);
-        }
-    }
-
-    fn generate_dispatch_bindings() {
-        println!("cargo:rustc-link-lib=framework=System");
-
-        let bindings = bindgen::Builder::default()
-            .header("src/platform/mac/dispatch.h")
-            .allowlist_var("_dispatch_main_q")
-            .allowlist_var("_dispatch_source_type_data_add")
-            .allowlist_var("DISPATCH_QUEUE_PRIORITY_HIGH")
-            .allowlist_var("DISPATCH_QUEUE_PRIORITY_DEFAULT")
-            .allowlist_var("DISPATCH_QUEUE_PRIORITY_LOW")
-            .allowlist_var("DISPATCH_TIME_NOW")
-            .allowlist_function("dispatch_get_global_queue")
-            .allowlist_function("dispatch_async_f")
-            .allowlist_function("dispatch_after_f")
-            .allowlist_function("dispatch_time")
-            .allowlist_function("dispatch_source_merge_data")
-            .allowlist_function("dispatch_source_create")
-            .allowlist_function("dispatch_source_set_event_handler_f")
-            .allowlist_function("dispatch_resume")
-            .allowlist_function("dispatch_suspend")
-            .allowlist_function("dispatch_source_cancel")
-            .allowlist_function("dispatch_set_context")
-            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-            .layout_tests(false)
-            .generate()
-            .expect("unable to generate bindings");
-
-        let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-        bindings
-            .write_to_file(out_path.join("dispatch_sys.rs"))
-            .expect("couldn't write dispatch bindings");
+        #[cfg(feature = "runtime_shaders")]
+        emit_stitched_shaders(&header_path);
+        #[cfg(not(feature = "runtime_shaders"))]
+        compile_metal_shaders(&header_path);
     }
 
     fn generate_shader_bindings() -> PathBuf {
         let output_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("scene.h");
         let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
         let mut config = Config {
             include_guard: Some("SCENE_H".into()),
             language: cbindgen::Language::C,
@@ -152,6 +82,7 @@ mod macos {
 
         let mut builder = cbindgen::Builder::new();
 
+        // Source files that define types used in shaders
         let src_paths = [
             crate_dir.join("src/scene.rs"),
             crate_dir.join("src/geometry.rs"),
@@ -160,7 +91,8 @@ mod macos {
             crate_dir.join("src/platform.rs"),
             crate_dir.join("src/platform/mac/metal_renderer.rs"),
         ];
-        for src_path in src_paths {
+
+        for src_path in &src_paths {
             println!("cargo:rerun-if-changed={}", src_path.display());
             builder = builder.with_src(src_path);
         }
@@ -178,7 +110,6 @@ mod macos {
     /// so that it is self-contained.
     #[cfg(feature = "runtime_shaders")]
     fn emit_stitched_shaders(header_path: &Path) {
-        use std::str::FromStr;
         fn stitch_header(header: &Path, shader_path: &Path) -> std::io::Result<PathBuf> {
             let header_contents = std::fs::read_to_string(header)?;
             let shader_contents = std::fs::read_to_string(shader_path)?;
@@ -189,7 +120,7 @@ mod macos {
             Ok(out_path)
         }
         let shader_source_path = "./src/platform/mac/shaders.metal";
-        let shader_path = PathBuf::from_str(shader_source_path).unwrap();
+        let shader_path = PathBuf::from(shader_source_path);
         stitch_header(header_path, &shader_path).unwrap();
         println!("cargo:rerun-if-changed={}", &shader_source_path);
     }
@@ -249,20 +180,10 @@ mod macos {
 
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::{
-        ffi::OsString,
-        fs,
-        io::Write,
-        path::{Path, PathBuf},
-        process::{self, Command},
-    };
-
-    pub(super) fn build() {
-        // Compile HLSL shaders
+    pub fn build() {
         #[cfg(not(debug_assertions))]
-        compile_shaders();
+        shader_compilation::compile_shaders();
 
-        // Embed the Windows manifest and resource file
         #[cfg(feature = "windows-manifest")]
         embed_resource();
     }
@@ -278,222 +199,223 @@ mod windows {
             .unwrap();
     }
 
-    /// You can set the `GPUI_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
-    fn compile_shaders() {
-        let shader_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("src/platform/windows/shaders.hlsl");
-        let out_dir = std::env::var("OUT_DIR").unwrap();
+    #[cfg(not(debug_assertions))]
+    mod shader_compilation {
+        use std::{
+            fs,
+            io::Write,
+            path::{Path, PathBuf},
+            process::{self, Command},
+        };
 
-        println!("cargo:rerun-if-changed={}", shader_path.display());
-
-        // Check if fxc.exe is available
-        let fxc_path = find_fxc_compiler();
-
-        // Define all modules
-        let modules = [
-            "quad",
-            "shadow",
-            "path_rasterization",
-            "path_sprite",
-            "underline",
-            "monochrome_sprite",
-            "polychrome_sprite",
-        ];
-
-        let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
-        if Path::new(&rust_binding_path).exists() {
-            fs::remove_file(&rust_binding_path)
-                .expect("Failed to remove existing Rust binding file");
-        }
-        for module in modules {
-            compile_shader_for_module(
-                module,
-                &out_dir,
-                &fxc_path,
-                shader_path.to_str().unwrap(),
-                &rust_binding_path,
-            );
-        }
-
-        {
+        pub fn compile_shaders() {
             let shader_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-                .join("src/platform/windows/color_text_raster.hlsl");
-            compile_shader_for_module(
-                "emoji_rasterization",
-                &out_dir,
-                &fxc_path,
-                shader_path.to_str().unwrap(),
-                &rust_binding_path,
-            );
-        }
-    }
+                .join("src/platform/windows/shaders.hlsl");
+            let out_dir = std::env::var("OUT_DIR").unwrap();
 
-    /// Locate `binary` in the newest installed Windows SDK.
-    pub fn find_latest_windows_sdk_binary(
-        binary: &str,
-    ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-        let key = windows_registry::LOCAL_MACHINE
-            .open("SOFTWARE\\WOW6432Node\\Microsoft\\Microsoft SDKs\\Windows\\v10.0")?;
+            println!("cargo:rerun-if-changed={}", shader_path.display());
 
-        let install_folder: String = key.get_string("InstallationFolder")?; // "C:\Program Files (x86)\Windows Kits\10\"
-        let install_folder_bin = Path::new(&install_folder).join("bin");
+            let fxc_path = find_fxc_compiler();
 
-        let mut versions: Vec<_> = std::fs::read_dir(&install_folder_bin)?
-            .flatten()
-            .filter(|entry| entry.path().is_dir())
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .collect();
+            let modules = [
+                "quad",
+                "shadow",
+                "path_rasterization",
+                "path_sprite",
+                "underline",
+                "monochrome_sprite",
+                "subpixel_sprite",
+                "polychrome_sprite",
+            ];
 
-        versions.sort_by_key(|s| {
-            s.split('.')
-                .filter_map(|p| p.parse().ok())
-                .collect::<Vec<u32>>()
-        });
-
-        let arch = match std::env::consts::ARCH {
-            "x86_64" => "x64",
-            "aarch64" => "arm64",
-            _ => Err(format!(
-                "Unsupported architecture: {}",
-                std::env::consts::ARCH
-            ))?,
-        };
-
-        if let Some(highest_version) = versions.last() {
-            return Ok(Some(
-                install_folder_bin
-                    .join(highest_version)
-                    .join(arch)
-                    .join(binary),
-            ));
-        }
-
-        Ok(None)
-    }
-
-    /// You can set the `GPUI_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
-    fn find_fxc_compiler() -> String {
-        // Check environment variable
-        if let Ok(path) = std::env::var("GPUI_FXC_PATH")
-            && Path::new(&path).exists()
-        {
-            return path;
-        }
-
-        // Try to find in PATH
-        // NOTE: This has to be `where.exe` on Windows, not `where`, it must be ended with `.exe`
-        if let Ok(output) = std::process::Command::new("where.exe")
-            .arg("fxc.exe")
-            .output()
-            && output.status.success()
-        {
-            let path = String::from_utf8_lossy(&output.stdout);
-            return path.trim().to_string();
-        }
-
-        if let Ok(Some(path)) = find_latest_windows_sdk_binary("fxc.exe") {
-            return path.to_string_lossy().into_owned();
-        }
-
-        panic!("Failed to find fxc.exe");
-    }
-
-    fn compile_shader_for_module(
-        module: &str,
-        out_dir: &str,
-        fxc_path: &str,
-        shader_path: &str,
-        rust_binding_path: &str,
-    ) {
-        // Compile vertex shader
-        let output_file = format!("{}/{}_vs.h", out_dir, module);
-        let const_name = format!("{}_VERTEX_BYTES", module.to_uppercase());
-        compile_shader_impl(
-            fxc_path,
-            &format!("{module}_vertex"),
-            &output_file,
-            &const_name,
-            shader_path,
-            "vs_4_1",
-        );
-        generate_rust_binding(&const_name, &output_file, rust_binding_path);
-
-        // Compile fragment shader
-        let output_file = format!("{}/{}_ps.h", out_dir, module);
-        let const_name = format!("{}_FRAGMENT_BYTES", module.to_uppercase());
-        compile_shader_impl(
-            fxc_path,
-            &format!("{module}_fragment"),
-            &output_file,
-            &const_name,
-            shader_path,
-            "ps_4_1",
-        );
-        generate_rust_binding(&const_name, &output_file, rust_binding_path);
-    }
-
-    fn compile_shader_impl(
-        fxc_path: &str,
-        entry_point: &str,
-        output_path: &str,
-        var_name: &str,
-        shader_path: &str,
-        target: &str,
-    ) {
-        let output = Command::new(fxc_path)
-            .args([
-                "/T",
-                target,
-                "/E",
-                entry_point,
-                "/Fh",
-                output_path,
-                "/Vn",
-                var_name,
-                "/O3",
-                shader_path,
-            ])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if result.status.success() {
-                    return;
-                }
-                println!(
-                    "cargo::error=Shader compilation failed for {}:\n{}",
-                    entry_point,
-                    String::from_utf8_lossy(&result.stderr)
+            let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
+            if Path::new(&rust_binding_path).exists() {
+                fs::remove_file(&rust_binding_path)
+                    .expect("Failed to remove existing Rust binding file");
+            }
+            for module in modules {
+                compile_shader_for_module(
+                    module,
+                    &out_dir,
+                    &fxc_path,
+                    shader_path.to_str().unwrap(),
+                    &rust_binding_path,
                 );
-                process::exit(1);
             }
-            Err(e) => {
-                println!("cargo::error=Failed to run fxc for {}: {}", entry_point, e);
-                process::exit(1);
+
+            {
+                let shader_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+                    .join("src/platform/windows/color_text_raster.hlsl");
+                compile_shader_for_module(
+                    "emoji_rasterization",
+                    &out_dir,
+                    &fxc_path,
+                    shader_path.to_str().unwrap(),
+                    &rust_binding_path,
+                );
             }
         }
-    }
 
-    fn generate_rust_binding(const_name: &str, head_file: &str, output_path: &str) {
-        let header_content = fs::read_to_string(head_file).expect("Failed to read header file");
-        let const_definition = {
-            let global_var_start = header_content.find("const BYTE").unwrap();
-            let global_var = &header_content[global_var_start..];
-            let equal = global_var.find('=').unwrap();
-            global_var[equal + 1..].trim()
-        };
-        let rust_binding = format!(
-            "const {}: &[u8] = &{}\n",
-            const_name,
-            const_definition.replace('{', "[").replace('}', "]")
-        );
-        let mut options = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output_path)
-            .expect("Failed to open Rust binding file");
-        options
-            .write_all(rust_binding.as_bytes())
-            .expect("Failed to write Rust binding file");
+        fn find_latest_windows_sdk_binary(
+            binary: &str,
+        ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+            let key = windows_registry::LOCAL_MACHINE
+                .open("SOFTWARE\\WOW6432Node\\Microsoft\\Microsoft SDKs\\Windows\\v10.0")?;
+
+            let install_folder: String = key.get_string("InstallationFolder")?;
+            let install_folder_bin = Path::new(&install_folder).join("bin");
+
+            let mut versions: Vec<_> = std::fs::read_dir(&install_folder_bin)?
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect();
+
+            versions.sort_by_key(|s| {
+                s.split('.')
+                    .filter_map(|p| p.parse().ok())
+                    .collect::<Vec<u32>>()
+            });
+
+            let arch = match std::env::consts::ARCH {
+                "x86_64" => "x64",
+                "aarch64" => "arm64",
+                _ => Err(format!(
+                    "Unsupported architecture: {}",
+                    std::env::consts::ARCH
+                ))?,
+            };
+
+            if let Some(highest_version) = versions.last() {
+                return Ok(Some(
+                    install_folder_bin
+                        .join(highest_version)
+                        .join(arch)
+                        .join(binary),
+                ));
+            }
+
+            Ok(None)
+        }
+
+        fn find_fxc_compiler() -> String {
+            if let Ok(path) = std::env::var("GPUI_FXC_PATH")
+                && Path::new(&path).exists()
+            {
+                return path;
+            }
+
+            if let Ok(output) = std::process::Command::new("where.exe")
+                .arg("fxc.exe")
+                .output()
+                && output.status.success()
+            {
+                let path = String::from_utf8_lossy(&output.stdout);
+                return path.trim().to_string();
+            }
+
+            if let Ok(Some(path)) = find_latest_windows_sdk_binary("fxc.exe") {
+                return path.to_string_lossy().into_owned();
+            }
+
+            panic!("Failed to find fxc.exe");
+        }
+
+        fn compile_shader_for_module(
+            module: &str,
+            out_dir: &str,
+            fxc_path: &str,
+            shader_path: &str,
+            rust_binding_path: &str,
+        ) {
+            let output_file = format!("{}/{}_vs.h", out_dir, module);
+            let const_name = format!("{}_VERTEX_BYTES", module.to_uppercase());
+            compile_shader_impl(
+                fxc_path,
+                &format!("{module}_vertex"),
+                &output_file,
+                &const_name,
+                shader_path,
+                "vs_4_1",
+            );
+            generate_rust_binding(&const_name, &output_file, rust_binding_path);
+
+            let output_file = format!("{}/{}_ps.h", out_dir, module);
+            let const_name = format!("{}_FRAGMENT_BYTES", module.to_uppercase());
+            compile_shader_impl(
+                fxc_path,
+                &format!("{module}_fragment"),
+                &output_file,
+                &const_name,
+                shader_path,
+                "ps_4_1",
+            );
+            generate_rust_binding(&const_name, &output_file, rust_binding_path);
+        }
+
+        fn compile_shader_impl(
+            fxc_path: &str,
+            entry_point: &str,
+            output_path: &str,
+            var_name: &str,
+            shader_path: &str,
+            target: &str,
+        ) {
+            let output = Command::new(fxc_path)
+                .args([
+                    "/T",
+                    target,
+                    "/E",
+                    entry_point,
+                    "/Fh",
+                    output_path,
+                    "/Vn",
+                    var_name,
+                    "/O3",
+                    shader_path,
+                ])
+                .output();
+
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        return;
+                    }
+                    println!(
+                        "cargo::error=Shader compilation failed for {}:\n{}",
+                        entry_point,
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                    process::exit(1);
+                }
+                Err(e) => {
+                    println!("cargo::error=Failed to run fxc for {}: {}", entry_point, e);
+                    process::exit(1);
+                }
+            }
+        }
+
+        fn generate_rust_binding(const_name: &str, head_file: &str, output_path: &str) {
+            let header_content = fs::read_to_string(head_file).expect("Failed to read header file");
+            let const_definition = {
+                let global_var_start = header_content.find("const BYTE").unwrap();
+                let global_var = &header_content[global_var_start..];
+                let equal = global_var.find('=').unwrap();
+                global_var[equal + 1..].trim()
+            };
+            let rust_binding = format!(
+                "const {}: &[u8] = &{}\n",
+                const_name,
+                const_definition.replace('{', "[").replace('}', "]")
+            );
+            let mut options = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(output_path)
+                .expect("Failed to open Rust binding file");
+            options
+                .write_all(rust_binding.as_bytes())
+                .expect("Failed to write Rust binding file");
+        }
     }
 }

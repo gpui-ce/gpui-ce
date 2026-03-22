@@ -1,13 +1,8 @@
-use crate::{
-    Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
-};
 use anyhow::anyhow;
 use cocoa::appkit::CGFloat;
 use collections::HashMap;
 use core_foundation::{
+    array::{CFArray, CFArrayRef},
     attributed_string::CFMutableAttributedString,
     base::{CFRange, TCFType},
     number::CFNumber,
@@ -21,8 +16,10 @@ use core_graphics::{
 };
 use core_text::{
     font::CTFont,
+    font_collection::CTFontCollectionRef,
     font_descriptor::{
-        kCTFontSlantTrait, kCTFontSymbolicTrait, kCTFontWeightTrait, kCTFontWidthTrait,
+        CTFontDescriptor, kCTFontSlantTrait, kCTFontSymbolicTrait, kCTFontWeightTrait,
+        kCTFontWidthTrait,
     },
     line::CTLine,
     string_attributes::kCTFontAttributeName,
@@ -36,11 +33,17 @@ use font_kit::{
     source::SystemSource,
     sources::mem::MemSource,
 };
+use gpui::{
+    Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
+    FontStyle, FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams,
+    Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size, TextRenderingMode,
+    point, px, size, swap_rgba_pa_to_bgra,
+};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::{
     rect::{RectF, RectI},
     transform2d::Transform2F,
-    vector::{Vector2F, Vector2I},
+    vector::Vector2F,
 };
 use smallvec::SmallVec;
 use std::{borrow::Cow, char, convert::TryFrom, sync::Arc};
@@ -50,7 +53,8 @@ use super::open_type::apply_features_and_fallbacks;
 #[allow(non_upper_case_globals)]
 const kCGImageAlphaOnly: u32 = 7;
 
-pub(crate) struct MacTextSystem(RwLock<MacTextSystemState>);
+/// macOS text system using CoreText for font shaping.
+pub struct MacTextSystem(RwLock<MacTextSystemState>);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FontKey {
@@ -70,7 +74,8 @@ struct MacTextSystemState {
 }
 
 impl MacTextSystem {
-    pub(crate) fn new() -> Self {
+    /// Create a new MacTextSystem.
+    pub fn new() -> Self {
         Self(RwLock::new(MacTextSystemState {
             memory_source: MemSource::empty(),
             system_source: SystemSource::new(),
@@ -97,7 +102,26 @@ impl PlatformTextSystem for MacTextSystem {
     fn all_font_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         let collection = core_text::font_collection::create_for_all_families();
-        let Some(descriptors) = collection.get_descriptors() else {
+        // NOTE: We intentionally avoid using `collection.get_descriptors()` here because
+        // it has a memory leak bug in core-text v21.0.0. The upstream code uses
+        // `wrap_under_get_rule` but `CTFontCollectionCreateMatchingFontDescriptors`
+        // follows the Create Rule (caller owns the result), so it should use
+        // `wrap_under_create_rule`. We call the function directly with correct memory management.
+        unsafe extern "C" {
+            fn CTFontCollectionCreateMatchingFontDescriptors(
+                collection: CTFontCollectionRef,
+            ) -> CFArrayRef;
+        }
+        let descriptors: Option<CFArray<CTFontDescriptor>> = unsafe {
+            let array_ref =
+                CTFontCollectionCreateMatchingFontDescriptors(collection.as_concrete_TypeRef());
+            if array_ref.is_null() {
+                None
+            } else {
+                Some(CFArray::wrap_under_create_rule(array_ref))
+            }
+        };
+        let Some(descriptors) = descriptors else {
             return names;
         };
         for descriptor in descriptors.into_iter() {
@@ -137,8 +161,8 @@ impl PlatformTextSystem for MacTextSystem {
             let ix = font_kit::matching::find_best_match(
                 &candidate_properties,
                 &font_kit::properties::Properties {
-                    style: font.style.into(),
-                    weight: font.weight.into(),
+                    style: fontkit_style(font.style),
+                    weight: fontkit_weight(font.weight),
                     stretch: Default::default(),
                 },
             )?;
@@ -150,13 +174,13 @@ impl PlatformTextSystem for MacTextSystem {
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.0.read().fonts[font_id.0].metrics().into()
+        font_kit_metrics_to_metrics(self.0.read().fonts[font_id.0].metrics())
     }
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        Ok(self.0.read().fonts[font_id.0]
-            .typographic_bounds(glyph_id.0)?
-            .into())
+        Ok(bounds_from_rect(
+            self.0.read().fonts[font_id.0].typographic_bounds(glyph_id.0)?,
+        ))
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
@@ -181,6 +205,14 @@ impl PlatformTextSystem for MacTextSystem {
 
     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         self.0.write().layout_line(text, font_size, font_runs)
+    }
+
+    fn recommended_rendering_mode(
+        &self,
+        _font_id: FontId,
+        _font_size: Pixels,
+    ) -> TextRenderingMode {
+        TextRenderingMode::Grayscale
     }
 }
 
@@ -211,7 +243,7 @@ impl MacTextSystemState {
         features: &FontFeatures,
         fallbacks: Option<&FontFallbacks>,
     ) -> Result<SmallVec<[FontId; 4]>> {
-        let name = crate::text_system::font_name_with_fallbacks(name, ".AppleSystemUIFont");
+        let name = gpui::font_name_with_fallbacks(name, ".AppleSystemUIFont");
 
         let mut font_ids = SmallVec::new();
         let family = self
@@ -291,7 +323,9 @@ impl MacTextSystemState {
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        Ok(self.fonts[font_id.0].advance(glyph_id.0)?.into())
+        Ok(size_from_vector2f(
+            self.fonts[font_id.0].advance(glyph_id.0)?,
+        ))
     }
 
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
@@ -327,15 +361,22 @@ impl MacTextSystemState {
     fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
         let font = &self.fonts[params.font_id.0];
         let scale = Transform2F::from_scale(params.scale_factor);
-        Ok(font
-            .raster_bounds(
-                params.glyph_id.0,
-                params.font_size.into(),
-                scale,
-                HintingOptions::None,
-                font_kit::canvas::RasterizationOptions::GrayscaleAa,
-            )?
-            .into())
+        let mut bounds: Bounds<DevicePixels> = bounds_from_rect_i(font.raster_bounds(
+            params.glyph_id.0,
+            params.font_size.into(),
+            scale,
+            HintingOptions::None,
+            font_kit::canvas::RasterizationOptions::GrayscaleAa,
+        )?);
+
+        // Add 3% of font size as padding, clamped between 1 and 5 pixels
+        // to avoid clipping of anti-aliased edges.
+        let pad =
+            ((params.font_size.as_f32() * 0.03 * params.scale_factor).ceil() as i32).clamp(1, 5);
+        bounds.origin.x -= DevicePixels(pad);
+        bounds.size.width += DevicePixels(pad);
+
+        Ok(bounds)
     }
 
     fn rasterize_glyph(
@@ -450,12 +491,12 @@ impl MacTextSystemState {
                 let font = &self.fonts[run.font_id.0];
 
                 let font_metrics = font.metrics();
-                let font_scale = font_size.0 / font_metrics.units_per_em as f32;
+                let font_scale = f32::from(font_size) / font_metrics.units_per_em as f32;
                 max_ascent = max_ascent.max(font_metrics.ascent * font_scale);
                 max_descent = max_descent.max(-font_metrics.descent * font_scale);
 
                 let font_size = if break_ligature {
-                    px(font_size.0.next_up())
+                    px(f32::from(font_size).next_up())
                 } else {
                     font_size
                 };
@@ -484,7 +525,7 @@ impl MacTextSystemState {
             };
             let font_id = self.id_for_native_font(font);
 
-            let mut glyphs = match runs.last_mut() {
+            let glyphs = match runs.last_mut() {
                 Some(run) if run.font_id == font_id => &mut run.glyphs,
                 _ => {
                     runs.push(ShapedRun {
@@ -500,7 +541,7 @@ impl MacTextSystemState {
                 .zip(run.positions().iter())
                 .zip(run.string_indices().iter())
             {
-                let mut glyph_utf16_ix = usize::try_from(glyph_utf16_ix).unwrap();
+                let glyph_utf16_ix = usize::try_from(glyph_utf16_ix).unwrap();
                 if ix_converter.utf16_ix > glyph_utf16_ix {
                     // We cannot reuse current index converter, as it can only seek forward. Restart the search.
                     ix_converter = StringIndexConverter::new(text);
@@ -556,80 +597,68 @@ impl<'a> StringIndexConverter<'a> {
     }
 }
 
-impl From<Metrics> for FontMetrics {
-    fn from(metrics: Metrics) -> Self {
-        FontMetrics {
-            units_per_em: metrics.units_per_em,
-            ascent: metrics.ascent,
-            descent: metrics.descent,
-            line_gap: metrics.line_gap,
-            underline_position: metrics.underline_position,
-            underline_thickness: metrics.underline_thickness,
-            cap_height: metrics.cap_height,
-            x_height: metrics.x_height,
-            bounding_box: metrics.bounding_box.into(),
-        }
+fn font_kit_metrics_to_metrics(metrics: Metrics) -> FontMetrics {
+    FontMetrics {
+        units_per_em: metrics.units_per_em,
+        ascent: metrics.ascent,
+        descent: metrics.descent,
+        line_gap: metrics.line_gap,
+        underline_position: metrics.underline_position,
+        underline_thickness: metrics.underline_thickness,
+        cap_height: metrics.cap_height,
+        x_height: metrics.x_height,
+        bounding_box: bounds_from_rect(metrics.bounding_box),
     }
 }
 
-impl From<RectF> for Bounds<f32> {
-    fn from(rect: RectF) -> Self {
-        Bounds {
-            origin: point(rect.origin_x(), rect.origin_y()),
-            size: size(rect.width(), rect.height()),
-        }
+fn bounds_from_rect(rect: RectF) -> Bounds<f32> {
+    Bounds {
+        origin: point(rect.origin_x(), rect.origin_y()),
+        size: size(rect.width(), rect.height()),
     }
 }
 
-impl From<RectI> for Bounds<DevicePixels> {
-    fn from(rect: RectI) -> Self {
-        Bounds {
-            origin: point(DevicePixels(rect.origin_x()), DevicePixels(rect.origin_y())),
-            size: size(DevicePixels(rect.width()), DevicePixels(rect.height())),
-        }
+fn bounds_from_rect_i(rect: RectI) -> Bounds<DevicePixels> {
+    Bounds {
+        origin: point(DevicePixels(rect.origin_x()), DevicePixels(rect.origin_y())),
+        size: size(DevicePixels(rect.width()), DevicePixels(rect.height())),
     }
 }
 
-impl From<Vector2I> for Size<DevicePixels> {
-    fn from(value: Vector2I) -> Self {
-        size(value.x().into(), value.y().into())
-    }
+// impl From<Vector2I> for Size<DevicePixels> {
+//     fn from(value: Vector2I) -> Self {
+//         size(value.x().into(), value.y().into())
+//     }
+// }
+
+// impl From<RectI> for Bounds<i32> {
+//     fn from(rect: RectI) -> Self {
+//         Bounds {
+//             origin: point(rect.origin_x(), rect.origin_y()),
+//             size: size(rect.width(), rect.height()),
+//         }
+//     }
+// }
+
+// impl From<Point<u32>> for Vector2I {
+//     fn from(size: Point<u32>) -> Self {
+//         Vector2I::new(size.x as i32, size.y as i32)
+//     }
+// }
+
+fn size_from_vector2f(vec: Vector2F) -> Size<f32> {
+    size(vec.x(), vec.y())
 }
 
-impl From<RectI> for Bounds<i32> {
-    fn from(rect: RectI) -> Self {
-        Bounds {
-            origin: point(rect.origin_x(), rect.origin_y()),
-            size: size(rect.width(), rect.height()),
-        }
-    }
+fn fontkit_weight(value: FontWeight) -> FontkitWeight {
+    FontkitWeight(value.0)
 }
 
-impl From<Point<u32>> for Vector2I {
-    fn from(size: Point<u32>) -> Self {
-        Vector2I::new(size.x as i32, size.y as i32)
-    }
-}
-
-impl From<Vector2F> for Size<f32> {
-    fn from(vec: Vector2F) -> Self {
-        size(vec.x(), vec.y())
-    }
-}
-
-impl From<FontWeight> for FontkitWeight {
-    fn from(value: FontWeight) -> Self {
-        FontkitWeight(value.0)
-    }
-}
-
-impl From<FontStyle> for FontkitStyle {
-    fn from(style: FontStyle) -> Self {
-        match style {
-            FontStyle::Normal => FontkitStyle::Normal,
-            FontStyle::Italic => FontkitStyle::Italic,
-            FontStyle::Oblique => FontkitStyle::Oblique,
-        }
+fn fontkit_style(style: FontStyle) -> FontkitStyle {
+    match style {
+        FontStyle::Normal => FontkitStyle::Normal,
+        FontStyle::Italic => FontkitStyle::Italic,
+        FontStyle::Oblique => FontkitStyle::Oblique,
     }
 }
 
@@ -676,7 +705,8 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+    use super::MacTextSystem;
+    use gpui::{FontRun, GlyphId, PlatformTextSystem, font, px};
 
     #[test]
     fn test_layout_line_bom_char() {

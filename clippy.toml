@@ -21,3 +21,4 @@ disallowed-types = [
     # { path = "indexmap::IndexSet", replacement = "collections::IndexSet" },
     # { path = "indexmap::IndexMap", replacement = "collections::IndexMap" },
 ]
+

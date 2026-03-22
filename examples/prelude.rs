@@ -29,6 +29,7 @@ pub fn init_example(cx: &mut App, name: impl Into<SharedString>) {
     cx.set_menus(vec![Menu {
         name: name.into(),
         items: vec![MenuItem::action("Quit", Quit)],
+        disabled: false,
     }]);
 
     // Quit the app when all windows are closed

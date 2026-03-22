@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use uuid::Uuid;
 use x11rb::{connection::Connection as _, xcb_ffi::XCBConnection};
 
-use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, Size, px};
+use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay, Size, px};
 
 #[derive(Debug)]
 pub(crate) struct X11Display {
@@ -38,7 +38,7 @@ impl X11Display {
 
 impl PlatformDisplay for X11Display {
     fn id(&self) -> DisplayId {
-        DisplayId(self.x_screen_index as u32)
+        DisplayId::new(self.x_screen_index as u32)
     }
 
     fn uuid(&self) -> anyhow::Result<Uuid> {

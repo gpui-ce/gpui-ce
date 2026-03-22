@@ -7,35 +7,15 @@ use windows::{
         Color,
         ViewManagement::{UIColorType, UISettings},
     },
-    Wdk::System::SystemServices::RtlGetVersion,
     Win32::{
         Foundation::*, Graphics::Dwm::*, System::LibraryLoader::LoadLibraryA,
         UI::WindowsAndMessaging::*,
     },
-    core::{BOOL, HSTRING, PCSTR},
+    core::{BOOL, PCSTR},
 };
 
 use crate::*;
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum WindowsVersion {
-    Win10,
-    Win11,
-}
-
-impl WindowsVersion {
-    pub(crate) fn new() -> anyhow::Result<Self> {
-        let mut version = unsafe { std::mem::zeroed() };
-        let status = unsafe { RtlGetVersion(&mut version) };
-
-        status.ok()?;
-        if version.dwBuildNumber >= 22000 {
-            Ok(WindowsVersion::Win11)
-        } else {
-            Ok(WindowsVersion::Win10)
-        }
-    }
-}
+use gpui::*;
 
 pub(crate) trait HiLoWord {
     fn hiword(&self) -> u16;
@@ -117,6 +97,8 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
     static HAND: OnceLock<SafeCursor> = OnceLock::new();
     static SIZEWE: OnceLock<SafeCursor> = OnceLock::new();
     static SIZENS: OnceLock<SafeCursor> = OnceLock::new();
+    static SIZENWSE: OnceLock<SafeCursor> = OnceLock::new();
+    static SIZENESW: OnceLock<SafeCursor> = OnceLock::new();
     static NO: OnceLock<SafeCursor> = OnceLock::new();
     let (lock, name) = match style {
         CursorStyle::IBeam | CursorStyle::IBeamCursorForVerticalLayout => (&IBEAM, IDC_IBEAM),
@@ -130,6 +112,8 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
         | CursorStyle::ResizeDown
         | CursorStyle::ResizeUpDown
         | CursorStyle::ResizeRow => (&SIZENS, IDC_SIZENS),
+        CursorStyle::ResizeUpLeftDownRight => (&SIZENWSE, IDC_SIZENWSE),
+        CursorStyle::ResizeUpRightDownLeft => (&SIZENESW, IDC_SIZENESW),
         CursorStyle::OperationNotAllowed => (&NO, IDC_NO),
         CursorStyle::None => return None,
         _ => (&ARROW, IDC_ARROW),
@@ -189,17 +173,6 @@ pub(crate) fn system_appearance() -> Result<WindowAppearance> {
 #[inline(always)]
 fn is_color_light(color: &Color) -> bool {
     ((5 * color.G as u32) + (2 * color.R as u32) + color.B as u32) > (8 * 128)
-}
-
-pub(crate) fn show_error(title: &str, content: String) {
-    let _ = unsafe {
-        MessageBoxW(
-            None,
-            &HSTRING::from(content),
-            &HSTRING::from(title),
-            MB_ICONERROR | MB_SYSTEMMODAL,
-        )
-    };
 }
 
 pub(crate) fn with_dll_library<R, F>(dll_name: PCSTR, f: F) -> Result<R>

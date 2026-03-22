@@ -27,6 +27,7 @@ use windows::{
 };
 
 use crate::*;
+use gpui::*;
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -45,11 +46,13 @@ pub struct WindowsWindowState {
     pub fullscreen_restore_bounds: Cell<Bounds<Pixels>>,
     pub border_offset: WindowBorderOffset,
     pub appearance: Cell<WindowAppearance>,
+    pub background_appearance: Cell<WindowBackgroundAppearance>,
     pub scale_factor: Cell<f32>,
     pub restore_from_minimized: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
 
     pub callbacks: Callbacks,
     pub input_handler: Cell<Option<PlatformInputHandler>>,
+    pub ime_enabled: Cell<bool>,
     pub pending_surrogate: Cell<Option<u16>>,
     pub last_reported_modifiers: Cell<Option<Modifiers>>,
     pub last_reported_capslock: Cell<Option<Capslock>>,
@@ -79,10 +82,10 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) hide_title_bar: bool,
     pub(crate) is_movable: bool,
     pub(crate) executor: ForegroundExecutor,
-    pub(crate) windows_version: WindowsVersion,
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
+    pub(crate) parent_hwnd: Option<HWND>,
 }
 
 impl WindowsWindowState {
@@ -134,11 +137,13 @@ impl WindowsWindowState {
             fullscreen_restore_bounds: Cell::new(fullscreen_restore_bounds),
             border_offset,
             appearance: Cell::new(appearance),
+            background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
             scale_factor: Cell::new(scale_factor),
             restore_from_minimized: Cell::new(restore_from_minimized),
             min_size,
             callbacks,
             input_handler: Cell::new(input_handler),
+            ime_enabled: Cell::new(true),
             pending_surrogate: Cell::new(pending_surrogate),
             last_reported_modifiers: Cell::new(last_reported_modifiers),
             last_reported_capslock: Cell::new(last_reported_capslock),
@@ -236,11 +241,11 @@ impl WindowsWindowInner {
             hide_title_bar: context.hide_title_bar,
             is_movable: context.is_movable,
             executor: context.executor.clone(),
-            windows_version: context.windows_version,
             validation_number: context.validation_number,
             main_receiver: context.main_receiver.clone(),
             platform_window_handle: context.platform_window_handle,
-            system_settings: WindowsSystemSettings::new(context.display),
+            system_settings: WindowsSystemSettings::new(),
+            parent_hwnd: context.parent_hwnd,
         }))
     }
 
@@ -289,6 +294,7 @@ impl WindowsWindowInner {
                         }
                     }
                 };
+                set_non_rude_hwnd(this.hwnd, !this.state.is_fullscreen());
                 unsafe { set_window_long(this.hwnd, GWL_STYLE, style.0 as isize) };
                 unsafe {
                     SetWindowPos(
@@ -339,7 +345,7 @@ impl WindowsWindowInner {
 #[derive(Default)]
 pub(crate) struct Callbacks {
     pub(crate) request_frame: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
-    pub(crate) input: Cell<Option<Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>>>,
+    pub(crate) input: Cell<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>>,
     pub(crate) active_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
     pub(crate) hovered_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
     pub(crate) resize: Cell<Option<Box<dyn FnMut(Size<Pixels>, f32)>>>,
@@ -359,7 +365,6 @@ struct WindowCreateContext {
     min_size: Option<Size<Pixels>>,
     executor: ForegroundExecutor,
     current_cursor: Option<HCURSOR>,
-    windows_version: WindowsVersion,
     drop_target_helper: IDropTargetHelper,
     validation_number: usize,
     main_receiver: PriorityQueueReceiver<RunnableVariant>,
@@ -368,6 +373,7 @@ struct WindowCreateContext {
     disable_direct_composition: bool,
     directx_devices: DirectXDevices,
     invalidate_devices: Arc<AtomicBool>,
+    parent_hwnd: Option<HWND>,
 }
 
 impl WindowsWindow {
@@ -380,7 +386,6 @@ impl WindowsWindow {
             icon,
             executor,
             current_cursor,
-            windows_version,
             drop_target_helper,
             validation_number,
             main_receiver,
@@ -390,6 +395,20 @@ impl WindowsWindow {
             invalidate_devices,
         } = creation_info;
         register_window_class(icon);
+        let parent_hwnd = if params.kind == WindowKind::Dialog {
+            let parent_window = unsafe { GetActiveWindow() };
+            if parent_window.is_invalid() {
+                None
+            } else {
+                // Disable the parent window to make this dialog modal
+                unsafe {
+                    EnableWindow(parent_window, false).as_bool();
+                };
+                Some(parent_window)
+            }
+        } else {
+            None
+        };
         let hide_title_bar = params
             .titlebar
             .as_ref()
@@ -416,8 +435,14 @@ impl WindowsWindow {
             if params.is_minimizable {
                 dwstyle |= WS_MINIMIZEBOX;
             }
+            let dwexstyle = if params.kind == WindowKind::Dialog {
+                dwstyle |= WS_POPUP | WS_CAPTION;
+                WS_EX_DLGMODALFRAME
+            } else {
+                WS_EX_APPWINDOW
+            };
 
-            (WS_EX_APPWINDOW, dwstyle)
+            (dwexstyle, dwstyle)
         };
         if !disable_direct_composition {
             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
@@ -440,7 +465,6 @@ impl WindowsWindow {
             min_size: params.window_min_size,
             executor,
             current_cursor,
-            windows_version,
             drop_target_helper,
             validation_number,
             main_receiver,
@@ -449,6 +473,7 @@ impl WindowsWindow {
             disable_direct_composition,
             directx_devices,
             invalidate_devices,
+            parent_hwnd,
         };
         let creation_result = unsafe {
             CreateWindowExW(
@@ -460,7 +485,7 @@ impl WindowsWindow {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                None,
+                parent_hwnd,
                 None,
                 Some(hinstance.into()),
                 Some(&context as *const _ as *const _),
@@ -474,6 +499,7 @@ impl WindowsWindow {
         let this = this.unwrap();
 
         register_drag_drop(&this)?;
+        set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.border_offset.update(hwnd)?;
         let placement = retrieve_window_placement(
@@ -553,8 +579,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn resize(&mut self, size: Size<Pixels>) {
         let hwnd = self.0.hwnd;
-        let bounds =
-            crate::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
+        let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
         let rect = calculate_window_rect(bounds, &self.state.border_offset);
 
         self.0
@@ -640,15 +665,15 @@ impl PlatformWindow for WindowsWindow {
                     let title;
                     let main_icon;
                     match level {
-                        crate::PromptLevel::Info => {
+                        PromptLevel::Info => {
                             title = windows::core::w!("Info");
                             main_icon = TD_INFORMATION_ICON;
                         }
-                        crate::PromptLevel::Warning => {
+                        PromptLevel::Warning => {
                             title = windows::core::w!("Warning");
                             main_icon = TD_WARNING_ICON;
                         }
-                        crate::PromptLevel::Critical => {
+                        PromptLevel::Critical => {
                             title = windows::core::w!("Critical");
                             main_icon = TD_ERROR_ICON;
                         }
@@ -716,8 +741,8 @@ impl PlatformWindow for WindowsWindow {
                         ShowWindowAsync(hwnd, SW_RESTORE).ok().log_err();
                     }
 
-                    SetActiveWindow(hwnd).log_err();
-                    SetFocus(Some(hwnd)).log_err();
+                    SetActiveWindow(hwnd).ok();
+                    SetFocus(Some(hwnd)).ok();
                 }
 
                 // premium ragebait by windows, this is needed because the window
@@ -764,6 +789,14 @@ impl PlatformWindow for WindowsWindow {
         self.state.hovered.get()
     }
 
+    fn background_appearance(&self) -> WindowBackgroundAppearance {
+        self.state.background_appearance.get()
+    }
+
+    fn is_subpixel_rendering_supported(&self) -> bool {
+        true
+    }
+
     fn set_title(&mut self, title: &str) {
         unsafe { SetWindowTextW(self.0.hwnd, &HSTRING::from(title)) }
             .inspect_err(|e| log::error!("Set title failed: {e}"))
@@ -771,6 +804,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
+        self.state.background_appearance.set(background_appearance);
         let hwnd = self.0.hwnd;
 
         // using Dwm APIs for Mica and MicaAlt backdrops.
@@ -881,7 +915,11 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn draw(&self, scene: &Scene) {
-        self.state.renderer.borrow_mut().draw(scene).log_err();
+        self.state
+            .renderer
+            .borrow_mut()
+            .draw(scene, self.state.background_appearance.get())
+            .log_err();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -896,8 +934,15 @@ impl PlatformWindow for WindowsWindow {
         self.state.renderer.borrow().gpu_specs().log_err()
     }
 
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
-        // There is no such thing on Windows.
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        let scale_factor = self.state.scale_factor.get();
+        let caret_position = POINT {
+            x: (bounds.origin.x.as_f32() * scale_factor) as i32,
+            y: (bounds.origin.y.as_f32() * scale_factor) as i32
+                + ((bounds.size.height.as_f32() * scale_factor) as i32 / 2),
+        };
+
+        self.0.update_ime_position(self.0.hwnd, caret_position);
     }
 }
 
@@ -1419,15 +1464,26 @@ fn set_window_composition_attribute(hwnd: HWND, color: Option<Color>, state: u32
     }
 }
 
+// When the platform title bar is hidden, Windows may think that our application is meant to appear 'fullscreen'
+// and will stop the taskbar from appearing on top of our window. Prevent this.
+// https://devblogs.microsoft.com/oldnewthing/20250522-00/?p=111211
+fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
+    if non_rude {
+        unsafe { SetPropW(hwnd, w!("NonRudeHWND"), Some(HANDLE(1 as _))) }.log_err();
+    } else {
+        unsafe { RemovePropW(hwnd, w!("NonRudeHWND")) }.log_err();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ClickState;
-    use crate::{DevicePixels, MouseButton, point};
+    use gpui::{DevicePixels, MouseButton, point};
     use std::time::Duration;
 
     #[test]
     fn test_double_click_interval() {
-        let mut state = ClickState::new();
+        let state = ClickState::new();
         assert_eq!(
             state.update(MouseButton::Left, point(DevicePixels(0), DevicePixels(0))),
             1
@@ -1455,7 +1511,7 @@ mod tests {
 
     #[test]
     fn test_double_click_spatial_tolerance() {
-        let mut state = ClickState::new();
+        let state = ClickState::new();
         assert_eq!(
             state.update(MouseButton::Left, point(DevicePixels(-3), DevicePixels(0))),
             1

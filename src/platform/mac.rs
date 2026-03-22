@@ -1,27 +1,22 @@
-//! Macos screen have a y axis that goings up from the bottom of the screen and
+//! macOS platform implementation for GPUI.
+//!
+//! macOS screens have a y axis that goes up from the bottom of the screen and
 //! an origin at the bottom left of the main display.
+
 mod dispatcher;
 mod display;
 mod display_link;
 mod events;
 mod keyboard;
+mod pasteboard;
 
 #[cfg(feature = "screen-capture")]
 mod screen_capture;
 
-#[cfg(not(feature = "macos-blade"))]
 mod metal_atlas;
-#[cfg(not(feature = "macos-blade"))]
 pub mod metal_renderer;
 
-use core_video::image_buffer::CVImageBuffer;
-#[cfg(not(feature = "macos-blade"))]
 use metal_renderer as renderer;
-
-#[cfg(feature = "macos-blade")]
-use crate::platform::blade as renderer;
-
-mod attributed_string;
 
 #[cfg(feature = "font-kit")]
 mod open_type;
@@ -33,10 +28,9 @@ mod platform;
 mod window;
 mod window_appearance;
 
-use crate::{DevicePixels, Pixels, Size, px, size};
 use cocoa::{
     base::{id, nil},
-    foundation::{NSAutoreleasePool, NSNotFound, NSRect, NSSize, NSString, NSUInteger},
+    foundation::{NSAutoreleasePool, NSNotFound, NSString, NSUInteger},
 };
 
 use objc::runtime::{BOOL, NO, YES};
@@ -55,8 +49,7 @@ pub(crate) use window::*;
 #[cfg(feature = "font-kit")]
 pub(crate) use text_system::*;
 
-/// A frame of video captured from a screen.
-pub(crate) type PlatformScreenCaptureFrame = CVImageBuffer;
+pub use platform::MacPlatform;
 
 trait BoolExt {
     fn to_objc(self) -> BOOL;
@@ -135,29 +128,8 @@ unsafe impl objc::Encode for NSRange {
     }
 }
 
+/// Allow NSString::alloc use here because it sets autorelease
+#[allow(clippy::disallowed_methods)]
 unsafe fn ns_string(string: &str) -> id {
     unsafe { NSString::alloc(nil).init_str(string).autorelease() }
-}
-
-impl From<NSSize> for Size<Pixels> {
-    fn from(value: NSSize) -> Self {
-        Size {
-            width: px(value.width as f32),
-            height: px(value.height as f32),
-        }
-    }
-}
-
-impl From<NSRect> for Size<Pixels> {
-    fn from(rect: NSRect) -> Self {
-        let NSSize { width, height } = rect.size;
-        size(width.into(), height.into())
-    }
-}
-
-impl From<NSRect> for Size<DevicePixels> {
-    fn from(rect: NSRect) -> Self {
-        let NSSize { width, height } = rect.size;
-        size(DevicePixels(width as i32), DevicePixels(height as i32))
-    }
 }

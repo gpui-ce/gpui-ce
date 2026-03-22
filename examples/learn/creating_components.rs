@@ -11,9 +11,10 @@
 mod example_prelude;
 
 use example_prelude::init_example;
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Colors, Context, Entity, IntoElement, Render, RenderOnce, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Context, Entity, IntoElement, Render, RenderOnce, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 // ============================================================================
@@ -43,10 +44,10 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
 
     let count = state.read(cx).count;
 
-    let error = colors.error;
-    let error_hover = colors.error_hover;
-    let success = colors.success;
-    let success_hover = colors.success_hover;
+    let error = rgb(0xd32f2f);
+    let error_hover = rgb(0xe04545);
+    let success = rgb(0x388e3c);
+    let success_hover = rgb(0x43a047);
 
     div()
         .id("use-state-counter")
@@ -55,11 +56,11 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
         .gap_2()
         .p_4()
         .rounded_lg()
-        .bg(colors.surface)
+        .bg(colors.container)
         .child(
             div()
                 .text_sm()
-                .text_color(colors.text_muted)
+                .text_color(colors.disabled)
                 .child("use_state Counter"),
         )
         .child(
@@ -164,10 +165,10 @@ impl RenderOnceCounter {
 impl RenderOnce for RenderOnceCounter {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let colors = self.colors;
-        let error = colors.error;
-        let error_hover = colors.error_hover;
-        let success = colors.success;
-        let success_hover = colors.success_hover;
+        let error = rgb(0xd32f2f);
+        let error_hover = rgb(0xe04545);
+        let success = rgb(0x388e3c);
+        let success_hover = rgb(0x43a047);
 
         div()
             .id("render-once-counter")
@@ -176,11 +177,11 @@ impl RenderOnce for RenderOnceCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("RenderOnce Counter"),
             )
             .child(
@@ -269,10 +270,10 @@ impl RenderCounter {
 impl Render for RenderCounter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
-        let error = colors.error;
-        let error_hover = colors.error_hover;
-        let success = colors.success;
-        let success_hover = colors.success_hover;
+        let error = rgb(0xd32f2f);
+        let error_hover = rgb(0xe04545);
+        let success = rgb(0x388e3c);
+        let success_hover = rgb(0x43a047);
 
         div()
             .id("render-counter")
@@ -281,11 +282,11 @@ impl Render for RenderCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(colors.surface)
+            .bg(colors.container)
             .child(
                 div()
                     .text_sm()
-                    .text_color(colors.text_muted)
+                    .text_color(colors.disabled)
                     .child("Render Counter"),
             )
             .child(
@@ -380,7 +381,7 @@ impl Render for CreatingComponentsExample {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(colors.text_muted)
+                            .text_color(colors.disabled)
                             .child("Three approaches to stateful components in GPUI"),
                     ),
             )

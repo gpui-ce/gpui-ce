@@ -1,6 +1,6 @@
 use gpui::{
     App, Application, Bounds, BoxShadow, Context, Div, SharedString, Window, WindowBounds,
-    WindowOptions, div, hsla, point, prelude::*, px, relative, rgb, size,
+    WindowOptions, current_platform, div, hsla, point, prelude::*, px, relative, rgb, size,
 };
 
 struct Shadow {}
@@ -569,7 +569,7 @@ impl Render for Shadow {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::with_platform(current_platform(false)).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1000.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {

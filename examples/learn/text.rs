@@ -14,15 +14,16 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Colors, Context, FontStyle, FontWeight, Hsla, Render, StyledText,
-    TextOverflow, Window, WindowBounds, WindowOptions, div, prelude::*, px, relative, size,
+    App, Application, Bounds, Context, FontStyle, FontWeight, Hsla, Render, StyledText,
+    TextOverflow, Window, WindowBounds, WindowOptions, colors::Colors, current_platform, div,
+    prelude::*, px, relative, rgb, size,
 };
 
 // Text Styling Examples
 
 fn text_sizes_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
 
     div()
         .flex()
@@ -50,7 +51,7 @@ fn text_sizes_example(colors: &Colors) -> impl IntoElement {
 
 fn text_weights_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
 
     div()
         .flex()
@@ -116,8 +117,8 @@ fn text_weights_example(colors: &Colors) -> impl IntoElement {
 
 fn text_alignment_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let surface = colors.surface;
+    let text_muted = colors.disabled;
+    let surface = colors.container;
 
     div()
         .flex()
@@ -167,9 +168,9 @@ fn text_alignment_example(colors: &Colors) -> impl IntoElement {
 
 fn text_decoration_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let accent = colors.accent;
-    let error = colors.error;
+    let text_muted = colors.disabled;
+    let accent = colors.selected;
+    let error = rgb(0xd32f2f);
 
     div()
         .flex()
@@ -208,8 +209,8 @@ fn text_decoration_example(colors: &Colors) -> impl IntoElement {
 
 fn text_overflow_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let surface = colors.surface;
+    let text_muted = colors.disabled;
+    let surface = colors.container;
     let border = colors.border;
 
     let long_text = "The quick brown fox jumps over the lazy dog. This is a long sentence that will overflow its container.";
@@ -333,7 +334,7 @@ fn text_overflow_example(colors: &Colors) -> impl IntoElement {
 
 fn styled_text_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
 
     div()
         .flex()
@@ -358,8 +359,8 @@ fn styled_text_example(colors: &Colors) -> impl IntoElement {
 
 fn character_grid_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let surface = colors.surface;
+    let text_muted = colors.disabled;
+    let surface = colors.container;
     let border = colors.border;
 
     let characters = [
@@ -414,8 +415,8 @@ fn character_grid_example(colors: &Colors) -> impl IntoElement {
 
 fn line_height_example(colors: &Colors) -> impl IntoElement {
     let text = colors.text;
-    let text_muted = colors.text_muted;
-    let surface = colors.surface;
+    let text_muted = colors.disabled;
+    let surface = colors.container;
 
     div()
         .flex()
@@ -500,7 +501,7 @@ impl Render for TextExample {
                                     .child("Text & Typography"),
                             )
                             .child(
-                                div().text_sm().text_color(colors.text_muted).child(
+                                div().text_sm().text_color(colors.disabled).child(
                                     "Font styling, alignment, overflow, and unicode support",
                                 ),
                             ),
@@ -546,7 +547,7 @@ impl Render for TextExample {
 }
 
 fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = colors.surface.into();
+    let surface: Hsla = colors.container.into();
 
     div()
         .flex()
@@ -566,7 +567,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::with_platform(current_platform(false)).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(650.), px(900.)), cx);
         cx.open_window(
             WindowOptions {

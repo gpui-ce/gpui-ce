@@ -3,7 +3,7 @@ use std::ffi::{CStr, c_void};
 
 use objc::{msg_send, runtime::Object, sel, sel_impl};
 
-use crate::{KeybindingKeystroke, Keystroke, PlatformKeyboardLayout, PlatformKeyboardMapper};
+use gpui::{KeybindingKeystroke, Keystroke, PlatformKeyboardLayout, PlatformKeyboardMapper};
 
 use super::{
     TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty, kTISPropertyInputSourceID,

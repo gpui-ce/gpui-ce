@@ -1,7 +1,5 @@
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use crate::scheduler::Instant;
+use std::{rc::Rc, time::Duration};
 
 use crate::{
     AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Window,

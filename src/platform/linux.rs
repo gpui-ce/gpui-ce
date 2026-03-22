@@ -12,7 +12,7 @@ mod x11;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod xdg_desktop_portal;
 
-pub(crate) use dispatcher::*;
+pub use dispatcher::*;
 pub(crate) use headless::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;
@@ -23,10 +23,35 @@ pub(crate) use wayland::*;
 #[cfg(feature = "x11")]
 pub(crate) use x11::*;
 
-#[cfg(all(feature = "screen-capture", any(feature = "wayland", feature = "x11")))]
-pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
-#[cfg(not(all(feature = "screen-capture", any(feature = "wayland", feature = "x11"))))]
-pub(crate) type PlatformScreenCaptureFrame = ();
+use std::rc::Rc;
 
-#[cfg(feature = "wayland")]
-pub use wayland::layer_shell;
+/// Returns the default platform implementation for the current OS.
+pub fn current_platform(headless: bool) -> Rc<dyn gpui::Platform> {
+    #[cfg(feature = "x11")]
+    use anyhow::Context as _;
+
+    if headless {
+        return Rc::new(LinuxPlatform {
+            inner: HeadlessClient::new(),
+        });
+    }
+
+    match gpui::guess_compositor() {
+        #[cfg(feature = "wayland")]
+        "Wayland" => Rc::new(LinuxPlatform {
+            inner: WaylandClient::new(),
+        }),
+
+        #[cfg(feature = "x11")]
+        "X11" => Rc::new(LinuxPlatform {
+            inner: X11Client::new()
+                .context("Failed to initialize X11 client.")
+                .unwrap(),
+        }),
+
+        "Headless" => Rc::new(LinuxPlatform {
+            inner: HeadlessClient::new(),
+        }),
+        _ => unreachable!(),
+    }
+}

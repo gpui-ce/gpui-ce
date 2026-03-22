@@ -10,10 +10,8 @@ use strum::IntoEnumIterator;
 use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
-use crate::{
-    ClipboardEntry, ClipboardItem, Image, ImageFormat, WaylandClientStatePtr, hash,
-    platform::linux::platform::read_fd,
-};
+use crate::platform::linux::{WaylandClientStatePtr, platform::read_fd};
+use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
 /// Text mime types that we'll offer to other programs.
 pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
@@ -241,7 +239,7 @@ impl Clipboard {
                     calloop::Mode::Level,
                 ),
                 move |_, file, _| {
-                    let mut file = unsafe { file.get_mut() };
+                    let file = unsafe { file.get_mut() };
                     loop {
                         match file.write(&bytes[written..]) {
                             Ok(n) if written + n == bytes.len() => {

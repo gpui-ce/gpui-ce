@@ -1,11 +1,11 @@
-use crate::{
-    AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, DevicePixels, PlatformAtlas,
-    Point, Size, platform::AtlasTextureList,
-};
 use anyhow::{Context as _, Result};
 use collections::FxHashMap;
 use derive_more::{Deref, DerefMut};
 use etagere::BucketedAtlasAllocator;
+use gpui::{
+    AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
+    PlatformAtlas, Point, Size,
+};
 use metal::Device;
 use parking_lot::Mutex;
 use std::borrow::Cow;
@@ -13,9 +13,10 @@ use std::borrow::Cow;
 pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
 
 impl MetalAtlas {
-    pub(crate) fn new(device: Device) -> Self {
+    pub(crate) fn new(device: Device, is_apple_gpu: bool) -> Self {
         MetalAtlas(Mutex::new(MetalAtlasState {
             device: AssertSend(device),
+            is_apple_gpu,
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
@@ -29,6 +30,7 @@ impl MetalAtlas {
 
 struct MetalAtlasState {
     device: AssertSend<Device>,
+    is_apple_gpu: bool,
     monochrome_textures: AtlasTextureList<MetalAtlasTexture>,
     polychrome_textures: AtlasTextureList<MetalAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
@@ -66,6 +68,7 @@ impl PlatformAtlas for MetalAtlas {
         let textures = match id.kind {
             AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
             AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+            AtlasTextureKind::Subpixel => unreachable!(),
         };
 
         let Some(texture_slot) = textures
@@ -99,6 +102,7 @@ impl MetalAtlasState {
             let textures = match texture_kind {
                 AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
                 AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+                AtlasTextureKind::Subpixel => unreachable!(),
             };
 
             if let Some(tile) = textures
@@ -143,14 +147,23 @@ impl MetalAtlasState {
                 pixel_format = metal::MTLPixelFormat::BGRA8Unorm;
                 usage = metal::MTLTextureUsage::ShaderRead;
             }
+            AtlasTextureKind::Subpixel => unreachable!(),
         }
         texture_descriptor.set_pixel_format(pixel_format);
         texture_descriptor.set_usage(usage);
+        // Shared memory mode can be used only on Apple GPU families
+        // https://developer.apple.com/documentation/metal/mtlresourceoptions/storagemodeshared
+        texture_descriptor.set_storage_mode(if self.is_apple_gpu {
+            metal::MTLStorageMode::Shared
+        } else {
+            metal::MTLStorageMode::Managed
+        });
         let metal_texture = self.device.new_texture(&texture_descriptor);
 
         let texture_list = match kind {
             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+            AtlasTextureKind::Subpixel => unreachable!(),
         };
 
         let index = texture_list.free_list.pop();
@@ -160,7 +173,7 @@ impl MetalAtlasState {
                 index: index.unwrap_or(texture_list.textures.len()) as u32,
                 kind,
             },
-            allocator: etagere::BucketedAtlasAllocator::new(size.into()),
+            allocator: etagere::BucketedAtlasAllocator::new(size_to_etagere(size)),
             metal_texture: AssertSend(metal_texture),
             live_atlas_keys: 0,
         };
@@ -179,8 +192,9 @@ impl MetalAtlasState {
 
     fn texture(&self, id: AtlasTextureId) -> &MetalAtlasTexture {
         let textures = match id.kind {
-            crate::AtlasTextureKind::Monochrome => &self.monochrome_textures,
-            crate::AtlasTextureKind::Polychrome => &self.polychrome_textures,
+            AtlasTextureKind::Monochrome => &self.monochrome_textures,
+            AtlasTextureKind::Polychrome => &self.polychrome_textures,
+            AtlasTextureKind::Subpixel => unreachable!(),
         };
         textures[id.index as usize].as_ref().unwrap()
     }
@@ -195,12 +209,12 @@ struct MetalAtlasTexture {
 
 impl MetalAtlasTexture {
     fn allocate(&mut self, size: Size<DevicePixels>) -> Option<AtlasTile> {
-        let allocation = self.allocator.allocate(size.into())?;
+        let allocation = self.allocator.allocate(size_to_etagere(size))?;
         let tile = AtlasTile {
             texture_id: self.id,
             tile_id: allocation.id.into(),
             bounds: Bounds {
-                origin: allocation.rectangle.min.into(),
+                origin: point_from_etagere(allocation.rectangle.min),
                 size,
             },
             padding: 0,
@@ -242,36 +256,14 @@ impl MetalAtlasTexture {
     }
 }
 
-impl From<Size<DevicePixels>> for etagere::Size {
-    fn from(size: Size<DevicePixels>) -> Self {
-        etagere::Size::new(size.width.into(), size.height.into())
-    }
+fn size_to_etagere(size: Size<DevicePixels>) -> etagere::Size {
+    etagere::Size::new(size.width.into(), size.height.into())
 }
 
-impl From<etagere::Point> for Point<DevicePixels> {
-    fn from(value: etagere::Point) -> Self {
-        Point {
-            x: DevicePixels::from(value.x),
-            y: DevicePixels::from(value.y),
-        }
-    }
-}
-
-impl From<etagere::Size> for Size<DevicePixels> {
-    fn from(size: etagere::Size) -> Self {
-        Size {
-            width: DevicePixels::from(size.width),
-            height: DevicePixels::from(size.height),
-        }
-    }
-}
-
-impl From<etagere::Rectangle> for Bounds<DevicePixels> {
-    fn from(rectangle: etagere::Rectangle) -> Self {
-        Bounds {
-            origin: rectangle.min.into(),
-            size: rectangle.size().into(),
-        }
+fn point_from_etagere(value: etagere::Point) -> Point<DevicePixels> {
+    Point {
+        x: DevicePixels::from(value.x),
+        y: DevicePixels::from(value.y),
     }
 }
 

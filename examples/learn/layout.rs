@@ -10,8 +10,9 @@
 mod example_prelude;
 
 use example_prelude::init_example;
+use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Colors, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
+    App, Application, Bounds, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
 };
 
@@ -34,7 +35,7 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
 // Flexbox Examples
 
 fn flexbox_row_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
 
     div()
@@ -59,7 +60,7 @@ fn flexbox_row_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn flexbox_column_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
 
     div()
@@ -85,9 +86,9 @@ fn flexbox_column_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
-    let surface = colors.surface;
+    let surface = colors.container;
 
     div()
         .flex()
@@ -136,7 +137,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn flexbox_grow_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
 
     div()
@@ -162,7 +163,7 @@ fn flexbox_grow_example(colors: &Colors) -> impl IntoElement {
 // Grid Examples
 
 fn grid_basic_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
 
     div()
@@ -190,7 +191,7 @@ fn grid_basic_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn grid_span_example(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
 
     div()
@@ -232,10 +233,10 @@ fn grid_span_example(colors: &Colors) -> impl IntoElement {
 // Common Layout Patterns
 
 fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.text;
-    let surface = colors.surface;
-    let surface_hover = colors.surface_hover;
+    let surface = colors.container;
+    let surface_hover = colors.selected;
     let background = colors.background;
     let border = colors.border;
 
@@ -300,10 +301,10 @@ fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
 }
 
 fn centered_pattern(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
+    let text_muted = colors.disabled;
     let text = colors.selected_text;
-    let surface = colors.surface;
-    let accent = colors.accent;
+    let surface = colors.container;
+    let accent = colors.selected;
 
     div()
         .flex()
@@ -337,8 +338,8 @@ fn centered_pattern(colors: &Colors) -> impl IntoElement {
 }
 
 fn stack_pattern(colors: &Colors) -> impl IntoElement {
-    let text_muted = colors.text_muted;
-    let surface = colors.surface;
+    let text_muted = colors.disabled;
+    let surface = colors.container;
 
     div()
         .flex()
@@ -421,7 +422,7 @@ impl Render for LayoutExample {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(colors.text_muted)
+                                    .text_color(colors.disabled)
                                     .child("Flexbox, Grid, and common layout patterns in GPUI"),
                             ),
                     )
@@ -463,7 +464,7 @@ impl Render for LayoutExample {
 }
 
 fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = colors.surface.into();
+    let surface: Hsla = colors.container.into();
 
     div()
         .flex()

@@ -4,11 +4,10 @@ use std::rc::Rc;
 use calloop::{EventLoop, LoopHandle};
 use util::ResultExt;
 
-use crate::platform::linux::LinuxClient;
-use crate::platform::{LinuxCommon, PlatformWindow};
-use crate::{
-    AnyWindowHandle, CursorStyle, DisplayId, LinuxKeyboardLayout, PlatformDisplay,
-    PlatformKeyboardLayout, WindowParams,
+use crate::platform::linux::{LinuxClient, LinuxCommon, LinuxKeyboardLayout};
+use gpui::{
+    AnyWindowHandle, CursorStyle, DisplayId, PlatformDisplay, PlatformKeyboardLayout,
+    PlatformWindow, WindowParams,
 };
 
 pub struct HeadlessClientState {
@@ -31,10 +30,7 @@ impl HeadlessClient {
         handle
             .insert_source(main_receiver, |event, _, _: &mut HeadlessClient| {
                 if let calloop::channel::Event::Msg(runnable) = event {
-                    match runnable {
-                        crate::RunnableVariant::Meta(runnable) => runnable.run(),
-                        crate::RunnableVariant::Compat(runnable) => runnable.run(),
-                    };
+                    runnable.run();
                 }
             })
             .ok();
@@ -69,16 +65,11 @@ impl LinuxClient for HeadlessClient {
     }
 
     #[cfg(feature = "screen-capture")]
-    fn is_screen_capture_supported(&self) -> bool {
-        false
-    }
-
-    #[cfg(feature = "screen-capture")]
     fn screen_capture_sources(
         &self,
-    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn crate::ScreenCaptureSource>>>>
+    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>>
     {
-        let (mut tx, rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         tx.send(Err(anyhow::anyhow!(
             "Headless mode does not support screen capture."
         )))
@@ -112,15 +103,15 @@ impl LinuxClient for HeadlessClient {
 
     fn reveal_path(&self, _path: std::path::PathBuf) {}
 
-    fn write_to_primary(&self, _item: crate::ClipboardItem) {}
+    fn write_to_primary(&self, _item: gpui::ClipboardItem) {}
 
-    fn write_to_clipboard(&self, _item: crate::ClipboardItem) {}
+    fn write_to_clipboard(&self, _item: gpui::ClipboardItem) {}
 
-    fn read_from_primary(&self) -> Option<crate::ClipboardItem> {
+    fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
         None
     }
 
-    fn read_from_clipboard(&self) -> Option<crate::ClipboardItem> {
+    fn read_from_clipboard(&self) -> Option<gpui::ClipboardItem> {
         None
     }
 

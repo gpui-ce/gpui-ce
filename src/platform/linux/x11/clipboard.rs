@@ -47,7 +47,7 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use crate::{ClipboardItem, Image, ImageFormat, hash};
+use gpui::{ClipboardItem, Image, ImageFormat, hash};
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
