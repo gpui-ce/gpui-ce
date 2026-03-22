@@ -96,6 +96,9 @@ pub enum ScrollStrategy {
     /// - The top of the list's viewport if the target element is above currently visible elements.
     /// - The bottom of the list's viewport if the target element is above currently visible elements.
     Nearest,
+    /// Force the element to the center of the list's viewport, even if it's already visible.
+    /// This will always scroll to center the item regardless of its current position.
+    ForceCenter,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -147,12 +150,15 @@ impl UniformListScrollHandle {
     /// This uses non-strict scrolling: if the item is already fully visible, no scrolling occurs.
     /// If the item is out of view, it scrolls the minimum amount to bring it into view according
     /// to the strategy.
+    /// 
+    /// Exception: ScrollStrategy::ForceCenter will always scroll to center the item, even if visible.
     pub fn scroll_to_item(&self, ix: usize, strategy: ScrollStrategy) {
+        let scroll_strict = matches!(strategy, ScrollStrategy::ForceCenter);
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
             strategy,
             offset: 0,
-            scroll_strict: false,
+            scroll_strict,
         });
     }
 
@@ -446,6 +452,15 @@ impl Element for UniformList {
                                     updated_scroll_offset.y =
                                         -target_scroll_top.clamp(Pixels::ZERO, max_scroll_offset);
                                 }
+                                ScrollStrategy::ForceCenter => {
+                                    let item_center = item_top + item_height / 2.0;
+
+                                    let viewport_height = list_height - offset_pixels;
+                                    let viewport_center = offset_pixels + viewport_height / 2.0;
+                                    let target_scroll_top = item_center - viewport_center;
+                                    updated_scroll_offset.y =
+                                        -target_scroll_top.clamp(Pixels::ZERO, max_scroll_offset);
+                                }
                                 ScrollStrategy::Bottom => {
                                     updated_scroll_offset.y = -(item_bottom - list_height)
                                         .clamp(Pixels::ZERO, max_scroll_offset);
@@ -708,6 +723,76 @@ impl InteractiveElement for UniformList {
 #[cfg(test)]
 mod test {
     use crate::TestAppContext;
+
+    #[gpui::test]
+    fn test_scroll_strategy_force_center(cx: &mut TestAppContext) {
+        use crate::{
+            Context, FocusHandle, ScrollStrategy, UniformListScrollHandle, Window, actions, div,
+            prelude::*, px, uniform_list,
+        };
+        use std::ops::Range;
+
+        actions!(example, [TestForceCenter]);
+
+        struct TestView {
+            scroll_handle: UniformListScrollHandle,
+            focus_handle: FocusHandle,
+        }
+
+        impl TestView {
+            pub fn test_force_center(
+                &mut self,
+                _: &TestForceCenter,
+                _window: &mut Window,
+                _: &mut Context<Self>,
+            ) {
+                // ForceCenter should always scroll, even if item is visible
+                self.scroll_handle.scroll_to_item(5, ScrollStrategy::ForceCenter);
+            }
+        }
+
+        impl Render for TestView {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .id("force-center-test")
+                    .track_focus(&self.focus_handle)
+                    .on_action(cx.listener(Self::test_force_center))
+                    .size_full()
+                    .child(
+                        uniform_list(
+                            "entries",
+                            50,
+                            |range: Range<usize>, _window, _cx| {
+                                range
+                                    .map(|ix| div().id(ix).h(px(20.0)).child(format!("Item {ix}")))
+                                    .collect()
+                            },
+                        )
+                        .track_scroll(&self.scroll_handle)
+                        .h(px(200.0)),
+                    )
+            }
+        }
+
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let focus_handle = cx.focus_handle();
+            window.focus(&focus_handle);
+            TestView {
+                scroll_handle: UniformListScrollHandle::new(),
+                focus_handle,
+            }
+        });
+
+        // Test that ForceCenter sets scroll_strict to true
+        cx.dispatch_action(TestForceCenter);
+        view.read_with(cx, |view, _| {
+            let scroll_state = view.scroll_handle.0.borrow();
+            let deferred_scroll = scroll_state.deferred_scroll_to_item.as_ref().unwrap();
+            assert_eq!(deferred_scroll.item_index, 5);
+            assert_eq!(deferred_scroll.strategy, ScrollStrategy::ForceCenter);
+            assert!(deferred_scroll.scroll_strict, "ForceCenter should use strict scrolling");
+        });
+    }
 
     #[gpui::test]
     fn test_scroll_strategy_nearest(cx: &mut TestAppContext) {
