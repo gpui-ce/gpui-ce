@@ -59,6 +59,9 @@
         ];
 
         commonArgs = {
+          pname = "gpui-ce";
+          version = "0.3.3";
+
           inherit src;
           strictDeps = true;
 

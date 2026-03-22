@@ -1,3 +1,13 @@
+[workspace]
+members = [
+    ".",           
+    "tooling/macros",
+]
+default-members = [
+    ".",       
+]
+resolver = "3"
+
 [package]
 name = "gpui-ce"
 version = "0.3.3"
