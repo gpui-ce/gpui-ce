@@ -1,7 +1,7 @@
 //! This code was generated using Zed Agent with Claude Opus 4.
 
 // gate on rust-analyzer so rust-analyzer never needs to expand this macro, it takes up to 10 seconds to expand due to inefficiencies in rust-analyzers proc-macro srv
-#[cfg_attr(not(rust_analyzer), gpui_macros::derive_inspector_reflection)]
+#[cfg_attr(not(rust_analyzer), gpui_ce_macros::derive_inspector_reflection)]
 trait Transform: Clone {
     /// Doubles the value
     fn double(self) -> Self;
@@ -103,9 +103,15 @@ fn test_derive_inspector_reflection() {
     // Chain operations
     let num = Number(10);
     let result = find_method::<Number>("double")
-        .map(|m| m.invoke(num))
-        .and_then(|n| find_method::<Number>("increment").map(|m| m.invoke(n)))
-        .and_then(|n| find_method::<Number>("triple").map(|m| m.invoke(n)));
+        .map(|m: gpui::inspector_reflection::FunctionReflection<Number>| m.invoke(num))
+        .and_then(|n| {
+            find_method::<Number>("increment")
+                .map(|m: gpui::inspector_reflection::FunctionReflection<Number>| m.invoke(n))
+        })
+        .and_then(|n| {
+            find_method::<Number>("triple")
+                .map(|m: gpui::inspector_reflection::FunctionReflection<Number>| m.invoke(n))
+        });
 
     assert_eq!(result, Some(Number(63))); // (10 * 2 + 1) * 3 = 63
 

@@ -2214,6 +2214,7 @@ dependencies = [
 name = "gpui-ce-macros"
 version = "0.1.0"
 dependencies = [
+ "gpui-ce",
  "heck",
  "proc-macro2",
  "quote",
