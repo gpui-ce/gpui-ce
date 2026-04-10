@@ -77,7 +77,7 @@ backtrace = { version = "0.3", optional = true }
 circular-buffer = "1.2"
 collections = { package = "gpui_collections", version = "0.2.2" }
 ctor = "0.9"
-derive_more = { version = "2", features = ["full"] }
+derive_more = "0.99.17"
 etagere = "0.3"
 futures = "0.3"
 futures-concurrency = "7"
@@ -135,7 +135,7 @@ cocoa = "=0.26.0"
 cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.7"
-core-graphics = "0.25"
+core-graphics = "0.24"
 core-text = "21"
 core-video = { version = "0.5", features = ["metal"] }
 dispatch2 = "0.3"
