@@ -5,7 +5,7 @@ use std::{
 
 use ::util::ResultExt;
 use anyhow::{Context, Result};
-use windows::{
+use ::windows::{
     Win32::{
         Foundation::HWND,
         Graphics::{
@@ -19,8 +19,8 @@ use windows::{
     core::Interface,
 };
 
-use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
-use crate::*;
+use self::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
+use super::{DirectXAtlas, DirectXDevices, try_to_recover_from_device_lost};
 use gpui::*;
 
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
@@ -1203,7 +1203,7 @@ fn create_swap_chain(
     width: u32,
     height: u32,
 ) -> Result<IDXGISwapChain1> {
-    use windows::Win32::Graphics::Dxgi::DXGI_MWA_NO_ALT_ENTER;
+    use ::windows::Win32::Graphics::Dxgi::DXGI_MWA_NO_ALT_ENTER;
 
     let desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
@@ -1774,9 +1774,9 @@ mod nvidia {
     };
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use ::windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
 
-    use crate::with_dll_library;
+    use super::super::with_dll_library;
 
     // https://github.com/NVIDIA/nvapi/blob/7cb76fce2f52de818b3da497af646af1ec16ce27/nvapi_lite_common.h#L180
     const NVAPI_SHORT_STRING_MAX: usize = 64;
@@ -1841,9 +1841,9 @@ mod amd {
     use std::os::raw::{c_char, c_int, c_void};
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use ::windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
 
-    use crate::with_dll_library;
+    use super::super::with_dll_library;
 
     // https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/blob/5d8812d703d0335741b6f7ffc37838eeb8b967f7/ags_lib/inc/amd_ags.h#L145
     const AGS_CURRENT_VERSION: i32 = (6 << 22) | (3 << 12);

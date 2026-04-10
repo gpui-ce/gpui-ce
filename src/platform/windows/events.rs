@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use ::util::ResultExt;
 use anyhow::Context as _;
-use windows::{
+use ::windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
@@ -17,7 +17,11 @@ use windows::{
     core::PCWSTR,
 };
 
-use crate::*;
+use super::{
+    DirectXDevices, HiLoWord, WindowsDisplay, WindowsDispatcher, WindowsWindowInner,
+    WindowsWindowState, configure_dwm_dark_mode, get_keystroke_key, logical_point,
+    system_appearance,
+};
 use gpui::*;
 
 pub(crate) const WM_GPUI_CURSOR_STYLE_CHANGED: u32 = WM_USER + 1;

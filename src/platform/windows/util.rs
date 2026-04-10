@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use ::util::ResultExt;
 use anyhow::Context;
-use windows::{
+use ::windows::{
     UI::{
         Color,
         ViewManagement::{UIColorType, UISettings},
@@ -14,7 +14,7 @@ use windows::{
     core::{BOOL, PCSTR},
 };
 
-use crate::*;
+use super::SafeCursor;
 use gpui::*;
 
 pub(crate) trait HiLoWord {

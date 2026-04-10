@@ -1,4 +1,7 @@
-use std::sync::LazyLock;
+use std::{
+    sync::LazyLock,
+    time::Duration,
+};
 
 use anyhow::Result;
 use collections::FxHashMap;
@@ -338,13 +341,23 @@ struct ClipboardGuard;
 
 impl ClipboardGuard {
     fn open() -> Option<Self> {
-        match unsafe { OpenClipboard(None) } {
-            Ok(()) => Some(Self),
-            Err(e) => {
-                log::error!("Failed to open clipboard: {e}");
-                None
+        const OPEN_CLIPBOARD_RETRY_COUNT: usize = 10;
+        const OPEN_CLIPBOARD_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+        for attempt in 0..OPEN_CLIPBOARD_RETRY_COUNT {
+            match unsafe { OpenClipboard(None) } {
+                Ok(()) => return Some(Self),
+                Err(e) if attempt + 1 == OPEN_CLIPBOARD_RETRY_COUNT => {
+                    log::error!("Failed to open clipboard: {e}");
+                    return None;
+                }
+                Err(_) => {
+                    std::thread::sleep(OPEN_CLIPBOARD_RETRY_DELAY);
+                }
             }
         }
+
+        None
     }
 }
 
