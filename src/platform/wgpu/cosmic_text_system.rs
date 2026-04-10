@@ -2,7 +2,7 @@ use anyhow::{Context as _, Ok, Result};
 use collections::HashMap;
 use cosmic_text::{
     Attrs, AttrsList, Family, Font as CosmicTextFont, FontFeatures as CosmicFontFeatures,
-    FontSystem, ShapeBuffer, ShapeLine,
+    FontSystem, ShapeBuffer, ShapeLine, Ellipsize,
 };
 use gpui::{
     Bounds, DevicePixels, Font, FontFeatures, FontId, FontMetrics, FontRun, GlyphId, LineLayout,
@@ -65,6 +65,7 @@ impl CosmicTextSystem {
         }))
     }
 
+    #[cfg(target_family = "wasm")]
     pub fn new_without_system_fonts(system_font_fallback: &str) -> Self {
         let font_system = FontSystem::new_with_locale_and_db(
             "en-US".to_string(),
@@ -438,6 +439,7 @@ impl CosmicTextSystemState {
             f32::from(font_size),
             None, // We do our own wrapping
             cosmic_text::Wrap::None,
+            Ellipsize::None,
             None,
             &mut layout_lines,
             None,
