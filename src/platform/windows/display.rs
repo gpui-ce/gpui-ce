@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use std::rc::Rc;
 use util::ResultExt;
 use uuid::Uuid;
-use windows::{
+use ::windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
@@ -15,7 +15,7 @@ use windows::{
     core::*,
 };
 
-use crate::logical_point;
+use super::logical_point;
 use gpui::{Bounds, DevicePixels, DisplayId, Pixels, PlatformDisplay, point, size};
 
 #[derive(Debug, Clone, Copy)]

@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    ".",           
+    ".",
     "tooling/macros",
 ]
 default-members = [
-    ".",       
+    ".",
 ]
 resolver = "3"
 
@@ -71,59 +71,59 @@ path = "src/gpui.rs"
 doctest = false
 
 [dependencies]
-anyhow = "1.0.86"
+anyhow = "1"
 async-task = "4.7"
 backtrace = { version = "0.3", optional = true }
-circular-buffer = "1.0"
+circular-buffer = "1.2"
 collections = { package = "gpui_collections", version = "0.2.2" }
-ctor = "0.4.0"
+ctor = "0.9"
 derive_more = "0.99.17"
-etagere = "0.2"
+etagere = "0.3"
 futures = "0.3"
 futures-concurrency = "7"
 gpui-ce-macros = { path = "./tooling/macros", features = ["inspector"] }
 http_client = { package = "gpui_http_client", version = "0.2.2" }
-image = "0.25.1"
-inventory = "0.3.19"
-itertools = "0.14.0"
+image = "0.25"
+inventory = "0.3"
+itertools = "0.14"
 libc = "0.2"
-log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
-lyon = "1.0"
-num_cpus = "1.13"
-parking = "2.0.0"
-parking_lot = "0.12.1"
-pin-project = "1.1.10"
+log = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
+lyon = "1"
+num_cpus = "1"
+parking = "2"
+parking_lot = "0.12"
+pin-project = "1"
 postage = { version = "0.5", features = ["futures-traits"] }
 profiling = "1"
 proptest = "1"
-rand = "0.9"
+rand = "0.10"
 raw-window-handle = "0.6"
 refineable = { package = "gpui_refineable", version = "0.2.2" }
-resvg = { version = "0.45.0", default-features = false, features = [
+resvg = { version = "0.47", default-features = false, features = [
     "text",
     "system-fonts",
     "memmap-fonts",
 ] }
-schemars = { version = "1.0", features = ["indexmap2"] }
-seahash = "4.1"
-semver = { version = "1.0", features = ["serde"] }
-serde = { version = "1.0.221", features = ["derive", "rc"] }
-serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
-slotmap = "1.0.6"
-smallvec = { version = "1.6", features = ["union"] }
-smol = "2.0"
-spin = "0.10.0"
-stacksafe = "0.1"
-strum = { version = "0.27.2", features = ["derive"] }
+schemars = { version = "1.2", features = ["indexmap2"] }
+seahash = "4"
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
+slotmap = "1"
+smallvec = { version = "1", features = ["union"] }
+smol = "2"
+spin = "0.10"
+stacksafe = "1"
+strum = { version = "0.28", features = ["derive"] }
 sum_tree = { package = "gpui_sum_tree", version = "0.2.2" }
-taffy = "=0.9.0"
-thiserror = "2.0.12"
+taffy = "=0.9"
+thiserror = "2"
 util = { package = "gpui_util", version = "0.2.2" }
 util_macros = { package = "gpui_util_macros", version = "0.2.2" }
-usvg = { version = "0.45.0", default-features = false }
+usvg = { version = "0.47", default-features = false }
 url = "2"
-uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
-waker-fn = "1.2.0"
+uuid = { version = "1.23", features = ["v4", "v5", "v7", "serde"] }
+waker-fn = "1"
 web-time = "1"
 async-channel = "2"
 pollster = "0.4"
@@ -134,16 +134,16 @@ block = "0.1"
 cocoa = "=0.26.0"
 cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
-core-foundation-sys = "0.8.6"
+core-foundation-sys = "0.8.7"
 core-graphics = "0.24"
 core-text = "21"
-core-video = { version = "0.4.3", features = ["metal"] }
-dispatch2 = "0.3.1"
-flume = "0.11"
+core-video = { version = "0.5", features = ["metal"] }
+dispatch2 = "0.3"
+flume = "0.12"
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed", optional = true }
 foreign-types = "0.5"
-mach2 = "0.5"
-metal = "0.29"
+mach2 = "0.6"
+metal = "0.33"
 objc = "0.2"
 objc2 = { version = "0.6", optional = true }
 objc2-metal = { version = "0.3", optional = true }
@@ -152,46 +152,46 @@ objc2-metal = { version = "0.3", optional = true }
 pathfinder_geometry = "0.5"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-flume = "0.11"
+flume = "0.12"
 oo7 = { version = "0.6", default-features = false, features = [
     "async-std",
     "native_crypto",
 ] }
-wgpu = "24"
-cosmic-text = "0.17.0"
-swash = "0.2.6"
+wgpu = { git = "https://github.com/zed-industries/wgpu.git", branch = "v29" }
+cosmic-text = "0.18"
+swash = "0.2"
 bytemuck = "1"
 
-ashpd = { version = "0.11", default-features = false, features = ["async-std"], optional = true }
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser", "open_uri", "settings"], optional = true }
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed", features = [
     "source-fontconfig-dlopen",
 ], optional = true }
 
-calloop = "0.14.3"
-filedescriptor = { version = "0.8.2", optional = true }
-open = { version = "5.2.0", optional = true }
+calloop = "0.14"
+filedescriptor = { version = "0.8", optional = true }
+open = { version = "5", optional = true }
 
-calloop-wayland-source = { version = "0.4.1", optional = true }
-wayland-backend = { version = "0.3.3", features = [
+calloop-wayland-source = { version = "0.4", optional = true }
+wayland-backend = { version = "0.3", features = [
     "client_system",
     "dlopen",
 ], optional = true }
-wayland-client = { version = "0.31.11", optional = true }
-wayland-cursor = { version = "0.31.11", optional = true }
-wayland-protocols = { version = "0.32.9", features = [
+wayland-client = { version = "0.31", optional = true }
+wayland-cursor = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = [
     "client",
     "staging",
     "unstable",
 ], optional = true }
-wayland-protocols-plasma = { version = "0.3.9", features = [
+wayland-protocols-plasma = { version = "0.3", features = [
     "client",
 ], optional = true }
-wayland-protocols-wlr = { version = "0.3.9", features = [
+wayland-protocols-wlr = { version = "0.3", features = [
     "client",
 ], optional = true }
 
 as-raw-xcb-connection = { version = "1", optional = true }
-x11rb = { version = "0.13.1", features = [
+x11rb = { version = "0.13", features = [
     "allow-unsafe-code",
     "xkb",
     "randr",
@@ -201,7 +201,7 @@ x11rb = { version = "0.13.1", features = [
     "sync",
     "dri3",
 ], optional = true }
-xkbcommon = { version = "0.8.0", features = [
+xkbcommon = { version = "0.9", features = [
     "wayland",
     "x11",
 ], optional = true }
@@ -209,13 +209,13 @@ xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881
     "x11rb-xcb",
     "x11rb-client",
 ], package = "zed-xim", version = "0.4.0-zed", optional = true }
-x11-clipboard = { version = "0.9.3", optional = true }
-bitflags = { version = "2.6.0", optional = true }
+x11-clipboard = { version = "0.9", optional = true }
+bitflags = { version = "2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-flume = "0.11"
-rand = "0.9"
-windows = { version = "0.61", features = [
+flume = "0.12"
+rand = "0.10"
+windows = { version = "0.62", features = [
     "Foundation_Numerics",
     "Storage_Search",
     "Storage_Streams",
@@ -234,6 +234,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_Graphics_Hlsl",
+    "Win32_Media",
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Credentials",
@@ -263,28 +264,28 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-core = "0.61"
-windows-numerics = "0.2"
-windows-registry = "0.5"
+windows-core = "0.62"
+windows-numerics = "0.3"
+windows-registry = "0.6"
 
 [dev-dependencies]
 backtrace = "0.3"
 collections = { package = "gpui_collections", version = "0.2.2", features = ["test-support"] }
 env_logger = "0.11"
 http_client = { package = "gpui_http_client", version = "0.2.2", features = ["test-support"] }
-lyon = { version = "1.0", features = ["extra"] }
-pretty_assertions = { version = "1.3.0", features = ["unstable"] }
+lyon = { version = "1", features = ["extra"] }
+pretty_assertions = { version = "1.4", features = ["unstable"] }
 proptest = "1"
-rand = "0.9"
-unicode-segmentation = "1.10"
+rand = "0.10"
+unicode-segmentation = "1.13"
 util = { package = "gpui_util", version = "0.2.2", features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
-embed-resource = "3.0"
-windows-registry = "0.5"
+embed-resource = "3"
+windows-registry = "0.6"
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
-cbindgen = { version = "0.28.0", default-features = false }
+cbindgen = { version = "0.29.2", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
 naga = { version = "29.0", features = ["wgsl-in"] }
@@ -459,4 +460,3 @@ single_range_in_vec_init = "allow"
 too_many_arguments = "allow"
 large_enum_variant = "allow"
 nonminimal_bool = "allow"
-

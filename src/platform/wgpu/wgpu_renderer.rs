@@ -1,4 +1,4 @@
-use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
+use super::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
     AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
@@ -1019,6 +1019,7 @@ impl WgpuRenderer {
         &self.atlas
     }
 
+    #[cfg(target_family = "wasm")]
     pub fn supports_dual_source_blending(&self) -> bool {
         self.dual_source_blending
     }

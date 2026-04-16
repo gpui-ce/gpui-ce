@@ -1,20 +1,18 @@
 use std::sync::OnceLock;
 
 use ::util::ResultExt;
-use anyhow::Context;
-use windows::{
+use ::windows::{
     UI::{
         Color,
         ViewManagement::{UIColorType, UISettings},
     },
     Win32::{
-        Foundation::*, Graphics::Dwm::*, System::LibraryLoader::LoadLibraryA,
-        UI::WindowsAndMessaging::*,
+        Foundation::*, Graphics::Dwm::*, UI::WindowsAndMessaging::*,
     },
-    core::{BOOL, PCSTR},
+    core::BOOL,
 };
 
-use crate::*;
+use super::SafeCursor;
 use gpui::*;
 
 pub(crate) trait HiLoWord {
@@ -173,20 +171,4 @@ pub(crate) fn system_appearance() -> Result<WindowAppearance> {
 #[inline(always)]
 fn is_color_light(color: &Color) -> bool {
     ((5 * color.G as u32) + (2 * color.R as u32) + color.B as u32) > (8 * 128)
-}
-
-pub(crate) fn with_dll_library<R, F>(dll_name: PCSTR, f: F) -> Result<R>
-where
-    F: FnOnce(HMODULE) -> Result<R>,
-{
-    let library = unsafe {
-        LoadLibraryA(dll_name).with_context(|| format!("Loading dll: {}", dll_name.display()))?
-    };
-    let result = f(library);
-    unsafe {
-        FreeLibrary(library)
-            .with_context(|| format!("Freeing dll: {}", dll_name.display()))
-            .log_err();
-    }
-    result
 }

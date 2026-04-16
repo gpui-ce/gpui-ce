@@ -37,7 +37,7 @@ pub struct Quote {
 
 impl Quote {
     pub fn random() -> Self {
-        use rand::Rng;
+        use rand::RngExt;
         let mut rng = rand::rng();
         // simulate a base price in a realistic range
         let prev_close = rng.random_range(100.0..200.0);

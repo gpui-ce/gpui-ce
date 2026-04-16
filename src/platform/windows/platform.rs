@@ -15,7 +15,7 @@ use futures::channel::oneshot::{self, Receiver};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
-use windows::{
+use ::windows::{
     UI::ViewManagement::UISettings,
     Win32::{
         Foundation::*,
@@ -27,7 +27,16 @@ use windows::{
     core::*,
 };
 
-use crate::*;
+use super::{
+    DISABLE_DIRECT_COMPOSITION, DirectWriteTextSystem, DirectXDevices, DockMenuItem, JumpList,
+    SafeHwnd, VSyncProvider, WM_GPUI_CLOSE_ONE_WINDOW, WM_GPUI_CURSOR_STYLE_CHANGED,
+    WM_GPUI_DOCK_MENU_ACTION, WM_GPUI_FORCE_UPDATE_WINDOW, WM_GPUI_GPU_DEVICE_LOST,
+    WM_GPUI_KEYBOARD_LAYOUT_CHANGED, WM_GPUI_KEYDOWN, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
+    WindowsDispatcher, WindowsDisplay, WindowsKeyboardLayout, WindowsKeyboardMapper,
+    WindowsWindow, WindowsWindowInner, get_window_long, load_cursor, read_from_clipboard,
+    set_window_long, system_appearance, try_to_recover_from_device_lost, update_jump_list,
+    windows_credentials_target_name, write_to_clipboard,
+};
 use gpui::*;
 
 pub struct WindowsPlatform {
@@ -201,7 +210,7 @@ impl WindowsPlatform {
             .read()
             .iter()
             .find(|entry| entry.as_raw() == hwnd)
-            .and_then(|hwnd| window_from_hwnd(hwnd.as_raw()))
+            .and_then(|hwnd| super::window_from_hwnd(hwnd.as_raw()))
     }
 
     #[inline]
@@ -1029,7 +1038,7 @@ fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
     let ret = unsafe {
         ShellExecuteW(
             None,
-            windows::core::w!("open"),
+            ::windows::core::w!("open"),
             &HSTRING::from(target),
             None,
             None,
@@ -1167,8 +1176,8 @@ fn file_save_dialog(
 
     unsafe {
         dialog.SetFileTypes(&[Common::COMDLG_FILTERSPEC {
-            pszName: windows::core::w!("All files"),
-            pszSpec: windows::core::w!("*.*"),
+            pszName: ::windows::core::w!("All files"),
+            pszSpec: ::windows::core::w!("*.*"),
         }])?;
         if dialog.Show(window).is_err() {
             // User cancelled
@@ -1190,7 +1199,7 @@ fn load_icon() -> Result<HICON> {
     let handle = unsafe {
         LoadImageW(
             Some(module.into()),
-            windows::core::PCWSTR(1 as _),
+            ::windows::core::PCWSTR(1 as _),
             IMAGE_ICON,
             0,
             0,
@@ -1340,7 +1349,7 @@ unsafe extern "system" fn window_procedure(
 
 #[cfg(test)]
 mod tests {
-    use crate::{read_from_clipboard, write_to_clipboard};
+    use super::{read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
 
     #[test]

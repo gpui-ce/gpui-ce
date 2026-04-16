@@ -8,7 +8,7 @@ use ::util::{ResultExt, maybe};
 use anyhow::{Context, Result};
 use collections::HashMap;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
-use windows::{
+use ::windows::{
     Win32::{
         Foundation::*,
         Globalization::GetUserDefaultLocaleName,
@@ -23,7 +23,8 @@ use windows::{
 };
 use windows_numerics::Vector2;
 
-use crate::*;
+use super::{DirectXDevices, DirectXRenderer, try_to_recover_from_device_lost};
+use super::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use gpui::*;
 
 #[derive(Debug)]
@@ -132,20 +133,16 @@ impl GPUState {
         };
 
         let vertex_shader = {
-            let source = shader_resources::RawShaderBytes::new(
-                shader_resources::ShaderModule::EmojiRasterization,
-                shader_resources::ShaderTarget::Vertex,
-            )?;
+            let source =
+                RawShaderBytes::new(ShaderModule::EmojiRasterization, ShaderTarget::Vertex)?;
             let mut shader = None;
             unsafe { device.CreateVertexShader(source.as_bytes(), None, Some(&mut shader)) }?;
             shader.unwrap()
         };
 
         let pixel_shader = {
-            let source = shader_resources::RawShaderBytes::new(
-                shader_resources::ShaderModule::EmojiRasterization,
-                shader_resources::ShaderTarget::Fragment,
-            )?;
+            let source =
+                RawShaderBytes::new(ShaderModule::EmojiRasterization, ShaderTarget::Fragment)?;
             let mut shader = None;
             unsafe { device.CreatePixelShader(source.as_bytes(), None, Some(&mut shader)) }?;
             shader.unwrap()
@@ -164,19 +161,23 @@ impl GPUState {
 
 impl DirectWriteTextSystem {
     pub(crate) fn new(directx_devices: &DirectXDevices) -> Result<Self> {
-        let factory: IDWriteFactory5 = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+        let factory: IDWriteFactory5 = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
+            .context("Creating DirectWrite factory")?;
         // The `IDWriteInMemoryFontFileLoader` here is supported starting from
         // Windows 10 Creators Update, which consequently requires the entire
         // `DirectWriteTextSystem` to run on `win10 1703`+.
-        let in_memory_loader = unsafe { factory.CreateInMemoryFontFileLoader()? };
-        unsafe { factory.RegisterFontFileLoader(&in_memory_loader)? };
-        let builder = unsafe { factory.CreateFontSetBuilder()? };
+        let in_memory_loader = unsafe { factory.CreateInMemoryFontFileLoader() }
+            .context("Creating in-memory DirectWrite font file loader")?;
+        unsafe { factory.RegisterFontFileLoader(&in_memory_loader) }
+            .context("Registering DirectWrite font file loader")?;
+        let builder = unsafe { factory.CreateFontSetBuilder() }
+            .context("Creating DirectWrite font set builder")?;
         let mut locale = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
         unsafe { GetUserDefaultLocaleName(&mut locale) };
         let locale = HSTRING::from_wide(&locale);
         let text_renderer = TextRendererWrapper::new(locale.clone());
 
-        let gpu_state = GPUState::new(directx_devices)?;
+        let gpu_state = GPUState::new(directx_devices).context("Creating DirectWrite GPU state")?;
 
         let system_subpixel_rendering = get_system_subpixel_rendering();
         let system_ui_font_name = get_system_ui_font_name();
@@ -197,11 +198,13 @@ impl DirectWriteTextSystem {
                 .GetSystemFontCollection(false, &mut result, true)?;
             result.context("Failed to get system font collection")?
         };
-        let custom_font_set = unsafe { components.builder.CreateFontSet()? };
+        let custom_font_set = unsafe { components.builder.CreateFontSet() }
+            .context("Creating DirectWrite custom font set")?;
         let custom_font_collection = unsafe {
             components
                 .factory
-                .CreateFontCollectionFromFontSet(&custom_font_set)?
+                .CreateFontCollectionFromFontSet(&custom_font_set)
+                .context("Creating DirectWrite custom font collection from font set")?
         };
 
         Ok(Self {
@@ -1098,7 +1101,7 @@ impl DirectWriteState {
         unsafe { device_context.PSSetSamplers(0, Some(std::slice::from_ref(&gpu_state.sampler))) };
         unsafe { device_context.OMSetBlendState(&gpu_state.blend_state, None, 0xffffffff) };
 
-        let crate::FontInfo {
+        let super::FontInfo {
             gamma_ratios,
             grayscale_enhanced_contrast,
             ..
@@ -1428,7 +1431,7 @@ impl IDWritePixelSnapping_Impl for TextRenderer_Impl {
     fn IsPixelSnappingDisabled(
         &self,
         _clientdrawingcontext: *const ::core::ffi::c_void,
-    ) -> windows::core::Result<BOOL> {
+    ) -> ::windows::core::Result<BOOL> {
         Ok(BOOL(0))
     }
 
@@ -1436,7 +1439,7 @@ impl IDWritePixelSnapping_Impl for TextRenderer_Impl {
         &self,
         _clientdrawingcontext: *const ::core::ffi::c_void,
         transform: *mut DWRITE_MATRIX,
-    ) -> windows::core::Result<()> {
+    ) -> ::windows::core::Result<()> {
         unsafe {
             *transform = DWRITE_MATRIX {
                 m11: 1.0,
@@ -1453,7 +1456,7 @@ impl IDWritePixelSnapping_Impl for TextRenderer_Impl {
     fn GetPixelsPerDip(
         &self,
         _clientdrawingcontext: *const ::core::ffi::c_void,
-    ) -> windows::core::Result<f32> {
+    ) -> ::windows::core::Result<f32> {
         Ok(1.0)
     }
 }
@@ -1468,8 +1471,8 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         _measuringmode: DWRITE_MEASURING_MODE,
         glyphrun: *const DWRITE_GLYPH_RUN,
         glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
-        _clientdrawingeffect: windows::core::Ref<windows::core::IUnknown>,
-    ) -> windows::core::Result<()> {
+        _clientdrawingeffect: ::windows::core::Ref<::windows::core::IUnknown>,
+    ) -> ::windows::core::Result<()> {
         let glyphrun = unsafe { &*glyphrun };
         let glyph_count = glyphrun.glyphCount as usize;
         if glyph_count == 0 {
@@ -1512,7 +1515,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
                         .text_system
                         .font_info_cache
                         .insert(font_face_key, font_id);
-                    windows::core::Result::Ok(font_id)
+                    ::windows::core::Result::Ok(font_id)
                 },
                 Ok,
             )?;
@@ -1566,9 +1569,9 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         _baselineoriginx: f32,
         _baselineoriginy: f32,
         _underline: *const DWRITE_UNDERLINE,
-        _clientdrawingeffect: windows::core::Ref<windows::core::IUnknown>,
-    ) -> windows::core::Result<()> {
-        Err(windows::core::Error::new(
+        _clientdrawingeffect: ::windows::core::Ref<::windows::core::IUnknown>,
+    ) -> ::windows::core::Result<()> {
+        Err(::windows::core::Error::new(
             E_NOTIMPL,
             "DrawUnderline unimplemented",
         ))
@@ -1580,9 +1583,9 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         _baselineoriginx: f32,
         _baselineoriginy: f32,
         _strikethrough: *const DWRITE_STRIKETHROUGH,
-        _clientdrawingeffect: windows::core::Ref<windows::core::IUnknown>,
-    ) -> windows::core::Result<()> {
-        Err(windows::core::Error::new(
+        _clientdrawingeffect: ::windows::core::Ref<::windows::core::IUnknown>,
+    ) -> ::windows::core::Result<()> {
+        Err(::windows::core::Error::new(
             E_NOTIMPL,
             "DrawStrikethrough unimplemented",
         ))
@@ -1593,12 +1596,12 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         _clientdrawingcontext: *const ::core::ffi::c_void,
         _originx: f32,
         _originy: f32,
-        _inlineobject: windows::core::Ref<IDWriteInlineObject>,
+        _inlineobject: ::windows::core::Ref<IDWriteInlineObject>,
         _issideways: BOOL,
         _isrighttoleft: BOOL,
-        _clientdrawingeffect: windows::core::Ref<windows::core::IUnknown>,
-    ) -> windows::core::Result<()> {
-        Err(windows::core::Error::new(
+        _clientdrawingeffect: ::windows::core::Ref<::windows::core::IUnknown>,
+    ) -> ::windows::core::Result<()> {
+        Err(::windows::core::Error::new(
             E_NOTIMPL,
             "DrawInlineObject unimplemented",
         ))
@@ -1875,11 +1878,11 @@ fn is_color_glyph(
     .is_ok()
 }
 
-const DEFAULT_LOCALE_NAME: PCWSTR = windows::core::w!("en-US");
+const DEFAULT_LOCALE_NAME: PCWSTR = ::windows::core::w!("en-US");
 
 #[cfg(test)]
 mod tests {
-    use crate::direct_write::ClusterAnalyzer;
+    use super::ClusterAnalyzer;
 
     #[test]
     fn test_cluster_map() {
