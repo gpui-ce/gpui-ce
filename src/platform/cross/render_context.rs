@@ -39,7 +39,8 @@ impl WgpuContext {
                     | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
                     | wgpu::Features::TEXTURE_BINDING_ARRAY
                     | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-                    | wgpu::Features::SHADER_PRIMITIVE_INDEX,
+                    | wgpu::Features::SHADER_PRIMITIVE_INDEX
+                    | wgpu::Features::MULTI_DRAW_INDIRECT_COUNT,
                 required_limits: wgpu::Limits {
                     max_binding_array_elements_per_shader_stage: 512,
                     ..adapter.limits()
