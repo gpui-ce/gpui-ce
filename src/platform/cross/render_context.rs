@@ -26,27 +26,31 @@ impl WgpuContext {
             ..Default::default()
         });
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))?;
+        let required_features = wgpu::Features::TIMESTAMP_QUERY
+            | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+            | wgpu::Features::TEXTURE_BINDING_ARRAY
+            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+            | wgpu::Features::SHADER_PRIMITIVE_INDEX
+            | wgpu::Features::MULTI_DRAW_INDIRECT_COUNT;
 
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::TIMESTAMP_QUERY
-                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
-                    | wgpu::Features::TEXTURE_BINDING_ARRAY
-                    | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-                    | wgpu::Features::SHADER_PRIMITIVE_INDEX
-                    | wgpu::Features::MULTI_DRAW_INDIRECT_COUNT,
-                required_limits: wgpu::Limits {
-                    max_binding_array_elements_per_shader_stage: 512,
-                    ..adapter.limits()
-                },
-                ..Default::default()
-            }))?;
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let adapter = adapters
+            .into_iter()
+            .find(|adapter| adapter.features().contains(required_features))
+            .ok_or_else(|| anyhow::anyhow!(
+                "No adapter available with required features: {:?}",
+                required_features
+            ))?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features,
+            required_limits: wgpu::Limits {
+                max_binding_array_elements_per_shader_stage: 512,
+                ..adapter.limits()
+            },
+            ..Default::default()
+        }))?;
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Globals Buffer"),
