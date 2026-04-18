@@ -316,6 +316,7 @@ pub fn wgpu_surface(handle: WgpuSurfaceHandle) -> WgpuSurface {
         handle,
         style: StyleRefinement::default(),
         on_resize: None,
+        pending_resize: Mutex::new(None),
         defer_resize_until_mouse_up: false,
     }
 }
