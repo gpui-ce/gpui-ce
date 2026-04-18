@@ -35,6 +35,7 @@ pub(crate) struct CrossWindowState {
     pub(crate) modifiers: Cell<Modifiers>,
     pub(crate) capslock: Cell<Capslock>,
     pub(crate) is_hovered: Cell<bool>,
+    pub(crate) is_resizing: Cell<bool>,
 }
 
 #[derive(Default)]
@@ -251,6 +252,10 @@ impl PlatformWindow for CrossWindow {
 
     fn is_hovered(&self) -> bool {
         self.0.state.is_hovered.get()
+    }
+
+    fn is_resizing(&self) -> bool {
+        self.0.state.is_resizing.get()
     }
 
     fn set_title(&mut self, title: &str) {

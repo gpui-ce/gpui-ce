@@ -1082,6 +1082,10 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().bounds.size
     }
 
+    fn is_resizing(&self) -> bool {
+        self.borrow().resizing
+    }
+
     fn resize(&mut self, size: Size<Pixels>) {
         let state = self.borrow();
         let state_ptr = self.0.clone();

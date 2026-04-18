@@ -576,6 +576,7 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                     return;
                 }
 
+                window.0.state.is_resizing.set(true);
                 let scale_factor = window.scale_factor();
 
                 if let Some(renderer) = window.0.renderer.get() {
