@@ -23,6 +23,7 @@ struct WgpuSurfaceHandleInner {
     winit_window: Option<Arc<winit::window::Window>>,
     size: Mutex<(u32, u32)>,
     pending_resize: Mutex<Option<(u32, u32)>>,
+    deferred_resize: Mutex<Option<(u32, u32)>>,
     is_resizing: AtomicBool,
     format: wgpu::TextureFormat,
 }
@@ -75,6 +76,7 @@ impl WgpuSurfaceHandle {
                 winit_window,
                 size: Mutex::new((width, height)),
                 pending_resize: Mutex::new(None),
+                deferred_resize: Mutex::new(None),
                 is_resizing: AtomicBool::new(false),
                 format,
             }),
@@ -200,12 +202,33 @@ impl WgpuSurfaceHandle {
         self.inner.format
     }
 
-    /// Returns true if a resize is pending or currently in progress.
+    /// Returns true if a resize is pending, deferred, or currently in progress.
     pub fn is_resize_pending(&self) -> bool {
         if self.inner.is_resizing.load(Ordering::Acquire) {
             return true;
         }
-        self.inner.pending_resize.lock().unwrap().is_some()
+        if self.inner.pending_resize.lock().unwrap().is_some() {
+            return true;
+        }
+        self.inner.deferred_resize.lock().unwrap().is_some()
+    }
+
+    /// Defer a resize until a later time, without starting texture reallocation yet.
+    pub fn defer_resize(&self, width: u32, height: u32) {
+        let current_size = self.size();
+        if current_size == (width, height) {
+            return;
+        }
+        let mut deferred = self.inner.deferred_resize.lock().unwrap();
+        if deferred.map_or(false, |pending_size| pending_size == (width, height)) {
+            return;
+        }
+        *deferred = Some((width, height));
+    }
+
+    /// Take any deferred resize request, returning the target size.
+    pub fn take_deferred_resize(&self) -> Option<(u32, u32)> {
+        self.inner.deferred_resize.lock().unwrap().take()
     }
 
     /// The `SurfaceId` for this handle (used internally by the element).
@@ -293,7 +316,6 @@ pub fn wgpu_surface(handle: WgpuSurfaceHandle) -> WgpuSurface {
         handle,
         style: StyleRefinement::default(),
         on_resize: None,
-        pending_resize: Mutex::new(None),
         defer_resize_until_mouse_up: false,
     }
 }
@@ -377,8 +399,7 @@ impl Element for WgpuSurface {
 
         if pixel_w != cur_w || pixel_h != cur_h {
             if self.defer_resize_until_mouse_up && left_pressed {
-                let mut pending = self.pending_resize.lock().unwrap();
-                *pending = Some((pixel_w, pixel_h));
+                self.handle.defer_resize(pixel_w, pixel_h);
             } else {
                 self.handle.request_resize(pixel_w, pixel_h);
                 if let Some(cb) = &self.on_resize {
@@ -388,7 +409,7 @@ impl Element for WgpuSurface {
         }
 
         if self.defer_resize_until_mouse_up && !left_pressed {
-            if let Some((pending_w, pending_h)) = self.pending_resize.lock().unwrap().take() {
+            if let Some((pending_w, pending_h)) = self.handle.take_deferred_resize() {
                 if (pending_w, pending_h) != (cur_w, cur_h) {
                     self.handle.request_resize(pending_w, pending_h);
                     if let Some(cb) = &self.on_resize {
