@@ -224,8 +224,7 @@ impl Platform for CrossPlatform {
                     .with_decorations(true)
                     .with_title_hidden(true)
                     .with_titlebar_transparent(appears_transparent)
-                    .with_fullsize_content_view(true)
-                    .with_movable_by_window_background(true);
+                    .with_fullsize_content_view(true);
             }
 
             let winit_window = event_loop
