@@ -656,6 +656,20 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                     });
             }
 
+            winit::event::WindowEvent::CursorEntered { .. } => {
+                self.hovered_window_id.set(Some(window_id));
+                let was_hovered = window.0.state.is_hovered.get();
+                window.0.state.is_hovered.set(true);
+                if !was_hovered {
+                    window
+                        .0
+                        .state
+                        .callbacks
+                        .invoke_mut(&window.0.state.callbacks.on_hover_status_change, |cb| {
+                            cb(true);
+                        });
+                }
+            }
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 self.hovered_window_id.set(Some(window_id));
                 let was_hovered = window.0.state.is_hovered.get();
