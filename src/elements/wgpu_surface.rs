@@ -28,6 +28,9 @@ struct WgpuSurfaceHandleInner {
     /// Remembers whether the window was resizing last prepaint so we can detect
     /// the transition `was_resizing=true -> false` across GPUI frame recreations.
     prev_window_resizing: AtomicBool,
+    /// Set when a deferred resize was queued due to an OS window resize (not a
+    /// mouse-drag panel resize).  Allows flushing without a mouse-up event.
+    deferred_from_window_resize: AtomicBool,
     format: wgpu::TextureFormat,
 }
 
@@ -82,6 +85,7 @@ impl WgpuSurfaceHandle {
                 deferred_resize: Mutex::new(None),
                 is_resizing: AtomicBool::new(false),
                 prev_window_resizing: AtomicBool::new(false),
+                deferred_from_window_resize: AtomicBool::new(false),
                 format,
             }),
         }
@@ -400,16 +404,16 @@ impl Element for WgpuSurface {
         let (cur_w, cur_h) = self.handle.size();
         let left_pressed = window.pressed_mouse_button() == Some(MouseButton::Left);
         let window_resizing = window.is_window_resizing();
-        // True on the first frame after OS window resize ends — force-flush even if
-        // the mouse button state didn't update (macOS may not deliver mouse-up for
-        // resize-handle drags that the OS owns).  Stored in the persistent handle
-        // so it survives GPUI recreating this element each frame.
         let prev_resizing = self.handle.inner.prev_window_resizing.swap(window_resizing, Ordering::Relaxed);
         let os_resize_just_ended = prev_resizing && !window_resizing;
 
         if pixel_w != cur_w || pixel_h != cur_h {
             if self.defer_resize_until_mouse_up && (left_pressed || window_resizing) {
                 self.handle.defer_resize(pixel_w, pixel_h);
+                // Remember what kind of resize caused this deferral.
+                if window_resizing {
+                    self.handle.inner.deferred_from_window_resize.store(true, Ordering::Relaxed);
+                }
             } else {
                 self.handle.request_resize(pixel_w, pixel_h);
                 if let Some(cb) = &self.on_resize {
@@ -418,11 +422,18 @@ impl Element for WgpuSurface {
             }
         }
 
-        // Flush deferred resize when:
-        //   - internal panel drag: mouse released (!left_pressed) and no OS resize
-        //   - OS window resize: size just stabilized (os_resize_just_ended), overrides mouse state
-        if self.defer_resize_until_mouse_up && (os_resize_just_ended || (!left_pressed && !window_resizing)) {
+        // Flush deferred resize:
+        //   OS window resize: mouse events are never delivered after the OS drag ends,
+        //   so flush on !window_resizing alone (no mouse check).
+        //   Internal panel drag: mouse-up is reliably delivered, so require !left_pressed.
+        let from_window_resize = self.handle.inner.deferred_from_window_resize.load(Ordering::Relaxed);
+        let should_flush = self.defer_resize_until_mouse_up
+            && !window_resizing
+            && (from_window_resize || os_resize_just_ended || !left_pressed);
+
+        if should_flush {
             if let Some((pending_w, pending_h)) = self.handle.take_deferred_resize() {
+                self.handle.inner.deferred_from_window_resize.store(false, Ordering::Relaxed);
                 if (pending_w, pending_h) != (cur_w, cur_h) {
                     self.handle.request_resize(pending_w, pending_h);
                     if let Some(cb) = &self.on_resize {
