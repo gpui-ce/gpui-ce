@@ -2282,12 +2282,14 @@ impl Window {
 
     fn complete_frame(&self) {
         self.platform_window.completed_frame();
-        self.resizing_window.set(false);
+        if self.platform_window.content_size() == self.viewport_size {
+            self.resizing_window.set(false);
+        }
     }
 
     /// Returns true if the platform window is currently resizing.
     pub fn is_window_resizing(&self) -> bool {
-        self.resizing_window.get()
+        self.resizing_window.get() || self.platform_window.content_size() != self.viewport_size
     }
 
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
