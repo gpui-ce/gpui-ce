@@ -4100,6 +4100,16 @@ impl Window {
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
+        if std::env::var_os("GPUI_DEBUG_MOUSE").is_some() {
+            eprintln!(
+                "[WGPUI] dispatch_mouse_event pos={:?} hit_ids={:?} listeners={} active={} hover={}",
+                self.mouse_position(),
+                hit_test.ids,
+                self.rendered_frame.mouse_listeners.len(),
+                self.active.get(),
+                self.hovered.get(),
+            );
+        }
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
