@@ -1,27 +1,28 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
+use device_query::{DeviceQuery, DeviceState, MouseButton};
 
 /// Detects whether a window is actively being resized by watching the stream
 /// of [`winit::event::WindowEvent::Resized`] events.
 ///
-/// **Primary strategy (macOS):** poll `[NSEvent pressedMouseButtons]` — a
-/// permission-free AppKit class method that returns the live bitmask of held
-/// mouse buttons. While bit 0 (left button) is set after a resize event, the
-/// user is still dragging the resize handle. The moment it clears the resize
-/// is done. No timer needed, no mouse events required.
+/// **Primary strategy:** poll global mouse button state via `device_query`.
+/// While the left button is held after a resize event started, the user is
+/// still dragging. The moment it releases the resize is done instantly.
+/// No special permissions required on any platform.
 ///
-/// **Fallback strategy (all platforms):** idle-threshold timer. If no
-/// `Resized` event arrives for [`IDLE_THRESHOLD`] the resize is considered
-/// finished. Used on Linux/Windows and as the macOS fallback for keyboard or
-/// programmatic resizes where no mouse button is held.
+/// **Fallback:** idle-threshold timer for keyboard/programmatic resizes where
+/// no mouse button is held (e.g. resize via keyboard shortcut, snap, tiling WM).
 pub struct ResizeDetector {
     /// Set when a resize event has been seen and we haven't confirmed the end yet.
     active: Cell<bool>,
-    /// Deadline for the timer-based fallback.
+    /// Deadline for the timer-based fallback (programmatic / non-mouse resizes).
     deadline: Cell<Option<Instant>>,
+    /// Cached device_query state — cheap to call, avoids re-initializing each poll.
+    device_state: DeviceState,
 }
 
-/// Fallback idle period after the last `Resized` event on non-macOS platforms.
+/// Fallback idle period used when the resize wasn't driven by a held mouse button
+/// (e.g. keyboard shortcut, tiling WM, programmatic resize).
 const IDLE_THRESHOLD: Duration = Duration::from_millis(150);
 
 impl ResizeDetector {
@@ -29,6 +30,7 @@ impl ResizeDetector {
         Self {
             active: Cell::new(false),
             deadline: Cell::new(None),
+            device_state: DeviceState::new(),
         }
     }
 
@@ -44,32 +46,32 @@ impl ResizeDetector {
             return false;
         }
 
-        // On macOS: ask the OS directly whether the left mouse button is still
-        // held. [NSEvent pressedMouseButtons] needs no special permissions.
-        #[cfg(target_os = "macos")]
-        {
-            if left_mouse_button_pressed() {
-                // Still dragging — stay active, reset deadline so the fallback
-                // doesn't fire while the button is held.
-                self.deadline.set(Some(Instant::now() + IDLE_THRESHOLD));
-                return true;
-            }
-            // Button released: resize is over. Fall through to clear state.
-            self.active.set(false);
-            self.deadline.set(None);
-            return false;
+        // Poll the real global left-button state. If it's held the user is
+        // still dragging the resize handle; keep deferring and push the
+        // fallback deadline out so it doesn't fire during the drag.
+        let mouse = self.device_state.get_mouse();
+        let left_held = mouse.button_pressed.contains(&MouseButton::Left);
+
+        if left_held {
+            self.deadline.set(Some(Instant::now() + IDLE_THRESHOLD));
+            return true;
         }
 
-        // Non-macOS: timer fallback.
-        #[cfg(not(target_os = "macos"))]
-        {
-            match self.deadline.get() {
-                Some(deadline) if Instant::now() < deadline => true,
-                _ => {
-                    self.active.set(false);
-                    self.deadline.set(None);
-                    false
-                }
+        // Left button is up. The user finished a mouse-driven resize; done immediately.
+        // Also covers the timer path: if the button was never down (keyboard/programmatic)
+        // we fall through to the deadline check below.
+        //
+        // Check deadline in case this is a non-mouse resize that still needs the grace period.
+        match self.deadline.get() {
+            Some(deadline) if Instant::now() < deadline => {
+                // Could be a split-second between event and button release detection;
+                // keep active until the deadline just to be safe.
+                true
+            }
+            _ => {
+                self.active.set(false);
+                self.deadline.set(None);
+                false
             }
         }
     }
@@ -79,32 +81,5 @@ impl Default for ResizeDetector {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Poll whether the left mouse button is currently held, using the AppKit
-/// `[NSEvent pressedMouseButtons]` class method. Requires no special
-/// permissions. Bit 0 of the return value is the left button.
-#[cfg(target_os = "macos")]
-fn left_mouse_button_pressed() -> bool {
-    use std::ffi::c_ulong;
-
-    // We talk directly to the ObjC runtime rather than pulling in a full
-    // AppKit binding crate. objc_msgSend is always available on macOS.
-    #[link(name = "objc", kind = "dylib")]
-    unsafe extern "C" {
-        fn objc_getClass(name: *const u8) -> *mut std::ffi::c_void;
-        fn sel_registerName(name: *const u8) -> *mut std::ffi::c_void;
-        // integer-returning class method — safe to call as a plain fn
-        fn objc_msgSend(receiver: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ...) -> c_ulong;
-    }
-
-    let pressed: c_ulong = unsafe {
-        let cls = objc_getClass(b"NSEvent\0".as_ptr());
-        let sel = sel_registerName(b"pressedMouseButtons\0".as_ptr());
-        objc_msgSend(cls, sel)
-    };
-
-    // Bit 0 = left button
-    pressed & 1 != 0
 }
 

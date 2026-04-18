@@ -30,6 +30,7 @@ path = "src/gpui.rs"
 doctest = false
 
 [dependencies]
+device_query = "2.1"
 pollster = "0.4.0"
 winit = "0.30.12"
 wgpu = { git = "https://github.com/Far-Beyond-Pulsar/wgpu", rev = "fce5b80e8017304449124b12637ec324417e40c8", default-features = false, features = ["web", "webgpu", "dx12", "vulkan", "wgsl"] }
