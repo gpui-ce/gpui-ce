@@ -477,6 +477,10 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                         if self.pressed_button == Some(mouse_button) {
                             self.pressed_button = None;
 
+                            // TODO: This is a fallback for macOS when WindowEvent::MouseInput
+                            // release notifications are not delivered reliably. In an ideal fix,
+                            // we would avoid synthesizing MouseUp from raw device events and instead
+                            // make the normal winit event path complete correctly.
                             if let Some(window_id) = self.hovered_window_id.get() {
                                 if let Some(window) = self.windows.get(&window_id) {
                                     let position = window.0.state.mouse_position.get();
