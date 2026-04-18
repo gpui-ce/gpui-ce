@@ -4001,11 +4001,28 @@ impl Window {
                 PlatformInput::MouseMove(mouse_move)
             }
             PlatformInput::MouseDown(mouse_down) => {
+                if std::env::var_os("GPUI_DEBUG_MOUSE").is_some() {
+                    eprintln!(
+                        "[WGPUI] dispatch MouseDown @ {:?} click_count={} first_mouse={} active={}",
+                        mouse_down.position,
+                        mouse_down.click_count,
+                        mouse_down.first_mouse,
+                        self.active.get(),
+                    );
+                }
                 self.mouse_position = mouse_down.position;
                 self.modifiers = mouse_down.modifiers;
                 PlatformInput::MouseDown(mouse_down)
             }
             PlatformInput::MouseUp(mouse_up) => {
+                if std::env::var_os("GPUI_DEBUG_MOUSE").is_some() {
+                    eprintln!(
+                        "[WGPUI] dispatch MouseUp @ {:?} click_count={} active={}",
+                        mouse_up.position,
+                        mouse_up.click_count,
+                        self.active.get(),
+                    );
+                }
                 self.mouse_position = mouse_up.position;
                 self.modifiers = mouse_up.modifiers;
                 PlatformInput::MouseUp(mouse_up)

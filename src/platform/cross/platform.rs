@@ -737,6 +737,17 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                 let mouse_button = winit_mouse_button_to_gpui(button);
                 let modifiers = self.current_modifiers;
 
+                if std::env::var_os("GPUI_DEBUG_MOUSE").is_some() {
+                    eprintln!(
+                        "[WGPUI] macOS MouseInput {:?} {:?} @ {:?} hovered={} pressed_button={:?}",
+                        state,
+                        button,
+                        position,
+                        window.0.state.is_hovered.get(),
+                        self.pressed_button,
+                    );
+                }
+
                 match state {
                     winit::event::ElementState::Pressed => {
                         self.pressed_button = Some(mouse_button);
