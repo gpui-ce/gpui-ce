@@ -214,11 +214,20 @@ impl Platform for CrossPlatform {
                 ));
 
             // Set the window/application icon when one is provided.
-            if let Some(icon) = options.app_icon {
-                match winit::window::Icon::from_rgba(icon.rgba, icon.width, icon.height) {
+            // On Windows this controls the titlebar + taskbar icon.
+            // On macOS, winit only sets the minimised-window thumbnail;
+            // we explicitly call `NSApp setApplicationIconImage:` below.
+            if let Some(ref icon) = options.app_icon {
+                match winit::window::Icon::from_rgba(icon.rgba.clone(), icon.width, icon.height) {
                     Ok(winit_icon) => attributes = attributes.with_window_icon(Some(winit_icon)),
                     Err(err) => log::warn!("Failed to set window icon: {err}"),
                 }
+            }
+
+            // macOS Dock icon — must be set via NSApp, not winit.
+            #[cfg(target_os = "macos")]
+            if let Some(ref icon) = options.app_icon {
+                set_macos_dock_icon(icon);
             }
 
             #[cfg(target_os = "macos")]
@@ -1067,4 +1076,55 @@ fn winit_key_to_keystroke(
         key,
         key_char,
     })
+}
+
+/// Set the macOS application Dock icon by calling `NSApp setApplicationIconImage:`.
+///
+/// `winit`'s `with_window_icon` only sets the per-window miniaturised thumbnail
+/// (shown in the Dock when *that specific window* is minimised). To change the
+/// live Dock tile for the running process — which is what users see as the "app
+/// icon" — we must call `[NSApp setApplicationIconImage:]` directly.
+///
+/// This is a no-op on all other platforms (the cfg gate in the call site ensures
+/// this function is never compiled in non-macOS builds).
+#[cfg(target_os = "macos")]
+fn set_macos_dock_icon(icon: &crate::WindowIcon) {
+    use image::{ImageBuffer, Rgba};
+    use objc2::ClassType;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{MainThreadMarker, NSData};
+
+    // Re-encode the raw RGBA pixels as PNG so NSImage can parse them.
+    let Some(buf) = ImageBuffer::<Rgba<u8>, _>::from_raw(
+        icon.width,
+        icon.height,
+        icon.rgba.clone(),
+    ) else {
+        log::warn!("set_macos_dock_icon: icon dimensions don't match pixel buffer");
+        return;
+    };
+    let mut png: Vec<u8> = Vec::new();
+    if buf
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            image::ImageFormat::Png,
+        )
+        .is_err()
+    {
+        log::warn!("set_macos_dock_icon: failed to encode icon as PNG");
+        return;
+    }
+
+    // SAFETY: `open_window` (our only call site) is always invoked on the main
+    // thread, which is the only thread on which AppKit objects may be used.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    unsafe {
+        let data = NSData::with_bytes(&png);
+        if let Some(ns_image) = NSImage::initWithData(NSImage::alloc(), &data) {
+            let app = NSApplication::sharedApplication(mtm);
+            app.setApplicationIconImage(Some(&ns_image));
+        } else {
+            log::warn!("set_macos_dock_icon: NSImage could not decode PNG data");
+        }
+    }
 }
