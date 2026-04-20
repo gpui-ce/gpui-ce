@@ -448,6 +448,10 @@ impl PlatformWindow for CrossWindow {
             }
         }
     }
+
+    fn close_programmatically(&self) {
+        CrossWindow::close_programmatically(self);
+    }
 }
 
 impl raw_window_handle::HasDisplayHandle for CrossWindow {
@@ -455,10 +459,6 @@ impl raw_window_handle::HasDisplayHandle for CrossWindow {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         self.window().display_handle()
-    }
-
-    fn close_programmatically(&self) {
-        CrossWindow::close_programmatically(self);
     }
 }
 
