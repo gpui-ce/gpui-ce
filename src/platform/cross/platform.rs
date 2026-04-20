@@ -208,10 +208,18 @@ impl Platform for CrossPlatform {
                         .unwrap_or_else(|| "GPUI".into()),
                 )
                 .with_decorations(!use_client_decorations)
+                .with_resizable(options.is_resizable)
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     bounds.size.width.0 as f64,
                     bounds.size.height.0 as f64,
                 ));
+
+            if let Some(min_size) = options.window_min_size {
+                attributes = attributes.with_min_inner_size(winit::dpi::LogicalSize::new(
+                    min_size.width.0 as f64,
+                    min_size.height.0 as f64,
+                ));
+            }
 
             // Set the window/application icon when one is provided.
             // On Windows this controls the titlebar + taskbar icon.
