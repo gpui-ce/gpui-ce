@@ -1553,13 +1553,13 @@ impl WgpuRenderer {
             let data = bytemuck::cast_slice(&flat_path_vertices);
             ensure_buffer_size(
                 &self.context.device,
-                &mut self.context.paths_vertices_buffer,
+                &self.context.paths_vertices_buffer,
                 data.len() as u64,
                 "Path Vertices Buffer",
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             );
             self.context.queue.write_buffer(
-                &self.context.paths_vertices_buffer,
+                &self.context.paths_vertices_buffer.borrow(),
                 0,
                 data,
             );
