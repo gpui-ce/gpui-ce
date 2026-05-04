@@ -165,7 +165,7 @@ impl WgpuContext {
             poly_sprites_buffer: Mutex::new(poly_sprites_buffer),
             color_adjustments_buffer,
 
-                paths_vertices_buffer: RefCell::new(paths_vertices_buffer),
+                paths_vertices_buffer: Mutex::new(paths_vertices_buffer),
             surface_registry: Arc::new(SurfaceRegistry::new()),
         })
     }
