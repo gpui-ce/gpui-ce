@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::surface_registry::SurfaceRegistry;
 
@@ -10,13 +9,13 @@ pub struct WgpuContext {
     pub(super) instance: wgpu::Instance,
 
     pub(super) globals_buffer: wgpu::Buffer,
-    pub(super) quads_buffer: RefCell<wgpu::Buffer>,
-    pub(super) shadows_buffer: RefCell<wgpu::Buffer>,
-    pub(super) underlines_buffer: RefCell<wgpu::Buffer>,
-    pub(super) mono_sprites_buffer: RefCell<wgpu::Buffer>,
-    pub(super) poly_sprites_buffer: RefCell<wgpu::Buffer>,
+    pub(super) quads_buffer: Mutex<wgpu::Buffer>,
+    pub(super) shadows_buffer: Mutex<wgpu::Buffer>,
+    pub(super) underlines_buffer: Mutex<wgpu::Buffer>,
+    pub(super) mono_sprites_buffer: Mutex<wgpu::Buffer>,
+    pub(super) poly_sprites_buffer: Mutex<wgpu::Buffer>,
     pub(super) color_adjustments_buffer: wgpu::Buffer,
-        pub(super) paths_vertices_buffer: RefCell<wgpu::Buffer>,
+        pub(super) paths_vertices_buffer: Mutex<wgpu::Buffer>,
 
     pub(crate) surface_registry: Arc<SurfaceRegistry>,
 }
