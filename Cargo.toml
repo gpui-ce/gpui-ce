@@ -163,6 +163,10 @@ path = "examples/learn/wgpu_surface_basic.rs"
 name = "blur_showcase"
 path = "examples/learn/blur_showcase.rs"
 
+[[example]]
+name = "window_background_showcase"
+path = "examples/learn/window_background_showcase.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================

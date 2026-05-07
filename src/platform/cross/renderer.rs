@@ -1370,6 +1370,9 @@ pub struct WgpuRenderer {
 
     // Alpha modes supported by this surface (queried once at creation)
     supported_alpha_modes: Vec<wgpu::CompositeAlphaMode>,
+
+    // Whether the window is currently transparent (used for clear color, independent of alpha_mode)
+    transparent: bool,
 }
 
 impl WgpuRenderer {
@@ -1540,6 +1543,7 @@ impl WgpuRenderer {
             surface_bounds_cache: Arc::new(Mutex::new(HashMap::new())),
             layout_version: Arc::new(AtomicU64::new(0)),
             supported_alpha_modes: surface_capabilities.alpha_modes,
+            transparent: false,
         })
     }
 
@@ -1917,14 +1921,15 @@ impl WgpuRenderer {
                 });
 
         {
-            let clear_color = match self.surface_configuration.alpha_mode {
-                wgpu::CompositeAlphaMode::Opaque => wgpu::Color::BLACK,
-                _ => wgpu::Color {
+            let clear_color = if self.transparent {
+                wgpu::Color {
                     r: 0.0,
                     g: 0.0,
                     b: 0.0,
                     a: 0.0,
-                },
+                }
+            } else {
+                wgpu::Color::BLACK
             };
 
             // Render to swapchain directly for now (TODO: render to framebuffer, then blit)
@@ -2515,6 +2520,10 @@ impl WgpuRenderer {
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
+        // Track transparency for the clear color (works on all platforms including
+        // Windows where DWM handles blending and the surface alpha_mode stays Opaque).
+        self.transparent = transparent;
+
         self.surface_configuration.alpha_mode = if transparent {
             // Pick the best transparent alpha mode the surface supports.
             if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
@@ -2522,8 +2531,10 @@ impl WgpuRenderer {
             } else if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
                 wgpu::CompositeAlphaMode::PostMultiplied
             } else {
-                // Surface doesn't support transparency; use whatever it does support.
-                self.supported_alpha_modes[0]
+                // Surface doesn't natively support transparency (e.g. Windows DX12).
+                // Keep whatever mode was set; the OS compositor will handle alpha
+                // as long as the window was created with with_transparent(true).
+                self.surface_configuration.alpha_mode
             }
         } else {
             if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
