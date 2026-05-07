@@ -2028,17 +2028,19 @@ impl WgpuRenderer {
 
                         // Copy surface texture to backdrop_blur_texture for sampling
                         if let Some(ref blur_texture) = self.backdrop_blur_texture {
-                            let surface_size = wgpu::Extent3d {
-                                width: self.surface_configuration.width,
-                                height: self.surface_configuration.height,
-                                depth_or_array_layers: 1,
-                            };
+                            // Use actual surface texture size (may differ from configured size)
+                            let surface_size = surface_texture.texture.size();
 
-                            command_encoder.copy_texture_to_texture(
-                                surface_texture.texture.as_image_copy(),
-                                blur_texture.as_image_copy(),
-                                surface_size,
-                            );
+                            // Only copy if sizes match (otherwise skip to avoid validation error)
+                            if surface_size.width == blur_texture.width()
+                                && surface_size.height == blur_texture.height()
+                            {
+                                command_encoder.copy_texture_to_texture(
+                                    surface_texture.texture.as_image_copy(),
+                                    blur_texture.as_image_copy(),
+                                    surface_size,
+                                );
+                            }
                         }
 
                         // Begin new render pass with Load to preserve existing content
