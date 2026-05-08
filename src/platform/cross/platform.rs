@@ -28,6 +28,7 @@ fn device_button_to_gpui(button: u32) -> Option<MouseButton> {
     }
 }
 use anyhow::Result;
+use arboard::Clipboard;
 use collections::FxHashMap;
 use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Instant};
 use winit::event_loop::ActiveEventLoop;
@@ -416,12 +417,26 @@ impl Platform for CrossPlatform {
         false
     }
 
-    fn write_to_clipboard(&self, _item: crate::ClipboardItem) {
-        log::warn!("write_to_clipboard is not yet implemented on this platform");
+    fn write_to_clipboard(&self, item: crate::ClipboardItem) {
+        let Some(text) = item.text() else {
+            log::warn!("write_to_clipboard currently supports text entries only on this platform");
+            return;
+        };
+
+        match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
+            Ok(()) => {}
+            Err(error) => log::warn!("failed to write to clipboard: {error}"),
+        }
     }
 
     fn read_from_clipboard(&self) -> Option<crate::ClipboardItem> {
-        None
+        match Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+            Ok(text) => Some(crate::ClipboardItem::new_string(text)),
+            Err(error) => {
+                log::warn!("failed to read from clipboard: {error}");
+                None
+            }
+        }
     }
 
     fn write_credentials(
@@ -1165,7 +1180,18 @@ fn winit_key_to_keystroke(
                 | NamedKey::Meta => return None,
                 _ => return None,
             };
-            (key_name.to_string(), None)
+            let key_char = match named {
+                NamedKey::Space
+                    if !modifiers.control
+                        && !modifiers.platform
+                        && !modifiers.function
+                        && !modifiers.alt =>
+                {
+                    Some(" ".to_string())
+                }
+                _ => None,
+            };
+            (key_name.to_string(), key_char)
         }
         WKey::Character(ch) => {
             let key = ch.to_lowercase();
@@ -1194,6 +1220,38 @@ fn winit_key_to_keystroke(
         key,
         key_char,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::winit_key_to_keystroke;
+    use crate::Modifiers;
+    use winit::keyboard::{Key, NamedKey};
+
+    #[test]
+    fn translates_space_to_text_input() {
+        let keystroke = winit_key_to_keystroke(&Key::Named(NamedKey::Space), Modifiers::default(), &None)
+            .expect("space should produce a keystroke");
+
+        assert_eq!(keystroke.key, "space");
+        assert_eq!(keystroke.key_char.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn does_not_treat_command_space_as_text_input() {
+        let keystroke = winit_key_to_keystroke(
+            &Key::Named(NamedKey::Space),
+            Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            &None,
+        )
+        .expect("command-space should still produce a keystroke");
+
+        assert_eq!(keystroke.key, "space");
+        assert_eq!(keystroke.key_char, None);
+    }
 }
 
 /// Set the macOS application Dock icon by calling `NSApp setApplicationIconImage:`.

@@ -37,6 +37,7 @@ wgpu = { git = "https://github.com/Far-Beyond-Pulsar/wgpu", rev = "fce5b80e80173
 priority-threadpool = { git = "https://github.com/mdeand/priority-threadpool" }
 anyhow = "1.0.86"
 async-task = "4.7"
+arboard = "3.6.1"
 backtrace = { version = "0.3", optional = true }
 bytemuck = { version = "1.24", features = ["derive"] }
 circular-buffer = "1.0"
