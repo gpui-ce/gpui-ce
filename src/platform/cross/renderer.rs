@@ -1543,7 +1543,7 @@ impl WgpuRenderer {
             surface_bounds_cache: Arc::new(Mutex::new(HashMap::new())),
             layout_version: Arc::new(AtomicU64::new(0)),
             supported_alpha_modes: surface_capabilities.alpha_modes,
-            transparent: true,
+            transparent: !cfg!(target_os = "linux"),
         })
     }
 

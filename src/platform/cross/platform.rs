@@ -202,12 +202,11 @@ impl Platform for CrossPlatform {
                 options.window_decorations,
                 Some(crate::WindowDecorations::Client)
             );
-            // Always create the native window with compositor transparency enabled.
-            // The renderer's `transparent` flag (driven by the theme via
-            // `set_background_appearance`) controls whether we actually clear to
-            // alpha=0 or alpha=1, so a window whose theme says Opaque will still
-            // look fully opaque — but we can switch to transparent at runtime
-            // without needing to recreate the window.
+            let transparent = !matches!(
+                options.window_background,
+                crate::WindowBackgroundAppearance::Opaque
+            );
+            let force_transparent = !cfg!(target_os = "linux");
             let mut attributes = winit::window::Window::default_attributes()
                 .with_title(
                     options
@@ -218,7 +217,7 @@ impl Platform for CrossPlatform {
                         .unwrap_or_else(|| "GPUI".into()),
                 )
                 .with_decorations(!use_client_decorations)
-                .with_transparent(true)
+                .with_transparent(force_transparent || transparent)
                 .with_resizable(options.is_resizable)
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     bounds.size.width.0 as f64,

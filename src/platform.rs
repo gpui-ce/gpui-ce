@@ -1220,7 +1220,7 @@ impl Default for WindowOptions {
             window_decorations: None,
             tabbing_identifier: None,
             app_icon: None,
-            always_transparent: true,
+            always_transparent: !cfg!(target_os = "linux"),
         }
     }
 }
