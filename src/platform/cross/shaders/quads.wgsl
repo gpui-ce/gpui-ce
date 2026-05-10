@@ -7,50 +7,50 @@ struct Globals {
 }
 
 struct GradientColor {
-  solid: vec4<f32>,
-  color0: vec4<f32>,
-  color1: vec4<f32>,
+    solid: vec4<f32>,
+    color0: vec4<f32>,
+    color1: vec4<f32>,
 }
 
 struct Hsla {
-  h: f32,
-  s: f32,
-  l: f32,
-  a: f32,
+    h: f32,
+    s: f32,
+    l: f32,
+    a: f32,
 }
 
 struct Bounds {
-  origin: vec2<f32>,
-  size: vec2<f32>,
+    origin: vec2<f32>,
+    size: vec2<f32>,
 }
 
-struct LinearColorStop {
-  color: Hsla,
-  percentage: f32,
+struct GradientStop {
+    color: Hsla,
+    percentage: f32,
 }
 
 struct Background {
-  tag: u32,
-  color_space: u32,
-  solid: Hsla,
-  gradient_angle_or_pattern_height: f32,
-  color0: LinearColorStop,
-  color1: LinearColorStop,
-  pad: u32,
+    tag: u32,
+    color_space: u32,
+    solid: Hsla,
+    gradient_angle_or_pattern_height: f32,
+    color0: GradientStop,
+    color1: GradientStop,
+    pad: u32,
 }
 
 struct Edges {
-  top: f32,
-  right: f32,
-  bottom: f32,
-  left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
 }
 
-struct Corners { 
-  top_left: f32,
-  top_right: f32,
-  bottom_right: f32,
-  bottom_left: f32,
+struct Corners {
+    top_left: f32,
+    top_right: f32,
+    bottom_right: f32,
+    bottom_left: f32,
 }
 
 struct Quad {
@@ -80,20 +80,20 @@ struct QuadVarying {
 
 /// Convert an Oklab color to linear sRGB space.
 fn oklab_to_linear_srgb(color: vec4<f32>) -> vec4<f32> {
-	let l_ = color.r + 0.3963377774 * color.g + 0.2158037573 * color.b;
-	let m_ = color.r - 0.1055613458 * color.g - 0.0638541728 * color.b;
-	let s_ = color.r - 0.0894841775 * color.g - 1.2914855480 * color.b;
+    let l_ = color.r + 0.3963377774 * color.g + 0.2158037573 * color.b;
+    let m_ = color.r - 0.1055613458 * color.g - 0.0638541728 * color.b;
+    let s_ = color.r - 0.0894841775 * color.g - 1.2914855480 * color.b;
 
-	let l = l_ * l_ * l_;
-	let m = m_ * m_ * m_;
-	let s = s_ * s_ * s_;
+    let l = l_ * l_ * l_;
+    let m = m_ * m_ * m_;
+    let s = s_ * s_ * s_;
 
-	return vec4<f32>(
-		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-		-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-		-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
-		color.a
-	);
+    return vec4<f32>(
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+        color.a
+    );
 }
 
 // https://gamedev.stackexchange.com/questions/92015/optimized-linear-to-srgb-glsl
@@ -123,14 +123,14 @@ fn linear_to_srgba(color: vec4<f32>) -> vec4<f32> {
 
 // Selects corner radius based on quadrant.
 fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
-    if (center_to_point.x < 0.0) {
-        if (center_to_point.y < 0.0) {
+    if center_to_point.x < 0.0 {
+        if center_to_point.y < 0.0 {
             return radii.top_left;
         } else {
             return radii.bottom_left;
         }
     } else {
-        if (center_to_point.y < 0.0) {
+        if center_to_point.y < 0.0 {
             return radii.top_right;
         } else {
             return radii.bottom_right;
@@ -141,20 +141,20 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
 /// Convert a linear sRGB to Oklab space.
 /// Reference: https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 fn linear_srgb_to_oklab(color: vec4<f32>) -> vec4<f32> {
-	let l = 0.4122214708 * color.r + 0.5363325363 * color.g + 0.0514459929 * color.b;
-	let m = 0.2119034982 * color.r + 0.6806995451 * color.g + 0.1073969566 * color.b;
-	let s = 0.0883024619 * color.r + 0.2817188376 * color.g + 0.6299787005 * color.b;
+    let l = 0.4122214708 * color.r + 0.5363325363 * color.g + 0.0514459929 * color.b;
+    let m = 0.2119034982 * color.r + 0.6806995451 * color.g + 0.1073969566 * color.b;
+    let s = 0.0883024619 * color.r + 0.2817188376 * color.g + 0.6299787005 * color.b;
 
-	let l_ = pow(l, 1.0 / 3.0);
-	let m_ = pow(m, 1.0 / 3.0);
-	let s_ = pow(s, 1.0 / 3.0);
+    let l_ = pow(l, 1.0 / 3.0);
+    let m_ = pow(m, 1.0 / 3.0);
+    let s_ = pow(s, 1.0 / 3.0);
 
-	return vec4<f32>(
-		0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-		1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-		0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
-		color.a
-	);
+    return vec4<f32>(
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+        color.a
+    );
 }
 
 fn to_device_position_impl(position: vec2<f32>) -> vec4<f32> {
@@ -179,19 +179,19 @@ fn hsla_to_rgba(hsla: Hsla) -> vec4<f32> {
     let m = l - c / 2.0;
     var color = vec3<f32>(m);
 
-    if (h >= 0.0 && h < 1.0) {
+    if h >= 0.0 && h < 1.0 {
         color.r += c;
         color.g += x;
-    } else if (h >= 1.0 && h < 2.0) {
+    } else if h >= 1.0 && h < 2.0 {
         color.r += x;
         color.g += c;
-    } else if (h >= 2.0 && h < 3.0) {
+    } else if h >= 2.0 && h < 3.0 {
         color.g += c;
         color.b += x;
-    } else if (h >= 3.0 && h < 4.0) {
+    } else if h >= 3.0 && h < 4.0 {
         color.g += x;
         color.b += c;
-    } else if (h >= 4.0 && h < 5.0) {
+    } else if h >= 4.0 && h < 5.0 {
         color.r += x;
         color.b += c;
     } else {
@@ -203,23 +203,23 @@ fn hsla_to_rgba(hsla: Hsla) -> vec4<f32> {
 }
 
 fn prepare_gradient_color(tag: u32, color_space: u32,
-    solid: Hsla, color0: LinearColorStop, color1: LinearColorStop) -> GradientColor {
+    solid: Hsla, color0: GradientStop, color1: GradientStop) -> GradientColor {
     var result = GradientColor();
 
-    if (tag == 0u || tag == 2u) {
+    if tag == 0u || tag == 2u {
         result.solid = hsla_to_rgba(solid);
-    } else if (tag == 1u) {
+    } else if tag == 1u {
         // The hsla_to_rgba is returns a linear sRGB color
         result.color0 = hsla_to_rgba(color0.color);
         result.color1 = hsla_to_rgba(color1.color);
 
         // Prepare color space in vertex for avoid conversion
         // in fragment shader for performance reasons
-        if (color_space == 0u) {
+        if color_space == 0u {
             // sRGB
             result.color0 = linear_to_srgba(result.color0);
             result.color1 = linear_to_srgba(result.color1);
-        } else if (color_space == 1u) {
+        } else if color_space == 1u {
             // Oklab
             result.color0 = linear_srgb_to_oklab(result.color0);
             result.color1 = linear_srgb_to_oklab(result.color1);
@@ -233,7 +233,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
     solid_color: vec4<f32>, color0: vec4<f32>, color1: vec4<f32>) -> vec4<f32> {
     var background_color = vec4<f32>(0.0);
 
-    switch (background.tag) {
+    switch background.tag {
         default: {
             return solid_color;
         }
@@ -247,7 +247,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let stop1_percentage = background.color1.percentage;
 
             // Expand the short side to be the same as the long side
-            if (bounds.size.x > bounds.size.y) {
+            if bounds.size.x > bounds.size.y {
                 direction.y *= bounds.size.y / bounds.size.x;
             } else {
                 direction.x *= bounds.size.x / bounds.size.y;
@@ -259,7 +259,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let center_to_point = position - center;
             var t = dot(center_to_point, direction) / length(direction);
             // Check the direct to determine the use x or y
-            if (abs(direction.x) > abs(direction.y)) {
+            if abs(direction.x) > abs(direction.y) {
                 t = (t + half_size.x) / bounds.size.x;
             } else {
                 t = (t + half_size.y) / bounds.size.y;
@@ -269,7 +269,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             t = (t - stop0_percentage) / (stop1_percentage - stop0_percentage);
             t = clamp(t, 0.0, 1.0);
 
-            switch (background.color_space) {
+            switch background.color_space {
                 default: {
                     background_color = srgba_to_linear(mix(color0, color1, t));
                 }
@@ -293,7 +293,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let relative_position = position - bounds.origin;
             let rotated_point = rotation * relative_position;
             let pattern = rotated_point.x % pattern_period;
-            let distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) /  2.0f;
+            let distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) / 2.0f;
             background_color = solid_color;
             background_color.a *= saturate(0.5 - distance);
         }
@@ -337,14 +337,13 @@ fn quad_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners) -> f32 {
 }
 
 fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
-    if (corner_radius == 0.0) {
+    if corner_radius == 0.0 {
         // Fast path for unrounded corners.
         return max(corner_center_to_point.x, corner_center_to_point.y);
     } else {
         // Signed distance of the point from a quad that is inset by corner_radius.
         // It is negative inside this quad, and positive outside.
-        let signed_distance_to_inset_quad =
-            // 0 inside the inset quad, and positive outside.
+        let signed_distance_to_inset_quad = // 0 inside the inset quad, and positive outside.
             length(max(vec2<f32>(0.0), corner_center_to_point)) +
             // 0 outside the inset quad, and negative inside.
             min(0.0, max(corner_center_to_point.x, corner_center_to_point.y));
@@ -378,9 +377,9 @@ fn quarter_ellipse_sdf(point: vec2<f32>, radii: vec2<f32>) -> f32 {
 // An alternative to this might be to appropriately interpolate the dash
 // velocity around the corner, but that seems overcomplicated.
 fn corner_dash_velocity(dv1: f32, dv2: f32) -> f32 {
-    if (dv1 == 0.0) {
+    if dv1 == 0.0 {
         return dv2;
-    } else if (dv2 == 0.0) {
+    } else if dv2 == 0.0 {
         return dv1;
     } else {
         return min(dv1, dv2);
@@ -427,7 +426,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
         quad.background.color0,
         quad.background.color1
     );
-    
+
     out.background_solid = gradient.solid;
     out.background_color0 = gradient.color0;
     out.background_color1 = gradient.color1;
@@ -440,7 +439,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
 @fragment
 fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // Alpha clip first, since we don't have `clip_distance`.
-    if (any(input.clip_distances < vec4<f32>(0.0))) {
+    if any(input.clip_distances < vec4<f32>(0.0)) {
         return vec4<f32>(0.0);
     }
 
@@ -455,11 +454,11 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         quad.corner_radii.bottom_right == 0.0;
 
     // Fast path when the quad is not rounded and doesn't have any border
-    if (quad.border_widths.top == 0.0 &&
+    if quad.border_widths.top == 0.0 &&
             quad.border_widths.left == 0.0 &&
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
-            unrounded) {
+            unrounded {
         return blend_color(background_color, 1.0);
     }
 
@@ -480,17 +479,19 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         select(
             quad.border_widths.right,
             quad.border_widths.left,
-            center_to_point.x < 0.0),
+            center_to_point.x < 0.0
+        ),
         select(
             quad.border_widths.bottom,
             quad.border_widths.top,
-            center_to_point.y < 0.0));
+            center_to_point.y < 0.0
+        )
+    );
 
     // 0-width borders are reduced so that `inner_sdf >= antialias_threshold`.
     // The purpose of this is to not draw antialiasing pixels in this case.
-    let reduced_border =
-        vec2<f32>(select(border.x, -antialias_threshold, border.x == 0.0),
-                  select(border.y, -antialias_threshold, border.y == 0.0));
+    let reduced_border = vec2<f32>(select(border.x, -antialias_threshold, border.x == 0.0),
+        select(border.y, -antialias_threshold, border.y == 0.0));
 
     // Vector from the corner of the quad bounds to the point, after mirroring
     // the point into the bottom right quadrant. Both components are <= 0.
@@ -501,22 +502,19 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     let corner_center_to_point = corner_to_point + corner_radius;
 
     // Whether the nearest point on the border is rounded
-    let is_near_rounded_corner =
-            corner_center_to_point.x >= 0 &&
+    let is_near_rounded_corner = corner_center_to_point.x >= 0 &&
             corner_center_to_point.y >= 0;
 
     // Vector from straight border inner corner to point.
     let straight_border_inner_corner_to_point = corner_to_point + reduced_border;
 
     // Whether the point is beyond the inner edge of the straight border.
-    let is_beyond_inner_straight_border =
-            straight_border_inner_corner_to_point.x > 0 ||
+    let is_beyond_inner_straight_border = straight_border_inner_corner_to_point.x > 0 ||
             straight_border_inner_corner_to_point.y > 0;
 
     // Whether the point is far enough inside the quad, such that the pixels are
     // not affected by the straight border.
-    let is_within_inner_straight_border =
-        straight_border_inner_corner_to_point.x < -antialias_threshold &&
+    let is_within_inner_straight_border = straight_border_inner_corner_to_point.x < -antialias_threshold &&
         straight_border_inner_corner_to_point.y < -antialias_threshold;
 
     // Fast path for points that must be part of the background.
@@ -525,7 +523,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // points in an inscribed rectangle, or some other quick linear check.
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
-    if (is_within_inner_straight_border && !is_near_rounded_corner) {
+    if is_within_inner_straight_border && !is_near_rounded_corner {
         return blend_color(background_color, 1.0);
     }
 
@@ -542,14 +540,14 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     //   nearest-point-on-ellipse.
     // * When it is quickly known to be outside the edge, -1.0 is used.
     var inner_sdf = 0.0;
-    if (corner_center_to_point.x <= 0 || corner_center_to_point.y <= 0) {
+    if corner_center_to_point.x <= 0 || corner_center_to_point.y <= 0 {
         // Fast paths for straight borders.
         inner_sdf = -max(straight_border_inner_corner_to_point.x,
-                         straight_border_inner_corner_to_point.y);
-    } else if (is_beyond_inner_straight_border) {
+            straight_border_inner_corner_to_point.y);
+    } else if is_beyond_inner_straight_border {
         // Fast path for points that must be outside the inner edge.
         inner_sdf = -1.0;
-    } else if (reduced_border.x == reduced_border.y) {
+    } else if reduced_border.x == reduced_border.y {
         // Fast path for circular inner edge.
         inner_sdf = -(outer_sdf + reduced_border.x);
     } else {
@@ -561,11 +559,11 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     let border_sdf = max(inner_sdf, outer_sdf);
 
     var color = background_color;
-    if (border_sdf < antialias_threshold) {
+    if border_sdf < antialias_threshold {
         var border_color = input.border_color;
 
         // Dashed border logic when border_style == 1
-        if (quad.border_style == 1) {
+        if quad.border_style == 1 {
             // Position along the perimeter in "dash space", where each dash
             // period has length 1
             var t = 0.0;
@@ -592,12 +590,11 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             // Dividing this by the border width gives the dash velocity
             let dv_numerator = 1.0 / dash_period_per_width;
 
-            if (unrounded) {
+            if unrounded {
                 // When corners aren't rounded, the dashes are separately laid
                 // out on each straight line, rather than around the whole
                 // perimeter. This way each line starts and ends with a dash.
-                let is_horizontal =
-                        corner_center_to_point.x <
+                let is_horizontal = corner_center_to_point.x <
                         corner_center_to_point.y;
 
                 // When applying dashed borders to just some, not all, the sides.
@@ -606,15 +603,15 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 // TODO: A better solution exists taking a look at the whole file.
                 // this does not fix single dashed borders at the corners
                 let dashed_border = vec2<f32>(
-                        max(
-                            quad.border_widths.bottom,
-                            quad.border_widths.top,
-                        ),
-                        max(
-                            quad.border_widths.right,
-                            quad.border_widths.left,
-                        )
-                   );
+                    max(
+                        quad.border_widths.bottom,
+                        quad.border_widths.top,
+                    ),
+                    max(
+                        quad.border_widths.right,
+                        quad.border_widths.left,
+                    )
+                );
 
                 let border_width = select(dashed_border.y, dashed_border.x, is_horizontal);
                 dash_velocity = dv_numerator / border_width;
@@ -667,13 +664,13 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 let upto_tl = upto_l + s_l;
                 max_t = upto_tl + c_tl;
 
-                if (is_near_rounded_corner) {
+                if is_near_rounded_corner {
                     let radians = atan2(corner_center_to_point.y,
-                                        corner_center_to_point.x);
+                        corner_center_to_point.x);
                     let corner_t = radians * corner_radius;
 
-                    if (center_to_point.x >= 0.0) {
-                        if (center_to_point.y < 0.0) {
+                    if center_to_point.x >= 0.0 {
+                        if center_to_point.y < 0.0 {
                             dash_velocity = corner_dash_velocity_tr;
                             // Subtracted because radians is pi/2 to 0 when
                             // going clockwise around the top right corner,
@@ -686,7 +683,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                             t = upto_br + corner_t * dash_velocity;
                         }
                     } else {
-                        if (center_to_point.y >= 0.0) {
+                        if center_to_point.y >= 0.0 {
                             dash_velocity = corner_dash_velocity_bl;
                             // Subtracted because radians is pi/2 to 0 when
                             // going clockwise around the bottom-left corner,
@@ -702,11 +699,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     }
                 } else {
                     // Straight borders
-                    let is_horizontal =
-                            corner_center_to_point.x <
+                    let is_horizontal = corner_center_to_point.x <
                             corner_center_to_point.y;
-                    if (is_horizontal) {
-                        if (center_to_point.y < 0.0) {
+                    if is_horizontal {
+                        if center_to_point.y < 0.0 {
                             dash_velocity = dv_t;
                             t = (point.x - r_tl) * dash_velocity;
                         } else {
@@ -714,7 +710,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                             t = upto_bl - (point.x - r_bl) * dash_velocity;
                         }
                     } else {
-                        if (center_to_point.x < 0.0) {
+                        if center_to_point.x < 0.0 {
                             dash_velocity = dv_l;
                             t = upto_tl - (point.y - r_tl) * dash_velocity;
                         } else {
@@ -731,7 +727,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             // Straight borders should start and end with a dash, so max_t is
             // reduced to cause this.
             max_t -= select(0.0, dash_length, unrounded);
-            if (max_t >= 1.0) {
+            if max_t >= 1.0 {
                 // Adjust dash gap to evenly divide max_t.
                 let dash_count = floor(max_t);
                 let dash_period = max_t / dash_count;
@@ -740,20 +736,22 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     dash_period,
                     dash_length,
                     dash_velocity,
-                    antialias_threshold);
-            } else if (unrounded) {
+                    antialias_threshold
+                );
+            } else if unrounded {
                 // When there isn't enough space for the full gap between the
                 // two start / end dashes of a straight border, reduce gap to
                 // make them fit.
                 let dash_gap = max_t - dash_length;
-                if (dash_gap > 0.0) {
+                if dash_gap > 0.0 {
                     let dash_period = dash_length + dash_gap;
                     border_color.a *= dash_alpha(
                         t,
                         dash_period,
                         dash_length,
                         dash_velocity,
-                        antialias_threshold);
+                        antialias_threshold
+                    );
                 }
             }
         }
@@ -762,7 +760,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         // between the two as we slide inside the background.
         let blended_border = over(background_color, border_color);
         color = mix(background_color, blended_border,
-                    saturate(antialias_threshold - inner_sdf));
+            saturate(antialias_threshold - inner_sdf));
     }
 
     return blend_color(color, saturate(antialias_threshold - outer_sdf));

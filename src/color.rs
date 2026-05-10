@@ -692,7 +692,7 @@ pub struct Background {
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 2],
+    pub(crate) colors: [GradientStop; 2],
     /// Padding for alignment for repr(C) layout.
     pub(crate) pad: u32,
 }
@@ -727,7 +727,7 @@ impl Default for Background {
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
-            colors: [LinearColorStop::default(), LinearColorStop::default()],
+            colors: [GradientStop::default(), GradientStop::default()],
             pad: 0,
         }
     }
@@ -764,8 +764,8 @@ pub fn solid_background(color: impl Into<Hsla>) -> Background {
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient>
 pub fn linear_gradient(
     angle: f32,
-    from: impl Into<LinearColorStop>,
-    to: impl Into<LinearColorStop>,
+    from: impl Into<GradientStop>,
+    to: impl Into<GradientStop>,
 ) -> Background {
     Background {
         tag: BackgroundTag::LinearGradient,
@@ -780,7 +780,7 @@ pub fn linear_gradient(
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient#linear-color-stop>
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
-pub struct LinearColorStop {
+pub struct GradientStop {
     /// The color of the color stop.
     pub color: Hsla,
     /// The percentage of the gradient, in the range 0.0 to 1.0.
@@ -790,14 +790,14 @@ pub struct LinearColorStop {
 /// Creates a new linear color stop.
 ///
 /// The percentage of the gradient, in the range 0.0 to 1.0.
-pub fn linear_color_stop(color: impl Into<Hsla>, percentage: f32) -> LinearColorStop {
-    LinearColorStop {
+pub fn linear_color_stop(color: impl Into<Hsla>, percentage: f32) -> GradientStop {
+    GradientStop {
         color: color.into(),
         percentage,
     }
 }
 
-impl LinearColorStop {
+impl GradientStop {
     /// Returns a new color stop with the same color, but with a modified alpha value.
     pub fn opacity(&self, factor: f32) -> Self {
         Self {

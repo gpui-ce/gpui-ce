@@ -4,11 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    AtlasTextureId, AtlasTile, DevicePixels, GpuSpecs, Hsla, LinearColorStop, MonochromeSprite,
-    PlatformAtlas, Pixels, PrimitiveBatch, Quad, ScaledPixels, Scene, TransformationMatrix,
-    color, geometry,
+    AtlasTextureId, AtlasTile, DevicePixels, GpuSpecs, GradientStop, Hsla, MonochromeSprite,
+    Pixels, PlatformAtlas, PrimitiveBatch, Quad, ScaledPixels, Scene, TransformationMatrix, color,
+    geometry,
     platform::cross::{
-        atlas::WgpuAtlas, render_context::{WgpuContext, ensure_buffer_size},
+        atlas::WgpuAtlas,
+        render_context::{WgpuContext, ensure_buffer_size},
         surface_registry::SurfaceId,
     },
 };
@@ -63,15 +64,15 @@ impl color::Hsla {
     ];
 }
 
-impl color::LinearColorStop {
+impl color::GradientStop {
     const VERTEX_ATTRIBUTES: &'static [wgpu::VertexAttribute; 2] = &[
         wgpu::VertexAttribute {
-            offset: std::mem::offset_of!(LinearColorStop, color) as wgpu::BufferAddress,
+            offset: std::mem::offset_of!(GradientStop, color) as wgpu::BufferAddress,
             shader_location: 0,
             format: wgpu::VertexFormat::Float32x4,
         },
         wgpu::VertexAttribute {
-            offset: std::mem::offset_of!(LinearColorStop, percentage) as wgpu::BufferAddress,
+            offset: std::mem::offset_of!(GradientStop, percentage) as wgpu::BufferAddress,
             shader_location: 1,
             format: wgpu::VertexFormat::Float32,
         },
@@ -81,7 +82,7 @@ impl color::LinearColorStop {
 impl color::Background {
     const VERTEX_ATTRIBUTES: &'static [wgpu::VertexAttribute; 7] = &{
         let linear_color_stop_vertex_attributes = map_attributes(
-            LinearColorStop::VERTEX_ATTRIBUTES,
+            GradientStop::VERTEX_ATTRIBUTES,
             4,
             std::mem::offset_of!(color::Background, colors) as wgpu::BufferAddress,
         );
@@ -332,12 +333,12 @@ struct PathsData {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuPathVertex {
-    xy_position:         [f32; 2],  // offset  0
-    st_position:         [f32; 2],  // offset  8
-    hsla:                [f32; 4],  // offset 16  (h, s, l, a)
-    content_mask_origin: [f32; 2],  // offset 32
-    content_mask_size:   [f32; 2],  // offset 40
-}                                   // stride  48
+    xy_position: [f32; 2],         // offset  0
+    st_position: [f32; 2],         // offset  8
+    hsla: [f32; 4],                // offset 16  (h, s, l, a)
+    content_mask_origin: [f32; 2], // offset 32
+    content_mask_size: [f32; 2],   // offset 40
+} // stride  48
 
 struct UnderlinesData {
     globals: GlobalParams,
@@ -633,12 +634,15 @@ impl WgpuPipelines {
                 source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadows.wgsl").into()),
             });
 
-        let backdrop_blur_shader = context
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("backdrop_blur_shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/backdrop_blur.wgsl").into()),
-            });
+        let backdrop_blur_shader =
+            context
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("backdrop_blur_shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("shaders/backdrop_blur.wgsl").into(),
+                    ),
+                });
 
         let underlines_shader = context
             .device
@@ -761,7 +765,10 @@ impl WgpuPipelines {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("quads_pipeline_layout"),
-                    bind_group_layouts: &[Some(&globals_bind_group_layout), Some(&quads_bind_group_layout)],
+                    bind_group_layouts: &[
+                        Some(&globals_bind_group_layout),
+                        Some(&quads_bind_group_layout),
+                    ],
                     immediate_size: 0,
                 });
 
@@ -787,7 +794,10 @@ impl WgpuPipelines {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("shadows_pipeline_layout"),
-                    bind_group_layouts: &[Some(&globals_bind_group_layout), Some(&shadows_bind_group_layout)],
+                    bind_group_layouts: &[
+                        Some(&globals_bind_group_layout),
+                        Some(&shadows_bind_group_layout),
+                    ],
                     immediate_size: 0,
                 });
 
@@ -983,7 +993,10 @@ impl WgpuPipelines {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("surfaces_pipeline_layout"),
-                    bind_group_layouts: &[Some(&globals_bind_group_layout), Some(&surfaces_bind_group_layout)],
+                    bind_group_layouts: &[
+                        Some(&globals_bind_group_layout),
+                        Some(&surfaces_bind_group_layout),
+                    ],
                     immediate_size: 0,
                 });
 
@@ -1613,7 +1626,9 @@ impl WgpuRenderer {
                 &self.context.quads_buffer,
                 data.len() as u64,
                 "Quads Buffer",
-                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
             );
             self.context
                 .queue
@@ -1626,7 +1641,9 @@ impl WgpuRenderer {
                 &self.context.shadows_buffer,
                 data.len() as u64,
                 "Shadows Buffer",
-                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
             );
             self.context
                 .queue
@@ -1641,9 +1658,11 @@ impl WgpuRenderer {
                 "Backdrop Blurs Buffer",
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             );
-            self.context
-                .queue
-                .write_buffer(&self.context.backdrop_blurs_buffer.lock().unwrap(), 0, data);
+            self.context.queue.write_buffer(
+                &self.context.backdrop_blurs_buffer.lock().unwrap(),
+                0,
+                data,
+            );
         }
         if !scene.underlines.is_empty() {
             let data = unsafe { as_bytes(&scene.underlines) };
@@ -1652,11 +1671,15 @@ impl WgpuRenderer {
                 &self.context.underlines_buffer,
                 data.len() as u64,
                 "Underlines Buffer",
-                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
             );
-            self.context
-                .queue
-                .write_buffer(&self.context.underlines_buffer.lock().unwrap(), 0, data);
+            self.context.queue.write_buffer(
+                &self.context.underlines_buffer.lock().unwrap(),
+                0,
+                data,
+            );
         }
         if !scene.monochrome_sprites.is_empty() {
             let data = unsafe { as_bytes(&scene.monochrome_sprites) };
@@ -1665,11 +1688,15 @@ impl WgpuRenderer {
                 &self.context.mono_sprites_buffer,
                 data.len() as u64,
                 "Monosprites Buffer",
-                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
             );
-            self.context
-                .queue
-                .write_buffer(&self.context.mono_sprites_buffer.lock().unwrap(), 0, data);
+            self.context.queue.write_buffer(
+                &self.context.mono_sprites_buffer.lock().unwrap(),
+                0,
+                data,
+            );
         }
         if !scene.polychrome_sprites.is_empty() {
             let data = unsafe { as_bytes(&scene.polychrome_sprites) };
@@ -1678,11 +1705,15 @@ impl WgpuRenderer {
                 &self.context.poly_sprites_buffer,
                 data.len() as u64,
                 "Poly Sprites Buffer",
-                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
             );
-            self.context
-                .queue
-                .write_buffer(&self.context.poly_sprites_buffer.lock().unwrap(), 0, data);
+            self.context.queue.write_buffer(
+                &self.context.poly_sprites_buffer.lock().unwrap(),
+                0,
+                data,
+            );
         }
 
         // Build flat vertex array for all paths (color + content mask baked per-vertex)
@@ -1691,14 +1722,14 @@ impl WgpuRenderer {
             let color = path.color.solid;
             let cm = &path.content_mask.bounds;
             let cm_origin = [cm.origin.x.0, cm.origin.y.0];
-            let cm_size   = [cm.size.width.0, cm.size.height.0];
+            let cm_size = [cm.size.width.0, cm.size.height.0];
             for vertex in &path.vertices {
                 flat_path_vertices.push(GpuPathVertex {
-                    xy_position:         [vertex.xy_position.x.0, vertex.xy_position.y.0],
-                    st_position:         [vertex.st_position.x,   vertex.st_position.y],
-                    hsla:                [color.h, color.s, color.l, color.a],
+                    xy_position: [vertex.xy_position.x.0, vertex.xy_position.y.0],
+                    st_position: [vertex.st_position.x, vertex.st_position.y],
+                    hsla: [color.h, color.s, color.l, color.a],
                     content_mask_origin: cm_origin,
-                    content_mask_size:   cm_size,
+                    content_mask_size: cm_size,
                 });
             }
         }
@@ -1846,7 +1877,7 @@ impl WgpuRenderer {
                         wgpu::BindGroupEntry {
                             binding: 0,
                             resource: wgpu::BindingResource::TextureView(
-                                self.backdrop_blur_texture_view.as_ref().unwrap()
+                                self.backdrop_blur_texture_view.as_ref().unwrap(),
                             ),
                         },
                         wgpu::BindGroupEntry {
@@ -1904,21 +1935,21 @@ impl WgpuRenderer {
                     }],
                 });
 
-        let paths_bind_group =
-            self.context
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("paths_bind_group"),
-                    layout: &self.pipelines.paths_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &paths_vertices_buffer_ref,
-                            offset: 0,
-                            size: None,
-                        }),
-                    }],
-                });
+        let paths_bind_group = self
+            .context
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("paths_bind_group"),
+                layout: &self.pipelines.paths_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &paths_vertices_buffer_ref,
+                        offset: 0,
+                        size: None,
+                    }),
+                }],
+            });
 
         {
             let clear_color = if self.transparent {
@@ -2106,7 +2137,10 @@ impl WgpuRenderer {
                         pass.set_bind_group(0, &self.pipelines.globals_bind_group, &[]);
                         pass.set_bind_group(1, &backdrop_blurs_bind_group, &[]);
                         pass.set_bind_group(2, &backdrop_texture_bind_group, &[]);
-                        pass.draw(0..4, backdrop_blurs_first_instance..backdrop_blurs_first_instance + count);
+                        pass.draw(
+                            0..4,
+                            backdrop_blurs_first_instance..backdrop_blurs_first_instance + count,
+                        );
                         backdrop_blurs_first_instance += count;
                     }
                     PrimitiveBatch::Underlines(underlines) => {
@@ -2124,18 +2158,15 @@ impl WgpuRenderer {
                         log::debug!("Renderer: processing {} surface(s)", surfaces.len());
                         for surface in surfaces {
                             if let crate::SurfaceContent::Wgpu(surface_id) = &surface.content {
-
                                 // Atomically swap ready ↔ display buffers with GPU sync
-                                let swapped = self.context.surface_registry.swap_ready_display(
-                                    &self.context.device,
-                                    *surface_id
-                                );
-
+                                let swapped = self
+                                    .context
+                                    .surface_registry
+                                    .swap_ready_display(&self.context.device, *surface_id);
 
                                 if let Some(view) =
                                     self.context.surface_registry.front_view(*surface_id)
                                 {
-
                                     let params = SurfaceParams {
                                         bounds: Bounds {
                                             origin: [
@@ -2176,15 +2207,25 @@ impl WgpuRenderer {
                                             },
                                             content_mask: geometry::Bounds {
                                                 origin: geometry::Point {
-                                                    x: Pixels(surface.content_mask.bounds.origin.x.0),
-                                                    y: Pixels(surface.content_mask.bounds.origin.y.0),
+                                                    x: Pixels(
+                                                        surface.content_mask.bounds.origin.x.0,
+                                                    ),
+                                                    y: Pixels(
+                                                        surface.content_mask.bounds.origin.y.0,
+                                                    ),
                                                 },
                                                 size: geometry::Size {
-                                                    width: Pixels(surface.content_mask.bounds.size.width.0),
-                                                    height: Pixels(surface.content_mask.bounds.size.height.0),
+                                                    width: Pixels(
+                                                        surface.content_mask.bounds.size.width.0,
+                                                    ),
+                                                    height: Pixels(
+                                                        surface.content_mask.bounds.size.height.0,
+                                                    ),
                                                 },
                                             },
-                                            layout_version: self.layout_version.load(Ordering::Acquire),
+                                            layout_version: self
+                                                .layout_version
+                                                .load(Ordering::Acquire),
                                         },
                                     );
 
@@ -2194,9 +2235,8 @@ impl WgpuRenderer {
                                         bytemuck::bytes_of(&params),
                                     );
 
-                                    let surface_bind_group = self.context
-                                        .device
-                                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                                    let surface_bind_group = self.context.device.create_bind_group(
+                                        &wgpu::BindGroupDescriptor {
                                             label: Some("surface_bind_group"),
                                             layout: &self.pipelines.surfaces_bind_group_layout,
                                             entries: &[
@@ -2223,14 +2263,11 @@ impl WgpuRenderer {
                                                     ),
                                                 },
                                             ],
-                                        });
+                                        },
+                                    );
 
                                     pass.set_pipeline(&self.pipelines.surfaces_pipeline);
-                                    pass.set_bind_group(
-                                        0,
-                                        &self.pipelines.globals_bind_group,
-                                        &[],
-                                    );
+                                    pass.set_bind_group(0, &self.pipelines.globals_bind_group, &[]);
                                     pass.set_bind_group(1, &surface_bind_group, &[]);
                                     pass.draw(0..4, 0..1);
 
@@ -2241,7 +2278,9 @@ impl WgpuRenderer {
                                     // Clear redraw pending AFTER we're done with the view
                                     // This prevents the external thread from triggering another compositor
                                     // pass while we're still using this view
-                                    self.context.surface_registry.clear_redraw_pending(*surface_id);
+                                    self.context
+                                        .surface_registry
+                                        .clear_redraw_pending(*surface_id);
 
                                     seen_surfaces.push(*surface_id);
                                 }
@@ -2250,8 +2289,7 @@ impl WgpuRenderer {
                     }
                     // TODO(mdeand): Implement paths rendering.
                     PrimitiveBatch::Paths(paths) => {
-                        let vertex_count: u32 =
-                            paths.iter().map(|p| p.vertices.len() as u32).sum();
+                        let vertex_count: u32 = paths.iter().map(|p| p.vertices.len() as u32).sum();
                         if vertex_count > 0 {
                             pass.set_pipeline(&self.pipelines.paths_pipeline);
                             pass.set_bind_group(0, &self.pipelines.globals_bind_group, &[]);
@@ -2305,12 +2343,16 @@ impl WgpuRenderer {
         drop(cache); // Release lock
 
         // 3. Atomic buffer swap with GPU synchronization
-        let swapped = self.context
+        let swapped = self
+            .context
             .surface_registry
             .swap_ready_display(&self.context.device, surface_id);
 
         if !swapped {
-            log::trace!("[surface_id={:?}] No new frame, reusing current display buffer", surface_id);
+            log::trace!(
+                "[surface_id={:?}] No new frame, reusing current display buffer",
+                surface_id
+            );
         }
 
         // 4. Get surface texture view
@@ -2358,12 +2400,12 @@ impl WgpuRenderer {
             }
         };
 
-        let mut encoder = self
-            .context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fast_surface_blit"),
-            });
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("fast_surface_blit"),
+                });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2386,8 +2428,8 @@ impl WgpuRenderer {
             });
 
             // Prepare surface params with cached bounds
-            let scale_factor = self.surface_configuration.width as f32
-                / self.surface_configuration.width as f32; // TODO: Get actual scale factor
+            let scale_factor =
+                self.surface_configuration.width as f32 / self.surface_configuration.width as f32; // TODO: Get actual scale factor
             let params = SurfaceParams {
                 bounds: Bounds {
                     origin: [screen_bounds.origin.x.0, screen_bounds.origin.y.0],
@@ -2406,31 +2448,31 @@ impl WgpuRenderer {
             );
 
             // Create bind group for this surface (must match surfaces.wgsl binding order)
-            let surface_bind_group = self
-                .context
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("fast_blit_surface_bind_group"),
-                    layout: &self.pipelines.surfaces_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &self.surface_params_buffer,
-                                offset: 0,
-                                size: None,
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.surface_sampler),
-                        },
-                    ],
-                });
+            let surface_bind_group =
+                self.context
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("fast_blit_surface_bind_group"),
+                        layout: &self.pipelines.surfaces_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &self.surface_params_buffer,
+                                    offset: 0,
+                                    size: None,
+                                }),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&self.surface_sampler),
+                            },
+                        ],
+                    });
 
             // Render surface quad using existing surfaces.wgsl shader
             pass.set_pipeline(&self.pipelines.surfaces_pipeline);
@@ -2475,24 +2517,24 @@ impl WgpuRenderer {
             .configure(&self.context.device, &self.surface_configuration);
 
         // Recreate persistent framebuffer at new size
-        let persistent_framebuffer =
-            self.context
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("persistent_framebuffer"),
-                    size: wgpu::Extent3d {
-                        width: self.surface_configuration.width,
-                        height: self.surface_configuration.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.surface_configuration.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
+        let persistent_framebuffer = self
+            .context
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("persistent_framebuffer"),
+                size: wgpu::Extent3d {
+                    width: self.surface_configuration.width,
+                    height: self.surface_configuration.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.surface_configuration.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
 
         let persistent_framebuffer_view =
             persistent_framebuffer.create_view(&wgpu::TextureViewDescriptor::default());
@@ -2502,25 +2544,25 @@ impl WgpuRenderer {
 
         // Recreate backdrop blur capture texture at the new size so that
         // copy_texture_to_texture doesn't silently skip due to a size mismatch.
-        let backdrop_blur_texture =
-            self.context
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("backdrop_blur_texture"),
-                    size: wgpu::Extent3d {
-                        width: self.surface_configuration.width,
-                        height: self.surface_configuration.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.surface_configuration.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
+        let backdrop_blur_texture = self
+            .context
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("backdrop_blur_texture"),
+                size: wgpu::Extent3d {
+                    width: self.surface_configuration.width,
+                    height: self.surface_configuration.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.surface_configuration.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
         let backdrop_blur_texture_view =
             backdrop_blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.backdrop_blur_texture = Some(backdrop_blur_texture);
@@ -2552,9 +2594,15 @@ impl WgpuRenderer {
 
         self.surface_configuration.alpha_mode = if transparent {
             // Pick the best transparent alpha mode the surface supports.
-            if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+            if self
+                .supported_alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
                 wgpu::CompositeAlphaMode::PreMultiplied
-            } else if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+            } else if self
+                .supported_alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+            {
                 wgpu::CompositeAlphaMode::PostMultiplied
             } else {
                 // Surface doesn't natively support transparency (e.g. Windows DX12).
@@ -2563,7 +2611,10 @@ impl WgpuRenderer {
                 self.surface_configuration.alpha_mode
             }
         } else {
-            if self.supported_alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            if self
+                .supported_alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::Opaque)
+            {
                 wgpu::CompositeAlphaMode::Opaque
             } else {
                 self.supported_alpha_modes[0]
@@ -2579,7 +2630,6 @@ impl WgpuRenderer {
             height: DevicePixels(self.surface_configuration.height as i32),
         }
     }
-
 }
 
 impl Drop for WgpuRenderer {
