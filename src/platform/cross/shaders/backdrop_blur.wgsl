@@ -178,7 +178,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if tag == 0u || tag == 2u {
         result[0] = hsla_to_rgba(solid);
-    } else if tag == 1u {
+    } else if tag == 1u || tag == 3u {
         result[1] = hsla_to_rgba(color0.color);
         result[2] = hsla_to_rgba(color1.color);
 
@@ -199,11 +199,11 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
     if background.tag == 0u || background.tag == 2u {
         return solid_color;
     } else if background.tag == 1u {
-        let angle = background.gradient_angle_or_pattern_height;
+        let angle = background.gradient_params.x;
         let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
         var direction = vec2<f32>(cos(radians), sin(radians));
-        let stop0_percentage = background.color0.percentage;
-        let stop1_percentage = background.color1.percentage;
+        let stop0_percentage = background.color0.position;
+        let stop1_percentage = background.color1.position;
 
         if bounds.size.x > bounds.size.y {
             direction.y *= bounds.size.y / bounds.size.x;

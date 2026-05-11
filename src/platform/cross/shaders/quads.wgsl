@@ -26,14 +26,14 @@ struct Bounds {
 
 struct GradientStop {
     color: Hsla,
-    percentage: f32,
+    position: f32,
 }
 
 struct Background {
     tag: u32,
     color_space: u32,
     solid: Hsla,
-    gradient_angle_or_pattern_height: f32,
+    gradient_params: vec4<f32>,
     color0: GradientStop,
     color1: GradientStop,
     pad: u32,
@@ -208,7 +208,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if tag == 0u || tag == 2u {
         result.solid = hsla_to_rgba(solid);
-    } else if tag == 1u {
+    } else if tag == 1u || tag == 3u {
         // The hsla_to_rgba is returns a linear sRGB color
         result.color0 = hsla_to_rgba(color0.color);
         result.color1 = hsla_to_rgba(color1.color);
@@ -240,11 +240,11 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         case 1u: {
             // Linear gradient background.
             // -90 degrees to match the CSS gradient angle.
-            let angle = background.gradient_angle_or_pattern_height;
+            let angle = background.gradient_params.x;
             let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
             var direction = vec2<f32>(cos(radians), sin(radians));
-            let stop0_percentage = background.color0.percentage;
-            let stop1_percentage = background.color1.percentage;
+            let stop0_percentage = background.color0.position;
+            let stop1_percentage = background.color1.position;
 
             // Expand the short side to be the same as the long side
             if bounds.size.x > bounds.size.y {
@@ -280,9 +280,9 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             }
         }
         case 2u: {
-            let gradient_angle_or_pattern_height = background.gradient_angle_or_pattern_height;
-            let pattern_width = (gradient_angle_or_pattern_height / 65535.0f) / 255.0f;
-            let pattern_interval = (gradient_angle_or_pattern_height % 65535.0f) / 255.0f;
+            let pattern_data = background.gradient_params.x;
+            let pattern_width = (pattern_data / 65535.0f) / 255.0f;
+            let pattern_interval = (pattern_data % 65535.0f) / 255.0f;
             let pattern_height = pattern_width + pattern_interval;
             let stripe_angle = M_PI_F / 4.0;
             let pattern_period = pattern_height * sin(stripe_angle);
