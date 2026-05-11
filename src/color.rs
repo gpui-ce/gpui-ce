@@ -1,5 +1,4 @@
 use anyhow::{Context as _, bail};
-use derive_more::Display;
 use schemars::{JsonSchema, json_schema};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
@@ -659,7 +658,6 @@ pub(crate) enum BackgroundTag {
     Solid = 0,
     LinearGradient = 1,
     PatternSlash = 2,
-    RadialGradient = 3,
 }
 
 /// A color space for color interpolation.
@@ -693,7 +691,7 @@ pub struct Background {
     pub(crate) tag: BackgroundTag,
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
-    pub(crate) gradient_params: GradientParams,
+    pub(crate) gradient_angle_or_pattern_height: f32,
     pub(crate) colors: [GradientStop; 2],
     /// Padding for alignment for repr(C) layout.
     pub(crate) pad: u32,
@@ -707,21 +705,14 @@ impl std::fmt::Debug for Background {
                 write!(
                     f,
                     "LinearGradient({}, {:?}, {:?})",
-                    self.gradient_params, self.colors[0], self.colors[1]
+                    self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
                 )
             }
             BackgroundTag::PatternSlash => {
                 write!(
                     f,
                     "PatternSlash({:?}, {})",
-                    self.solid, self.gradient_params
-                )
-            }
-            BackgroundTag::RadialGradient => {
-                write!(
-                    f,
-                    "RadialGradient(params: {:?}, {:?}, {:?})",
-                    self.gradient_params, self.colors[0], self.colors[1]
+                    self.solid, self.gradient_angle_or_pattern_height
                 )
             }
         }
@@ -735,7 +726,7 @@ impl Default for Background {
             tag: BackgroundTag::Solid,
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
-            gradient_params: GradientParams::default(),
+            gradient_angle_or_pattern_height: 0.0,
             colors: [GradientStop::default(), GradientStop::default()],
             pad: 0,
         }
@@ -751,9 +742,7 @@ pub fn pattern_slash(color: Hsla, width: f32, interval: f32) -> Background {
     Background {
         tag: BackgroundTag::PatternSlash,
         solid: color,
-        gradient_params: GradientParams {
-            params: [height, 0.0, 0.0, 0.0],
-        },
+        gradient_angle_or_pattern_height: height,
         ..Default::default()
     }
 }
@@ -780,9 +769,7 @@ pub fn linear_gradient(
 ) -> Background {
     Background {
         tag: BackgroundTag::LinearGradient,
-        gradient_params: GradientParams {
-            params: [angle, 0.0, 0.0, 0.0],
-        },
+        gradient_angle_or_pattern_height: angle,
         colors: [from.into(), to.into()],
         ..Default::default()
     }
@@ -816,20 +803,10 @@ pub struct GradientStop {
 ///
 /// Additional gradient types may interpret these values differently.
 #[repr(C)]
-#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GradientParams {
     /// The parameters for the gradient, interpreted based on the gradient type.
     pub params: [f32; 4],
-}
-
-impl Display for GradientParams {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "GradientParams({}, {}, {}, {})",
-            self.params[0], self.params[1], self.params[2], self.params[3]
-        )
-    }
 }
 
 /// Creates a new linear color stop.
@@ -878,7 +855,6 @@ impl Background {
             BackgroundTag::Solid => self.solid.is_transparent(),
             BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
-            BackgroundTag::RadialGradient => self.colors.iter().all(|c| c.color.is_transparent()),
         }
     }
 }
