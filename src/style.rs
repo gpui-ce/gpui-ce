@@ -8,8 +8,8 @@ use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black,
-    transparent_black, transparent_white, phi, point, quad, rems, size,
+    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
+    point, quad, rems, size, transparent_black, transparent_white,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -658,7 +658,7 @@ impl Style {
             let mut border_color = match background_color {
                 Some(color) => match color.tag {
                     BackgroundTag::Solid => color.solid,
-                    BackgroundTag::LinearGradient => color
+                    BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => color
                         .colors
                         .first()
                         .map(|stop| stop.color)

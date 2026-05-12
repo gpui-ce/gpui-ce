@@ -32,7 +32,7 @@ struct Edges {
     left: f32,
 }
 
-struct LinearColorStop {
+struct GradientStop {
     color: Hsla,
     percentage: f32,
 }
@@ -41,10 +41,12 @@ struct Background {
     tag: u32,
     color_space: u32,
     solid: Hsla,
-    gradient_angle_or_pattern_height: f32,
-    color0: LinearColorStop,
-    color1: LinearColorStop,
-    pad: u32,
+    param0: f32,
+    param1: f32,
+    param2: f32,
+    param3: f32,
+    color0: GradientStop,
+    color1: GradientStop,
 }
 
 struct BackdropBlur {
@@ -90,19 +92,19 @@ fn hsla_to_rgba(hsla: Hsla) -> vec4<f32> {
     let m = l - c / 2.0;
     var color = vec3<f32>(m);
 
-    if (h >= 0.0 && h < 1.0) {
+    if h >= 0.0 && h < 1.0 {
         color.r += c;
         color.g += x;
-    } else if (h >= 1.0 && h < 2.0) {
+    } else if h >= 1.0 && h < 2.0 {
         color.r += x;
         color.g += c;
-    } else if (h >= 2.0 && h < 3.0) {
+    } else if h >= 2.0 && h < 3.0 {
         color.g += c;
         color.b += x;
-    } else if (h >= 3.0 && h < 4.0) {
+    } else if h >= 3.0 && h < 4.0 {
         color.g += x;
         color.b += c;
-    } else if (h >= 4.0 && h < 5.0) {
+    } else if h >= 4.0 && h < 5.0 {
         color.r += x;
         color.b += c;
     } else {
@@ -117,7 +119,7 @@ fn linear_to_srgba(linear: vec4<f32>) -> vec4<f32> {
     let a = 0.055;
     var srgb: vec3<f32>;
     for (var i = 0; i < 3; i++) {
-        if (linear[i] <= 0.0031308) {
+        if linear[i] <= 0.0031308 {
             srgb[i] = linear[i] * 12.92;
         } else {
             srgb[i] = (1.0 + a) * pow(linear[i], 1.0 / 2.4) - a;
@@ -129,7 +131,7 @@ fn linear_to_srgba(linear: vec4<f32>) -> vec4<f32> {
 fn srgba_to_linear(srgb: vec4<f32>) -> vec4<f32> {
     var linear: vec3<f32>;
     for (var i = 0; i < 3; i++) {
-        if (srgb[i] <= 0.04045) {
+        if srgb[i] <= 0.04045 {
             linear[i] = srgb[i] / 12.92;
         } else {
             linear[i] = pow((srgb[i] + 0.055) / 1.055, 2.4);
@@ -173,19 +175,19 @@ fn linear_srgb_to_oklab(color: vec4<f32>) -> vec4<f32> {
 }
 
 fn prepare_gradient_color(tag: u32, color_space: u32,
-    solid: Hsla, color0: LinearColorStop, color1: LinearColorStop) -> array<vec4<f32>, 3> {
+    solid: Hsla, color0: GradientStop, color1: GradientStop) -> array<vec4<f32>, 3> {
     var result: array<vec4<f32>, 3>;
 
-    if (tag == 0u || tag == 2u) {
+    if tag == 0u || tag == 2u {
         result[0] = hsla_to_rgba(solid);
-    } else if (tag == 1u) {
+    } else if tag == 1u || tag == 3u {
         result[1] = hsla_to_rgba(color0.color);
         result[2] = hsla_to_rgba(color1.color);
 
-        if (color_space == 0u) {
+        if color_space == 0u {
             result[1] = linear_to_srgba(result[1]);
             result[2] = linear_to_srgba(result[2]);
-        } else if (color_space == 1u) {
+        } else if color_space == 1u {
             result[1] = linear_srgb_to_oklab(result[1]);
             result[2] = linear_srgb_to_oklab(result[2]);
         }
@@ -196,16 +198,16 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
     solid_color: vec4<f32>, color0: vec4<f32>, color1: vec4<f32>) -> vec4<f32> {
-    if (background.tag == 0u || background.tag == 2u) {
+    if background.tag == 0u || background.tag == 2u {
         return solid_color;
-    } else if (background.tag == 1u) {
-        let angle = background.gradient_angle_or_pattern_height;
+    } else if background.tag == 1u || background.tag == 3u {
+        let angle = background.param0;
         let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
         var direction = vec2<f32>(cos(radians), sin(radians));
         let stop0_percentage = background.color0.percentage;
         let stop1_percentage = background.color1.percentage;
 
-        if (bounds.size.x > bounds.size.y) {
+        if bounds.size.x > bounds.size.y {
             direction.y *= bounds.size.y / bounds.size.x;
         } else {
             direction.x *= bounds.size.x / bounds.size.y;
@@ -215,7 +217,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         let center = bounds.origin + half_size;
         let center_to_point = position - center;
         var t = dot(center_to_point, direction) / length(direction);
-        if (abs(direction.x) > abs(direction.y)) {
+        if abs(direction.x) > abs(direction.y) {
             t = (t + half_size.x) / bounds.size.x;
         } else {
             t = (t + half_size.y) / bounds.size.y;
@@ -224,9 +226,9 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         t = (t - stop0_percentage) / (stop1_percentage - stop0_percentage);
         t = clamp(t, 0.0, 1.0);
 
-        if (background.color_space == 0u) {
+        if background.color_space == 0u {
             return srgba_to_linear(mix(color0, color1, t));
-        } else if (background.color_space == 1u) {
+        } else if background.color_space == 1u {
             let oklab_color = mix(color0, color1, t);
             return oklab_to_linear_srgb(oklab_color);
         }
@@ -244,14 +246,14 @@ fn quad_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners) -> f32 {
     let center = bounds.origin + bounds.size / 2.0;
     let half_size = bounds.size / 2.0;
     var radii_size = vec2<f32>(0.0);
-    if (point.x < center.x) {
-        if (point.y < center.y) {
+    if point.x < center.x {
+        if point.y < center.y {
             radii_size = vec2<f32>(corner_radii.top_left);
         } else {
             radii_size = vec2<f32>(corner_radii.bottom_left);
         }
     } else {
-        if (point.y < center.y) {
+        if point.y < center.y {
             radii_size = vec2<f32>(corner_radii.top_right);
         } else {
             radii_size = vec2<f32>(corner_radii.bottom_right);
@@ -298,7 +300,7 @@ fn vs_backdrop_blur(@builtin(vertex_index) vertex_id: u32, @builtin(instance_ind
 @fragment
 fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
     // Clip test
-    if (any(input.clip_distances < vec4<f32>(0.0))) {
+    if any(input.clip_distances < vec4<f32>(0.0)) {
         return vec4<f32>(0.0);
     }
 
@@ -312,7 +314,7 @@ fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
     let blur_radius = backdrop_blur.blur_radius;
 
     // Skip blur sampling if radius is very small
-    if (blur_radius < 0.5) {
+    if blur_radius < 0.5 {
         let uv = pixel_position / globals.viewport_size;
         blurred_color = textureSample(backdrop_texture, backdrop_sampler, uv);
     } else {
@@ -329,7 +331,7 @@ fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
                 let sample_uv = sample_pos / globals.viewport_size;
 
                 // Clamp UV to valid range
-                if (sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0) {
+                if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
                     let sample_color = textureSample(backdrop_texture, backdrop_sampler, sample_uv);
                     blurred_color += sample_color * weight;
                     total_weight += weight;
@@ -337,7 +339,7 @@ fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
             }
         }
 
-        if (total_weight > 0.0) {
+        if total_weight > 0.0 {
             blurred_color /= total_weight;
         }
     }
