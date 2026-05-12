@@ -210,7 +210,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if tag == 0u || tag == 2u {
         result.solid = hsla_to_rgba(solid);
-    } else if tag == 1u {
+    } else if tag == 1u || tag == 3u {
         // The hsla_to_rgba is returns a linear sRGB color
         result.color0 = hsla_to_rgba(color0.color);
         result.color1 = hsla_to_rgba(color1.color);
@@ -298,6 +298,47 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) / 2.0f;
             background_color = solid_color;
             background_color.a *= saturate(0.5 - distance);
+        }
+        case 3u: {
+            let center = bounds.origin +
+vec2<f32>(
+                background.param0 * bounds.size.x,
+                background.param1 * bounds.size.y
+            );
+
+            let delta = position - center;
+
+            let radius = max(
+                vec2<f32>(
+                    background.param2 * bounds.size.x,
+                    background.param3 * bounds.size.y
+                ),
+                vec2<f32>(0.001)
+            );
+
+            let ellipse_space = delta / radius;
+
+            var t = length(ellipse_space);
+
+            let stop0_percentage = background.color0.percentage;
+            let stop1_percentage = background.color1.percentage;
+
+            t = (t - stop0_percentage) /
+                (stop1_percentage - stop0_percentage);
+
+            t = clamp(t, 0.0, 1.0);
+
+            switch background.color_space {
+                default: {
+                    background_color = srgba_to_linear(
+                        mix(color0, color1, t)
+                    );
+                }
+                case 1u: {
+                    let oklab_color = mix(color0, color1, t);
+                    background_color = oklab_to_linear_srgb(oklab_color);
+                }
+            }
         }
     }
 

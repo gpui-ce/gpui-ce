@@ -1,6 +1,6 @@
 use gpui::{
     App, Application, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions, canvas,
-    div, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    div, linear_color_stop, linear_gradient, point, prelude::*, px, radial_gradient, size,
 };
 
 struct GradientViewer {
@@ -239,6 +239,46 @@ impl Render for GradientViewer {
                     );
                 },
             )))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .gap_3()
+                    .h_32()
+                    .child(
+                        div().flex_1().rounded_xl().bg(radial_gradient(
+                            0.5,
+                            0.5,
+                            0.5,
+                            0.5,
+                            linear_color_stop(gpui::white(), 0.0),
+                            linear_color_stop(gpui::blue(), 1.0),
+                        )
+                        .color_space(color_space)),
+                    )
+                    .child(
+                        div().flex_1().rounded_xl().bg(radial_gradient(
+                            0.3,
+                            0.3,
+                            0.7,
+                            0.7,
+                            linear_color_stop(gpui::yellow(), 0.0),
+                            linear_color_stop(gpui::red(), 1.0),
+                        )
+                        .color_space(color_space)),
+                    )
+                    .child(
+                        div().flex_1().rounded_xl().bg(radial_gradient(
+                            0.8,
+                            0.2,
+                            0.8,
+                            0.6,
+                            linear_color_stop(gpui::green(), 0.0),
+                            linear_color_stop(gpui::black(), 1.0),
+                        )
+                        .color_space(color_space)),
+                    ),
+            )
     }
 }
 

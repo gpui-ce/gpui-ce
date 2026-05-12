@@ -658,6 +658,7 @@ pub(crate) enum BackgroundTag {
     Solid = 0,
     LinearGradient = 1,
     PatternSlash = 2,
+    RadialGradient = 3,
 }
 
 /// A color space for color interpolation.
@@ -711,6 +712,18 @@ impl std::fmt::Debug for Background {
             }
             BackgroundTag::PatternSlash => {
                 write!(f, "PatternSlash({:?}, {})", self.solid, self.param0)
+            }
+            BackgroundTag::RadialGradient => {
+                write!(
+                    f,
+                    "RadialGradient(center=({}, {}), radius=({}, {}), {:?}, {:?})",
+                    self.param0,
+                    self.param1,
+                    self.param2,
+                    self.param3,
+                    self.colors[0],
+                    self.colors[1]
+                )
             }
         }
     }
@@ -769,6 +782,44 @@ pub fn linear_gradient(
     Background {
         tag: BackgroundTag::LinearGradient,
         param0: angle,
+        colors: [from.into(), to.into()],
+        ..Default::default()
+    }
+}
+
+/// Creates a radial gradient background color.
+///
+/// The gradient radiates outward from a center point.
+///
+/// `center_x` and `center_y` define the center of the gradient
+/// in normalized coordinates, where:
+///
+/// - `0.0` represents the start (left or top)
+/// - `1.0` represents the end (right or bottom)
+///
+/// `radius_x` and `radius_y` define the horizontal and vertical
+/// radii of the gradient in normalized space.
+///
+/// A value of `0.5` generally fills about half the container
+/// along that axis.
+///
+/// The gradient interpolates between the provided color stops.
+///
+/// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/radial-gradient>
+pub fn radial_gradient(
+    center_x: f32,
+    center_y: f32,
+    radius_x: f32,
+    radius_y: f32,
+    from: impl Into<GradientStop>,
+    to: impl Into<GradientStop>,
+) -> Background {
+    Background {
+        tag: BackgroundTag::RadialGradient,
+        param0: center_x,
+        param1: center_y,
+        param2: radius_x,
+        param3: radius_y,
         colors: [from.into(), to.into()],
         ..Default::default()
     }
@@ -852,7 +903,9 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.is_transparent(),
-            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
+            BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => {
+                self.colors.iter().all(|c| c.color.is_transparent())
+            }
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
         }
     }
