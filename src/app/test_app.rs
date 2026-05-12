@@ -28,8 +28,8 @@ use crate::{
     AnyWindowHandle, App, AppCell, AppContext, AsyncApp, BackgroundExecutor, BorrowAppContext,
     Bounds, ClipboardItem, Context, Entity, ForegroundExecutor, Global, InputEvent, Keystroke,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Platform,
-    PlatformTextSystem, Point, Render, Size, Task, TestDispatcher, TestPlatform, TextSystem,
-    Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
+    PlatformTextSystem, Point, Render, RequestFrameOptions, Size, Task, TestDispatcher,
+    TestPlatform, TextSystem, Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
 };
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
@@ -481,6 +481,24 @@ impl<V: 'static + Render> TestAppWindow<V> {
         self.background_executor.run_until_parked();
     }
 
+    /// Simulate a platform frame request.
+    pub fn simulate_request_frame(&mut self, options: RequestFrameOptions) {
+        let window_id = self.handle.window_id();
+        let test_window = {
+            let mut app = self.app.borrow_mut();
+            app.windows
+                .get_mut(window_id)
+                .and_then(|window| window.as_mut())
+                .and_then(|window| window.platform_window.as_test().cloned())
+        };
+
+        if let Some(test_window) = test_window {
+            test_window.simulate_request_frame(options);
+        }
+
+        self.background_executor.run_until_parked();
+    }
+
     /// Force a redraw of the window.
     pub fn draw(&mut self) {
         let mut app = self.app.borrow_mut();
@@ -506,7 +524,8 @@ impl<V> Clone for TestAppWindow<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FocusHandle, Focusable, div, prelude::*};
+    use crate::{AnyView, FocusHandle, Focusable, StyleRefinement, div, prelude::*, px};
+    use std::cell::Cell;
 
     struct Counter {
         count: usize,
@@ -539,6 +558,27 @@ mod tests {
         }
     }
 
+    struct CachedRoot {
+        child: Entity<RenderCounter>,
+    }
+
+    struct RenderCounter {
+        render_count: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            AnyView::from(self.child.clone()).cached(StyleRefinement::default().size(px(10.)))
+        }
+    }
+
+    impl Render for RenderCounter {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.render_count.set(self.render_count.get() + 1);
+            div().size(px(10.))
+        }
+    }
+
     #[test]
     fn test_basic_usage() {
         let mut app = TestApp::new();
@@ -555,6 +595,29 @@ mod tests {
 
         drop(window);
         app.update(|cx| cx.shutdown());
+    }
+
+    #[test]
+    fn force_render_refreshes_cached_views() {
+        let mut app = TestApp::new();
+        let render_count = Rc::new(Cell::new(0));
+        let child_render_count = render_count.clone();
+        let mut window = app.open_window(move |_, cx| CachedRoot {
+            child: cx.new(|_| RenderCounter {
+                render_count: child_render_count,
+            }),
+        });
+
+        assert_eq!(render_count.get(), 1);
+
+        window.draw();
+        assert_eq!(render_count.get(), 1);
+
+        window.simulate_request_frame(RequestFrameOptions {
+            require_presentation: false,
+            force_render: true,
+        });
+        assert_eq!(render_count.get(), 2);
     }
 
     #[test]

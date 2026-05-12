@@ -11,10 +11,6 @@ use std::{
 };
 
 use ::util::ResultExt;
-use anyhow::{Context as _, Result};
-use futures::channel::oneshot::{self, Receiver};
-use raw_window_handle as rwh;
-use smallvec::SmallVec;
 use ::windows::{
     Win32::{
         Foundation::*,
@@ -25,11 +21,15 @@ use ::windows::{
     },
     core::*,
 };
+use anyhow::{Context as _, Result};
+use futures::channel::oneshot::{self, Receiver};
+use raw_window_handle as rwh;
+use smallvec::SmallVec;
 
 use super::{
     DirectXDevices, DirectXRenderer, WindowCreationInfo, WindowsDisplay, WindowsSystemSettings,
-    configure_dwm_dark_mode, current_capslock, current_modifiers, get_window_long,
-    logical_point, set_window_long, system_appearance, with_file_names,
+    configure_dwm_dark_mode, current_capslock, current_modifiers, get_window_long, logical_point,
+    set_window_long, system_appearance, with_file_names,
 };
 use gpui::*;
 

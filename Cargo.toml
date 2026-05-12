@@ -99,6 +99,7 @@ proptest = "1"
 rand = "0.10"
 raw-window-handle = "0.6"
 refineable = { package = "gpui_refineable", version = "0.2.2" }
+regex = "1"
 resvg = { version = "0.47", default-features = false, features = [
     "text",
     "system-fonts",
@@ -118,6 +119,7 @@ strum = { version = "0.28", features = ["derive"] }
 sum_tree = { package = "gpui_sum_tree", version = "0.2.2" }
 taffy = "=0.9"
 thiserror = "2"
+ttf-parser = "0.25"
 util = { package = "gpui_util", version = "0.2.2" }
 util_macros = { package = "gpui_util_macros", version = "0.2.2" }
 usvg = { version = "0.47", default-features = false }

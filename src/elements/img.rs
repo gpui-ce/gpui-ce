@@ -294,7 +294,7 @@ impl Element for Img {
                 })
             });
 
-            let frame_index = state.as_ref().map(|state| state.frame_index).unwrap_or(0);
+            let mut frame_index = state.as_ref().map(|state| state.frame_index).unwrap_or(0);
 
             let layout_id = self.interactivity.request_layout(
                 global_id,
@@ -312,26 +312,36 @@ impl Element for Img {
                         cx,
                     ) {
                         Some(Ok(data)) => {
-                            if let Some(state) = &mut state {
-                                let frame_count = data.frame_count();
-                                if frame_count > 1 {
-                                    let current_time = Instant::now();
-                                    if let Some(last_frame_time) = state.last_frame_time {
-                                        let elapsed = current_time - last_frame_time;
-                                        let frame_duration =
-                                            Duration::from(data.delay(state.frame_index));
+                            let frame_count = data.frame_count();
+                            let max_frame_index = frame_count.saturating_sub(1);
 
-                                        if elapsed >= frame_duration {
-                                            state.frame_index =
-                                                (state.frame_index + 1) % frame_count;
-                                            state.last_frame_time =
-                                                Some(current_time - (elapsed - frame_duration));
+                            if let Some(state) = &mut state {
+                                state.frame_index = state.frame_index.min(max_frame_index);
+                                if frame_count > 1 {
+                                    if window.is_window_active() {
+                                        let current_time = Instant::now();
+                                        if let Some(last_frame_time) = state.last_frame_time {
+                                            let elapsed = current_time - last_frame_time;
+                                            let frame_duration =
+                                                Duration::from(data.delay(state.frame_index));
+
+                                            if elapsed >= frame_duration {
+                                                state.frame_index =
+                                                    (state.frame_index + 1) % frame_count;
+                                                state.last_frame_time =
+                                                    Some(current_time - (elapsed - frame_duration));
+                                            }
+                                        } else {
+                                            state.last_frame_time = Some(current_time);
                                         }
                                     } else {
-                                        state.last_frame_time = Some(current_time);
+                                        state.last_frame_time = None;
                                     }
+                                } else {
+                                    state.last_frame_time = None;
                                 }
                                 state.started_loading = None;
+                                frame_index = state.frame_index;
                             }
 
                             let image_size = data.render_size(frame_index);
@@ -365,7 +375,10 @@ impl Element for Img {
                                 };
                             }
 
-                            if global_id.is_some() && data.frame_count() > 1 {
+                            if global_id.is_some()
+                                && data.frame_count() > 1
+                                && window.is_window_active()
+                            {
                                 window.request_animation_frame();
                             }
                         }
@@ -466,6 +479,9 @@ impl Element for Img {
                     window,
                     cx,
                 ) {
+                    if data.frame_count() == 0 {
+                        return;
+                    }
                     let new_bounds = self
                         .style
                         .object_fit
@@ -755,5 +771,61 @@ impl From<usvg::Error> for ImageCacheError {
 impl From<image::ImageError> for ImageCacheError {
     fn from(value: image::ImageError) -> Self {
         Self::Image(Arc::new(value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ParentElement as _, TestAppContext, canvas, div, point, px, size};
+    use image::{Frame, ImageBuffer, Rgba};
+
+    const TEST_IMG_ID: &str = "test-img";
+
+    fn test_image(frame_count: usize) -> Arc<RenderImage> {
+        let frame = Frame::new(ImageBuffer::from_pixel(1, 1, Rgba([0, 0, 0, 0])));
+        Arc::new(RenderImage::new(SmallVec::from_iter(
+            (0..frame_count).map(|_| frame.clone()),
+        )))
+    }
+
+    fn seed_frame_index(frame_index: usize) -> impl IntoElement {
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                window.with_global_id(TEST_IMG_ID.into(), |id, window| {
+                    window.with_element_state::<ImgState, _>(id, |state, _| {
+                        let mut state = state.expect("img state should be initialized");
+                        state.frame_index = frame_index;
+                        ((), state)
+                    });
+                });
+            },
+        )
+    }
+
+    #[gpui::test]
+    fn zero_frame_image_does_not_panic_on_paint(cx: &mut TestAppContext) {
+        cx.add_empty_window()
+            .draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+                img(ImageSource::Render(test_image(0))).into_any_element()
+            });
+    }
+
+    #[gpui::test]
+    fn stale_frame_index_is_clamped_when_image_changes(cx: &mut TestAppContext) {
+        let window = cx.add_empty_window();
+
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            div()
+                .child(img(ImageSource::Render(test_image(5))).id(TEST_IMG_ID))
+                .child(seed_frame_index(4))
+                .into_any_element()
+        });
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            img(ImageSource::Render(test_image(1)))
+                .id(TEST_IMG_ID)
+                .into_any_element()
+        });
     }
 }

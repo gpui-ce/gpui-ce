@@ -29,7 +29,7 @@ use x11rb::{
     protocol::xkb::ConnectionExt as _,
     protocol::xproto::{
         AtomEnum, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent,
-        ConnectionExt as _, EventMask, ModMask, Visibility,
+        ConnectionExt as _, EventMask, Visibility,
     },
     protocol::{Event, dri3, randr, render, xinput, xkb, xproto},
     resource_manager::Database,
@@ -1011,23 +1011,16 @@ impl X11Client {
                 let modifiers = modifiers_from_state(event.state);
                 state.modifiers = modifiers;
                 state.pre_key_char_down.take();
-
-                // Macros containing modifiers might result in
-                // the modifiers missing from the event.
-                // We therefore update the mask from the global state.
-                update_xkb_mask_from_event_state(&mut state.xkb, event.state);
+                let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
 
                 let keystroke = {
                     let code = event.detail.into();
-                    let mut keystroke = keystroke_from_xkb(&state.xkb, modifiers, code);
-                    let keysym = state.xkb.key_get_one_sym(code);
+                    let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
+                    let keysym = key_event_state.key_get_one_sym(code);
 
                     if keysym.is_modifier_key() {
                         return Some(());
                     }
-
-                    // should be called after key_get_one_sym
-                    state.xkb.update_key(code, xkbc::KeyDirection::Down);
 
                     if let Some(mut compose_state) = state.compose_state.take() {
                         compose_state.feed(keysym);
@@ -1081,23 +1074,16 @@ impl X11Client {
 
                 let modifiers = modifiers_from_state(event.state);
                 state.modifiers = modifiers;
-
-                // Macros containing modifiers might result in
-                // the modifiers missing from the event.
-                // We therefore update the mask from the global state.
-                update_xkb_mask_from_event_state(&mut state.xkb, event.state);
+                let key_event_state = xkb_state_for_key_event(&state.xkb, event.state);
 
                 let keystroke = {
                     let code = event.detail.into();
-                    let keystroke = keystroke_from_xkb(&state.xkb, modifiers, code);
-                    let keysym = state.xkb.key_get_one_sym(code);
+                    let keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
+                    let keysym = key_event_state.key_get_one_sym(code);
 
                     if keysym.is_modifier_key() {
                         return Some(());
                     }
-
-                    // should be called after key_get_one_sym
-                    state.xkb.update_key(code, xkbc::KeyDirection::Up);
 
                     keystroke
                 };
@@ -2599,17 +2585,278 @@ fn valid_scale_factor(scale_factor: f32) -> bool {
 }
 
 #[inline]
-fn update_xkb_mask_from_event_state(xkb: &mut xkbc::State, event_state: xproto::KeyButMask) {
-    let depressed_mods = event_state.remove((ModMask::LOCK | ModMask::M2).bits());
-    let latched_mods = xkb.serialize_mods(xkbc::STATE_MODS_LATCHED);
-    let locked_mods = xkb.serialize_mods(xkbc::STATE_MODS_LOCKED);
-    let locked_layout = xkb.serialize_layout(xkbc::STATE_LAYOUT_LOCKED);
-    xkb.update_mask(
-        depressed_mods.into(),
-        latched_mods,
-        locked_mods,
-        0,
-        0,
-        locked_layout,
+fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -> xkbc::State {
+    let keymap = xkb.get_keymap();
+    let mut key_event_state = xkbc::State::new(&keymap);
+
+    let latched_modifiers = xkb.serialize_mods(xkbc::STATE_MODS_LATCHED);
+    let locked_modifiers = xkb.serialize_mods(xkbc::STATE_MODS_LOCKED);
+    let active_modifier_mask: xkbc::ModMask = u16::from(
+        event_state
+            & (xproto::KeyButMask::SHIFT
+                | xproto::KeyButMask::LOCK
+                | xproto::KeyButMask::CONTROL
+                | xproto::KeyButMask::MOD1
+                | xproto::KeyButMask::MOD2
+                | xproto::KeyButMask::MOD3
+                | xproto::KeyButMask::MOD4
+                | xproto::KeyButMask::MOD5),
+    )
+    .into();
+    let depressed_modifiers = active_modifier_mask & !(latched_modifiers | locked_modifiers);
+
+    key_event_state.update_mask(
+        depressed_modifiers,
+        latched_modifiers,
+        locked_modifiers,
+        xkb.serialize_layout(xkbc::STATE_LAYOUT_DEPRESSED),
+        xkb.serialize_layout(xkbc::STATE_LAYOUT_LATCHED),
+        xkb.serialize_layout(xkbc::STATE_LAYOUT_LOCKED),
     );
+
+    key_event_state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_keymap(layouts: &str) -> xkbc::Keymap {
+        test_keymap_with_variant(layouts, "")
+    }
+
+    fn test_keymap_with_variant(layouts: &str, variant: &str) -> xkbc::Keymap {
+        let context = xkbc::Context::new(xkbc::CONTEXT_NO_FLAGS);
+        xkbc::Keymap::new_from_names(
+            &context,
+            "",
+            "pc105",
+            layouts,
+            variant,
+            None,
+            xkbc::COMPILE_NO_FLAGS,
+        )
+        .expect("test keymap should compile")
+    }
+
+    fn state_with_non_locked_layout(keymap: &xkbc::Keymap) -> xkbc::State {
+        let mut depressed_layout_state = xkbc::State::new(keymap);
+        depressed_layout_state.update_mask(0, 0, 0, 1, 0, 0);
+        if depressed_layout_state.serialize_layout(STATE_LAYOUT_EFFECTIVE) == 1 {
+            return depressed_layout_state;
+        }
+
+        let mut latched_layout_state = xkbc::State::new(keymap);
+        latched_layout_state.update_mask(0, 0, 0, 0, 1, 0);
+        if latched_layout_state.serialize_layout(STATE_LAYOUT_EFFECTIVE) == 1 {
+            return latched_layout_state;
+        }
+
+        panic!("test keymap should support a non-locked secondary layout");
+    }
+
+    #[test]
+    fn key_event_state_uses_event_modifiers_without_mutating_server_state() {
+        let keymap = test_keymap("us");
+        let server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AE09")
+            .expect("test key should exist in the keymap");
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::SHIFT);
+        let keystroke = keystroke_from_xkb(
+            &key_event_state,
+            modifiers_from_state(xproto::KeyButMask::SHIFT),
+            keycode,
+        );
+
+        assert_eq!(keystroke.key, "(");
+        assert_eq!(keystroke.key_char.as_deref(), Some("("));
+        assert_eq!(server_state.key_get_utf8(keycode), "9");
+    }
+
+    #[test]
+    fn key_event_state_ignores_pointer_button_bits() {
+        let keymap = test_keymap("us");
+        let server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AE09")
+            .expect("test key should exist in the keymap");
+
+        let shifted_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::SHIFT);
+        let shifted_with_button_state = xkb_state_for_key_event(
+            &server_state,
+            xproto::KeyButMask::SHIFT | xproto::KeyButMask::BUTTON1,
+        );
+
+        assert_eq!(
+            shifted_with_button_state.serialize_mods(xkbc::STATE_MODS_EFFECTIVE),
+            shifted_state.serialize_mods(xkbc::STATE_MODS_EFFECTIVE)
+        );
+        assert_eq!(
+            shifted_with_button_state.key_get_utf8(keycode),
+            shifted_state.key_get_utf8(keycode)
+        );
+    }
+
+    #[test]
+    fn key_event_state_preserves_non_locked_layout_components() {
+        let keymap = test_keymap("us,ru");
+        let server_state = state_with_non_locked_layout(&keymap);
+        let keycode = keymap
+            .key_by_name("AD01")
+            .expect("test key should exist in the keymap");
+
+        let expected_text = server_state.key_get_utf8(keycode);
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+
+        assert_eq!(
+            key_event_state.serialize_layout(STATE_LAYOUT_EFFECTIVE),
+            server_state.serialize_layout(STATE_LAYOUT_EFFECTIVE)
+        );
+        assert_eq!(key_event_state.key_get_utf8(keycode), expected_text);
+    }
+
+    #[test]
+    fn capslock_toggle_produces_uppercase() {
+        let keymap = test_keymap("us");
+        let mut server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AC01")
+            .expect("'a' key should exist in the keymap");
+
+        let lock_mod = u16::from(xproto::KeyButMask::LOCK) as xkbc::ModMask;
+        server_state.update_mask(0, 0, lock_mod, 0, 0, 0);
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::LOCK);
+
+        assert_eq!(
+            key_event_state.serialize_mods(xkbc::STATE_MODS_LOCKED) & lock_mod,
+            lock_mod,
+        );
+        assert_eq!(key_event_state.key_get_utf8(keycode), "A");
+    }
+
+    #[test]
+    fn neo2_level3_via_capslock_produces_ellipsis() {
+        let keymap = test_keymap_with_variant("de", "neo");
+        let server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AD01")
+            .expect("test key should exist in the keymap");
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::MOD5);
+
+        assert_eq!(key_event_state.key_get_utf8(keycode), "\u{2026}");
+    }
+
+    #[test]
+    fn neo2_latched_mod5_preserved() {
+        let keymap = test_keymap_with_variant("de", "neo");
+        let mut server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AD01")
+            .expect("test key should exist in the keymap");
+
+        let mod5 = u16::from(xproto::KeyButMask::MOD5) as xkbc::ModMask;
+        server_state.update_mask(0, mod5, 0, 0, 0, 0);
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::MOD5);
+
+        assert_eq!(
+            key_event_state.serialize_mods(xkbc::STATE_MODS_LATCHED) & mod5,
+            mod5,
+        );
+        assert_eq!(key_event_state.key_get_utf8(keycode), "\u{2026}");
+    }
+
+    #[test]
+    fn german_layout_correct_key_resolution() {
+        let keymap = test_keymap("de");
+        let server_state = xkbc::State::new(&keymap);
+        let keycode = keymap
+            .key_by_name("AE07")
+            .expect("'7' key should exist in the keymap");
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+
+        assert_eq!(key_event_state.key_get_utf8(keycode), "7");
+    }
+
+    #[test]
+    fn space_works_with_cyrillic_layout_active() {
+        let keymap = test_keymap("us,ru");
+        let mut server_state = xkbc::State::new(&keymap);
+        let space = keymap
+            .key_by_name("SPCE")
+            .expect("space key should exist in the keymap");
+
+        server_state.update_mask(0, 0, 0, 0, 0, 1);
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+
+        assert_eq!(key_event_state.serialize_layout(STATE_LAYOUT_EFFECTIVE), 1);
+        assert_eq!(key_event_state.key_get_utf8(space), " ");
+    }
+
+    #[test]
+    fn macro_shift_bracket_produces_brace() {
+        let keymap = test_keymap("us");
+        let server_state = xkbc::State::new(&keymap);
+        let bracket = keymap
+            .key_by_name("AD12")
+            .expect("']' key should exist in the keymap");
+
+        assert_eq!(server_state.serialize_mods(xkbc::STATE_MODS_EFFECTIVE), 0);
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::SHIFT);
+
+        assert_eq!(key_event_state.key_get_utf8(bracket), "}");
+    }
+
+    #[test]
+    fn sequential_key_events_do_not_corrupt_state() {
+        let keymap = test_keymap("us");
+        let server_state = xkbc::State::new(&keymap);
+
+        let keys: &[(&str, &str)] = &[
+            ("AC01", "a"),
+            ("SPCE", " "),
+            ("AC02", "s"),
+            ("SPCE", " "),
+            ("AC03", "d"),
+        ];
+
+        for &(key_name, expected_utf8) in keys {
+            let keycode = keymap
+                .key_by_name(key_name)
+                .expect("test key should exist in the keymap");
+
+            let key_event_state =
+                xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+
+            assert_eq!(
+                key_event_state.key_get_utf8(keycode),
+                expected_utf8,
+                "key {key_name} should produce {expected_utf8:?}",
+            );
+        }
+
+        assert_eq!(server_state.serialize_mods(xkbc::STATE_MODS_EFFECTIVE), 0);
+        assert_eq!(server_state.serialize_layout(STATE_LAYOUT_EFFECTIVE), 0);
+    }
+
+    #[test]
+    fn space_works_with_czech_layout_active() {
+        let keymap = test_keymap("us,cz");
+        let mut server_state = xkbc::State::new(&keymap);
+        let space = keymap
+            .key_by_name("SPCE")
+            .expect("space key should exist in the keymap");
+
+        server_state.update_mask(0, 0, 0, 0, 0, 1);
+
+        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+
+        assert_eq!(key_event_state.key_get_utf8(space), " ");
+    }
 }

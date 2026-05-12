@@ -1,7 +1,4 @@
-use std::{
-    sync::LazyLock,
-    time::Duration,
-};
+use std::{sync::LazyLock, time::Duration};
 
 use anyhow::Result;
 use collections::FxHashMap;

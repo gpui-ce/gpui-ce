@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use ::util::ResultExt;
-use anyhow::Context as _;
 use ::windows::{
     Win32::{
         Foundation::*,
@@ -16,9 +15,10 @@ use ::windows::{
     },
     core::PCWSTR,
 };
+use anyhow::Context as _;
 
 use super::{
-    DirectXDevices, HiLoWord, WindowsDisplay, WindowsDispatcher, WindowsWindowInner,
+    DirectXDevices, HiLoWord, WindowsDispatcher, WindowsDisplay, WindowsWindowInner,
     WindowsWindowState, configure_dwm_dark_mode, get_keystroke_key, logical_point,
     system_appearance,
 };

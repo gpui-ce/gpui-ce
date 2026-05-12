@@ -6,9 +6,7 @@ use ::windows::{
         Color,
         ViewManagement::{UIColorType, UISettings},
     },
-    Win32::{
-        Foundation::*, Graphics::Dwm::*, UI::WindowsAndMessaging::*,
-    },
+    Win32::{Foundation::*, Graphics::Dwm::*, UI::WindowsAndMessaging::*},
     core::BOOL,
 };
 

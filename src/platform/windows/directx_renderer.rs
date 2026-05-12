@@ -4,7 +4,6 @@ use std::{
 };
 
 use ::util::ResultExt;
-use anyhow::{Context, Result};
 use ::windows::{
     Win32::{
         Foundation::HWND,
@@ -18,6 +17,7 @@ use ::windows::{
     },
     core::Interface,
 };
+use anyhow::{Context, Result};
 
 use self::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use super::{DirectXAtlas, DirectXDevices, try_to_recover_from_device_lost};
@@ -715,9 +715,9 @@ impl DirectXRenderer {
             id => format!("Unknown Vendor (ID: {:#X})", id),
         };
         let driver_version = dxgi::get_driver_version(&devices.adapter)
-        .context("Failed to get gpu driver info")
-        .log_err()
-        .unwrap_or("Unknown Driver".to_string());
+            .context("Failed to get gpu driver info")
+            .log_err()
+            .unwrap_or("Unknown Driver".to_string());
         Ok(GpuSpecs {
             is_software_emulated,
             device_name,

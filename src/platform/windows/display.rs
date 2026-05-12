@@ -1,8 +1,3 @@
-use itertools::Itertools;
-use smallvec::SmallVec;
-use std::rc::Rc;
-use util::ResultExt;
-use uuid::Uuid;
 use ::windows::{
     Win32::{
         Foundation::*,
@@ -14,6 +9,11 @@ use ::windows::{
     },
     core::*,
 };
+use itertools::Itertools;
+use smallvec::SmallVec;
+use std::rc::Rc;
+use util::ResultExt;
+use uuid::Uuid;
 
 use super::logical_point;
 use gpui::{Bounds, DevicePixels, DisplayId, Pixels, PlatformDisplay, point, size};
