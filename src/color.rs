@@ -788,12 +788,10 @@ pub fn linear_gradient(
 }
 
 /// Creates a radial gradient background color.
-///
 /// The gradient radiates outward from a center point.
 ///
 /// `center_x` and `center_y` define the center of the gradient
 /// in normalized coordinates, where:
-///
 /// - `0.0` represents the start (left or top)
 /// - `1.0` represents the end (right or bottom)
 ///
@@ -835,28 +833,6 @@ pub struct GradientStop {
     pub color: Hsla,
     /// The position of the gradient, in the range 0.0 to 1.0.
     pub position: f32,
-}
-
-/// Generic parameters for procedural gradients.
-/// The interpretation of the parameters depends on the gradient type.
-///
-/// Current conventions:
-///
-/// Linear gradients:
-/// - data[0]: angle in degrees
-///
-/// Radial gradients:
-/// - data[0]: center x, normalized to [-1.0, 1.0]
-/// - data[1]: center y, normalized to [-1.0, 1.0]
-/// - data[2]: radius x
-/// - data[3]: radius y
-///
-/// Additional gradient types may interpret these values differently.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GradientParams {
-    /// The parameters for the gradient, interpreted based on the gradient type.
-    pub params: [f32; 4],
 }
 
 /// Creates a new gradient color stop.

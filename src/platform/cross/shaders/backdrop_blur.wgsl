@@ -180,7 +180,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if tag == 0u || tag == 2u {
         result[0] = hsla_to_rgba(solid);
-    } else if tag == 1u {
+    } else if tag == 1u || tag == 3u {
         result[1] = hsla_to_rgba(color0.color);
         result[2] = hsla_to_rgba(color1.color);
 
