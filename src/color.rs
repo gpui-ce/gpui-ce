@@ -696,8 +696,6 @@ pub struct Background {
     pub(crate) param2: f32,
     pub(crate) param3: f32,
     pub(crate) colors: [GradientStop; 2],
-    /// Padding for alignment for repr(C) layout.
-    pub(crate) pad: u8,
 }
 
 impl std::fmt::Debug for Background {
@@ -730,7 +728,6 @@ impl Default for Background {
             param2: 0.0,
             param3: 0.0,
             colors: [GradientStop::default(), GradientStop::default()],
-            pad: 0,
         }
     }
 }

@@ -33,10 +33,12 @@ struct Background {
     tag: u32,
     color_space: u32,
     solid: Hsla,
-    gradient_angle_or_pattern_height: f32,
+    param0: f32,
+    param1: f32,
+    param2: f32,
+    param3: f32,
     color0: GradientStop,
     color1: GradientStop,
-    pad: u32,
 }
 
 struct Edges {
@@ -240,7 +242,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         case 1u: {
             // Linear gradient background.
             // -90 degrees to match the CSS gradient angle.
-            let angle = background.gradient_angle_or_pattern_height;
+            let angle = background.param0;
             let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
             var direction = vec2<f32>(cos(radians), sin(radians));
             let stop0_percentage = background.color0.percentage;
@@ -280,7 +282,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             }
         }
         case 2u: {
-            let gradient_angle_or_pattern_height = background.gradient_angle_or_pattern_height;
+            let gradient_angle_or_pattern_height = background.param0;
             let pattern_width = (gradient_angle_or_pattern_height / 65535.0f) / 255.0f;
             let pattern_interval = (gradient_angle_or_pattern_height % 65535.0f) / 255.0f;
             let pattern_height = pattern_width + pattern_interval;
