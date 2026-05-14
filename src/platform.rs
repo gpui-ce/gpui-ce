@@ -1739,12 +1739,7 @@ impl Image {
             bytes: &[u8],
             format: image::ImageFormat,
         ) -> Result<SmallVec<[Frame; 1]>> {
-            let mut data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
-
-            // Convert from RGBA to BGRA.
-            for pixel in data.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
+            let data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
 
             Ok(SmallVec::from_elem(Frame::new(data), 1))
         }
@@ -1755,11 +1750,7 @@ impl Image {
                 let mut frames = SmallVec::new();
 
                 for frame in decoder.into_frames() {
-                    let mut frame = frame?;
-                    // Convert from RGBA to BGRA.
-                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                        pixel.swap(0, 2);
-                    }
+                    let frame = frame?;
                     frames.push(frame);
                 }
 

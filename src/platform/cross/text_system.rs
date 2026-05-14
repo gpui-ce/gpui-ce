@@ -335,13 +335,6 @@ impl CosmicTextSystemState {
                 .clone()
                 .with_context(|| format!("no image for {params:?} in font {font:?}"))?;
 
-            if params.is_emoji {
-                // Convert from RGBA to BGRA.
-                for pixel in image.data.chunks_exact_mut(4) {
-                    pixel.swap(0, 2);
-                }
-            }
-
             Ok((bitmap_size, image.data))
         }
     }
