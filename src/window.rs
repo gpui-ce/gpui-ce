@@ -2120,6 +2120,18 @@ impl Window {
         self.platform_window.start_window_move()
     }
 
+    /// Move the window so its top-left corner is at `position` in logical screen coordinates.
+    /// Cross-platform: no-op on platforms that don't implement it.
+    pub fn set_window_position(&self, position: Point<Pixels>) {
+        self.platform_window.set_window_position(position)
+    }
+
+    /// Call `f` with a reference to the underlying `winit::window::Window`.
+    /// `f` is not called on platforms that don't use winit (e.g. the test backend).
+    pub fn with_winit_window(&self, mut f: impl FnMut(&crate::platform::cross::WinitWindow)) {
+        self.platform_window.with_winit_window(&mut f);
+    }
+
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);

@@ -460,6 +460,19 @@ impl PlatformWindow for CrossWindow {
         let _ = self.window().drag_window();
     }
 
+    fn set_window_position(&self, position: crate::Point<crate::Pixels>) {
+        let scale = self.window().scale_factor() as f32;
+        let physical = winit::dpi::PhysicalPosition::new(
+            (position.x.0 * scale) as i32,
+            (position.y.0 * scale) as i32,
+        );
+        self.window().set_outer_position(physical);
+    }
+
+    fn with_winit_window(&self, f: &mut dyn FnMut(&winit::window::Window)) {
+        f(self.window());
+    }
+
     fn start_window_resize(&self, edge: ResizeEdge) {
         use winit::window::ResizeDirection;
         let direction = match edge {
