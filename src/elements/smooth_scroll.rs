@@ -1,19 +1,31 @@
 use crate::Pixels;
 use std::time::Instant;
 
+/// Controls how scroll motion is visually presented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmoothScrollMode {
+    /// Disables smooth scrolling and snaps immediately to the target offset.
     Disabled,
+    /// Smoothly interpolates toward the target scroll offset over time.
     Interpolated,
 }
 
+/// Stores state used for smooth scrolling animation.
 #[derive(Clone, Debug)]
 pub struct SmoothScrollState {
+    /// The current smooth scrolling mode.
     pub mode: SmoothScrollMode,
+    /// The currently rendered visual scroll offset.
     pub visual_offset: Pixels,
+    /// The target logical scroll offset.
     pub target_offset: Pixels,
+    /// Whether a smooth scroll animation is currently active.
     pub animating: bool,
+    /// Timestamp of the previous animation frame.
     pub last_frame_time: Option<Instant>,
+    /// Interpolation strength used during smoothing.
+    ///
+    /// Higher values move faster toward the target.
     pub smoothing_factor: f32,
 }
 
@@ -31,6 +43,10 @@ impl Default for SmoothScrollState {
 }
 
 impl SmoothScrollState {
+    /// Sets the smooth scrolling mode.
+    ///
+    /// Disabling smooth scrolling immediately snaps the visual
+    /// offset to the target offset.
     pub fn set_mode(&mut self, mode: SmoothScrollMode) {
         self.mode = mode;
 
@@ -40,6 +56,10 @@ impl SmoothScrollState {
         }
     }
 
+    /// Updates the target scroll offset.
+    ///
+    /// If smooth scrolling is enabled, animation toward the
+    /// target begins automatically.
     pub fn set_target(&mut self, target: Pixels) {
         self.target_offset = target;
 
@@ -56,6 +76,10 @@ impl SmoothScrollState {
         self.animating = true;
     }
 
+    /// Advances the smooth scrolling animation.
+    ///
+    /// Returns `true` if the visual offset changed and another
+    /// animation frame should be requested.
     pub fn update(&mut self) -> bool {
         if self.mode == SmoothScrollMode::Disabled {
             self.visual_offset = self.target_offset;
@@ -92,6 +116,10 @@ impl SmoothScrollState {
         true
     }
 
+    /// Returns the current visual scroll offset.
+    ///
+    /// When smooth scrolling is disabled, this returns the
+    /// target offset directly.
     pub fn current(&self) -> Pixels {
         if self.mode == SmoothScrollMode::Disabled {
             self.target_offset

@@ -457,7 +457,7 @@ impl ListState {
 
     /// Get the current visual scroll offset, which may be different from the logical scroll offset if smooth scrolling is enabled.
     fn visual_scroll_offset(&self) -> Pixels {
-        self.0.borrow().smooth_scroll.get_visual_offset()
+        self.0.borrow().smooth_scroll.current()
     }
 
     /// Returns the maximum scroll offset according to the items we have measured.
@@ -539,7 +539,7 @@ impl StateInner {
         let padding = self.last_padding.unwrap_or_default();
         let scroll_max =
             (self.items.summary().height + padding.top + padding.bottom - height).max(px(0.));
-        let current_visual = self.smooth_scroll.get_visual_offset();
+        let current_visual = self.smooth_scroll.current();
 
         let new_scroll_top = (current_visual - delta.y);
 
@@ -555,6 +555,8 @@ impl StateInner {
                 item_ix,
                 offset_in_item,
             });
+            self.smooth_scroll.set_target(new_scroll_top);
+            window.request_animation_frame();
         }
 
         if self.scroll_handler.is_some() {
@@ -847,7 +849,15 @@ impl StateInner {
             // Only paint the visible items, if there is actually any space for them (taking padding into account)
             if bounds.size.height > padding.top + padding.bottom {
                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
+
+                let logical_scroll = self.scroll_top(&layout_response.scroll_top);
+
+                let visual_scroll = self.smooth_scroll.current();
+
+                let visual_delta = visual_scroll - logical_scroll;
+
                 item_origin.y -= layout_response.scroll_top.offset_in_item;
+                item_origin.y += visual_delta;
                 for item in &mut layout_response.item_layouts {
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
                         item.element.prepaint_at(item_origin, window, cx);
@@ -1127,6 +1137,18 @@ impl Element for List {
                     window,
                     cx,
                 )
+            }
+        });
+        let state = self.state.clone();
+
+        window.on_next_frame(move |window, cx| {
+            let mut state_inner = state.0.borrow_mut();
+
+            let animating = state_inner.smooth_scroll.update();
+
+            if animating {
+                window.request_animation_frame();
+                cx.notify(current_view);
             }
         });
     }
