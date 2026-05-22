@@ -7,6 +7,7 @@
 //!
 //! If all of your elements are the same height, see [`crate::UniformList`] for a simpler API
 
+use crate::elements::smooth_scroll::{SmoothScrollMode, SmoothScrollState};
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
     FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -71,6 +72,7 @@ struct StateInner {
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
     scrollbar_drag_start_height: Option<Pixels>,
     measuring_behavior: ListMeasuringBehavior,
+    smooth_scroll: SmoothScrollState,
 }
 
 /// Whether the list is scrolling from top to bottom or bottom to top.
@@ -225,6 +227,7 @@ impl ListState {
             reset: false,
             scrollbar_drag_start_height: None,
             measuring_behavior: ListMeasuringBehavior::default(),
+            smooth_scroll: SmoothScrollState::default(),
         })));
         this.splice(0..0, item_count);
         this
@@ -342,6 +345,8 @@ impl ListState {
             item_ix: cursor.start().count,
             offset_in_item: new_pixel_offset - cursor.start().height,
         });
+        let target = new_pixel_offset;
+        state.smooth_scroll.set_target(target);
     }
 
     /// Scroll the list to the given offset
@@ -352,6 +357,12 @@ impl ListState {
             scroll_top.item_ix = item_count;
             scroll_top.offset_in_item = px(0.);
         }
+
+        let current = state.scroll_top(&state.logical_scroll_top());
+        let target = state.scroll_top(&scroll_top);
+
+        state.smooth_scroll.visual_offset = current;
+        state.smooth_scroll.set_target(target);
 
         state.logical_scroll_top = Some(scroll_top);
     }
@@ -439,6 +450,16 @@ impl ListState {
         self.0.borrow_mut().set_offset_from_scrollbar(point);
     }
 
+    /// Update smooth scrolling state and return whether the visual offset changed, indicating that a re-render is needed.
+    fn update_smooth_scroll(&mut self) -> bool {
+        self.0.borrow_mut().smooth_scroll.update()
+    }
+
+    /// Get the current visual scroll offset, which may be different from the logical scroll offset if smooth scrolling is enabled.
+    fn visual_scroll_offset(&self) -> Pixels {
+        self.0.borrow().smooth_scroll.current()
+    }
+
     /// Returns the maximum scroll offset according to the items we have measured.
     /// This value remains constant while dragging to prevent the scrollbar from moving away unexpectedly.
     pub fn max_offset_for_scrollbar(&self) -> Size<Pixels> {
@@ -473,6 +494,22 @@ impl ListState {
     pub fn viewport_bounds(&self) -> Bounds<Pixels> {
         self.0.borrow().last_layout_bounds.unwrap_or_default()
     }
+
+    /// Enable or disable smooth scrolling for this list.
+    pub fn set_smooth_scroll_enabled(&self, enabled: bool) {
+        let mode = if enabled {
+            SmoothScrollMode::Interpolated
+        } else {
+            SmoothScrollMode::Disabled
+        };
+
+        self.0.borrow_mut().smooth_scroll.set_mode(mode);
+    }
+
+    /// Get the current smooth scroll mode for this list.
+    pub fn smooth_scroll_mode(&self) -> SmoothScrollMode {
+        self.0.borrow().smooth_scroll.mode
+    }
 }
 
 impl StateInner {
@@ -502,9 +539,9 @@ impl StateInner {
         let padding = self.last_padding.unwrap_or_default();
         let scroll_max =
             (self.items.summary().height + padding.top + padding.bottom - height).max(px(0.));
-        let new_scroll_top = (self.scroll_top(scroll_top) - delta.y)
-            .max(px(0.))
-            .min(scroll_max);
+        let current_visual = self.smooth_scroll.current();
+
+        let new_scroll_top = (current_visual - delta.y);
 
         if self.alignment == ListAlignment::Bottom && new_scroll_top == scroll_max {
             self.logical_scroll_top = None;
@@ -518,6 +555,8 @@ impl StateInner {
                 item_ix,
                 offset_in_item,
             });
+            self.smooth_scroll.set_target(new_scroll_top);
+            window.request_animation_frame();
         }
 
         if self.scroll_handler.is_some() {
@@ -810,7 +849,15 @@ impl StateInner {
             // Only paint the visible items, if there is actually any space for them (taking padding into account)
             if bounds.size.height > padding.top + padding.bottom {
                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
+
+                let logical_scroll = self.scroll_top(&layout_response.scroll_top);
+
+                let visual_scroll = self.smooth_scroll.current();
+
+                let visual_delta = visual_scroll - logical_scroll;
+
                 item_origin.y -= layout_response.scroll_top.offset_in_item;
+                item_origin.y += visual_delta;
                 for item in &mut layout_response.item_layouts {
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
                         item.element.prepaint_at(item_origin, window, cx);
@@ -1090,6 +1137,18 @@ impl Element for List {
                     window,
                     cx,
                 )
+            }
+        });
+        let state = self.state.clone();
+
+        window.on_next_frame(move |window, cx| {
+            let mut state_inner = state.0.borrow_mut();
+
+            let animating = state_inner.smooth_scroll.update();
+
+            if animating {
+                window.request_animation_frame();
+                cx.notify(current_view);
             }
         });
     }
