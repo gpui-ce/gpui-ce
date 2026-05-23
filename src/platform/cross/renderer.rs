@@ -2135,7 +2135,7 @@ impl WgpuRenderer {
                         for surface in surfaces {
                             if let crate::SurfaceContent::Wgpu(surface_id) = &surface.content {
                                 // Atomically swap ready ↔ display buffers with GPU sync
-                                let swapped = self
+                                let _swapped = self
                                     .context
                                     .surface_registry
                                     .swap_ready_display(&self.context.device, *surface_id);
@@ -2404,7 +2404,7 @@ impl WgpuRenderer {
             });
 
             // Prepare surface params with cached bounds
-            let scale_factor =
+            let _scale_factor =
                 self.surface_configuration.width as f32 / self.surface_configuration.width as f32; // TODO: Get actual scale factor
             let params = SurfaceParams {
                 bounds: Bounds {

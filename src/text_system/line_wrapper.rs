@@ -1,4 +1,6 @@
-use crate::{FontId, FontRun, Pixels, PlatformTextSystem, SharedString, TextRun, px};
+use crate::{
+    FontId, FontRun, FontStyle, FontWeight, Pixels, PlatformTextSystem, SharedString, TextRun, px,
+};
 use collections::HashMap;
 use std::{borrow::Cow, iter, sync::Arc};
 
@@ -7,6 +9,8 @@ pub struct LineWrapper {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     pub(crate) font_id: FontId,
     pub(crate) font_size: Pixels,
+    pub(crate) weight: FontWeight,
+    pub(crate) style: FontStyle,
     cached_ascii_char_widths: [Option<Pixels>; 128],
     cached_other_char_widths: HashMap<char, Pixels>,
 }
@@ -18,12 +22,16 @@ impl LineWrapper {
     pub(crate) fn new(
         font_id: FontId,
         font_size: Pixels,
+        weight: FontWeight,
+        style: FontStyle,
         text_system: Arc<dyn PlatformTextSystem>,
     ) -> Self {
         Self {
             platform_text_system: text_system,
             font_id,
             font_size,
+            weight,
+            style,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
         }
@@ -219,6 +227,8 @@ impl LineWrapper {
                 &[FontRun {
                     len: buffer.len(),
                     font_id: self.font_id,
+                    weight: self.weight,
+                    style: self.style,
                 }],
             )
             .width
@@ -322,7 +332,13 @@ mod tests {
         let dispatcher = TestDispatcher::new(StdRng::seed_from_u64(0));
         let cx = TestAppContext::build(dispatcher, None);
         let id = cx.text_system().resolve_font(&font(".ZedMono"));
-        LineWrapper::new(id, px(16.), cx.text_system().platform_text_system.clone())
+        LineWrapper::new(
+            id,
+            px(16.),
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            cx.text_system().platform_text_system.clone(),
+        )
     }
 
     fn generate_test_runs(input_run_len: &[usize]) -> Vec<TextRun> {
