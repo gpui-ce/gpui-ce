@@ -291,7 +291,13 @@ impl TextSystem {
             .entry(FontIdWithSize { font_id, font_size })
             .or_default();
         let wrapper = wrappers.pop().unwrap_or_else(|| {
-            LineWrapper::new(font_id, font_size, self.platform_text_system.clone())
+            LineWrapper::new(
+                font_id,
+                font_size,
+                font.weight,
+                font.style,
+                self.platform_text_system.clone(),
+            )
         });
 
         LineWrapperHandle {
@@ -458,6 +464,8 @@ impl WindowTextSystem {
                     font_runs.push(FontRun {
                         len: run_len_within_line,
                         font_id,
+                        weight: run.font.weight,
+                        style: run.font.style,
                     });
                 }
 
@@ -572,6 +580,8 @@ impl WindowTextSystem {
                 font_runs.push(FontRun {
                     len: run.len,
                     font_id,
+                    weight: run.font.weight,
+                    style: run.font.style,
                 });
             }
         }

@@ -361,7 +361,9 @@ impl CosmicTextSystemState {
                         .chunks_exact(4)
                         .map(|pixel| pixel[0].max(pixel[1]).max(pixel[2]).max(pixel[3]))
                         .collect(),
-                    SwashContent::Color => image.data.chunks_exact(4).map(|pixel| pixel[3]).collect(),
+                    SwashContent::Color => {
+                        image.data.chunks_exact(4).map(|pixel| pixel[3]).collect()
+                    }
                 }
             };
 
@@ -416,8 +418,8 @@ impl CosmicTextSystemState {
                     .metadata(run.font_id.0)
                     .family(Family::Name(&font.families.first().unwrap().0))
                     .stretch(font.stretch)
-                    .style(font.style)
-                    .weight(font.weight)
+                    .style(run.style.into())
+                    .weight(run.weight.into())
                     .font_features(loaded_font.features.clone()),
             );
             offs += run.len;
