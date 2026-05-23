@@ -2,7 +2,11 @@
 name = "gpui-ce"
 version = "1.0.0"
 edition = "2024"
-authors = ["Nathan Sobo <nathan@zed.dev>", "Tristan J. Poland <me@tridentforu.com>", "Maxine DeAndrade (@mdeand)"]
+authors = [
+    "Nathan Sobo <nathan@zed.dev>",
+    "Tristan J. Poland <me@tridentforu.com>",
+    "Maxine DeAndrade (@mdeand)",
+]
 description = "A community fork of Zed's GPU-accelerated UI framework"
 repository = "https://github.com/gpui-ce/gpui-ce"
 publish = true
@@ -33,7 +37,13 @@ doctest = false
 device_query = "2.1"
 pollster = "0.4.0"
 winit = "0.30.12"
-wgpu = { git = "https://github.com/Far-Beyond-Pulsar/wgpu", rev = "fce5b80e8017304449124b12637ec324417e40c8", default-features = false, features = ["web", "webgpu", "dx12", "vulkan", "wgsl"] }
+wgpu = { git = "https://github.com/Far-Beyond-Pulsar/wgpu", rev = "fce5b80e8017304449124b12637ec324417e40c8", default-features = false, features = [
+    "web",
+    "webgpu",
+    "dx12",
+    "vulkan",
+    "wgsl",
+] }
 priority-threadpool = { git = "https://github.com/tristanpoland/priority-threadpool", rev = "bb1ab91" }
 anyhow = "1.0.86"
 async-task = "4.7"
@@ -101,7 +111,7 @@ objc2-foundation = { version = "0.2", features = ["NSData"] }
 
 [dev-dependencies]
 backtrace = "0.3"
-helio = { git="https://github.com/Far-Beyond-Pulsar/Helio", rev="f124aeac0057c8f11c159931ea0c57d4c3b7fef9" }
+helio = { git = "https://github.com/Far-Beyond-Pulsar/Helio", rev = "f124aeac0057c8f11c159931ea0c57d4c3b7fef9" }
 glam = "0.29"
 env_logger = "0.11"
 collections = { package = "gpui_collections", version = "0.2.2", features = [
@@ -167,6 +177,14 @@ path = "examples/learn/wgpu_surface_basic.rs"
 [[example]]
 name = "blur_showcase"
 path = "examples/learn/blur_showcase.rs"
+
+[[example]]
+name = "smooth_scrolling"
+path = "examples/learn/smooth_scrolling.rs"
+
+[[example]]
+name = "virtual_list"
+path = "examples/learn/virtual_list.rs"
 
 # ============================================================================
 # Bench Examples - Performance benchmarks
