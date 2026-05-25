@@ -1,6 +1,7 @@
 use crate::{
     BackgroundExecutor, Capslock, DevicePixels, DummyKeyboardMapper, ForegroundExecutor,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
+    ExternalPaths, FileDropEvent, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, Pixels, Platform, PlatformInput,
     PlatformWindow as _, PriorityQueueReceiver, RunnableVariant, ScrollWheelEvent, Size,
     platform::cross::{
@@ -29,7 +30,7 @@ fn device_button_to_gpui(button: u32) -> Option<MouseButton> {
 use anyhow::Result;
 use arboard::Clipboard;
 use collections::FxHashMap;
-use std::{cell::Cell, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Instant};
 use winit::event_loop::ActiveEventLoop;
 
 thread_local! {
@@ -74,6 +75,7 @@ struct AppState {
     pressed_button: Option<MouseButton>,
     click_state: ClickState,
     hovered_window_id: Cell<Option<winit::window::WindowId>>,
+    hovered_external_paths: Vec<PathBuf>,
 }
 
 struct ClickState {
@@ -137,6 +139,7 @@ impl Platform for CrossPlatform {
                 current_count: 0,
             },
             hovered_window_id: Cell::new(None),
+            hovered_external_paths: Vec::new(),
         };
 
         event_loop
@@ -616,6 +619,78 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
         };
 
         match event {
+            winit::event::WindowEvent::HoveredFile(path) => {
+                if !self.hovered_external_paths.iter().any(|p| p == &path) {
+                    self.hovered_external_paths.push(path);
+                }
+
+                let position = window.0.state.mouse_position.get();
+
+                // Start external drag once with all currently known hovered paths.
+                if self.hovered_external_paths.len() == 1 {
+                    let platform_event = PlatformInput::FileDrop(FileDropEvent::Entered {
+                        position,
+                        paths: ExternalPaths(self.hovered_external_paths.clone().into()),
+                    });
+
+                    window
+                        .0
+                        .state
+                        .callbacks
+                        .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
+                            cb(platform_event.clone());
+                        });
+                }
+            }
+
+            winit::event::WindowEvent::HoveredFileCancelled => {
+                self.hovered_external_paths.clear();
+
+                let platform_event = PlatformInput::FileDrop(FileDropEvent::Exited);
+
+                window
+                    .0
+                    .state
+                    .callbacks
+                    .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
+                        cb(platform_event.clone());
+                    });
+            }
+
+            winit::event::WindowEvent::DroppedFile(path) => {
+                // Some backends may emit drop without prior hover events.
+                if self.hovered_external_paths.is_empty() {
+                    self.hovered_external_paths.push(path);
+
+                    let position = window.0.state.mouse_position.get();
+                    let entered = PlatformInput::FileDrop(FileDropEvent::Entered {
+                        position,
+                        paths: ExternalPaths(self.hovered_external_paths.clone().into()),
+                    });
+
+                    window
+                        .0
+                        .state
+                        .callbacks
+                        .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
+                            cb(entered.clone());
+                        });
+                }
+
+                let position = window.0.state.mouse_position.get();
+                let submit = PlatformInput::FileDrop(FileDropEvent::Submit { position });
+
+                window
+                    .0
+                    .state
+                    .callbacks
+                    .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
+                        cb(submit.clone());
+                    });
+
+                self.hovered_external_paths.clear();
+            }
+
             winit::event::WindowEvent::Resized(physical_size) => {
                 if physical_size.width == 0 || physical_size.height == 0 {
                     return;
@@ -832,6 +907,20 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                     .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
                         cb(platform_event.clone());
                     });
+
+                if !self.hovered_external_paths.is_empty() {
+                    let file_drop_event = PlatformInput::FileDrop(FileDropEvent::Pending {
+                        position,
+                    });
+
+                    window
+                        .0
+                        .state
+                        .callbacks
+                        .invoke_mut(&window.0.state.callbacks.on_input, |cb| {
+                            cb(file_drop_event.clone());
+                        });
+                }
             }
 
             winit::event::WindowEvent::CursorLeft { .. } => {

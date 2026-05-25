@@ -640,10 +640,6 @@ impl Asset for ImageAssetLoader {
 
                         for frame in decoder.into_frames() {
                             let mut frame = frame?;
-                            // Convert from RGBA to BGRA.
-                            for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
                             frames.push(frame);
                         }
 
@@ -658,33 +654,19 @@ impl Asset for ImageAssetLoader {
 
                             for frame in decoder.into_frames() {
                                 let mut frame = frame?;
-                                // Convert from RGBA to BGRA.
-                                for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                    pixel.swap(0, 2);
-                                }
                                 frames.push(frame);
                             }
 
                             frames
                         } else {
-                            let mut data = DynamicImage::from_decoder(decoder)?.into_rgba8();
-
-                            // Convert from RGBA to BGRA.
-                            for pixel in data.chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
+                            let data = DynamicImage::from_decoder(decoder)?.into_rgba8();
 
                             SmallVec::from_elem(Frame::new(data), 1)
                         }
                     }
                     _ => {
-                        let mut data =
+                        let data =
                             image::load_from_memory_with_format(&bytes, format)?.into_rgba8();
-
-                        // Convert from RGBA to BGRA.
-                        for pixel in data.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
 
                         SmallVec::from_elem(Frame::new(data), 1)
                     }
@@ -693,7 +675,7 @@ impl Asset for ImageAssetLoader {
                 Ok(Arc::new(RenderImage::new(data)))
             } else {
                 svg_renderer
-                    .render_single_frame(&bytes, 1.0, true)
+                    .render_single_frame(&bytes, 1.0, false)
                     .map_err(Into::into)
             }
         }

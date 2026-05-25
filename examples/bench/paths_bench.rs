@@ -36,8 +36,8 @@ impl PaintingViewer {
                 path,
                 linear_gradient(
                     180.,
-                    linear_color_stop(rgb(0xFACC15), 0.7),
-                    linear_color_stop(rgb(0xD56D0C), 1.),
+                    gradient_color_stop(rgb(0xFACC15), 0.7),
+                    gradient_color_stop(rgb(0xD56D0C), 1.),
                 )
                 .color_space(ColorSpace::Oklab),
             ));

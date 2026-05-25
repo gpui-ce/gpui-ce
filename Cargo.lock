@@ -2006,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-ce"
-version = "0.3.3"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3221,7 +3221,7 @@ dependencies = [
 [[package]]
 name = "lockfree"
 version = "0.5.1"
-source = "git+https://github.com/mdeand/priority-threadpool#28df6ed5ebef6818f2ea0cde9bfd99d3067d42ce"
+source = "git+https://github.com/tristanpoland/priority-threadpool?rev=bb1ab91#bb1ab91e284332975ca6889303582c7352ec6509"
 dependencies = [
  "owned-alloc",
 ]
@@ -4193,7 +4193,7 @@ dependencies = [
 [[package]]
 name = "priority-threadpool"
 version = "0.1.0"
-source = "git+https://github.com/mdeand/priority-threadpool#28df6ed5ebef6818f2ea0cde9bfd99d3067d42ce"
+source = "git+https://github.com/tristanpoland/priority-threadpool?rev=bb1ab91#bb1ab91e284332975ca6889303582c7352ec6509"
 dependencies = [
  "async-task",
  "lockfree",

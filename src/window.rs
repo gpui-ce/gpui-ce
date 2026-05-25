@@ -850,6 +850,7 @@ pub struct Window {
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
+    pub(crate) element_blur: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
@@ -1279,6 +1280,7 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            element_blur: 0.0,
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -1568,6 +1570,7 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            element_blur: 0.0,
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2115,6 +2118,18 @@ impl Window {
     /// Events may not be received during a move operation.
     pub fn start_window_move(&self) {
         self.platform_window.start_window_move()
+    }
+
+    /// Move the window so its top-left corner is at `position` in logical screen coordinates.
+    /// Cross-platform: no-op on platforms that don't implement it.
+    pub fn set_window_position(&self, position: Point<Pixels>) {
+        self.platform_window.set_window_position(position)
+    }
+
+    /// Call `f` with a reference to the underlying `winit::window::Window`.
+    /// `f` is not called on platforms that don't use winit (e.g. the test backend).
+    pub fn with_winit_window(&self, mut f: impl FnMut(&crate::platform::cross::WinitWindow)) {
+        self.platform_window.with_winit_window(&mut f);
     }
 
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
@@ -2854,6 +2869,24 @@ impl Window {
         result
     }
 
+    pub(crate) fn with_element_blur<R>(
+        &mut self,
+        blur_radius: Option<f32>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+
+        let Some(blur_radius) = blur_radius else {
+            return f(self);
+        };
+
+        let previous_blur = self.element_blur;
+        self.element_blur = previous_blur + blur_radius.max(0.0);
+        let result = f(self);
+        self.element_blur = previous_blur;
+        result
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -2951,6 +2984,14 @@ impl Window {
     pub(crate) fn element_opacity(&self) -> f32 {
         self.invalidator.debug_assert_paint_or_prepaint();
         self.element_opacity
+    }
+
+    /// Obtain the current element blur radius. This method should only be called during the
+    /// paint or prepaint phase of element drawing.
+    #[inline]
+    pub(crate) fn element_blur(&self) -> f32 {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        self.element_blur
     }
 
     /// Obtain the current content mask. This method should only be called during element drawing.
@@ -3255,6 +3296,28 @@ impl Window {
             corner_radii: quad.corner_radii.scale(scale_factor),
             border_widths: quad.border_widths.scale(scale_factor),
             border_style: quad.border_style,
+        });
+    }
+
+    /// Paint a backdrop blur quad into the scene for the next frame at the current z-index.
+    /// This blurs the content behind the element (like CSS backdrop-filter: blur()).
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_blur_quad(&mut self, quad: PaintQuad, blur_radius: Pixels) {
+        self.invalidator.debug_assert_paint();
+
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask();
+        let opacity = self.element_opacity();
+        self.next_frame.scene.insert_primitive(crate::BackdropBlur {
+            order: 0,
+            blur_radius: blur_radius.scale(scale_factor),
+            bounds: quad.bounds.scale(scale_factor),
+            content_mask: content_mask.scale(scale_factor),
+            corner_radii: quad.corner_radii.scale(scale_factor),
+            background: quad.background.opacity(opacity),
+            border_color: quad.border_color.opacity(opacity),
+            border_widths: quad.border_widths.scale(scale_factor),
         });
     }
 

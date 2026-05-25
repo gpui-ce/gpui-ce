@@ -148,7 +148,7 @@ impl SurfaceRegistry {
     ///
     /// Returns `true` if a swap occurred, `false` if GPU work is incomplete (compositor
     /// should reuse the current display buffer).
-    pub fn swap_ready_display(&self, device: &wgpu::Device, id: SurfaceId) -> bool {
+    pub fn swap_ready_display(&self, _device: &wgpu::Device, id: SurfaceId) -> bool {
         if let Some(tb) = self.surfaces.lock().unwrap().get(&id) {
             // Atomic swap: ready ↔ display
             // NOTE: We do NOT call device.poll() here because:
