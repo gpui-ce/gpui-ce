@@ -2,441 +2,556 @@ use std::time::Duration;
 
 use gpui::*;
 
-/// A full-featured karaoke app with scrolling, fading, and auto text wrapping
-/// Using "You Are My Sunshine" - a well-known public domain song
+/// A polished karaoke app with proper component architecture
+/// Using "You Are My Sunshine" - public domain classic
 struct KaraokeApp {
-    lines: Vec<KaraokeLine>,
+    song: Song,
+    playback: PlaybackState,
+}
+
+struct Song {
+    title: SharedString,
+    artist: SharedString,
+    lines: Vec<LyricLine>,
+}
+
+#[derive(Clone)]
+struct LyricLine {
+    text: SharedString,
+    duration: f32,
+    color: Rgba,
+}
+
+#[derive(Clone)]
+struct PlaybackState {
     current_line: usize,
     line_progress: f32,
-    scroll_offset: f32, // Vertical offset for scrolling animation
-    line_max_width: f32, // Maximum width before wrapping
+    scroll_position: f32,
+    total_lines: usize,
 }
 
-struct KaraokeLine {
-    text: SharedString,
-    wrapped_segments: Vec<SharedString>, // Text split into segments if it wraps
-    char_timings: Vec<f32>, // Duration in seconds for each character
-    total_duration: f32,
-}
-
-impl KaraokeLine {
-    fn new(text: impl Into<SharedString>, timing: f32) -> Self {
-        let text_string: SharedString = text.into();
-        let char_count = text_string.chars().count();
-
-        // Create even timing for each character
-        let char_timings = vec![timing / char_count as f32; char_count];
-        let total_duration = timing;
-
-        Self {
-            text: text_string,
-            wrapped_segments: vec![],
-            char_timings,
-            total_duration,
+impl PlaybackState {
+    fn overall_progress(&self) -> f32 {
+        if self.total_lines == 0 {
+            return 0.0;
         }
+        (self.current_line as f32 + self.line_progress) / self.total_lines as f32
     }
 
-    /// Get the progress (0.0 to 1.0) through the text given elapsed time
-    fn progress_at_time(&self, elapsed: f32) -> f32 {
-        if elapsed >= self.total_duration {
-            return 1.0;
-        }
-        (elapsed / self.total_duration).clamp(0.0, 1.0)
+    fn is_active(&self, line_idx: usize) -> bool {
+        line_idx == self.current_line
     }
 
-    /// Split text into segments if it exceeds max_width
-    /// This is a simple character-based split - in production you'd measure actual text width
-    fn wrap_text(&mut self, max_width_chars: usize) {
-        let text_str = self.text.to_string();
-        if text_str.len() <= max_width_chars {
-            self.wrapped_segments = vec![self.text.clone()];
-            return;
-        }
-
-        // Split at word boundaries when possible
-        let mut segments = Vec::new();
-        let mut current_segment = String::new();
-
-        for word in text_str.split_whitespace() {
-            if current_segment.len() + word.len() + 1 > max_width_chars && !current_segment.is_empty() {
-                segments.push(current_segment.trim().to_string().into());
-                current_segment = word.to_string();
-            } else {
-                if !current_segment.is_empty() {
-                    current_segment.push(' ');
-                }
-                current_segment.push_str(word);
-            }
-        }
-
-        if !current_segment.is_empty() {
-            segments.push(current_segment.trim().to_string().into());
-        }
-
-        self.wrapped_segments = segments;
+    fn is_past(&self, line_idx: usize) -> bool {
+        line_idx < self.current_line
     }
 }
 
 impl KaraokeApp {
     fn new(cx: &mut Context<Self>) -> Self {
-        // "You Are My Sunshine" - Public domain lyrics
+        // Create the song - lines are pre-split to avoid wrapping issues
+        // Each line is kept short enough to fit on screen at large font size
         let lines = vec![
-            // Chorus
-            KaraokeLine::new("You are my sunshine, my only sunshine", 3.5),
-            KaraokeLine::new("You make me happy when skies are gray", 3.5),
-            KaraokeLine::new("You'll never know dear, how much I love you", 3.8),
-            KaraokeLine::new("Please don't take my sunshine away", 3.5),
+            // Chorus - warm sunny colors
+            LyricLine::new("You are my sunshine", 1.8, rgb(0xffd700)),
+            LyricLine::new("my only sunshine", 1.7, rgb(0xffcc00)),
+            LyricLine::new("You make me happy", 1.8, rgb(0xffb347)),
+            LyricLine::new("when skies are gray", 1.7, rgb(0xffa500)),
+            LyricLine::new("You'll never know dear", 2.0, rgb(0xff8c42)),
+            LyricLine::new("how much I love you", 1.8, rgb(0xff7b35)),
+            LyricLine::new("Please don't take", 1.8, rgb(0xff6b35)),
+            LyricLine::new("my sunshine away", 1.7, rgb(0xff5a28)),
 
-            // Verse 1
-            KaraokeLine::new("The other night dear, as I lay sleeping", 3.5),
-            KaraokeLine::new("I dreamed I held you in my arms", 3.3),
-            KaraokeLine::new("When I awoke dear, I was mistaken", 3.5),
-            KaraokeLine::new("So I hung my head and cried", 3.0),
+            // Verse 1 - cool blues
+            LyricLine::new("The other night dear", 1.8, rgb(0x5da6ff)),
+            LyricLine::new("as I lay sleeping", 1.7, rgb(0x4d96ff)),
+            LyricLine::new("I dreamed I held you", 1.8, rgb(0x3d86ff)),
+            LyricLine::new("in my arms", 1.5, rgb(0x2d76ff)),
+            LyricLine::new("When I awoke dear", 1.8, rgb(0x2d72ff)),
+            LyricLine::new("I was mistaken", 1.5, rgb(0x1d68ff)),
+            LyricLine::new("So I hung my head", 1.8, rgb(0x1d58d4)),
+            LyricLine::new("and cried", 1.2, rgb(0x1d48c4)),
 
-            // Chorus repeat
-            KaraokeLine::new("You are my sunshine, my only sunshine", 3.5),
-            KaraokeLine::new("You make me happy when skies are gray", 3.5),
-            KaraokeLine::new("You'll never know dear, how much I love you", 3.8),
-            KaraokeLine::new("Please don't take my sunshine away", 3.5),
+            // Chorus repeat - warm sunny colors
+            LyricLine::new("You are my sunshine", 1.8, rgb(0xffd700)),
+            LyricLine::new("my only sunshine", 1.7, rgb(0xffcc00)),
+            LyricLine::new("You make me happy", 1.8, rgb(0xffb347)),
+            LyricLine::new("when skies are gray", 1.7, rgb(0xffa500)),
+            LyricLine::new("You'll never know dear", 2.0, rgb(0xff8c42)),
+            LyricLine::new("how much I love you", 1.8, rgb(0xff7b35)),
+            LyricLine::new("Please don't take", 1.8, rgb(0xff6b35)),
+            LyricLine::new("my sunshine away", 1.7, rgb(0xff5a28)),
 
-            // Verse 2
-            KaraokeLine::new("I'll always love you and make you happy", 3.5),
-            KaraokeLine::new("If you will only say the same", 3.2),
-            KaraokeLine::new("But if you leave me to love another", 3.5),
-            KaraokeLine::new("You'll regret it all some day", 3.2),
+            // Verse 2 - purples and magentas
+            LyricLine::new("I'll always love you", 1.8, rgb(0xda70d6)),
+            LyricLine::new("and make you happy", 1.5, rgb(0xca60c6)),
+            LyricLine::new("If you will only", 1.6, rgb(0xba55d3)),
+            LyricLine::new("say the same", 1.6, rgb(0xaa45c3)),
+            LyricLine::new("But if you leave me", 1.8, rgb(0x9a3ab3)),
+            LyricLine::new("to love another", 1.7, rgb(0x8a2aa3)),
+            LyricLine::new("You'll regret it all", 1.8, rgb(0x7a1f93)),
+            LyricLine::new("some day", 1.4, rgb(0x6a0f83)),
 
-            // Final chorus
-            KaraokeLine::new("You are my sunshine, my only sunshine", 3.5),
-            KaraokeLine::new("You make me happy when skies are gray", 3.5),
-            KaraokeLine::new("You'll never know dear, how much I love you", 3.8),
-            KaraokeLine::new("Please don't take my sunshine away", 4.0),
+            // Final chorus - golden finale
+            LyricLine::new("You are my sunshine", 1.8, rgb(0xffd700)),
+            LyricLine::new("my only sunshine", 1.7, rgb(0xffcc00)),
+            LyricLine::new("You make me happy", 1.8, rgb(0xffb347)),
+            LyricLine::new("when skies are gray", 1.7, rgb(0xffa500)),
+            LyricLine::new("You'll never know dear", 2.0, rgb(0xff8c42)),
+            LyricLine::new("how much I love you", 1.8, rgb(0xff7b35)),
+            LyricLine::new("Please don't take", 1.8, rgb(0xff6b35)),
+            LyricLine::new("my sunshine away", 2.0, rgb(0xff5a28)),
         ];
 
-        let mut app = Self {
+        let total_lines = lines.len();
+        let song = Song {
+            title: "You Are My Sunshine".into(),
+            artist: "Public Domain Classic".into(),
             lines,
-            current_line: 0,
-            line_progress: 0.0,
-            scroll_offset: 0.0,
-            line_max_width: 40.0, // Characters
         };
 
-        // Wrap all lines
-        for line in &mut app.lines {
-            line.wrap_text(40);
-        }
+        let playback = PlaybackState {
+            current_line: 0,
+            line_progress: 0.0,
+            scroll_position: 0.0,
+            total_lines,
+        };
 
-        // Start animation
-        cx.spawn(async move |this, cx| {
-            loop {
-                let total_lines = this.update(cx, |this, _| this.lines.len()).ok().unwrap_or(0);
-
-                for line_idx in 0..total_lines {
-                    let duration = this.update(cx, |this, _| {
-                        this.current_line = line_idx;
-                        this.lines[line_idx].total_duration
-                    }).ok().unwrap_or(3.0);
-
-                    let steps = (duration * 60.0) as u32; // 60 FPS
-                    for i in 0..=steps {
-                        let elapsed = (i as f32 / steps as f32) * duration;
-                        this.update(cx, |this, cx| {
-                            this.line_progress = this.lines[this.current_line].progress_at_time(elapsed);
-
-                            // Smooth scroll animation - target scroll keeps active line near center
-                            let target_scroll = this.current_line as f32;
-                            this.scroll_offset += (target_scroll - this.scroll_offset) * 0.08;
-
-                            cx.notify();
-                        }).ok();
-                        Timer::after(Duration::from_millis((1000.0 / 60.0) as u64)).await;
-                    }
-
-                    // Brief pause between lines
-                    Timer::after(Duration::from_millis(400)).await;
-                }
-
-                // Longer pause before restarting
-                Timer::after(Duration::from_secs(3)).await;
-
-                this.update(cx, |this, cx| {
-                    this.current_line = 0;
-                    this.line_progress = 0.0;
-                    this.scroll_offset = 0.0;
-                    cx.notify();
-                }).ok();
-
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }).detach();
-
+        let mut app = Self { song, playback };
+        app.start_playback(cx);
         app
     }
 
-    /// Calculate visual properties for a line based on its position relative to current line
-    fn line_visual_props(&self, line_idx: usize) -> LineVisualProps {
-        let relative_position = line_idx as f32 - self.scroll_offset;
-        let is_current = line_idx == self.current_line;
-        let distance_from_current = (line_idx as i32 - self.current_line as i32).abs() as f32;
+    fn start_playback(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let total_lines = this.update(cx, |this, _| this.song.lines.len()).ok().unwrap_or(0);
 
-        // Lines above current (already sung)
-        let is_past = line_idx < self.current_line;
-        // Lines below current (not yet sung)
-        let _is_future = line_idx > self.current_line;
+                for line_idx in 0..total_lines {
+                    let duration = this
+                        .update(cx, |this, _| {
+                            this.playback.current_line = line_idx;
+                            this.song.lines[line_idx].duration
+                        })
+                        .ok()
+                        .unwrap_or(2.0);
 
-        // Scale: current=1.0, adjacent=0.85, far=0.7
-        let scale = if is_current {
+                    let steps = (duration * 60.0) as u32;
+                    for i in 0..=steps {
+                        let progress = i as f32 / steps as f32;
+                        this.update(cx, |this, cx| {
+                            this.playback.line_progress = progress;
+
+                            // Smooth scroll to keep current line in view position 2
+                            let target_scroll = (this.playback.current_line as f32).max(2.0) - 2.0;
+                            this.playback.scroll_position +=
+                                (target_scroll - this.playback.scroll_position) * 0.15;
+
+                            cx.notify();
+                        })
+                        .ok();
+
+                        Timer::after(Duration::from_millis(16)).await;
+                    }
+
+                    // Tiny pause between lines
+                    Timer::after(Duration::from_millis(200)).await;
+                }
+
+                // Longer pause before restart
+                Timer::after(Duration::from_secs(3)).await;
+
+                this.update(cx, |this, cx| {
+                    this.playback.current_line = 0;
+                    this.playback.line_progress = 0.0;
+                    this.playback.scroll_position = 0.0;
+                    cx.notify();
+                })
+                .ok();
+
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        })
+        .detach();
+    }
+}
+
+impl LyricLine {
+    fn new(text: impl Into<SharedString>, duration: f32, color: Rgba) -> Self {
+        Self {
+            text: text.into(),
+            duration,
+            color,
+        }
+    }
+}
+
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+/// Single lyric line component with gradient effect
+#[derive(IntoElement)]
+struct LyricLineComponent {
+    line: LyricLine,
+    line_idx: usize,
+    playback: PlaybackState,
+}
+
+impl LyricLineComponent {
+    fn new(line: LyricLine, line_idx: usize, playback: PlaybackState) -> Self {
+        Self {
+            line,
+            line_idx,
+            playback,
+        }
+    }
+
+    fn calculate_visual_state(&self) -> LyricVisualState {
+        let is_active = self.playback.is_active(self.line_idx);
+        let is_past = self.playback.is_past(self.line_idx);
+        let visual_position = self.line_idx as f32 - self.playback.scroll_position;
+        let distance = (self.line_idx as i32 - self.playback.current_line as i32).abs() as f32;
+
+        // Scale: active is largest, others shrink based on distance
+        let scale = if is_active {
+            1.3
+        } else if distance <= 1.0 {
             1.0
-        } else if distance_from_current <= 1.0 {
-            0.85
         } else {
-            (0.7 - (distance_from_current - 1.0) * 0.05).max(0.5)
+            (0.85 - (distance - 1.0) * 0.1).max(0.5)
         };
 
-        // Opacity: current=1.0, adjacent=0.8, far fades out
-        let opacity = if is_current {
+        // Opacity: active is full, others fade based on distance
+        let opacity = if is_active {
             1.0
-        } else if distance_from_current <= 1.0 {
-            0.8
+        } else if distance <= 1.0 {
+            0.9
         } else if is_past {
-            // Fade out as lines move up and away
-            (0.6 - (distance_from_current - 1.0) * 0.15).max(0.0)
+            // Past lines fade out faster
+            (0.75 - (distance - 1.0) * 0.2).max(0.0)
         } else {
-            // Future lines fade in from below
-            (0.4 - (distance_from_current - 1.0) * 0.1).max(0.2)
+            // Future lines are dimmer
+            (0.5 - (distance - 1.0) * 0.15).max(0.1)
         };
 
-        // Progress: 1.0 for past, current progress for current, 0.0 for future
+        // Text progress for gradient
         let progress = if is_past {
             1.0
-        } else if is_current {
-            self.line_progress
+        } else if is_active {
+            self.playback.line_progress
         } else {
             0.0
         };
 
-        // Color based on progress through song
-        let song_progress = line_idx as f32 / self.lines.len() as f32;
-        let color = self.interpolate_color(song_progress);
-
-        LineVisualProps {
+        LyricVisualState {
             scale,
             opacity,
             progress,
-            active_color: color,
-            inactive_color: rgb(0x555555),
-            relative_position,
-        }
-    }
-
-    /// Interpolate color through rainbow for visual variety
-    fn interpolate_color(&self, t: f32) -> Rgba {
-        // Smooth color gradient through the song
-        if t < 0.25 {
-            // Blue to Cyan
-            let blue = rgb(0x0080ff);
-            let cyan = rgb(0x00ffff);
-            let local_t = t * 4.0;
-            Rgba {
-                r: blue.r * (1.0 - local_t) + cyan.r * local_t,
-                g: blue.g * (1.0 - local_t) + cyan.g * local_t,
-                b: blue.b * (1.0 - local_t) + cyan.b * local_t,
-                a: 1.0,
-            }
-        } else if t < 0.5 {
-            // Cyan to Yellow
-            let cyan = rgb(0x00ffff);
-            let yellow = rgb(0xffff00);
-            let local_t = (t - 0.25) * 4.0;
-            Rgba {
-                r: cyan.r * (1.0 - local_t) + yellow.r * local_t,
-                g: cyan.g * (1.0 - local_t) + yellow.g * local_t,
-                b: cyan.b * (1.0 - local_t) + yellow.b * local_t,
-                a: 1.0,
-            }
-        } else if t < 0.75 {
-            // Yellow to Magenta
-            let yellow = rgb(0xffff00);
-            let magenta = rgb(0xff00ff);
-            let local_t = (t - 0.5) * 4.0;
-            Rgba {
-                r: yellow.r * (1.0 - local_t) + magenta.r * local_t,
-                g: yellow.g * (1.0 - local_t) + magenta.g * local_t,
-                b: yellow.b * (1.0 - local_t) + magenta.b * local_t,
-                a: 1.0,
-            }
-        } else {
-            // Magenta to Blue
-            let magenta = rgb(0xff00ff);
-            let blue = rgb(0x0080ff);
-            let local_t = (t - 0.75) * 4.0;
-            Rgba {
-                r: magenta.r * (1.0 - local_t) + blue.r * local_t,
-                g: magenta.g * (1.0 - local_t) + blue.g * local_t,
-                b: magenta.b * (1.0 - local_t) + blue.b * local_t,
-                a: 1.0,
-            }
+            visual_position,
+            is_active,
+            is_past,
         }
     }
 }
 
-struct LineVisualProps {
+struct LyricVisualState {
     scale: f32,
     opacity: f32,
     progress: f32,
-    active_color: Rgba,
-    inactive_color: Rgba,
-    relative_position: f32,
+    visual_position: f32,
+    is_active: bool,
+    is_past: bool,
 }
 
-impl Render for KaraokeApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let visible_lines = 5; // Show 5 lines at a time
-        let center_position = (visible_lines / 2) as f32;
+impl RenderOnce for LyricLineComponent {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let state = self.calculate_visual_state();
+        let y_offset = state.visual_position * px(70.0);
+
+        // Color selection
+        let inactive_color = if state.is_past {
+            rgb(0x555555)
+        } else {
+            rgb(0x333333)
+        };
 
         div()
+            .absolute()
+            .top(y_offset)
+            .left_0()
+            .right_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .opacity(state.opacity)
+            .child(
+                div()
+                    .text_size(px(52.0 * state.scale))
+                    .line_height(relative(1.3))
+                    .font_weight(if state.is_active {
+                        FontWeight::EXTRA_BOLD
+                    } else {
+                        FontWeight::SEMIBOLD
+                    })
+                    .text_gradient_horizontal(
+                        linear_color_stop(self.line.color, (state.progress - 0.015).max(0.0)),
+                        linear_color_stop(inactive_color, (state.progress + 0.015).min(1.0)),
+                    )
+                    .child(self.line.text.clone()),
+            )
+    }
+}
+
+/// Elegant title bar
+#[derive(IntoElement)]
+struct TitleBar {
+    title: SharedString,
+    artist: SharedString,
+}
+
+impl TitleBar {
+    fn new(title: SharedString, artist: SharedString) -> Self {
+        Self { title, artist }
+    }
+}
+
+impl RenderOnce for TitleBar {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(90.0))
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .size_full()
-            .bg(rgb(0x0a0a0a))
-            .overflow_hidden()
+            .gap_1()
+            .bg(linear_gradient(
+                180.0,
+                linear_color_stop(rgba(0x00000099), 0.0),
+                linear_color_stop(rgba(0x00000000), 1.0),
+            ))
             .child(
-                // Title bar
                 div()
-                    .absolute()
-                    .top_0()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .p_6()
-                    .bg(rgba(0x000000aa))
-                    .child(
-                        div()
-                            .text_size(px(28.0))
-                            .text_color(rgb(0xffffff))
-                            .font_weight(FontWeight::BOLD)
-                            .text_gradient_horizontal(
-                                linear_color_stop(rgb(0xffd700), 0.0),
-                                linear_color_stop(rgb(0xffa500), 1.0),
-                            )
-                            .child("♫ You Are My Sunshine ♫"),
-                    ),
+                    .text_size(px(38.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_gradient_horizontal(
+                        linear_color_stop(rgb(0xffd700), 0.3),
+                        linear_color_stop(rgb(0xffaa00), 0.7),
+                    )
+                    .child(format!("♪ {} ♪", self.title)),
             )
             .child(
-                // Main scrolling area
                 div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(16.0))
-                    .w_full()
-                    .h_full()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(20.0))
-                            .children(
-                                self.lines.iter().enumerate().map(|(idx, line)| {
-                                    let props = self.line_visual_props(idx);
-
-                                    // Only render lines near the current position
-                                    if (props.relative_position - center_position).abs() > 4.0 {
-                                        return div().into_any_element();
-                                    }
-
-                                    let y_offset = (props.relative_position - center_position) * 90.0;
-
-                                    // Render wrapped segments if any, otherwise single line
-                                    let segments = if !line.wrapped_segments.is_empty() {
-                                        line.wrapped_segments.clone()
-                                    } else {
-                                        vec![line.text.clone()]
-                                    };
-
-                                    div()
-                                        .relative()
-                                        .top(px(y_offset))
-                                        .flex()
-                                        .flex_col()
-                                        .items_center()
-                                        .gap(px(4.0))
-                                        .children(segments.into_iter().map(|segment| {
-                                            div()
-                                                .text_size(px(40.0 * props.scale))
-                                                .font_weight(if idx == self.current_line {
-                                                    FontWeight::BOLD
-                                                } else {
-                                                    FontWeight::SEMIBOLD
-                                                })
-                                                .text_gradient_horizontal(
-                                                    linear_color_stop(
-                                                        props.active_color,
-                                                        props.progress.max(0.01) - 0.01,
-                                                    ),
-                                                    linear_color_stop(
-                                                        props.inactive_color,
-                                                        props.progress.max(0.01) + 0.01,
-                                                    ),
-                                                )
-                                                .opacity(props.opacity)
-                                                .child(segment)
-                                        }))
-                                        .into_any_element()
-                                }),
-                            ),
-                    ),
+                    .text_size(px(13.0))
+                    .text_color(rgba(0xffffffaa))
+                    .child(self.artist),
             )
+    }
+}
+
+/// Sleek progress bar at bottom
+#[derive(IntoElement)]
+struct ProgressBar {
+    progress: f32,
+    current_line: usize,
+    total_lines: usize,
+}
+
+impl ProgressBar {
+    fn new(progress: f32, current_line: usize, total_lines: usize) -> Self {
+        Self {
+            progress,
+            current_line,
+            total_lines,
+        }
+    }
+
+    fn progress_color(&self) -> Rgba {
+        if self.progress < 0.25 {
+            rgb(0xffd700)
+        } else if self.progress < 0.5 {
+            rgb(0x5da6ff)
+        } else if self.progress < 0.75 {
+            rgb(0xda70d6)
+        } else {
+            rgb(0xffaa00)
+        }
+    }
+}
+
+impl RenderOnce for ProgressBar {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let bar_color = self.progress_color();
+
+        div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(px(75.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .bg(linear_gradient(
+                0.0,
+                linear_color_stop(rgba(0x00000099), 0.0),
+                linear_color_stop(rgba(0x00000000), 1.0),
+            ))
             .child(
-                // Progress indicator at bottom
                 div()
-                    .absolute()
-                    .bottom_0()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .p_4()
-                    .bg(rgba(0x000000aa))
+                    .w(px(600.0))
+                    .h(px(6.0))
+                    .bg(rgba(0x33333366))
+                    .rounded(px(3.0))
+                    .overflow_hidden()
                     .child(
                         div()
-                            .w(px(400.0))
-                            .h(px(6.0))
-                            .bg(rgb(0x333333))
+                            .w(relative(self.progress))
+                            .h_full()
+                            .bg(bar_color)
                             .rounded(px(3.0))
-                            .child(
-                                div()
-                                    .w(relative((self.current_line as f32 + self.line_progress) / self.lines.len() as f32))
-                                    .h_full()
-                                    .bg(
-                                        self.interpolate_color(
-                                            (self.current_line as f32 + self.line_progress) / self.lines.len() as f32
-                                        )
-                                    )
-                                    .rounded(px(3.0)),
-                            ),
+                            .shadow(vec![BoxShadow {
+                                color: Hsla::from(bar_color).opacity(0.6),
+                                blur_radius: px(8.0),
+                                spread_radius: px(0.0),
+                                offset: point(px(0.0), px(0.0)),
+                            }]),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgba(0xbbbbbbff))
+                            .child(format!("Line {}/{}", self.current_line + 1, self.total_lines)),
                     )
                     .child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(rgb(0x888888))
-                            .child(format!(
-                                "Line {}/{} • {:.0}%",
-                                self.current_line + 1,
-                                self.lines.len(),
-                                ((self.current_line as f32 + self.line_progress) / self.lines.len() as f32) * 100.0
-                            )),
+                            .text_color(rgba(0x888888ff))
+                            .child("•"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgba(0xbbbbbbff))
+                            .child(format!("{:.0}%", self.progress * 100.0)),
                     ),
             )
+    }
+}
+
+/// Subtle animated background
+#[derive(IntoElement)]
+struct AnimatedBackground {
+    progress: f32,
+}
+
+impl AnimatedBackground {
+    fn new(progress: f32) -> Self {
+        Self { progress }
+    }
+}
+
+impl RenderOnce for AnimatedBackground {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        // Subtle color shift through the song
+        let (c1, c2) = if self.progress < 0.25 {
+            (rgba(0x1a1a14ff), rgba(0x0a0a08ff))
+        } else if self.progress < 0.5 {
+            (rgba(0x14141aff), rgba(0x08080aff))
+        } else if self.progress < 0.75 {
+            (rgba(0x1a141aff), rgba(0x0a080aff))
+        } else {
+            (rgba(0x1a1814ff), rgba(0x0a0a08ff))
+        };
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(linear_gradient(
+                145.0,
+                linear_color_stop(c1, 0.0),
+                linear_color_stop(c2, 1.0),
+            ))
+    }
+}
+
+// ============================================================================
+// MAIN RENDER
+// ============================================================================
+
+impl Render for KaraokeApp {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let playback = self.playback.clone();
+
+        div()
+            .flex()
+            .size_full()
+            .overflow_hidden()
+            .child(AnimatedBackground::new(playback.overall_progress()))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(90.0))
+                    .bottom(px(75.0))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .relative()
+                                    .top(px(180.0))
+                                    .w_full()
+                                    .children(self.song.lines.iter().enumerate().filter_map(
+                                        |(idx, line)| {
+                                            let visual_pos = idx as f32 - playback.scroll_position;
+                                            if visual_pos < -2.5 || visual_pos > 7.0 {
+                                                return None;
+                                            }
+
+                                            Some(LyricLineComponent::new(
+                                                line.clone(),
+                                                idx,
+                                                playback.clone(),
+                                            ))
+                                        },
+                                    )),
+                            ),
+                    ),
+            )
+            .child(TitleBar::new(
+                self.song.title.clone(),
+                self.song.artist.clone(),
+            ))
+            .child(ProgressBar::new(
+                playback.overall_progress(),
+                playback.current_line,
+                playback.total_lines,
+            ))
     }
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1200.0), px(700.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1400.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
