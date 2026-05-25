@@ -121,6 +121,10 @@ name = "karaoke_text"
 path = "examples/karaoke_text.rs"
 
 [[example]]
+name = "karaoke_app"
+path = "examples/karaoke_app.rs"
+
+[[example]]
 name = "text_gradients"
 path = "examples/text_gradients.rs"
 
