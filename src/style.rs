@@ -483,7 +483,7 @@ impl TextStyle {
                 weight: self.font_weight,
                 style: self.font_style,
             },
-            color: self.color.to_hsla(),
+            color: self.color,
             background_color: self.background_color,
             underline: self.underline,
             strikethrough: self.strikethrough,

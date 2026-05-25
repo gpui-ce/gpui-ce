@@ -952,12 +952,16 @@ pub fn text_gradient(
     from: impl Into<LinearColorStop>,
     to: impl Into<LinearColorStop>,
 ) -> TextColor {
+    let from_stop = from.into();
+    let to_stop = to.into();
+    println!("[DEBUG] text_gradient: angle={}, from=(color={:?}, pct={}), to=(color={:?}, pct={})",
+        angle, from_stop.color, from_stop.percentage, to_stop.color, to_stop.percentage);
     TextColor {
         tag: TextColorTag::LinearGradient,
         solid: Hsla::default(),
         color_space: ColorSpace::default(),
         gradient_angle_or_reserved: angle,
-        colors: [from.into(), to.into()],
+        colors: [from_stop, to_stop],
         pad: 0,
     }
 }

@@ -203,7 +203,9 @@ fn paint_line(
             line_height * (wrap_boundaries.len() as f32 + 1.),
         ),
     );
+    println!("[DEBUG] paint_line: line_bounds={:?}", line_bounds);
     window.paint_layer(line_bounds, |window| {
+        println!("[DEBUG] paint_line: inside paint_layer, window.content_mask()={:?}", window.content_mask());
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let baseline_offset = point(px(0.), padding_top + layout.ascent);
         let mut decoration_runs = decoration_runs.iter();
@@ -331,6 +333,7 @@ fn paint_line(
 
                         run_end += style_run.len as usize;
                         color = style_run.color;
+                        println!("[DEBUG] paint_line: color updated from style_run, tag={:?}", color.tag);
                     } else {
                         run_end = layout.len;
                         finished_underline = current_underline.take();

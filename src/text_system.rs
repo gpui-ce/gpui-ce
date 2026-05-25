@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Bounds, DevicePixels, Hsla, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
-    StrikethroughStyle, UnderlineStyle, px,
+    StrikethroughStyle, TextColor, UnderlineStyle, px,
 };
 use anyhow::{Context as _, anyhow};
 use collections::FxHashMap;
@@ -738,8 +738,8 @@ pub struct TextRun {
     pub len: usize,
     /// The font to use for this run.
     pub font: Font,
-    /// The color
-    pub color: Hsla,
+    /// The color (can be solid or gradient)
+    pub color: TextColor,
     /// The background color (if any)
     pub background_color: Option<Hsla>,
     /// The underline style (if any)

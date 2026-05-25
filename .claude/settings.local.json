@@ -10,7 +10,8 @@
       "Bash(grep:*)",
       "Bash(cargo tree:*)",
       "Bash(cargo check:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(timeout 5 tail:*)"
     ]
   }
 }
