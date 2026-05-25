@@ -117,8 +117,8 @@ unicode-segmentation = "1.10"
 util = { package = "gpui_util", version = "0.2.2", features = ["test-support"] }
 
 [[example]]
-name = "text_gradients"
-path = "examples/text_gradients.rs"
+name = "karaoke_text"
+path = "examples/karaoke_text.rs"
 
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
