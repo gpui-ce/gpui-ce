@@ -16,9 +16,6 @@ use std::{
 };
 use winit::event_loop::EventLoopProxy;
 
-#[cfg(target_os = "windows")]
-use winit::platform::windows::{BackdropType, WindowExtWindows};
-
 #[derive(Clone)]
 pub struct CrossWindow(pub(crate) Arc<CrossWindowInner>);
 
@@ -274,41 +271,8 @@ impl PlatformWindow for CrossWindow {
         self.window().set_title(title);
     }
 
-    fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
-        let window = self.window();
-
-        match background_appearance {
-            WindowBackgroundAppearance::Opaque => {
-                window.set_transparent(false);
-                window.set_blur(false);
-                #[cfg(target_os = "windows")]
-                window.set_system_backdrop(BackdropType::None);
-            }
-            WindowBackgroundAppearance::Transparent => {
-                window.set_transparent(true);
-                window.set_blur(false);
-                #[cfg(target_os = "windows")]
-                window.set_system_backdrop(BackdropType::None);
-            }
-            WindowBackgroundAppearance::Blurred => {
-                window.set_transparent(true);
-                window.set_blur(true);
-                #[cfg(target_os = "windows")]
-                window.set_system_backdrop(BackdropType::TransientWindow);
-            }
-            WindowBackgroundAppearance::MicaBackdrop => {
-                window.set_transparent(true);
-                window.set_blur(false);
-                #[cfg(target_os = "windows")]
-                window.set_system_backdrop(BackdropType::MainWindow);
-            }
-            WindowBackgroundAppearance::MicaAltBackdrop => {
-                window.set_transparent(true);
-                window.set_blur(false);
-                #[cfg(target_os = "windows")]
-                window.set_system_backdrop(BackdropType::TabbedWindow);
-            }
-        }
+    fn set_background_appearance(&self, _background_appearance: WindowBackgroundAppearance) {
+        // TODO(mdeand): Add support for setting the background appearance.
     }
 
     fn minimize(&self) {
@@ -392,7 +356,7 @@ impl PlatformWindow for CrossWindow {
 
     fn draw(&self, scene: &crate::Scene) {
         if let Some(renderer) = self.0.renderer.get() {
-            renderer.borrow_mut().draw(scene);
+            renderer.borrow().draw(scene);
         }
     }
 
@@ -458,19 +422,6 @@ impl PlatformWindow for CrossWindow {
 
     fn start_window_move(&self) {
         let _ = self.window().drag_window();
-    }
-
-    fn set_window_position(&self, position: crate::Point<crate::Pixels>) {
-        let scale = self.window().scale_factor() as f32;
-        let physical = winit::dpi::PhysicalPosition::new(
-            (position.x.0 * scale) as i32,
-            (position.y.0 * scale) as i32,
-        );
-        self.window().set_outer_position(physical);
-    }
-
-    fn with_winit_window(&self, f: &mut dyn FnMut(&winit::window::Window)) {
-        f(self.window());
     }
 
     fn start_window_resize(&self, edge: ResizeEdge) {

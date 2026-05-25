@@ -8,7 +8,6 @@ use collections::HashMap;
 use cosmic_text::{
     Attrs, AttrsList, CacheKey, Ellipsize, Family, Font as CosmicTextFont,
     FontFeatures as CosmicFontFeatures, FontSystem, Hinting, ShapeBuffer, ShapeLine, SwashCache,
-    SwashContent,
 };
 use itertools::Itertools;
 use parking_lot::RwLock;
@@ -336,38 +335,14 @@ impl CosmicTextSystemState {
                 .clone()
                 .with_context(|| format!("no image for {params:?} in font {font:?}"))?;
 
-            let data = if params.is_emoji {
-                match image.content {
-                    SwashContent::Color => image.data,
-                    SwashContent::Mask => image
-                        .data
-                        .into_iter()
-                        .flat_map(|alpha| [255, 255, 255, alpha])
-                        .collect(),
-                    SwashContent::SubpixelMask => image
-                        .data
-                        .chunks_exact(4)
-                        .flat_map(|pixel| {
-                            let alpha = pixel[0].max(pixel[1]).max(pixel[2]).max(pixel[3]);
-                            [255, 255, 255, alpha]
-                        })
-                        .collect(),
+            if params.is_emoji {
+                // Convert from RGBA to BGRA.
+                for pixel in image.data.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
                 }
-            } else {
-                match image.content {
-                    SwashContent::Mask => image.data,
-                    SwashContent::SubpixelMask => image
-                        .data
-                        .chunks_exact(4)
-                        .map(|pixel| pixel[0].max(pixel[1]).max(pixel[2]).max(pixel[3]))
-                        .collect(),
-                    SwashContent::Color => {
-                        image.data.chunks_exact(4).map(|pixel| pixel[3]).collect()
-                    }
-                }
-            };
+            }
 
-            Ok((bitmap_size, data))
+            Ok((bitmap_size, image.data))
         }
     }
 
@@ -418,8 +393,8 @@ impl CosmicTextSystemState {
                     .metadata(run.font_id.0)
                     .family(Family::Name(&font.families.first().unwrap().0))
                     .stretch(font.stretch)
-                    .style(run.style.into())
-                    .weight(run.weight.into())
+                    .style(font.style)
+                    .weight(font.weight)
                     .font_features(loaded_font.features.clone()),
             );
             offs += run.len;
@@ -760,14 +735,6 @@ fn face_info_into_properties(
 }
 
 fn check_is_known_emoji_font(postscript_name: &str) -> bool {
-    // Include common color emoji fonts across platforms.
-    matches!(
-        postscript_name,
-        "NotoColorEmoji"
-            | "AppleColorEmoji"
-            | "SegoeUIEmoji"
-            | "Segoe UI Emoji"
-            | "TwitterColorEmoji-SVGinOT"
-            | "EmojiOneColor"
-    ) || postscript_name.contains("Emoji")
+    // TODO: Include other common emoji fonts
+    postscript_name == "NotoColorEmoji"
 }

@@ -412,14 +412,6 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn show_window_menu(&self, _position: Point<Pixels>) {}
     fn start_window_move(&self) {}
     fn start_window_resize(&self, _edge: ResizeEdge) {}
-    /// Move the window so its top-left corner is at `position` in logical screen coordinates.
-    /// Non-breaking: default no-op for platforms that don't implement it.
-    fn set_window_position(&self, _position: Point<Pixels>) {}
-
-    /// Run `f` with a reference to the underlying `winit::window::Window`, if available.
-    /// Returns without calling `f` on platforms that don't use winit (test backend, etc.).
-    /// The closure is scoped to prevent the reference from escaping.
-    fn with_winit_window(&self, _f: &mut dyn FnMut(&crate::platform::cross::WinitWindow)) {}
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
@@ -1733,7 +1725,12 @@ impl Image {
             bytes: &[u8],
             format: image::ImageFormat,
         ) -> Result<SmallVec<[Frame; 1]>> {
-            let data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
+            let mut data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
+
+            // Convert from RGBA to BGRA.
+            for pixel in data.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
 
             Ok(SmallVec::from_elem(Frame::new(data), 1))
         }
@@ -1744,7 +1741,11 @@ impl Image {
                 let mut frames = SmallVec::new();
 
                 for frame in decoder.into_frames() {
-                    let frame = frame?;
+                    let mut frame = frame?;
+                    // Convert from RGBA to BGRA.
+                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                    }
                     frames.push(frame);
                 }
 

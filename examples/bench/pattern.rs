@@ -91,8 +91,8 @@ impl Render for PatternExample {
                     .h(px(40.0))
                     .bg(linear_gradient(
                         45.,
-                        gradient_color_stop(gpui::red(), 0.),
-                        gradient_color_stop(gpui::blue(), 1.),
+                        linear_color_stop(gpui::red(), 0.),
+                        linear_color_stop(gpui::blue(), 1.),
                     )),
             )
     }

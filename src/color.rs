@@ -658,7 +658,6 @@ pub(crate) enum BackgroundTag {
     Solid = 0,
     LinearGradient = 1,
     PatternSlash = 2,
-    RadialGradient = 3,
 }
 
 /// A color space for color interpolation.
@@ -692,11 +691,10 @@ pub struct Background {
     pub(crate) tag: BackgroundTag,
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
-    pub(crate) param0: f32,
-    pub(crate) param1: f32,
-    pub(crate) param2: f32,
-    pub(crate) param3: f32,
-    pub(crate) colors: [GradientStop; 2],
+    pub(crate) gradient_angle_or_pattern_height: f32,
+    pub(crate) colors: [LinearColorStop; 2],
+    /// Padding for alignment for repr(C) layout.
+    pub(crate) pad: u32,
 }
 
 impl std::fmt::Debug for Background {
@@ -707,22 +705,14 @@ impl std::fmt::Debug for Background {
                 write!(
                     f,
                     "LinearGradient({}, {:?}, {:?})",
-                    self.param0, self.colors[0], self.colors[1]
+                    self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
                 )
             }
             BackgroundTag::PatternSlash => {
-                write!(f, "PatternSlash({:?}, {})", self.solid, self.param0)
-            }
-            BackgroundTag::RadialGradient => {
                 write!(
                     f,
-                    "RadialGradient(center=({}, {}), radius=({}, {}), {:?}, {:?})",
-                    self.param0,
-                    self.param1,
-                    self.param2,
-                    self.param3,
-                    self.colors[0],
-                    self.colors[1]
+                    "PatternSlash({:?}, {})",
+                    self.solid, self.gradient_angle_or_pattern_height
                 )
             }
         }
@@ -736,11 +726,9 @@ impl Default for Background {
             tag: BackgroundTag::Solid,
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
-            param0: 0.0,
-            param1: 0.0,
-            param2: 0.0,
-            param3: 0.0,
-            colors: [GradientStop::default(), GradientStop::default()],
+            gradient_angle_or_pattern_height: 0.0,
+            colors: [LinearColorStop::default(), LinearColorStop::default()],
+            pad: 0,
         }
     }
 }
@@ -754,7 +742,7 @@ pub fn pattern_slash(color: Hsla, width: f32, interval: f32) -> Background {
     Background {
         tag: BackgroundTag::PatternSlash,
         solid: color,
-        param0: height,
+        gradient_angle_or_pattern_height: height,
         ..Default::default()
     }
 }
@@ -776,80 +764,44 @@ pub fn solid_background(color: impl Into<Hsla>) -> Background {
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient>
 pub fn linear_gradient(
     angle: f32,
-    from: impl Into<GradientStop>,
-    to: impl Into<GradientStop>,
+    from: impl Into<LinearColorStop>,
+    to: impl Into<LinearColorStop>,
 ) -> Background {
     Background {
         tag: BackgroundTag::LinearGradient,
-        param0: angle,
+        gradient_angle_or_pattern_height: angle,
         colors: [from.into(), to.into()],
         ..Default::default()
     }
 }
 
-/// Creates a radial gradient background color.
-/// The gradient radiates outward from a center point.
-///
-/// `center_x` and `center_y` define the center of the gradient
-/// in normalized coordinates, where:
-/// - `0.0` represents the start (left or top)
-/// - `1.0` represents the end (right or bottom)
-///
-/// `radius_x` and `radius_y` define the horizontal and vertical
-/// radii of the gradient in normalized space.
-///
-/// A value of `0.5` generally fills about half the container
-/// along that axis.
-///
-/// The gradient interpolates between the provided color stops.
-///
-/// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/radial-gradient>
-pub fn radial_gradient(
-    center_x: f32,
-    center_y: f32,
-    radius_x: f32,
-    radius_y: f32,
-    from: impl Into<GradientStop>,
-    to: impl Into<GradientStop>,
-) -> Background {
-    Background {
-        tag: BackgroundTag::RadialGradient,
-        param0: center_x,
-        param1: center_y,
-        param2: radius_x,
-        param3: radius_y,
-        colors: [from.into(), to.into()],
-        ..Default::default()
-    }
-}
-
-/// A color stop for a gradient.
+/// A color stop in a linear gradient.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient#linear-color-stop>
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
-pub struct GradientStop {
+pub struct LinearColorStop {
     /// The color of the color stop.
     pub color: Hsla,
-    /// The position of the gradient, in the range 0.0 to 1.0.
-    pub position: f32,
+    /// The percentage of the gradient, in the range 0.0 to 1.0.
+    pub percentage: f32,
 }
 
-/// Creates a new gradient color stop.
+/// Creates a new linear color stop.
 ///
-/// The position of the gradient, in the range 0.0 to 1.0.
-pub fn gradient_color_stop(color: impl Into<Hsla>, position: f32) -> GradientStop {
-    GradientStop {
+/// The percentage of the gradient, in the range 0.0 to 1.0.
+pub fn linear_color_stop(color: impl Into<Hsla>, percentage: f32) -> LinearColorStop {
+    LinearColorStop {
         color: color.into(),
-        position,
+        percentage,
     }
 }
 
-impl GradientStop {
+impl LinearColorStop {
     /// Returns a new color stop with the same color, but with a modified alpha value.
     pub fn opacity(&self, factor: f32) -> Self {
         Self {
-            position: self.position,
+            percentage: self.percentage,
             color: self.color.opacity(factor),
         }
     }
@@ -886,9 +838,7 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.is_transparent(),
-            BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => {
-                self.colors.iter().all(|c| c.color.is_transparent())
-            }
+            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
         }
     }
@@ -1163,8 +1113,8 @@ mod tests {
 
     #[test]
     fn test_background_linear_gradient() {
-        let from = gradient_color_stop(rgba(0xff0099ff), 0.0);
-        let to = gradient_color_stop(rgba(0x00ff99ff), 1.0);
+        let from = linear_color_stop(rgba(0xff0099ff), 0.0);
+        let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
         let background = linear_gradient(90.0, from, to);
         assert_eq!(background.tag, BackgroundTag::LinearGradient);
         assert_eq!(background.colors[0], from);

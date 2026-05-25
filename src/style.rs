@@ -9,7 +9,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextColor, TextRun, Window,
-    black, phi, point, quad, rems, size, solid_text_color, transparent_black, transparent_white,
+    black, phi, point, quad, rems, size, solid_text_color,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -260,12 +260,6 @@ pub struct Style {
 
     /// The opacity of this element
     pub opacity: Option<f32>,
-
-    /// A fast, frosted blur radius for this element and its children.
-    pub blur: Option<f32>,
-
-    /// Backdrop blur radius - blurs content BEHIND this element (CSS backdrop-filter: blur())
-    pub backdrop_blur: Option<f32>,
 
     /// The grid columns of this element
     /// Equivalent to the Tailwind `grid-cols-<number>`
@@ -631,26 +625,6 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
-        let blur_radius = window.element_blur();
-        if blur_radius > 0.0 {
-            let blur_pixels = Pixels(blur_radius);
-            let opacity = window.element_opacity();
-            let blur_glow = BoxShadow {
-                color: transparent_white().opacity(0.14 * opacity),
-                offset: Point::default(),
-                blur_radius: blur_pixels,
-                spread_radius: Pixels::ZERO,
-            };
-            let blur_depth = BoxShadow {
-                color: transparent_black().opacity(0.06 * opacity),
-                offset: Point::default(),
-                blur_radius: blur_pixels,
-                spread_radius: Pixels::ZERO,
-            };
-            let blur_shadows = [blur_glow, blur_depth];
-            window.paint_shadows(bounds, corner_radii, &blur_shadows);
-        }
-
         window.paint_shadows(bounds, corner_radii, &self.box_shadow);
 
         let background_color = self.background.as_ref().and_then(Fill::color);
@@ -658,7 +632,7 @@ impl Style {
             let mut border_color = match background_color {
                 Some(color) => match color.tag {
                     BackgroundTag::Solid => color.solid,
-                    BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => color
+                    BackgroundTag::LinearGradient => color
                         .colors
                         .first()
                         .map(|stop| stop.color)
@@ -668,30 +642,14 @@ impl Style {
                 None => Hsla::default(),
             };
             border_color.a = 0.;
-
-            // Use backdrop blur if specified, otherwise regular quad
-            if let Some(backdrop_blur_radius) = self.backdrop_blur {
-                window.paint_backdrop_blur_quad(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        background_color.unwrap_or_default(),
-                        Edges::default(),
-                        border_color,
-                        self.border_style,
-                    ),
-                    Pixels(backdrop_blur_radius),
-                );
-            } else {
-                window.paint_quad(quad(
-                    bounds,
-                    corner_radii,
-                    background_color.unwrap_or_default(),
-                    Edges::default(),
-                    border_color,
-                    self.border_style,
-                ));
-            }
+            window.paint_quad(quad(
+                bounds,
+                corner_radii,
+                background_color.unwrap_or_default(),
+                Edges::default(),
+                border_color,
+                self.border_style,
+            ));
         }
 
         continuation(window, cx);
@@ -812,8 +770,6 @@ impl Default for Style {
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,
-            blur: None,
-            backdrop_blur: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

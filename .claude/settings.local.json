@@ -11,8 +11,7 @@
       "Bash(cargo tree:*)",
       "Bash(cargo check:*)",
       "Bash(find:*)",
-      "Bash(timeout 5 tail:*)",
-      "Bash(taskkill:*)"
+      "Bash(timeout 5 tail:*)"
     ]
   }
 }

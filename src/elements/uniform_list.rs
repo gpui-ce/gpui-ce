@@ -4,8 +4,6 @@
 //! measurement. This is much faster than the full layout system, but only works for
 //! elements with uniform height.
 
-use super::ListHorizontalSizingBehavior;
-use crate::elements::smooth_scroll::SmoothScrollState;
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, Element, ElementId, Entity,
     GlobalElementId, Hitbox, InspectorElementId, InteractiveElement, Interactivity, IntoElement,
@@ -14,6 +12,8 @@ use crate::{
 };
 use smallvec::SmallVec;
 use std::{cell::RefCell, cmp, ops::Range, rc::Rc, usize};
+
+use super::ListHorizontalSizingBehavior;
 
 /// uniform_list provides lazy rendering for a set of items that are of uniform height.
 /// When rendered into a container with overflow-y: hidden and a fixed (or max) height,
@@ -119,8 +119,6 @@ pub struct UniformListScrollState {
     pub last_item_size: Option<ItemSize>,
     /// Whether the list was vertically flipped during last layout.
     pub y_flipped: bool,
-    /// Smooth scrolling animation state.
-    pub smooth_scroll: SmoothScrollState,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -141,7 +139,6 @@ impl UniformListScrollHandle {
             deferred_scroll_to_item: None,
             last_item_size: None,
             y_flipped: false,
-            smooth_scroll: SmoothScrollState::default(),
         })))
     }
 
@@ -359,7 +356,6 @@ impl Element for UniformList {
         };
 
         let shared_scroll_offset = self.interactivity.scroll_offset.clone().unwrap();
-        let mut logical_scroll_offset = *shared_scroll_offset.borrow();
         let item_height = longest_item_size.height;
         let shared_scroll_to_item = self.scroll_handle.as_mut().and_then(|handle| {
             let mut handle = handle.0.borrow_mut();
@@ -377,7 +373,7 @@ impl Element for UniformList {
             content_size,
             window,
             cx,
-            |_style, mut logical_scroll_offset, hitbox, window, cx| {
+            |_style, mut scroll_offset, hitbox, window, cx| {
                 let y_flipped = if let Some(scroll_handle) = &self.scroll_handle {
                     let scroll_state = scroll_handle.0.borrow();
                     scroll_state.y_flipped
@@ -388,18 +384,20 @@ impl Element for UniformList {
                 if self.item_count > 0 {
                     let content_height = item_height * self.item_count;
 
-                    let is_scrolled_vertically = !logical_scroll_offset.y.is_zero();
+                    let is_scrolled_vertically = !scroll_offset.y.is_zero();
                     let max_scroll_offset = padded_bounds.size.height - content_height;
 
-                    if is_scrolled_vertically && logical_scroll_offset.y < max_scroll_offset {
+                    if is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
                         shared_scroll_offset.borrow_mut().y = max_scroll_offset;
+                        scroll_offset.y = max_scroll_offset;
                     }
 
                     let content_width = content_size.width + padding.left + padding.right;
                     let is_scrolled_horizontally =
-                        can_scroll_horizontally && !logical_scroll_offset.x.is_zero();
+                        can_scroll_horizontally && !scroll_offset.x.is_zero();
                     if is_scrolled_horizontally && content_width <= padded_bounds.size.width {
                         shared_scroll_offset.borrow_mut().x = Pixels::ZERO;
+                        scroll_offset.x = Pixels::ZERO;
                     }
 
                     if let Some(DeferredScrollToItem {
@@ -457,28 +455,12 @@ impl Element for UniformList {
                                 }
                             }
                         }
-                        logical_scroll_offset = *updated_scroll_offset;
+                        scroll_offset = *updated_scroll_offset
                     }
 
-                    let mut visual_scroll_offset = logical_scroll_offset;
-
-                    if let Some(scroll_handle) = &self.scroll_handle {
-                        let mut scroll_state = scroll_handle.0.borrow_mut();
-
-                        scroll_state
-                            .smooth_scroll
-                            .set_target(logical_scroll_offset.y);
-
-                        if scroll_state.smooth_scroll.update() {
-                            window.refresh();
-                        }
-
-                        visual_scroll_offset.y = scroll_state.smooth_scroll.current();
-                    }
                     let first_visible_element_ix =
-                        (-(visual_scroll_offset.y + padding.top) / item_height).floor() as usize;
-                    let last_visible_element_ix = ((-visual_scroll_offset.y
-                        + padded_bounds.size.height)
+                        (-(scroll_offset.y + padding.top) / item_height).floor() as usize;
+                    let last_visible_element_ix = ((-scroll_offset.y + padded_bounds.size.height)
                         / item_height)
                         .ceil() as usize;
 
@@ -499,11 +481,11 @@ impl Element for UniformList {
                     window.with_content_mask(Some(content_mask), |window| {
                         for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
                             let item_origin = padded_bounds.origin
-                                + visual_scroll_offset
+                                + scroll_offset
                                 + point(Pixels::ZERO, item_height * ix);
 
                             let available_width = if can_scroll_horizontally {
-                                padded_bounds.size.width + visual_scroll_offset.x.abs()
+                                padded_bounds.size.width + scroll_offset.x.abs()
                             } else {
                                 padded_bounds.size.width
                             };
@@ -516,15 +498,13 @@ impl Element for UniformList {
                             frame_state.items.push(item);
                         }
 
-                        let bounds = Bounds::new(
-                            padded_bounds.origin + visual_scroll_offset,
-                            padded_bounds.size,
-                        );
+                        let bounds =
+                            Bounds::new(padded_bounds.origin + scroll_offset, padded_bounds.size);
                         for decoration in &self.decorations {
                             let mut decoration = decoration.as_ref().compute(
                                 visible_range.clone(),
                                 bounds,
-                                visual_scroll_offset,
+                                scroll_offset,
                                 item_height,
                                 self.item_count,
                                 window,

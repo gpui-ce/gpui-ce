@@ -1,7 +1,4 @@
-use crate::{
-    FontId, FontStyle, FontWeight, GlyphId, Pixels, PlatformTextSystem, Point, SharedString,
-    Size, point, px,
-};
+use crate::{FontId, GlyphId, Pixels, PlatformTextSystem, Point, SharedString, Size, point, px};
 use collections::FxHashMap;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use smallvec::SmallVec;
@@ -600,8 +597,6 @@ impl LineLayoutCache {
 pub struct FontRun {
     pub(crate) len: usize,
     pub(crate) font_id: FontId,
-    pub(crate) weight: FontWeight,
-    pub(crate) style: FontStyle,
 }
 
 trait AsCacheKeyRef {
