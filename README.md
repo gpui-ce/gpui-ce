@@ -10,17 +10,17 @@ The public API is kept intentionally compatible with gpui-ce so existing applica
 
 ```toml
 [dependencies]
-gpui = { git = "https://github.com/gpui-ce/wgpui" }
+gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/wgpui" }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/gpui-ce/wgpui", features = ["test-support"] }
+gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/wgpui", features = ["test-support"] }
 ```
 
 Imports use the `gpui` crate name as normal:
 
 ```rust
-use gpui::prelude::*;
-use gpui::{App, Application, Context, Render, Window, div, px};
+use gpui-ce::prelude::*;
+use gpui-ce::{App, Application, Context, Render, Window, div, px};
 ```
 
 ---
@@ -40,7 +40,7 @@ wgpu device/context around WGPUI, ensure you request the same feature set.
 ## Hello World
 
 ```rust
-use gpui::{
+use gpui-ce::{
     App, Application, Bounds, Context, SharedString, Window,
     WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
