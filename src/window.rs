@@ -1219,7 +1219,9 @@ impl Window {
         }));
         platform_window.on_active_status_change(Box::new({
             let mut cx = cx.to_async();
+            let active_state = active.clone();
             move |active| {
+                active_state.set(active);
                 handle
                     .update(&mut cx, |_, window, cx| {
                         window.active.set(active);
