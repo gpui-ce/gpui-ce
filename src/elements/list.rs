@@ -541,7 +541,7 @@ impl StateInner {
             (self.items.summary().height + padding.top + padding.bottom - height).max(px(0.));
         let current_visual = self.smooth_scroll.current();
 
-        let new_scroll_top = (current_visual - delta.y);
+        let new_scroll_top = current_visual - delta.y;
 
         if self.alignment == ListAlignment::Bottom && new_scroll_top == scroll_max {
             self.logical_scroll_top = None;

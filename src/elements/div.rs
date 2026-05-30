@@ -2039,12 +2039,12 @@ impl Interactivity {
         // This behavior can be suppressed by using `cx.prevent_default()`.
         if let Some(focus_handle) = self.tracked_focus_handle.clone() {
             let hitbox = hitbox.clone();
-            window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _| {
+            window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble
                     && hitbox.is_hovered(window)
                     && !window.default_prevented()
                 {
-                    window.focus(&focus_handle);
+                    window.focus(&focus_handle, cx);
                     // If there is a parent that is also focusable, prevent it
                     // from transferring focus because we already did so.
                     window.prevent_default();

@@ -235,7 +235,7 @@ impl StyledText {
 
     /// Set the text runs for this piece of text.
     pub fn with_runs(mut self, runs: Vec<TextRun>) -> Self {
-        let mut text = &**self.text;
+        let mut text = self.text.as_str();
         for run in &runs {
             text = text.get(run.len..).expect("invalid text run");
         }

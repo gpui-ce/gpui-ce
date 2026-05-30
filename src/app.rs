@@ -34,19 +34,16 @@ use util::{ResultExt, debug_panic};
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::InspectorElementRegistry;
 use crate::{
-    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Asset,
-    AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle, DispatchPhase, DisplayId,
-    EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext,
-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
-    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
-    RenderablePromptHandle, Reservation, SharedString, SubscriberSet,
-    Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
-    WindowInvalidator, current_platform,
-    default_colors::{Colors, GlobalColors},
-    hash, init_app_menus,
+    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
+    ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, Colors, CursorStyle,
+    DispatchPhase, DisplayId, EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global,
+    GlobalColors, KeyBinding, KeyContext, Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu,
+    PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton, PromptHandle,
+    PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation, SharedString,
+    SubscriberSet, Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance,
+    WindowHandle, WindowId, WindowInvalidator, current_platform, hash, init_app_menus,
 };
-use crate::ExternalWindowHandle;
 
 mod async_context;
 mod context;
@@ -243,7 +240,7 @@ type Listener = Box<dyn FnMut(&dyn Any, &mut App) -> bool + 'static>;
 pub(crate) type KeystrokeObserver =
     Box<dyn FnMut(&KeystrokeEvent, &mut Window, &mut App) -> bool + 'static>;
 type QuitHandler = Box<dyn FnOnce(&mut App) -> LocalBoxFuture<'static, ()> + 'static>;
-type WindowClosedHandler = Box<dyn FnMut(&mut App)>;
+type WindowClosedHandler = Box<dyn FnMut(&mut App, WindowId)>;
 type ReleaseListener = Box<dyn FnOnce(&mut dyn Any, &mut App) + 'static>;
 type NewEntityListener = Box<dyn FnMut(AnyEntity, &mut Option<&mut Window>, &mut App) + 'static>;
 
@@ -585,21 +582,13 @@ impl GpuiMode {
 pub struct App {
     pub(crate) this: Weak<AppCell>,
     pub(crate) platform: Rc<dyn Platform>,
-    pub(crate) mode: GpuiMode,
     text_system: Arc<TextSystem>,
-    flushing_effects: bool,
-    pending_updates: usize,
+
     pub(crate) actions: Rc<ActionRegistry>,
     pub(crate) active_drag: Option<AnyDrag>,
     pub(crate) background_executor: BackgroundExecutor,
     pub(crate) foreground_executor: ForegroundExecutor,
-    pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
-    asset_source: Arc<dyn AssetSource>,
-    pub(crate) svg_renderer: SvgRenderer,
-    http_client: Arc<dyn HttpClient>,
-    pub(crate) globals_by_type: FxHashMap<TypeId, Box<dyn Any>>,
     pub(crate) entities: EntityMap,
-    pub(crate) window_update_stack: Vec<WindowId>,
     pub(crate) new_entity_observers: SubscriberSet<TypeId, NewEntityListener>,
     pub(crate) windows: SlotMap<WindowId, Option<Box<Window>>>,
     pub(crate) window_handles: FxHashMap<WindowId, AnyWindowHandle>,
@@ -610,10 +599,8 @@ pub struct App {
     pub(crate) global_action_listeners:
         FxHashMap<TypeId, Vec<Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Self)>>>,
     pending_effects: VecDeque<Effect>,
-    pub(crate) pending_notifications: FxHashSet<EntityId>,
-    pub(crate) pending_global_notifications: FxHashSet<TypeId>,
+
     pub(crate) observers: SubscriberSet<EntityId, Handler>,
-    // TypeId is the type of the event that the listener callback expects
     pub(crate) event_listeners: SubscriberSet<EntityId, (TypeId, Listener)>,
     pub(crate) keystroke_observers: SubscriberSet<(), KeystrokeObserver>,
     pub(crate) keystroke_interceptors: SubscriberSet<(), KeystrokeObserver>,
@@ -622,22 +609,58 @@ pub struct App {
     pub(crate) global_observers: SubscriberSet<TypeId, Handler>,
     pub(crate) quit_observers: SubscriberSet<(), QuitHandler>,
     pub(crate) restart_observers: SubscriberSet<(), Handler>,
-    pub(crate) restart_path: Option<PathBuf>,
     pub(crate) window_closed_observers: SubscriberSet<(), WindowClosedHandler>,
+
+    /// Per-App element arena. This isolates element allocations between different
+    /// App instances (important for tests where multiple Apps run concurrently).
+    pub(crate) element_arena: RefCell<Arena>,
+    /// Per-App event arena.
+    pub(crate) event_arena: Arena,
+
+    // Drop globals last. We need to ensure all tasks owned by entities and
+    // callbacks are marked cancelled at this point as this will also shutdown
+    // the tokio runtime. As any task attempting to spawn a blocking tokio task,
+    // might panic.
+    pub(crate) globals_by_type: FxHashMap<TypeId, Box<dyn Any>>,
+
+    // assets
+    pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
+    asset_source: Arc<dyn AssetSource>,
+    pub(crate) svg_renderer: SvgRenderer,
+    http_client: Arc<dyn HttpClient>,
+
+    // below is plain data, the drop order is insignificant here
+    pub(crate) pending_notifications: FxHashSet<EntityId>,
+    pub(crate) pending_global_notifications: FxHashSet<TypeId>,
+    pub(crate) restart_path: Option<PathBuf>,
     pub(crate) layout_id_buffer: Vec<LayoutId>, // We recycle this memory across layout requests.
     pub(crate) propagate_event: bool,
     pub(crate) prompt_builder: Option<PromptBuilder>,
     pub(crate) window_invalidators_by_entity:
         FxHashMap<EntityId, FxHashMap<WindowId, WindowInvalidator>>,
     pub(crate) tracked_entities: FxHashMap<WindowId, FxHashSet<EntityId>>,
+    pub(crate) current_window_by_entity: FxHashMap<EntityId, WindowId>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_renderer: Option<crate::InspectorRenderer>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_element_registry: InspectorElementRegistry,
     #[cfg(any(test, feature = "test-support", debug_assertions))]
     pub(crate) name: Option<&'static str>,
+
+    pub(crate) window_update_stack: Vec<WindowId>,
+    pub(crate) mode: GpuiMode,
+    /// Whether the app was created by [`Application::new_inaccessible`]. No
+    /// accesskit APIs will be called when this flag is set.
+    pub(crate) accessibility_force_disabled: bool,
+    flushing_effects: bool,
+    pending_updates: usize,
     quit_mode: QuitMode,
     quitting: bool,
+
+    // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
+    // Otherwise it may report false positives.
+    #[cfg(any(test, feature = "leak-detection"))]
+    _ref_counts: Arc<RwLock<EntityRefCounts>>,
 }
 
 impl App {
@@ -647,10 +670,10 @@ impl App {
         asset_source: Arc<dyn AssetSource>,
         http_client: Arc<dyn HttpClient>,
     ) -> Rc<AppCell> {
-        let executor = platform.background_executor();
+        let background_executor = platform.background_executor();
         let foreground_executor = platform.foreground_executor();
         assert!(
-            executor.is_main_thread(),
+            background_executor.is_main_thread(),
             "must construct App on main thread"
         );
 
@@ -658,6 +681,9 @@ impl App {
         let entities = EntityMap::new();
         let keyboard_layout = platform.keyboard_layout();
         let keyboard_mapper = platform.keyboard_mapper();
+
+        #[cfg(any(test, feature = "leak-detection"))]
+        let _ref_counts = entities.ref_counts_drop_handle();
 
         let app = Rc::new_cyclic(|this| AppCell {
             app: RefCell::new(App {
@@ -669,7 +695,7 @@ impl App {
                 flushing_effects: false,
                 pending_updates: 0,
                 active_drag: None,
-                background_executor: executor,
+                background_executor,
                 foreground_executor,
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
@@ -692,6 +718,7 @@ impl App {
                 observers: SubscriberSet::new(),
                 tracked_entities: FxHashMap::default(),
                 window_invalidators_by_entity: FxHashMap::default(),
+                current_window_by_entity: FxHashMap::default(),
                 event_listeners: SubscriberSet::new(),
                 release_listeners: SubscriberSet::new(),
                 keystroke_observers: SubscriberSet::new(),
@@ -711,9 +738,15 @@ impl App {
                 inspector_element_registry: InspectorElementRegistry::default(),
                 quit_mode: QuitMode::default(),
                 quitting: false,
+                accessibility_force_disabled: false,
 
                 #[cfg(any(test, feature = "test-support", debug_assertions))]
                 name: None,
+                element_arena: RefCell::new(Arena::new(1024 * 1024)),
+                event_arena: Arena::new(1024 * 1024),
+
+                #[cfg(any(test, feature = "leak-detection"))]
+                _ref_counts,
             }),
         });
 
@@ -735,13 +768,46 @@ impl App {
         }));
 
         platform.on_quit(Box::new({
-            let cx = app.clone();
+            let cx = Rc::downgrade(&app);
             move || {
-                cx.borrow_mut().shutdown();
+                if let Some(cx) = cx.upgrade() {
+                    cx.borrow_mut().shutdown();
+                }
             }
         }));
 
         app
+    }
+
+    #[doc(hidden)]
+    pub fn ref_counts_drop_handle(&self) -> impl Sized + use<> {
+        self.entities.ref_counts_drop_handle()
+    }
+
+    /// Captures a snapshot of all entities that currently have alive handles.
+    ///
+    /// The returned [`LeakDetectorSnapshot`] can later be passed to
+    /// [`assert_no_new_leaks`](Self::assert_no_new_leaks) to verify that no
+    /// entities created after the snapshot are still alive.
+    #[cfg(any(test, feature = "leak-detection"))]
+    pub fn leak_detector_snapshot(&self) -> LeakDetectorSnapshot {
+        self.entities.leak_detector_snapshot()
+    }
+
+    /// Asserts that no entities created after `snapshot` still have alive handles.
+    ///
+    /// Entities that were already tracked at the time of the snapshot are ignored,
+    /// even if they still have handles. Only *new* entities (those whose
+    /// `EntityId` was not present in the snapshot) are considered leaks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any new entity handles exist. The panic message lists every
+    /// leaked entity with its type name, and includes allocation-site backtraces
+    /// when `LEAK_BACKTRACE` is set.
+    #[cfg(any(test, feature = "leak-detection"))]
+    pub fn assert_no_new_leaks(&self, snapshot: &LeakDetectorSnapshot) {
+        self.entities.assert_no_new_leaks(snapshot)
     }
 
     /// Quit the application gracefully. Handlers registered with [`Context::on_app_quit`]
@@ -846,10 +912,12 @@ impl App {
         &mut self,
         callback: impl FnOnce(&mut App) -> R,
     ) -> (R, FxHashSet<EntityId>) {
-        let accessed_entities_start = self.entities.accessed_entities.borrow().clone();
+        let accessed_entities_start = self.entities.accessed_entities.get_mut().clone();
         let result = callback(self);
-        let accessed_entities_end = self.entities.accessed_entities.borrow().clone();
-        let entities_accessed_in_callback = accessed_entities_end
+        let entities_accessed_in_callback = self
+            .entities
+            .accessed_entities
+            .get_mut()
             .difference(&accessed_entities_start)
             .copied()
             .collect::<FxHashSet<EntityId>>();
@@ -876,6 +944,8 @@ impl App {
                 .entry(*entity)
                 .or_default()
                 .insert(window_handle.id, invalidator.clone());
+            self.current_window_by_entity
+                .insert(*entity, window_handle.id);
         }
         tracked_entities.clear();
         tracked_entities.extend(entities.iter().copied());
@@ -1016,43 +1086,6 @@ impl App {
 
                     cx.window_handles.insert(id, window.handle);
                     cx.windows.get_mut(id).unwrap().replace(Box::new(window));
-                    Ok(handle)
-                }
-                Err(e) => {
-                    cx.windows.remove(id);
-                    Err(e)
-                }
-            }
-        })
-    }
-
-    /// Attaches to an existing external window with the given handle, using the root view returned by the given function.
-    pub fn attach_window<V: 'static + Render>(
-        &mut self,
-        external_handle: ExternalWindowHandle,
-        build_root_view: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
-    ) -> anyhow::Result<WindowHandle<V>> {
-        self.update(|cx| {
-            let id = cx.windows.insert(None);
-            let handle = WindowHandle::new(id);
-
-            match Window::attach(handle.into(), external_handle, cx) {
-                Ok(mut window) => {
-                    cx.window_update_stack.push(id);
-                    
-                    let root_view = build_root_view(&mut window, cx);
-                    
-                    cx.window_update_stack.pop();
-
-                    window.root.replace(root_view.into());
-                    window.defer(cx, |window: &mut Window, cx| window.appearance_changed(cx));
-
-                    let clear = window.draw(cx);
-                    clear.clear();
-
-                    cx.window_handles.insert(id, window.handle);
-                    cx.windows.get_mut(id).unwrap().replace(Box::new(window));
-
                     Ok(handle)
                 }
                 Err(e) => {
@@ -1280,7 +1313,7 @@ impl App {
                         emitter,
                         event_type,
                         event,
-                    } => self.apply_emit_effect(emitter, event_type, event),
+                    } => self.apply_emit_effect(emitter, event_type, &*event),
 
                     Effect::RefreshWindows => {
                         self.apply_refresh_effect();
@@ -1317,6 +1350,7 @@ impl App {
                 }
 
                 if self.pending_effects.is_empty() {
+                    self.event_arena.clear();
                     break;
                 }
             }
@@ -1336,6 +1370,8 @@ impl App {
             for (entity_id, mut entity) in dropped {
                 self.observers.remove(&entity_id);
                 self.event_listeners.remove(&entity_id);
+                self.window_invalidators_by_entity.remove(&entity_id);
+                self.current_window_by_entity.remove(&entity_id);
                 for release_callback in self.release_listeners.remove(&entity_id) {
                     release_callback(entity.as_mut(), self);
                 }
@@ -1374,12 +1410,12 @@ impl App {
             .retain(&emitter, |handler| handler(self));
     }
 
-    fn apply_emit_effect(&mut self, emitter: EntityId, event_type: TypeId, event: Box<dyn Any>) {
+    fn apply_emit_effect(&mut self, emitter: EntityId, event_type: TypeId, event: &dyn Any) {
         self.event_listeners
             .clone()
             .retain(&emitter, |(stored_type, handler)| {
                 if *stored_type == event_type {
-                    handler(event.as_ref(), self)
+                    handler(event, self)
                 } else {
                     true
                 }
@@ -1412,6 +1448,13 @@ impl App {
         tid: TypeId,
         window: Option<WindowId>,
     ) {
+        // Seed the entity's current window from its creation context so
+        // `with_window` resolves correctly before the entity has ever been
+        // rendered.
+        if let Some(id) = window {
+            self.current_window_by_entity.insert(entity.entity_id(), id);
+        }
+
         self.new_entity_observers.clone().retain(&tid, |observer| {
             if let Some(id) = window {
                 self.update_window_id(id, {
@@ -1426,7 +1469,28 @@ impl App {
         });
     }
 
-    fn update_window_id<T, F>(&mut self, id: WindowId, update: F) -> Result<T>
+    /// Run `f` against the entity's *current* window — the most recently
+    /// rendered window that referenced the entity, or its creation window if
+    /// it has yet to be rendered. Returns `None` if the entity has no
+    /// current window, or if that window has been closed, or if it is
+    /// already on the update stack.
+    pub fn with_window<R>(
+        &mut self,
+        entity_id: EntityId,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> Option<R> {
+        let window_id = *self.current_window_by_entity.get(&entity_id)?;
+        self.update_window_id(window_id, |_, window, cx| f(window, cx))
+            .ok()
+    }
+
+    fn ensure_window(&mut self, entity_id: EntityId, window: WindowId) {
+        self.current_window_by_entity
+            .entry(entity_id)
+            .or_insert(window);
+    }
+
+    pub(crate) fn update_window_id<T, F>(&mut self, id: WindowId, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
@@ -1437,33 +1501,49 @@ impl App {
 
             cx.window_update_stack.push(window.handle.id);
             let result = update(root_view, &mut window, cx);
-            cx.window_update_stack.pop();
+            fn trail(id: WindowId, window: Box<Window>, cx: &mut App) -> Option<()> {
+                cx.window_update_stack.pop();
 
-            if window.removed {
-                // Tell the platform to close the native OS window.
-                // This removes it from AppState.windows so the winit window is destroyed.
-                window.platform_window.close_programmatically();
+                if window.removed {
+                    // Tell the platform to close the native OS window.
+                    // This removes it from AppState.windows so the winit window is destroyed.
+                    window.platform_window.close_programmatically();
 
-                cx.window_handles.remove(&id);
-                cx.windows.remove(id);
+                    cx.window_handles.remove(&id);
+                    cx.windows.remove(id);
+                    if let Some(tracked) = cx.tracked_entities.remove(&id) {
+                        for entity_id in tracked {
+                            if let Some(windows) =
+                                cx.window_invalidators_by_entity.get_mut(&entity_id)
+                            {
+                                windows.remove(&id);
+                            }
+                            if cx.current_window_by_entity.get(&entity_id) == Some(&id) {
+                                cx.current_window_by_entity.remove(&entity_id);
+                            }
+                        }
+                    }
 
-                cx.window_closed_observers.clone().retain(&(), |callback| {
-                    callback(cx);
-                    true
-                });
+                    cx.window_closed_observers.clone().retain(&(), |callback| {
+                        callback(cx, id);
+                        true
+                    });
 
-                let quit_on_empty = match cx.quit_mode {
-                    QuitMode::Explicit => false,
-                    QuitMode::LastWindowClosed => true,
-                    QuitMode::Default => cfg!(not(target_os = "macos")),
-                };
+                    let quit_on_empty = match cx.quit_mode {
+                        QuitMode::Explicit => false,
+                        QuitMode::LastWindowClosed => true,
+                        QuitMode::Default => cfg!(not(target_os = "macos")),
+                    };
 
-                if quit_on_empty && cx.windows.is_empty() {
-                    cx.quit();
+                    if quit_on_empty && cx.windows.is_empty() {
+                        cx.quit();
+                    }
+                } else {
+                    cx.windows.get_mut(id)?.replace(window);
                 }
-            } else {
-                cx.windows.get_mut(id)?.replace(window);
+                Some(())
             }
+            trail(id, window, cx)?;
 
             Some(result)
         })
@@ -1508,7 +1588,7 @@ impl App {
         let mut cx = self.to_async();
 
         self.foreground_executor
-            .spawn(async move { f(&mut cx).await })
+            .spawn(async move { f(&mut cx).await }.boxed_local())
     }
 
     /// Spawns the future returned by the given function on the main thread with
@@ -1526,7 +1606,7 @@ impl App {
         let mut cx = self.to_async();
 
         self.foreground_executor
-            .spawn_with_priority(priority, async move { f(&mut cx).await })
+            .spawn_with_priority(priority, async move { f(&mut cx).await }.boxed_local())
     }
 
     /// Schedules the given function to be run at the end of the current effect cycle, allowing entities
@@ -1558,8 +1638,7 @@ impl App {
         self.globals_by_type
             .get(&TypeId::of::<G>())
             .map(|any_state| any_state.downcast_ref::<G>().unwrap())
-            .with_context(|| format!("no state of type {} exists", type_name::<G>()))
-            .unwrap()
+            .unwrap_or_else(|| panic!("no state of type {} exists", type_name::<G>()))
     }
 
     /// Access the global of the given type if a value has been assigned.
@@ -1577,8 +1656,7 @@ impl App {
         self.globals_by_type
             .get_mut(&global_type)
             .and_then(|any_state| any_state.downcast_mut::<G>())
-            .with_context(|| format!("no state of type {} exists", type_name::<G>()))
-            .unwrap()
+            .unwrap_or_else(|| panic!("no state of type {} exists", type_name::<G>()))
     }
 
     /// Access the global of the given type mutably. A default value is assigned if a global of this type has not
@@ -1613,7 +1691,7 @@ impl App {
         *self
             .globals_by_type
             .remove(&global_type)
-            .unwrap_or_else(|| panic!("no global added for {}", std::any::type_name::<G>()))
+            .unwrap_or_else(|| panic!("no global added for {}", type_name::<G>()))
             .downcast()
             .unwrap()
     }
@@ -1793,7 +1871,10 @@ impl App {
     /// Register a global handler for actions invoked via the keyboard. These handlers are run at
     /// the end of the bubble phase for actions, and so will only be invoked if there are no other
     /// handlers or if they called `cx.propagate()`.
-    pub fn on_action<A: Action>(&mut self, listener: impl Fn(&A, &mut Self) + 'static) {
+    pub fn on_action<A: Action>(
+        &mut self,
+        listener: impl Fn(&A, &mut Self) + 'static,
+    ) -> &mut Self {
         self.global_action_listeners
             .entry(TypeId::of::<A>())
             .or_default()
@@ -1803,6 +1884,7 @@ impl App {
                     listener(action, cx)
                 }
             }));
+        self
     }
 
     /// Event handlers propagate events by default. Call this method to stop dispatching to
@@ -1903,7 +1985,10 @@ impl App {
 
     /// Register a callback to be invoked when a window is closed
     /// The window is no longer accessible at the point this callback is invoked.
-    pub fn on_window_closed(&self, mut on_closed: impl FnMut(&mut App) + 'static) -> Subscription {
+    pub fn on_window_closed(
+        &self,
+        mut on_closed: impl FnMut(&mut App, WindowId) + 'static,
+    ) -> Subscription {
         let (subscription, activate) = self.window_closed_observers.insert((), Box::new(on_closed));
         activate();
         subscription
@@ -1937,7 +2022,8 @@ impl App {
     }
 
     /// Sets the menu bar for this application. This will replace any existing menu bar.
-    pub fn set_menus(&self, menus: Vec<Menu>) {
+    pub fn set_menus(&self, menus: impl IntoIterator<Item = Menu>) {
+        let menus: Vec<Menu> = menus.into_iter().collect();
         self.platform.set_menus(menus, &self.keymap.borrow());
     }
 
@@ -2138,13 +2224,27 @@ impl App {
                 .or_default(),
         );
 
-        if window_invalidators.is_empty() {
+        // `window_invalidators_by_entity` is monotonic, so an entry alone
+        // doesn't mean the window is currently rendering the entity. Filter
+        // through `tracked_entities` to keep invalidation tight to windows
+        // that actually display this entity right now.
+        let live_invalidators: SmallVec<[WindowInvalidator; 2]> = window_invalidators
+            .iter()
+            .filter(|(window_id, _)| {
+                self.tracked_entities
+                    .get(window_id)
+                    .is_some_and(|set| set.contains(&entity_id))
+            })
+            .map(|(_, invalidator)| invalidator.clone())
+            .collect();
+
+        if live_invalidators.is_empty() {
             if self.pending_notifications.insert(entity_id) {
                 self.pending_effects
                     .push_back(Effect::Notify { emitter: entity_id });
             }
         } else {
-            for invalidator in window_invalidators.values() {
+            for invalidator in &live_invalidators {
                 invalidator.invalidate_view(entity_id, self);
             }
         }
@@ -2204,8 +2304,6 @@ impl App {
 }
 
 impl AppContext for App {
-    type Result<T> = T;
-
     /// Builds an entity that is owned by the application.
     ///
     /// The given function will be invoked with a [`Context`] and must return an object representing the entity. An
@@ -2217,17 +2315,16 @@ impl AppContext for App {
             let entity = build_entity(&mut Context::new_context(cx, slot.downgrade()));
 
             cx.push_effect(Effect::EntityCreated {
-                entity: handle.clone().into_any(),
+                entity: handle.into_any(),
                 tid: TypeId::of::<T>(),
                 window: cx.window_update_stack.last().cloned(),
             });
 
-            cx.entities.insert(slot, entity);
-            handle
+            cx.entities.insert(slot, entity)
         })
     }
 
-    fn reserve_entity<T: 'static>(&mut self) -> Self::Result<Reservation<T>> {
+    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
         Reservation(self.entities.reserve())
     }
 
@@ -2235,7 +2332,7 @@ impl AppContext for App {
         &mut self,
         reservation: Reservation<T>,
         build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Self::Result<Entity<T>> {
+    ) -> Entity<T> {
         self.update(|cx| {
             let slot = reservation.0;
             let entity = build_entity(&mut Context::new_context(cx, slot.downgrade()));
@@ -2268,11 +2365,7 @@ impl AppContext for App {
         GpuiBorrow::new(handle.clone(), self)
     }
 
-    fn read_entity<T, R>(
-        &self,
-        handle: &Entity<T>,
-        read: impl FnOnce(&T, &App) -> R,
-    ) -> Self::Result<R>
+    fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
     where
         T: 'static,
     {
@@ -2285,6 +2378,14 @@ impl AppContext for App {
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
         self.update_window_id(handle.id, update)
+    }
+
+    fn with_window<R>(
+        &mut self,
+        entity_id: EntityId,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> Option<R> {
+        App::with_window(self, entity_id, f)
     }
 
     fn read_window<T, R>(
@@ -2317,7 +2418,7 @@ impl AppContext for App {
         self.background_executor.spawn(future)
     }
 
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> Self::Result<R>
+    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global,
     {
@@ -2334,7 +2435,7 @@ pub(crate) enum Effect {
     Emit {
         emitter: EntityId,
         event_type: TypeId,
-        event: Box<dyn Any>,
+        event: ArenaBox<dyn Any>,
     },
     RefreshWindows,
     NotifyGlobalObservers {

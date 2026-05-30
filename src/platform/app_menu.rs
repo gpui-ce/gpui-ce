@@ -1,5 +1,4 @@
 use crate::{Action, App, Platform, SharedString};
-use util::ResultExt;
 
 /// A menu of the application, either a main menu or a submenu
 pub struct Menu {
@@ -263,7 +262,7 @@ pub(crate) fn init_app_menus(platform: &dyn Platform, cx: &App) {
     platform.on_will_open_app_menu(Box::new({
         let cx = cx.to_async();
         move || {
-            cx.update(|cx| cx.clear_pending_keystrokes()).ok();
+            cx.update(|cx| cx.clear_pending_keystrokes());
         }
     }));
 
@@ -271,14 +270,13 @@ pub(crate) fn init_app_menus(platform: &dyn Platform, cx: &App) {
         let cx = cx.to_async();
         move |action| {
             cx.update(|cx| cx.is_action_available(action))
-                .unwrap_or(false)
         }
     }));
 
     platform.on_app_menu_action(Box::new({
         let cx = cx.to_async();
         move |action| {
-            cx.update(|cx| cx.dispatch_action(action)).log_err();
+            cx.update(|cx| cx.dispatch_action(action));
         }
     }));
 }

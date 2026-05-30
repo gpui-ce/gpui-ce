@@ -1353,7 +1353,7 @@ mod tests {
         );
 
         let mut style_b = HighlightStyle {
-            color: Some(red()),
+            color: Some(red().into()),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(2.),
                 color: Some(blue()),
@@ -1385,7 +1385,7 @@ mod tests {
         let mut style_c = expected_style;
 
         let style_d = HighlightStyle {
-            color: Some(blue().alpha(0.7)),
+            color: Some(blue().alpha(0.7).into()),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(crate::red()),
@@ -1402,7 +1402,7 @@ mod tests {
         };
 
         let expected_style = HighlightStyle {
-            color: Some(red().blend(blue().alpha(0.7))),
+            color: Some(red().blend(blue().alpha(0.7)).into()),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(red()),
@@ -1446,21 +1446,21 @@ mod tests {
                 (
                     0..1,
                     HighlightStyle {
-                        color: Some(green()),
+                        color: Some(green().into()),
                         ..Default::default()
                     }
                 ),
                 (
                     1..2,
                     HighlightStyle {
-                        color: Some(blue()),
+                        color: Some(blue().into()),
                         ..Default::default()
                     }
                 ),
                 (
                     2..3,
                     HighlightStyle {
-                        color: Some(blue()),
+                        color: Some(blue().into()),
                         font_style: Some(FontStyle::Italic),
                         ..Default::default()
                     }
@@ -1468,7 +1468,7 @@ mod tests {
                 (
                     3..4,
                     HighlightStyle {
-                        color: Some(green()),
+                        color: Some(green().into()),
                         font_style: Some(FontStyle::Italic),
                         ..Default::default()
                     }
@@ -1476,7 +1476,7 @@ mod tests {
                 (
                     4..5,
                     HighlightStyle {
-                        color: Some(green()),
+                        color: Some(green().into()),
                         font_weight: Some(FontWeight::BOLD),
                         font_style: Some(FontStyle::Italic),
                         ..Default::default()
@@ -1500,14 +1500,14 @@ mod tests {
                 (
                     15..20,
                     HighlightStyle {
-                        color: Some(yellow()),
+                        color: Some(yellow().into()),
                         ..Default::default()
                     }
                 ),
                 (
                     21..23,
                     HighlightStyle {
-                        color: Some(red()),
+                        color: Some(red().into()),
                         ..Default::default()
                     }
                 )

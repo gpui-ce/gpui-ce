@@ -233,7 +233,7 @@ impl TestDispatcher {
     }
 
     pub fn rng(&self) -> StdRng {
-        self.state.lock().random.clone()
+        StdRng::try_from_rng(&mut self.state.lock().random).expect("failed to copy rng")
     }
 
     pub fn set_block_on_ticks(&self, range: std::ops::RangeInclusive<usize>) {

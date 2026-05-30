@@ -60,6 +60,7 @@ flume = "0.12"
 # font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed", optional = true }
 font-kit = { version = "0.14.3", optional = true }
 futures = "0.3"
+futures-concurrency = "7.7.1"
 gpui_macros = { package = "gpui-macros", version = "0.2.2" }
 http_client = { package = "gpui_http_client", version = "0.2.2" }
 image = "0.25.1"
@@ -91,6 +92,7 @@ serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
 slotmap = "1.0.6"
 smallvec = { version = "1.6", features = ["union"] }
 smol = "2.0"
+smol_str = "0.3.6"
 spin = "0.10.0"
 stacksafe = "1.0"
 strum = { version = "0.28.0", features = ["derive"] }
@@ -100,7 +102,7 @@ thiserror = "2.0.12"
 util = { package = "gpui_util", version = "0.2.2" }
 util_macros = { package = "gpui_util_macros", version = "0.2.2" }
 usvg = { version = "0.47.0", default-features = false }
-uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
+uuid = { version = "1.23.2", features = ["v4", "v5", "v7", "serde"] }
 waker-fn = "1.2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]

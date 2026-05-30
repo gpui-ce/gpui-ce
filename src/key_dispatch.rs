@@ -876,8 +876,9 @@ mod tests {
             cx.bind_keys([KeyBinding::new("ctrl-b h", TestAction, Some("Terminal"))]);
         });
         let (test, cx) = cx.add_window_view(|_, cx| CustomElement::new(cx));
+        let focus_handle = test.update(cx, |test, _| test.focus_handle.clone());
         cx.update(|window, cx| {
-            window.focus(&test.read(cx).focus_handle);
+            window.focus(&focus_handle, cx);
             window.activate_window();
         });
         cx.simulate_keystrokes("ctrl-b [");

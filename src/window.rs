@@ -57,7 +57,8 @@ mod prompts;
 use crate::util::atomic_incr_if_not_zero;
 pub use prompts::*;
 
-pub(crate) const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(864.));
+/// Default window size used when no explicit size is provided.
+pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
 
 /// A 6:5 aspect ratio minimum window size to be used for functional,
 /// additional-to-main-Zed windows, like the settings and rules library windows.
@@ -101,6 +102,7 @@ struct WindowInvalidatorInner {
     pub dirty: bool,
     pub draw_phase: DrawPhase,
     pub dirty_views: FxHashSet<EntityId>,
+    pub update_count: usize,
 }
 
 #[derive(Clone)]
@@ -115,12 +117,14 @@ impl WindowInvalidator {
                 dirty: true,
                 draw_phase: DrawPhase::None,
                 dirty_views: FxHashSet::default(),
+                update_count: 0,
             })),
         }
     }
 
     pub fn invalidate_view(&self, entity: EntityId, cx: &mut App) -> bool {
         let mut inner = self.inner.borrow_mut();
+        inner.update_count += 1;
         inner.dirty_views.insert(entity);
         if inner.draw_phase == DrawPhase::None {
             inner.dirty = true;
@@ -136,11 +140,19 @@ impl WindowInvalidator {
     }
 
     pub fn set_dirty(&self, dirty: bool) {
-        self.inner.borrow_mut().dirty = dirty
+        let mut inner = self.inner.borrow_mut();
+        inner.dirty = dirty;
+        if dirty {
+            inner.update_count += 1;
+        }
     }
 
     pub fn set_phase(&self, phase: DrawPhase) {
         self.inner.borrow_mut().draw_phase = phase
+    }
+
+    pub fn update_count(&self) -> usize {
+        self.inner.borrow().update_count
     }
 
     pub fn take_views(&self) -> FxHashSet<EntityId> {
@@ -215,19 +227,73 @@ slotmap::new_key_type! {
 }
 
 thread_local! {
+    /// Fallback arena used when no app-specific arena is active.
+    /// In production, each window draw sets CURRENT_ELEMENT_ARENA to the app's arena.
     pub(crate) static ELEMENT_ARENA: RefCell<Arena> = RefCell::new(Arena::new(1024 * 1024));
+
+    /// Points to the current App's element arena during draw operations.
+    /// This allows multiple test Apps to have isolated arenas, preventing
+    /// cross-session corruption when the scheduler interleaves their tasks.
+    static CURRENT_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
+}
+
+/// Allocates an element in the current arena. Uses the app-specific arena if one
+/// is active (during draw), otherwise falls back to the thread-local ELEMENT_ARENA.
+pub(crate) fn with_element_arena<R>(f: impl FnOnce(&mut Arena) -> R) -> R {
+    CURRENT_ELEMENT_ARENA.with(|current| {
+        if let Some(arena_ptr) = current.get() {
+            // SAFETY: The pointer is valid for the duration of the draw operation
+            // that set it, and we're being called during that same draw.
+            let arena_cell = unsafe { &*arena_ptr };
+            f(&mut arena_cell.borrow_mut())
+        } else {
+            ELEMENT_ARENA.with_borrow_mut(f)
+        }
+    })
+}
+
+/// RAII guard that sets CURRENT_ELEMENT_ARENA for the duration of a draw operation.
+/// When dropped, restores the previous arena (supporting nested draws).
+pub(crate) struct ElementArenaScope {
+    previous: Option<*const RefCell<Arena>>,
+}
+
+impl ElementArenaScope {
+    /// Enter a scope where element allocations use the given arena.
+    pub(crate) fn enter(arena: &RefCell<Arena>) -> Self {
+        let previous = CURRENT_ELEMENT_ARENA.with(|current| {
+            let prev = current.get();
+            current.set(Some(arena as *const RefCell<Arena>));
+            prev
+        });
+        Self { previous }
+    }
+}
+
+impl Drop for ElementArenaScope {
+    fn drop(&mut self) {
+        CURRENT_ELEMENT_ARENA.with(|current| {
+            current.set(self.previous);
+        });
+    }
 }
 
 /// Returned when the element arena has been used and so must be cleared before the next draw.
 #[must_use]
-pub struct ArenaClearNeeded;
+pub struct ArenaClearNeeded<'app> {
+    arena: &'app RefCell<Arena>,
+}
 
-impl ArenaClearNeeded {
+impl<'app> ArenaClearNeeded<'app> {
+    /// Create a new ArenaClearNeeded that will clear the given arena.
+    pub(crate) fn new(arena: &'app RefCell<Arena>) -> Self {
+        Self { arena }
+    }
+
     /// Clear the element arena.
     pub fn clear(self) {
-        ELEMENT_ARENA.with_borrow_mut(|element_arena| {
-            element_arena.clear();
-        });
+        // SAFETY: The arena reference must be valid and cleared before the next draw.
+        self.arena.borrow_mut().clear();
     }
 }
 
@@ -343,8 +409,8 @@ impl FocusHandle {
     }
 
     /// Moves the focus to the element associated with this handle.
-    pub fn focus(&self, window: &mut Window) {
-        window.focus(self)
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        window.focus(self, cx)
     }
 
     /// Obtains whether the element associated with this handle is currently focused.
@@ -1101,6 +1167,11 @@ impl Window {
                     measure("frame duration", || {
                         handle
                             .update(&mut cx, |_, window, cx| {
+                                if request_frame_options.force_render {
+                                    // Bypass cached view reuse so we don't replay stale
+                                    // atlas tile references after a GPU device recovery.
+                                    window.refresh();
+                                }
                                 let arena_clear_needed = window.draw(cx);
                                 window.present();
                                 // drop the arena elements after present to reduce latency
@@ -1322,296 +1393,6 @@ impl Window {
         })
     }
 
-    pub(crate) fn attach(
-        handle: AnyWindowHandle,
-        external_handle: ExternalWindowHandle,
-        cx: &mut App,
-    ) -> Result<Self> {
-        let mut platform_window = cx.platform.attach_window(handle, external_handle)?;
-
-        platform_window.set_background_appearance(WindowBackgroundAppearance::Transparent);
-
-        let tab_bar_visible = platform_window.tab_bar_visible();
-        SystemWindowTabController::init_visible(cx, tab_bar_visible);
-        if let Some(tabs) = platform_window.tabbed_windows() {
-            SystemWindowTabController::add_tab(cx, handle.window_id(), tabs);
-        }
-
-        let display_id = platform_window.display().map(|display| display.id());
-        let sprite_atlas = platform_window.sprite_atlas();
-        let mouse_position = platform_window.mouse_position();
-        let modifiers = platform_window.modifiers();
-        let capslock = platform_window.capslock();
-        let content_size = platform_window.content_size();
-        let scale_factor = platform_window.scale_factor();
-        let appearance = platform_window.appearance();
-        let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
-        let invalidator = WindowInvalidator::new();
-        let active = Rc::new(Cell::new(platform_window.is_active()));
-        let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
-        let needs_present = Rc::new(Cell::new(false));
-        let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
-        let last_input_timestamp = Rc::new(Cell::new(Instant::now()));
-
-        platform_window.set_background_appearance(WindowBackgroundAppearance::Transparent);
-
-        platform_window.on_close(Box::new({
-            let window_id = handle.window_id();
-            let mut cx = cx.to_async();
-            move || {
-                let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
-                let _ = cx.update(|cx| {
-                    SystemWindowTabController::remove_tab(cx, window_id);
-                });
-            }
-        }));
-        platform_window.on_request_frame(Box::new({
-            let mut cx = cx.to_async();
-            let invalidator = invalidator.clone();
-            let active = active.clone();
-            let needs_present = needs_present.clone();
-            let next_frame_callbacks = next_frame_callbacks.clone();
-            let last_input_timestamp = last_input_timestamp.clone();
-            move |request_frame_options| {
-                let next_frame_callbacks = next_frame_callbacks.take();
-                if !next_frame_callbacks.is_empty() {
-                    handle
-                        .update(&mut cx, |_, window, cx| {
-                            for callback in next_frame_callbacks {
-                                callback(window, cx);
-                            }
-                        })
-                        .log_err();
-                }
-
-                // Keep presenting the current scene for 1 extra second since the
-                // last input to prevent the display from underclocking the refresh rate.
-                let needs_present = request_frame_options.require_presentation
-                    || needs_present.get()
-                    || (active.get()
-                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
-
-                if invalidator.is_dirty() || request_frame_options.force_render {
-                    measure("frame duration", || {
-                        handle
-                            .update(&mut cx, |_, window, cx| {
-                                let arena_clear_needed = window.draw(cx);
-                                window.present();
-                                // drop the arena elements after present to reduce latency
-                                arena_clear_needed.clear();
-                            })
-                            .log_err();
-                    })
-                } else if needs_present {
-                    // Fast path: framebuffer already updated by surface blit, just present it
-                    handle
-                        .update(&mut cx, |_, window, _| window.present_framebuffer_only())
-                        .log_err();
-                }
-
-                handle
-                    .update(&mut cx, |_, window, _| {
-                        window.complete_frame();
-                    })
-                    .log_err();
-            }
-        }));
-        platform_window.on_resize(Box::new({
-            let mut cx = cx.to_async();
-            move |_, _| {
-                handle
-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
-                    .log_err();
-            }
-        }));
-        platform_window.on_moved(Box::new({
-            let mut cx = cx.to_async();
-            move || {
-                handle
-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
-                    .log_err();
-            }
-        }));
-        platform_window.on_appearance_changed(Box::new({
-            let mut cx = cx.to_async();
-            move || {
-                handle
-                    .update(&mut cx, |_, window, cx| window.appearance_changed(cx))
-                    .log_err();
-            }
-        }));
-        platform_window.on_active_status_change(Box::new({
-            let mut cx = cx.to_async();
-            move |active| {
-                handle
-                    .update(&mut cx, |_, window, cx| {
-                        window.active.set(active);
-                        window.modifiers = window.platform_window.modifiers();
-                        window.capslock = window.platform_window.capslock();
-                        window
-                            .activation_observers
-                            .clone()
-                            .retain(&(), |callback| callback(window, cx));
-
-                        window.bounds_changed(cx);
-                        window.refresh();
-
-                        SystemWindowTabController::update_last_active(cx, window.handle.id);
-                    })
-                    .log_err();
-            }
-        }));
-        platform_window.on_hover_status_change(Box::new({
-            let mut cx = cx.to_async();
-            move |active| {
-                handle
-                    .update(&mut cx, |_, window, _| {
-                        window.hovered.set(active);
-                        window.refresh();
-                    })
-                    .log_err();
-            }
-        }));
-        platform_window.on_input({
-            let mut cx = cx.to_async();
-            Box::new(move |event| {
-                handle
-                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
-                    .log_err()
-                    .unwrap_or(DispatchEventResult::default())
-            })
-        });
-        platform_window.on_hit_test_window_control({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, window, _cx| {
-                        for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
-                            if window.mouse_hit_test.ids.contains(&hitbox.id) {
-                                return Some(*area);
-                            }
-                        }
-                        None
-                    })
-                    .log_err()
-                    .unwrap_or(None)
-            })
-        });
-        platform_window.on_move_tab_to_new_window({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, _window, cx| {
-                        SystemWindowTabController::move_tab_to_new_window(cx, handle.window_id());
-                    })
-                    .log_err();
-            })
-        });
-        platform_window.on_merge_all_windows({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, _window, cx| {
-                        SystemWindowTabController::merge_all_windows(cx, handle.window_id());
-                    })
-                    .log_err();
-            })
-        });
-        platform_window.on_select_next_tab({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, _window, cx| {
-                        SystemWindowTabController::select_next_tab(cx, handle.window_id());
-                    })
-                    .log_err();
-            })
-        });
-        platform_window.on_select_previous_tab({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, _window, cx| {
-                        SystemWindowTabController::select_previous_tab(cx, handle.window_id())
-                    })
-                    .log_err();
-            })
-        });
-        platform_window.on_toggle_tab_bar({
-            let mut cx = cx.to_async();
-            Box::new(move || {
-                handle
-                    .update(&mut cx, |_, window, cx| {
-                        let tab_bar_visible = window.platform_window.tab_bar_visible();
-                        SystemWindowTabController::set_visible(cx, tab_bar_visible);
-                    })
-                    .log_err();
-            })
-        });
-
-        platform_window.map_window().unwrap();
-
-        Ok(Window {
-            handle,
-            invalidator,
-            removed: false,
-            platform_window,
-            display_id,
-            sprite_atlas,
-            text_system,
-            rem_size: px(16.),
-            rem_size_override_stack: SmallVec::new(),
-            viewport_size: content_size,
-            layout_engine: Some(TaffyLayoutEngine::new()),
-            root: None,
-            element_id_stack: SmallVec::default(),
-            text_style_stack: Vec::new(),
-            rendered_entity_stack: Vec::new(),
-            element_offset_stack: Vec::new(),
-            content_mask_stack: Vec::new(),
-            element_opacity: 1.0,
-            element_blur: 0.0,
-            requested_autoscroll: None,
-            rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
-            next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
-            next_frame_callbacks,
-            next_hitbox_id: HitboxId(0),
-            next_tooltip_id: TooltipId::default(),
-            tooltip_bounds: None,
-            dirty_views: FxHashSet::default(),
-            focus_listeners: SubscriberSet::new(),
-            focus_lost_listeners: SubscriberSet::new(),
-            default_prevented: true,
-            mouse_position,
-            mouse_hit_test: HitTest::default(),
-            modifiers,
-            capslock,
-            mouse_button_pressed: None,
-            scale_factor,
-            bounds_observers: SubscriberSet::new(),
-            appearance,
-            appearance_observers: SubscriberSet::new(),
-            active,
-            hovered,
-            needs_present,
-            last_input_timestamp,
-            resizing_window: Rc::new(Cell::new(false)),
-            last_input_modality: InputModality::Mouse,
-            refreshing: false,
-            activation_observers: SubscriberSet::new(),
-            focus: None,
-            focus_enabled: true,
-            pending_input: None,
-            pending_modifier: ModifierState::default(),
-            pending_input_observers: SubscriberSet::new(),
-            prompt: None,
-            client_inset: None,
-            image_cache_stack: Vec::new(),
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            inspector: None,
-        })
-    }
-
     pub(crate) fn new_focus_listener(
         &self,
         value: AnyWindowFocusListener,
@@ -1621,7 +1402,8 @@ impl Window {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DispatchEventResult {
+#[expect(missing_docs)]
+pub struct DispatchEventResult {
     pub propagate: bool,
     pub default_prevented: bool,
 }
@@ -1629,7 +1411,7 @@ pub(crate) struct DispatchEventResult {
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
 /// rendered. Currently, only rectangular content masks are supported, but we give the mask its own type
 /// to leave room to support more complex shapes in the future.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     /// The bounds
@@ -1732,13 +1514,25 @@ impl Window {
     }
 
     /// Move focus to the element associated with the given [`FocusHandle`].
-    pub fn focus(&mut self, handle: &FocusHandle) {
+    pub fn focus(&mut self, handle: &FocusHandle, cx: &mut App) {
         if !self.focus_enabled || self.focus == Some(handle.id) {
             return;
         }
 
         self.focus = Some(handle.id);
         self.clear_pending_keystrokes();
+
+        // Avoid re-entrant entity updates by deferring observer notifications to the end of the
+        // current effect cycle, and only for this window.
+        let window_handle = self.handle;
+        cx.defer(move |cx| {
+            window_handle
+                .update(cx, |_, window, cx| {
+                    window.pending_input_changed(cx);
+                })
+                .ok();
+        });
+
         self.refresh();
     }
 
@@ -1759,24 +1553,24 @@ impl Window {
     }
 
     /// Move focus to next tab stop.
-    pub fn focus_next(&mut self) {
+    pub fn focus_next(&mut self, cx: &mut App) {
         if !self.focus_enabled {
             return;
         }
 
         if let Some(handle) = self.rendered_frame.tab_stops.next(self.focus.as_ref()) {
-            self.focus(&handle)
+            self.focus(&handle, cx)
         }
     }
 
     /// Move focus to previous tab stop.
-    pub fn focus_prev(&mut self) {
+    pub fn focus_prev(&mut self, cx: &mut App) {
         if !self.focus_enabled {
             return;
         }
 
         if let Some(handle) = self.rendered_frame.tab_stops.prev(self.focus.as_ref()) {
-            self.focus(&handle)
+            self.focus(&handle, cx)
         }
     }
 
@@ -2043,7 +1837,12 @@ impl Window {
         })
     }
 
-    fn bounds_changed(&mut self, cx: &mut App) {
+    /// Notify the window that its bounds have changed.
+    ///
+    /// This updates internal state like `viewport_size` and `scale_factor` from
+    /// the platform window, then notifies observers. Normally called automatically
+    /// by the platform's resize callback, but exposed publicly for test infrastructure.
+    pub fn bounds_changed(&mut self, cx: &mut App) {
         let previous_viewport_size = self.viewport_size;
         self.scale_factor = self.platform_window.scale_factor();
         self.viewport_size = self.platform_window.content_size();
@@ -2098,8 +1897,17 @@ impl Window {
 
     /// Returns whether this window is considered to be the window
     /// that currently owns the mouse cursor.
+    /// On mac, this is equivalent to `is_window_active`.
     pub fn is_window_hovered(&self) -> bool {
-        self.hovered.get()
+        if cfg!(any(
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "freebsd"
+        )) {
+            self.hovered.get()
+        } else {
+            self.is_window_active()
+        }
     }
 
     /// Toggle zoom on the window.
@@ -2216,10 +2024,22 @@ impl Window {
         element_id: ElementId,
         f: impl FnOnce(&GlobalElementId, &mut Self) -> R,
     ) -> R {
-        self.element_id_stack.push(element_id);
-        let global_id = GlobalElementId(Arc::from(&*self.element_id_stack));
+        self.with_id(element_id, |this| {
+            let global_id = GlobalElementId(Arc::from(&*this.element_id_stack));
 
-        let result = f(&global_id, self);
+            f(&global_id, this)
+        })
+    }
+
+    /// Calls the provided closure with the element ID pushed on the stack.
+    #[inline]
+    pub fn with_id<R>(
+        &mut self,
+        element_id: impl Into<ElementId>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.element_id_stack.push(element_id.into());
+        let result = f(self);
         self.element_id_stack.pop();
         result
     }
@@ -2263,9 +2083,17 @@ impl Window {
     }
 
     /// Determine whether the given action is available along the dispatch path to the currently focused element.
-    pub fn is_action_available(&self, action: &dyn Action, cx: &mut App) -> bool {
+    pub fn is_action_available(&self, action: &dyn Action, cx: &App) -> bool {
         let node_id =
             self.focus_node_id_in_rendered_frame(self.focused(cx).map(|handle| handle.id));
+        self.rendered_frame
+            .dispatch_tree
+            .is_action_available(action, node_id)
+    }
+
+    /// Determine whether the given action is available along the dispatch path to the given focus_handle.
+    pub fn is_action_available_in(&self, action: &dyn Action, focus_handle: &FocusHandle) -> bool {
+        let node_id = self.focus_node_id_in_rendered_frame(Some(focus_handle.id));
         self.rendered_frame
             .dispatch_tree
             .is_action_available(action, node_id)
@@ -2316,7 +2144,11 @@ impl Window {
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
-    pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+    pub fn draw<'app>(&mut self, cx: &'app mut App) -> ArenaClearNeeded<'app> {
+        // Set up the per-App arena for element allocation during this draw.
+        // This ensures that multiple test Apps have isolated arenas.
+        let _arena_scope = ElementArenaScope::enter(&cx.element_arena);
+
         self.invalidate_entities();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
@@ -2324,8 +2156,21 @@ impl Window {
         self.requested_autoscroll = None;
 
         // Restore the previously-used input handler.
+        // Place it back into a None slot (left by a previous .take()) so that
+        // cached paint_range indices in reuse_paint find the handler at the
+        // expected position.
         if let Some(input_handler) = self.platform_window.take_input_handler() {
-            self.rendered_frame.input_handlers.push(Some(input_handler));
+            if let Some(slot) = self
+                .rendered_frame
+                .input_handlers
+                .iter_mut()
+                .rev()
+                .find(|h| h.is_none())
+            {
+                *slot = Some(input_handler);
+            } else {
+                self.rendered_frame.input_handlers.push(Some(input_handler));
+            }
         }
         if !cx.mode.skip_drawing() {
             self.draw_roots(cx);
@@ -2334,9 +2179,18 @@ impl Window {
         self.next_frame.window_active = self.active.get();
 
         // Register requested input handler with the platform window.
-        if let Some(input_handler) = self.next_frame.input_handlers.pop() {
-            self.platform_window
-                .set_input_handler(input_handler.unwrap());
+        // Use .take() instead of .pop() to preserve Vec length, so that cached
+        // paint_range indices remain valid for reuse_paint on the next frame.
+        // Search backwards to find the last Some entry, since reuse_paint may
+        // have copied None slots from the previous frame. (Fixes #50456)
+        if let Some(input_handler) = self
+            .next_frame
+            .input_handlers
+            .iter_mut()
+            .rev()
+            .find_map(|h| h.take())
+        {
+            self.platform_window.set_input_handler(input_handler);
         }
 
         self.layout_engine.as_mut().unwrap().clear();
@@ -2384,13 +2238,12 @@ impl Window {
         self.invalidator.set_phase(DrawPhase::None);
         self.needs_present.set(true);
 
-        ArenaClearNeeded
+        ArenaClearNeeded::new(&cx.element_arena)
     }
 
     fn record_entities_accessed(&mut self, cx: &mut App) {
-        let mut entities_ref = cx.entities.accessed_entities.borrow_mut();
+        let mut entities_ref = cx.entities.accessed_entities.get_mut();
         let mut entities = mem::take(entities_ref.deref_mut());
-        drop(entities_ref);
         let handle = self.handle;
         cx.record_entities_accessed(
             handle,
@@ -2398,7 +2251,7 @@ impl Window {
             self.invalidator.clone(),
             &entities,
         );
-        let mut entities_ref = cx.entities.accessed_entities.borrow_mut();
+        let mut entities_ref = cx.entities.accessed_entities.get_mut();
         mem::swap(&mut entities, entities_ref.deref_mut());
     }
 
@@ -3045,11 +2898,6 @@ impl Window {
         })
     }
 
-    /// Immediately push an element ID onto the stack. Useful for simplifying IDs in lists
-    pub fn with_id<R>(&mut self, id: impl Into<ElementId>, f: impl FnOnce(&mut Self) -> R) -> R {
-        self.with_global_id(id.into(), |_, window| f(window))
-    }
-
     /// Use a piece of state that exists as long this element is being rendered in consecutive frames, without needing to specify a key
     ///
     /// NOTE: This method uses the location of the caller to generate an ID for this state.
@@ -3458,7 +3306,6 @@ impl Window {
             use std::sync::atomic::{AtomicU32, Ordering};
             static GLYPH_COUNT: AtomicU32 = AtomicU32::new(0);
             let count = GLYPH_COUNT.fetch_add(1, Ordering::Relaxed);
-
 
             self.next_frame.scene.insert_primitive(MonochromeSprite {
                 order: 0,
@@ -5265,11 +5112,11 @@ impl<V: 'static + Render> WindowHandle<V> {
     where
         C: AppContext,
     {
-        crate::Flatten::flatten(cx.update_window(self.any_handle, |root_view, _, _| {
+        cx.update_window(self.any_handle, |root_view, _, _| {
             root_view
                 .downcast::<V>()
                 .map_err(|_| anyhow!("the type of the window's root view has changed"))
-        }))
+        })?
     }
 
     /// Updates the root view of this window.
@@ -5370,7 +5217,7 @@ impl<V: 'static> From<WindowHandle<V>> for AnyWindowHandle {
 }
 
 /// A handle to a window with any root view type, which can be downcast to a window with a specific root view type.
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AnyWindowHandle {
     pub(crate) id: WindowId,
     state_type: TypeId,
@@ -5463,6 +5310,8 @@ pub enum ElementId {
     CodeLocation(core::panic::Location<'static>),
     /// A labeled child of an element.
     NamedChild(Arc<ElementId>, SharedString),
+    /// A byte array ID (used for text-anchors)
+    OpaqueId([u8; 20]),
 }
 
 impl ElementId {
@@ -5484,6 +5333,7 @@ impl Display for ElementId {
             ElementId::Path(path) => write!(f, "{}", path.display())?,
             ElementId::CodeLocation(location) => write!(f, "{}", location)?,
             ElementId::NamedChild(id, name) => write!(f, "{}-{}", id, name)?,
+            ElementId::OpaqueId(opaque_id) => write!(f, "{:x?}", opaque_id)?,
         }
 
         Ok(())
@@ -5540,7 +5390,7 @@ impl From<Arc<std::path::Path>> for ElementId {
 
 impl From<&'static str> for ElementId {
     fn from(name: &'static str) -> Self {
-        ElementId::Name(name.into())
+        ElementId::Name(SharedString::new_static(name))
     }
 }
 
@@ -5552,13 +5402,13 @@ impl<'a> From<&'a FocusHandle> for ElementId {
 
 impl From<(&'static str, EntityId)> for ElementId {
     fn from((name, id): (&'static str, EntityId)) -> Self {
-        ElementId::NamedInteger(name.into(), id.as_u64())
+        ElementId::NamedInteger(SharedString::new_static(name), id.as_u64())
     }
 }
 
 impl From<(&'static str, usize)> for ElementId {
     fn from((name, id): (&'static str, usize)) -> Self {
-        ElementId::NamedInteger(name.into(), id as u64)
+        ElementId::NamedInteger(SharedString::new_static(name), id as u64)
     }
 }
 
@@ -5570,7 +5420,7 @@ impl From<(SharedString, usize)> for ElementId {
 
 impl From<(&'static str, u64)> for ElementId {
     fn from((name, id): (&'static str, u64)) -> Self {
-        ElementId::NamedInteger(name.into(), id)
+        ElementId::NamedInteger(SharedString::new_static(name), id)
     }
 }
 
@@ -5582,7 +5432,7 @@ impl From<Uuid> for ElementId {
 
 impl From<(&'static str, u32)> for ElementId {
     fn from((name, id): (&'static str, u32)) -> Self {
-        ElementId::NamedInteger(name.into(), id.into())
+        ElementId::NamedInteger(SharedString::new_static(name), u64::from(id))
     }
 }
 
@@ -5595,6 +5445,12 @@ impl<T: Into<SharedString>> From<(ElementId, T)> for ElementId {
 impl From<&'static core::panic::Location<'static>> for ElementId {
     fn from(location: &'static core::panic::Location<'static>) -> Self {
         ElementId::CodeLocation(*location)
+    }
+}
+
+impl From<[u8; 20]> for ElementId {
+    fn from(opaque_id: [u8; 20]) -> Self {
+        ElementId::OpaqueId(opaque_id)
     }
 }
 
