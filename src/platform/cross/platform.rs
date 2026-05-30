@@ -278,8 +278,10 @@ impl Platform for CrossPlatform {
         crate::WindowAppearance::default()
     }
 
-    fn open_url(&self, _url: &str) {
-        log::warn!("open_url is not yet implemented on this platform");
+    fn open_url(&self, url: &str) {
+        if let Err(err) = ::open::that_detached(url) {
+            log::error!("failed to open_url {url:?}: {err:?}");
+        }
     }
 
     fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>)>) {
@@ -383,11 +385,19 @@ impl Platform for CrossPlatform {
     }
 
     fn reveal_path(&self, _path: &std::path::Path) {
+        // Have not yet found a decent cross-platform crate that handles the reveal-in-native-file-manager behavior.
+        // Could partially be implemented by delegating to `::open::that_detached(directory)`, but that would be a half-measure because it would
+        // still be missing "select the file" portion of revealing a path (plus, revealing a directory should select the director in the parent folder).
+        // examples:
+        // https://github.com/zed-industries/zed/blob/e2e7a6769e693c843c82cea2dcf65917c139cc0f/crates/gpui_windows/src/platform.rs#L1091
+        // https://github.com/tauri-apps/plugins-workspace/blob/4350ca652d33e3face88d7c97a78830553545550/plugins/opener/src/reveal_item_in_dir.rs
         log::warn!("reveal_path is not yet implemented on this platform");
     }
 
-    fn open_with_system(&self, _path: &std::path::Path) {
-        log::warn!("open_with_system is not yet implemented on this platform");
+    fn open_with_system(&self, path: &std::path::Path) {
+        if let Err(err) = ::open::that_detached(path) {
+            log::error!("failed to open_with_system {path:?}: {err:?}");
+        }
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut()>) {
@@ -398,9 +408,13 @@ impl Platform for CrossPlatform {
         self.callbacks.on_reopen.set(Some(callback));
     }
 
-    fn set_menus(&self, _menus: Vec<crate::Menu>, _keymap: &crate::Keymap) {}
+    fn set_menus(&self, _menus: Vec<crate::Menu>, _keymap: &crate::Keymap) {
+        log::warn!("set_menus is not yet implemented on this platform");
+    }
 
-    fn set_dock_menu(&self, _menu: Vec<crate::MenuItem>, _keymap: &crate::Keymap) {}
+    fn set_dock_menu(&self, _menu: Vec<crate::MenuItem>, _keymap: &crate::Keymap) {
+        log::warn!("set_dock_menu is not yet implemented on this platform");
+    }
 
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn crate::Action)>) {
         self.callbacks.on_app_menu_action.set(Some(callback));
