@@ -71,6 +71,7 @@ log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
 lyon = "1.0"
 num_cpus = "1.13"
 open = "5.3.5"
+opener = { version = "0.8.4", features = ["reveal"] }
 parking = "2.0.0"
 parking_lot = "0.12.1"
 pathfinder_geometry = "0.5"

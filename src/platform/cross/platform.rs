@@ -30,7 +30,14 @@ fn device_button_to_gpui(button: u32) -> Option<MouseButton> {
 use anyhow::Result;
 use arboard::Clipboard;
 use collections::FxHashMap;
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    time::Instant,
+};
 use winit::event_loop::ActiveEventLoop;
 
 thread_local! {
@@ -55,6 +62,8 @@ pub(crate) struct CrossPlatform {
     event_loop: Cell<Option<winit::event_loop::EventLoop<CrossEvent>>>,
     event_loop_proxy: winit::event_loop::EventLoopProxy<CrossEvent>,
     callbacks: PlatformCallbacks,
+    menus: RefCell<Option<Vec<crate::OwnedMenu>>>,
+    dock_menu: RefCell<Vec<crate::OwnedMenuItem>>,
 }
 
 #[derive(Default)]
@@ -69,11 +78,13 @@ struct PlatformCallbacks {
 
 struct AppState {
     windows: FxHashMap<winit::window::WindowId, CrossWindow>,
+    window_handles: FxHashMap<winit::window::WindowId, crate::AnyWindowHandle>,
     on_finish_launching: Cell<Option<Box<dyn 'static + FnOnce()>>>,
     main_rx: PriorityQueueReceiver<RunnableVariant>,
     current_modifiers: Modifiers,
     pressed_button: Option<MouseButton>,
     click_state: ClickState,
+    active_window_id: Cell<Option<winit::window::WindowId>>,
     hovered_window_id: Cell<Option<winit::window::WindowId>>,
     hovered_external_paths: Vec<PathBuf>,
 }
@@ -106,6 +117,8 @@ impl CrossPlatform {
             event_loop: Cell::new(Some(event_loop)),
             event_loop_proxy,
             callbacks: PlatformCallbacks::default(),
+            menus: RefCell::new(None),
+            dock_menu: RefCell::new(Vec::new()),
         })
     }
 }
@@ -128,6 +141,7 @@ impl Platform for CrossPlatform {
 
         let mut app_state = AppState {
             windows: Default::default(),
+            window_handles: Default::default(),
             on_finish_launching: Cell::new(Some(on_finish_launching)),
             main_rx: self.main_rx.clone(),
             current_modifiers: Modifiers::default(),
@@ -138,6 +152,7 @@ impl Platform for CrossPlatform {
                 last_time: None,
                 current_count: 0,
             },
+            active_window_id: Cell::new(None),
             hovered_window_id: Cell::new(None),
             hovered_external_paths: Vec::new(),
         };
@@ -156,63 +171,91 @@ impl Platform for CrossPlatform {
         });
     }
 
-    fn restart(&self, _binary_path: Option<std::path::PathBuf>) {
-        log::warn!(
-            "restart is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/29"
-        );
+    fn restart(&self, binary_path: Option<std::path::PathBuf>) {
+        let binary_path = match binary_path {
+            Some(path) => path,
+            None => match std::env::current_exe() {
+                Ok(path) => path,
+                Err(err) => {
+                    log::error!("failed to resolve current executable for restart: {err:?}");
+                    return;
+                }
+            },
+        };
+
+        let mut command = std::process::Command::new(&binary_path);
+        command.args(std::env::args_os().skip(1));
+        if let Err(err) = command.spawn() {
+            log::error!("failed to restart app with executable {binary_path:?}: {err:?}");
+            return;
+        }
+
+        self.quit();
     }
 
-    fn activate(&self, _ignoring_other_apps: bool) {
-        log::warn!(
-            "activate is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/29"
-        );
+    fn activate(&self, ignoring_other_apps: bool) {
+        activate_native_app(ignoring_other_apps);
+        with_active_context(|_, app_state| {
+            for window in app_state.windows.values() {
+                window.window().set_visible(true);
+            }
+
+            if let Some(active_window_id) = app_state.active_window_id.get()
+                && let Some(window) = app_state.windows.get(&active_window_id)
+            {
+                window.window().focus_window();
+                return;
+            }
+
+            if let Some(window) = app_state.windows.values().next() {
+                window.window().focus_window();
+            }
+        });
     }
 
     fn hide(&self) {
-        log::warn!(
-            "hide is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/29"
-        );
+        hide_native_app();
+        with_active_context(|_, app_state| {
+            for window in app_state.windows.values() {
+                window.window().set_visible(false);
+            }
+        });
     }
 
     fn hide_other_apps(&self) {
-        log::warn!(
-            "hide_other_apps is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/29"
-        );
+        hide_other_native_apps();
     }
 
     fn unhide_other_apps(&self) {
-        log::warn!(
-            "unhide_other_apps is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/29"
-        );
+        unhide_other_native_apps();
     }
 
     fn displays(&self) -> Vec<Rc<dyn crate::PlatformDisplay>> {
-        log::warn!(
-            "multiple display support is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/28"
-        );
-        // TODO(mdeand): Add support for multiple displays.
-        vec![]
+        with_active_context(|event_loop, _| collect_displays(event_loop).0).unwrap_or_default()
     }
 
     fn primary_display(&self) -> Option<Rc<dyn crate::PlatformDisplay>> {
-        log::warn!(
-            "multiple display support is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/28"
-        );
-        // TODO(mdeand): Add support for multiple displays and primary display.
-        None
+        with_active_context(|event_loop, _| {
+            let (displays, primary_id) = collect_displays(event_loop);
+            primary_id
+                .and_then(|primary_id| displays.into_iter().find(|display| display.id() == primary_id))
+        })
+        .flatten()
     }
 
     fn active_window(&self) -> Option<crate::AnyWindowHandle> {
-        log::warn!(
-            "multiple display support is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/28"
-        );
-        // TODO(mdeand): Add support for tracking active window.
-        None
+        with_active_context(|_, app_state| {
+            app_state
+                .active_window_id
+                .get()
+                .and_then(|window_id| app_state.window_handles.get(&window_id).copied())
+        })
+        .flatten()
     }
 
     fn open_window(
         &self,
-        _handle: crate::AnyWindowHandle,
+        handle: crate::AnyWindowHandle,
         options: crate::WindowParams,
     ) -> anyhow::Result<Box<dyn crate::PlatformWindow>> {
         let window = CrossWindow::new(self.wgpu_context.clone(), self.event_loop_proxy.clone());
@@ -223,6 +266,16 @@ impl Platform for CrossPlatform {
                 options.window_decorations,
                 Some(crate::WindowDecorations::Client)
             );
+            let mut window_origin = bounds.origin;
+            if let Some(display_id) = options.display_id {
+                if let Some(display) = collect_displays(event_loop)
+                    .0
+                    .into_iter()
+                    .find(|display| display.id() == display_id)
+                {
+                    window_origin = display.default_bounds().origin;
+                }
+            }
             let mut attributes = winit::window::Window::default_attributes()
                 .with_title(
                     options
@@ -234,6 +287,11 @@ impl Platform for CrossPlatform {
                 )
                 .with_decorations(!use_client_decorations)
                 .with_resizable(options.is_resizable)
+                .with_visible(options.show)
+                .with_position(winit::dpi::LogicalPosition::new(
+                    window_origin.x.0 as f64,
+                    window_origin.y.0 as f64,
+                ))
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     bounds.size.width.0 as f64,
                     bounds.size.height.0 as f64,
@@ -284,6 +342,10 @@ impl Platform for CrossPlatform {
 
             window.initialize(winit_window);
             app_state.windows.insert(window_id, window.clone());
+            app_state.window_handles.insert(window_id, handle);
+            if options.focus {
+                window.window().focus_window();
+            }
             window.window().request_redraw();
         })
         .is_some();
@@ -405,14 +467,23 @@ impl Platform for CrossPlatform {
         false
     }
 
-    fn reveal_path(&self, _path: &std::path::Path) {
-        // Have not yet found a decent cross-platform crate that handles the reveal-in-native-file-manager behavior.
-        // Could partially be implemented by delegating to `::open::that_detached(directory)`, but that would be a half-measure because it would
-        // still be missing "select the file" portion of revealing a path (plus, revealing a directory should select the director in the parent folder).
-        // examples:
-        // https://github.com/zed-industries/zed/blob/e2e7a6769e693c843c82cea2dcf65917c139cc0f/crates/gpui_windows/src/platform.rs#L1091
-        // https://github.com/tauri-apps/plugins-workspace/blob/4350ca652d33e3face88d7c97a78830553545550/plugins/opener/src/reveal_item_in_dir.rs
-        log::warn!("reveal_path is not yet implemented on this platform");
+    fn reveal_path(&self, path: &std::path::Path) {
+        if let Err(err) = opener::reveal(path) {
+            let fallback_path = if path.is_file() {
+                path.parent().unwrap_or(path)
+            } else {
+                path
+            };
+            if let Err(fallback_err) = ::open::that_detached(fallback_path) {
+                log::error!(
+                    "failed to reveal path {path:?}: {err:?}; fallback open failed for {fallback_path:?}: {fallback_err:?}"
+                );
+            } else {
+                log::warn!(
+                    "failed to reveal path {path:?} ({err:?}); opened {fallback_path:?} instead"
+                );
+            }
+        }
     }
 
     fn open_with_system(&self, path: &std::path::Path) {
@@ -429,16 +500,35 @@ impl Platform for CrossPlatform {
         self.callbacks.on_reopen.set(Some(callback));
     }
 
-    fn set_menus(&self, _menus: Vec<crate::Menu>, _keymap: &crate::Keymap) {
-        log::warn!(
-            "set_menus is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/26"
-        );
+    fn set_menus(&self, menus: Vec<crate::Menu>, _keymap: &crate::Keymap) {
+        let owned_menus = menus.into_iter().map(crate::Menu::owned).collect();
+        *self.menus.borrow_mut() = Some(owned_menus);
     }
 
-    fn set_dock_menu(&self, _menu: Vec<crate::MenuItem>, _keymap: &crate::Keymap) {
-        log::warn!(
-            "set_dock_menu is not yet implemented on this platform, https://github.com/Far-Beyond-Pulsar/WGPUI/issues/27"
-        );
+    fn get_menus(&self) -> Option<Vec<crate::OwnedMenu>> {
+        self.menus.borrow().clone()
+    }
+
+    fn set_dock_menu(&self, menu: Vec<crate::MenuItem>, _keymap: &crate::Keymap) {
+        *self.dock_menu.borrow_mut() = menu.into_iter().map(crate::MenuItem::owned).collect();
+    }
+
+    fn perform_dock_menu_action(&self, action: usize) {
+        let selected_action = {
+            let dock_menu = self.dock_menu.borrow();
+            let mut index = action;
+            find_action_at_index(&dock_menu, &mut index).map(|action| action.boxed_clone())
+        };
+
+        let Some(selected_action) = selected_action else {
+            log::warn!("dock menu action index {action} is out of range");
+            return;
+        };
+
+        if let Some(mut callback) = self.callbacks.on_app_menu_action.take() {
+            callback(selected_action.as_ref());
+            self.callbacks.on_app_menu_action.set(Some(callback));
+        }
     }
 
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn crate::Action)>) {
@@ -618,6 +708,10 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                 // Programmatic close: remove from platform map so the winit
                 // window is dropped and the OS window actually disappears.
                 self.windows.remove(&window_id);
+                self.window_handles.remove(&window_id);
+                if self.active_window_id.get() == Some(window_id) {
+                    self.active_window_id.set(None);
+                }
             }
         }
 
@@ -837,6 +931,11 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
             }
 
             winit::event::WindowEvent::Focused(active) => {
+                if active {
+                    self.active_window_id.set(Some(window_id));
+                } else if self.active_window_id.get() == Some(window_id) {
+                    self.active_window_id.set(None);
+                }
                 window
                     .0
                     .state
@@ -873,6 +972,10 @@ impl winit::application::ApplicationHandler<CrossEvent> for AppState {
                         cb();
                     }
                     self.windows.remove(&window_id);
+                    self.window_handles.remove(&window_id);
+                    if self.active_window_id.get() == Some(window_id) {
+                        self.active_window_id.set(None);
+                    }
                 }
             }
 
@@ -1217,6 +1320,202 @@ fn winit_mouse_button_to_gpui(button: winit::event::MouseButton) -> MouseButton 
     }
 }
 
+#[derive(Debug)]
+struct CrossDisplay {
+    id: crate::DisplayId,
+    uuid: uuid::Uuid,
+    bounds: crate::Bounds<Pixels>,
+}
+
+impl crate::PlatformDisplay for CrossDisplay {
+    fn id(&self) -> crate::DisplayId {
+        self.id
+    }
+
+    fn uuid(&self) -> anyhow::Result<uuid::Uuid> {
+        Ok(self.uuid)
+    }
+
+    fn bounds(&self) -> crate::Bounds<Pixels> {
+        self.bounds
+    }
+}
+
+fn collect_displays(
+    event_loop: &ActiveEventLoop,
+) -> (Vec<Rc<dyn crate::PlatformDisplay>>, Option<crate::DisplayId>) {
+    let primary_fingerprint = event_loop.primary_monitor().as_ref().map(monitor_fingerprint);
+
+    let mut primary_display_id = None;
+    let mut used_display_ids = HashSet::new();
+    let displays = event_loop
+        .available_monitors()
+        .map(|monitor| {
+            let fingerprint = monitor_fingerprint(&monitor);
+            let display_id = stable_display_id(&fingerprint, &mut used_display_ids);
+            if Some(fingerprint.clone()) == primary_fingerprint {
+                primary_display_id = Some(display_id);
+            }
+
+            let scale_factor = monitor.scale_factor() as f32;
+            let position = monitor.position();
+            let size = monitor.size();
+            let bounds = crate::Bounds::new(
+                point(
+                    Pixels(position.x as f32 / scale_factor),
+                    Pixels(position.y as f32 / scale_factor),
+                ),
+                crate::Size {
+                    width: Pixels(size.width as f32 / scale_factor),
+                    height: Pixels(size.height as f32 / scale_factor),
+                },
+            );
+            let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &fingerprint);
+
+            Rc::new(CrossDisplay {
+                id: display_id,
+                uuid,
+                bounds,
+            }) as Rc<dyn crate::PlatformDisplay>
+        })
+        .collect::<Vec<_>>();
+
+    (displays, primary_display_id)
+}
+
+fn monitor_fingerprint(monitor: &winit::monitor::MonitorHandle) -> Vec<u8> {
+    let mut fingerprint = Vec::new();
+    if let Some(name) = monitor.name() {
+        fingerprint.extend_from_slice(name.as_bytes());
+    }
+
+    let position = monitor.position();
+    fingerprint.extend_from_slice(&position.x.to_le_bytes());
+    fingerprint.extend_from_slice(&position.y.to_le_bytes());
+
+    let size = monitor.size();
+    fingerprint.extend_from_slice(&size.width.to_le_bytes());
+    fingerprint.extend_from_slice(&size.height.to_le_bytes());
+
+    fingerprint.extend_from_slice(&monitor.scale_factor().to_bits().to_le_bytes());
+    fingerprint
+}
+
+fn stable_display_id(fingerprint: &[u8], used_ids: &mut HashSet<u32>) -> crate::DisplayId {
+    let base = (seahash::hash(fingerprint) as u32).max(1);
+    let mut candidate = base;
+
+    while !used_ids.insert(candidate) {
+        candidate = candidate.wrapping_add(1);
+        if candidate == 0 {
+            candidate = 1;
+        }
+    }
+
+    crate::DisplayId(candidate)
+}
+
+#[cfg(target_os = "macos")]
+fn activate_native_app(ignoring_other_apps: bool) {
+    use objc2_app_kit::NSApp;
+    use objc2_foundation::MainThreadMarker;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("activate called off main thread; skipping native activation");
+        return;
+    };
+
+    let app = NSApp(mtm);
+    if ignoring_other_apps {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    } else {
+        unsafe { app.activate() };
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_native_app(_ignoring_other_apps: bool) {}
+
+#[cfg(target_os = "macos")]
+fn hide_native_app() {
+    use objc2_app_kit::NSApp;
+    use objc2_foundation::MainThreadMarker;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("hide called off main thread; skipping native hide");
+        return;
+    };
+
+    let app = NSApp(mtm);
+    app.hide(None);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_native_app() {}
+
+#[cfg(target_os = "macos")]
+fn hide_other_native_apps() {
+    use objc2_app_kit::NSApp;
+    use objc2_foundation::MainThreadMarker;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("hide_other_apps called off main thread; skipping native hide-other-apps");
+        return;
+    };
+
+    let app = NSApp(mtm);
+    app.hideOtherApplications(None);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_other_native_apps() {
+    log::debug!("hide_other_apps has no native equivalent on this platform");
+}
+
+#[cfg(target_os = "macos")]
+fn unhide_other_native_apps() {
+    use objc2_app_kit::NSApp;
+    use objc2_foundation::MainThreadMarker;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("unhide_other_apps called off main thread; skipping native unhide-all-apps");
+        return;
+    };
+
+    let app = NSApp(mtm);
+    unsafe { app.unhideAllApplications(None) };
+}
+
+#[cfg(not(target_os = "macos"))]
+fn unhide_other_native_apps() {
+    log::debug!("unhide_other_apps has no native equivalent on this platform");
+}
+
+fn find_action_at_index<'a>(
+    items: &'a [crate::OwnedMenuItem],
+    index: &mut usize,
+) -> Option<&'a dyn crate::Action> {
+    for item in items {
+        match item {
+            crate::OwnedMenuItem::Action { action, .. } => {
+                if *index == 0 {
+                    return Some(action.as_ref());
+                }
+                *index -= 1;
+            }
+            crate::OwnedMenuItem::Submenu(submenu) => {
+                if let Some(action) = find_action_at_index(&submenu.items, index) {
+                    return Some(action);
+                }
+            }
+            crate::OwnedMenuItem::Separator | crate::OwnedMenuItem::SystemMenu(_) => {}
+        }
+    }
+
+    None
+}
+
 fn winit_key_to_keystroke(
     logical_key: &winit::keyboard::Key,
     modifiers: Modifiers,
@@ -1274,6 +1573,7 @@ fn winit_key_to_keystroke(
                 {
                     Some(" ".to_string())
                 }
+
                 _ => None,
             };
             (key_name.to_string(), key_char)
