@@ -318,12 +318,25 @@ fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
         let uv = pixel_position / globals.viewport_size;
         blurred_color = textureSample(backdrop_texture, backdrop_sampler, uv);
     } else {
-        // Gaussian blur kernel
-        let kernel_size = i32(ceil(blur_radius * 2.0));
-        let sigma = blur_radius / 2.0;
+        // Cap effective radius so the dynamic loops remain manageable on FXC/DX.
+        let max_blur_radius = 32.0;
+        let effective_blur_radius = min(blur_radius, max_blur_radius);
+        let kernel_size = i32(ceil(effective_blur_radius * 2.0));
+        let sigma = max(effective_blur_radius / 2.0, 0.0001);
 
-        for (var dy = -kernel_size; dy <= kernel_size; dy++) {
-            for (var dx = -kernel_size; dx <= kernel_size; dx++) {
+        // Use explicit loops to avoid WGSL `for` unroll pressure on FXC.
+        var dy = -kernel_size;
+        loop {
+            if dy > kernel_size {
+                break;
+            }
+
+            var dx = -kernel_size;
+            loop {
+                if dx > kernel_size {
+                    break;
+                }
+
                 let offset = vec2<f32>(f32(dx), f32(dy));
                 let weight = gaussian(length(offset), sigma);
 
@@ -332,11 +345,16 @@ fn fs_backdrop_blur(input: BackdropBlurVarying) -> @location(0) vec4<f32> {
 
                 // Clamp UV to valid range
                 if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
-                    let sample_color = textureSample(backdrop_texture, backdrop_sampler, sample_uv);
+                    // Use explicit LOD in dynamic loops (FXC can't derive gradients reliably here).
+                    let sample_color = textureSampleLevel(backdrop_texture, backdrop_sampler, sample_uv, 0.0);
                     blurred_color += sample_color * weight;
                     total_weight += weight;
                 }
+
+                dx += 1;
             }
+
+            dy += 1;
         }
 
         if total_weight > 0.0 {
