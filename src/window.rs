@@ -2428,8 +2428,8 @@ impl Window {
         assert_eq!(self.element_id_stack.len(), 0);
 
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
-        for deferred_draw_ix in deferred_draw_indices {
-            let deferred_draw = &mut deferred_draws[*deferred_draw_ix];
+        for &deferred_draw_ix in deferred_draw_indices {
+            let deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
             self.text_style_stack
@@ -2451,11 +2451,37 @@ impl Window {
             let prepaint_end = self.prepaint_index();
             deferred_draw.prepaint_range = prepaint_start..prepaint_end;
         }
-        assert_eq!(
-            self.next_frame.deferred_draws.len(),
-            0,
-            "cannot call defer_draw during deferred drawing"
-        );
+
+        // Process any nested deferred draws that were added during prepaint.
+        // A deferred element's child may itself contain deferred() elements,
+        // which call defer_draw() during their prepaint.
+        // Repeat until no new deferred draws are added.
+        while !self.next_frame.deferred_draws.is_empty() {
+            let nested = mem::take(&mut self.next_frame.deferred_draws);
+            for mut deferred_draw in nested {
+                self.element_id_stack
+                    .clone_from(&deferred_draw.element_id_stack);
+                self.text_style_stack
+                    .clone_from(&deferred_draw.text_style_stack);
+                self.next_frame
+                    .dispatch_tree
+                    .set_active_node(deferred_draw.parent_node);
+
+                let prepaint_start = self.prepaint_index();
+                if let Some(element) = deferred_draw.element.as_mut() {
+                    self.with_rendered_view(deferred_draw.current_view, |window| {
+                        window.with_absolute_element_offset(
+                            deferred_draw.absolute_offset,
+                            |window| element.prepaint(window, cx),
+                        )
+                    });
+                }
+                let prepaint_end = self.prepaint_index();
+                deferred_draw.prepaint_range = prepaint_start..prepaint_end;
+                deferred_draws.push(deferred_draw);
+            }
+        }
+
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
         self.text_style_stack.clear();
@@ -2465,8 +2491,8 @@ impl Window {
         assert_eq!(self.element_id_stack.len(), 0);
 
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
-        for deferred_draw_ix in deferred_draw_indices {
-            let mut deferred_draw = &mut deferred_draws[*deferred_draw_ix];
+        for &deferred_draw_ix in deferred_draw_indices {
+            let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
             self.next_frame
@@ -2484,6 +2510,29 @@ impl Window {
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
         }
+
+        // Paint any nested deferred draws that were added during prepaint
+        // but are not covered by the original indices.
+        for index in deferred_draw_indices.len()..deferred_draws.len() {
+            let mut deferred_draw = &mut deferred_draws[index];
+            self.element_id_stack
+                .clone_from(&deferred_draw.element_id_stack);
+            self.next_frame
+                .dispatch_tree
+                .set_active_node(deferred_draw.parent_node);
+
+            let paint_start = self.paint_index();
+            if let Some(element) = deferred_draw.element.as_mut() {
+                self.with_rendered_view(deferred_draw.current_view, |window| {
+                    element.paint(window, cx);
+                })
+            } else {
+                self.reuse_paint(deferred_draw.paint_range.clone());
+            }
+            let paint_end = self.paint_index();
+            deferred_draw.paint_range = paint_start..paint_end;
+        }
+
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
     }
