@@ -1,37 +1,20 @@
-# gpui - Community Edition
-
-A community fork of [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework.
-
-## Usage
-
-```toml
-[dependencies]
-gpui = { package = "gpui-ce", version = "0.3" }
-gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce" }
-
-# for test support...
-[dev-dependencies]
-gpui = { package = "gpui-ce", version = "0.3", features = ["test-support"] }
-```
-
-or for using the git version
-
-```toml
-gpui = { package = "gpui", git = "https://github.com/gpui-ce/gpui-ce" }
-```
-
-Then use `gpui::{import}` as normal.
-
----
-
-todo: rewrite below...
-
 # Welcome to GPUI!
 
 GPUI is a hybrid immediate and retained mode, GPU accelerated, UI framework
 for Rust, designed to support a wide variety of applications.
 
-Everything in GPUI starts with an `Application`. You can create one with `gpui_platform::application()`, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()`, and register your first root view. See [gpui.rs](https://www.gpui.rs/) for a complete example.
+## Getting Started
+
+GPUI is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions. You'll also need to use the latest version of stable Rust and be on macOS or Linux. Add the following to your `Cargo.toml`:
+
+```toml
+gpui = { version = "*" }
+```
+
+- [Ownership and data flow](_ownership_and_data_flow)
+- [Accessibility](_accessibility)
+
+Everything in GPUI starts with an `Application`. You can create one with `Application::new()`, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()`, and register your first root view. See [gpui.rs](https://www.gpui.rs/) for a complete example.
 
 ### Dependencies
 
