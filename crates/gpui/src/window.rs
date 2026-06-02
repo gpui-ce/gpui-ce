@@ -19,7 +19,7 @@ use crate::{
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
     Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point,
-    prelude::*, px, rems, size, transparent_black,
+    prelude::*, profiler, px, rems, size, transparent_black,
 };
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -5127,7 +5127,9 @@ impl Window {
             .remove(&action.as_any().type_id())
         {
             for listener in &global_listeners {
+                profiler::update_running_action(action, cx);
                 listener(action.as_any(), DispatchPhase::Capture, cx);
+                profiler::save_action_timing();
                 if !cx.propagate_event {
                     break;
                 }
@@ -5157,7 +5159,9 @@ impl Window {
             {
                 let any_action = action.as_any();
                 if action_type == any_action.type_id() {
+                    profiler::update_running_action(action, cx);
                     listener(any_action, DispatchPhase::Capture, self, cx);
+                    profiler::save_action_timing();
 
                     if !cx.propagate_event {
                         return;
@@ -5177,7 +5181,9 @@ impl Window {
                 let any_action = action.as_any();
                 if action_type == any_action.type_id() {
                     cx.propagate_event = false; // Actions stop propagation by default during the bubble phase
+                    profiler::update_running_action(action, cx);
                     listener(any_action, DispatchPhase::Bubble, self, cx);
+                    profiler::save_action_timing();
 
                     if !cx.propagate_event {
                         return;
@@ -5194,7 +5200,9 @@ impl Window {
             for listener in global_listeners.iter().rev() {
                 cx.propagate_event = false; // Actions stop propagation by default during the bubble phase
 
+                profiler::update_running_action(action, cx);
                 listener(action.as_any(), DispatchPhase::Bubble, cx);
+                profiler::save_action_timing();
                 if !cx.propagate_event {
                     break;
                 }
