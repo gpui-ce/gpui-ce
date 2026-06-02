@@ -2208,6 +2208,7 @@ dependencies = [
  "gpui_shared_string",
  "gpui_web",
  "hdrhistogram",
+ "heapless",
  "http",
  "image",
  "inventory",
