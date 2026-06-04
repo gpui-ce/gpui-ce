@@ -210,6 +210,10 @@ path = "examples/learn/animation.rs"
 name = "text"
 path = "examples/learn/text.rs"
 
+[[example]]
+name = "transition"
+path = "examples/learn/transition.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================

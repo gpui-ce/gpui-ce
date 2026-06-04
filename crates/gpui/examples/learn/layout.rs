@@ -12,8 +12,8 @@ mod example_prelude;
 use example_prelude::init_example;
 use gpui::colors::Colors;
 use gpui::{
-    div, prelude::*, px, size, App, Application, Bounds, Context, Div, Hsla, Render, Rgba, Window,
-    WindowBounds, WindowOptions,
+    App, Application, Bounds, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 
 // Helper: Colored block for visualization

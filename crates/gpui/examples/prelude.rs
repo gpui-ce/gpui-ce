@@ -8,7 +8,7 @@
 //! use example_prelude::init_example;
 //! ```
 
-use gpui::{actions, App, KeyBinding, Menu, MenuItem, SharedString};
+use gpui::{App, KeyBinding, Menu, MenuItem, SharedString, actions};
 
 actions!(example, [Quit, CloseWindow]);
 

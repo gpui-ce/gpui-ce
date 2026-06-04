@@ -13,8 +13,8 @@ mod example_prelude;
 use example_prelude::init_example;
 use gpui::colors::Colors;
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, IntoElement, Render,
-    RenderOnce, Window, WindowBounds, WindowOptions,
+    App, Application, Bounds, Context, Entity, IntoElement, Render, RenderOnce, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 // ============================================================================

@@ -11,20 +11,22 @@ mod example {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use gpui::{
-        div, layer_shell::*, point, prelude::*, px, rems, rgba, white, App, Application, Bounds,
-        Context, FontWeight, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
-        WindowOptions,
+        App, Application, Bounds, Context, FontWeight, Size, Window, WindowBackgroundAppearance,
+        WindowBounds, WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, rems,
+        rgba, white,
     };
 
     struct LayerShellExample;
 
     impl LayerShellExample {
         fn new(cx: &mut Context<Self>) -> Self {
-            cx.spawn(async move |this, cx| loop {
-                let _ = this.update(cx, |_, cx| cx.notify());
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                }
             })
             .detach();
 

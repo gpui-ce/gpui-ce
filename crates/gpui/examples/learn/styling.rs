@@ -8,8 +8,8 @@
 
 use gpui::colors::Colors;
 use gpui::{
-    actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FocusHandle, Hsla,
-    KeyBinding, Menu, MenuItem, Render, Rgba, Window, WindowBounds, WindowOptions,
+    App, Application, Bounds, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
+    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
 actions!(styling_example, [Quit, Tab, TabPrev]);

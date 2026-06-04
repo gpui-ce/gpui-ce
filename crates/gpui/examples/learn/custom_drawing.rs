@@ -9,9 +9,9 @@
 
 use gpui::colors::Colors;
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, rgb, size, App, Application, Bounds, Context, Hsla,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path, PathBuilder, Pixels, Point,
-    Render, Rgba, Window, WindowBounds, WindowOptions,
+    App, Application, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
+    WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 #[path = "../prelude.rs"]
