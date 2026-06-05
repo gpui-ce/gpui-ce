@@ -860,14 +860,23 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn zoom(&self) {
-        unsafe {
-            if IsWindowVisible(self.0.hwnd).as_bool() {
-                ShowWindowAsync(self.0.hwnd, SW_MAXIMIZE).ok().log_err();
-            } else if let Some(mut status) = self.state.initial_placement.take() {
-                status.state = WindowOpenState::Maximized;
-                self.state.initial_placement.set(Some(status));
+        let is_visible = unsafe { IsWindowVisible(self.0.hwnd).as_bool() };
+        if !is_visible {
+            if let Some(mut status) = self.state.initial_placement.take() {
+            status.state = WindowOpenState::Maximized;
+            self.state.initial_placement.set(Some(status));
             }
+            return;
         }
+
+        let window_operation = if self.is_maximized() {
+       	    SW_RESTORE
+        }
+        else
+        {
+           SW_MAXIMIZE
+        };
+       	unsafe { ShowWindowAsync(self.0.hwnd, window_operation).ok().log_err(); }
     }
 
     fn toggle_fullscreen(&self) {
