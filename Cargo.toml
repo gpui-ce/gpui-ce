@@ -31,6 +31,7 @@ accesskit_macos = "0.26.0"
 accesskit_unix = "0.22.0"
 accesskit_windows = "0.32.1"
 anyhow = "1.0.86"
+async-io = "2.6"
 backtrace = "0.3"
 bitflags = "2.6.0"
 collections = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9", version = "0.1.0" }
