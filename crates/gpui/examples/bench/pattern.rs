@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div,
-    linear_color_stop, linear_gradient, pattern_slash, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
+    linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
 
 struct PatternExample;

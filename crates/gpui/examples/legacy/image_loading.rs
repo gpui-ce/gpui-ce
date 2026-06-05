@@ -1,8 +1,8 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use gpui::{
-    Animation, AnimationExt, App, Asset, AssetLogger, AssetSource, Bounds, Context,
-    Hsla, ImageAssetLoader, ImageCacheError, ImgResourceLoader, LOADING_DELAY, Length, RenderImage,
+    Animation, AnimationExt, App, Asset, AssetLogger, AssetSource, Bounds, Context, Hsla,
+    ImageAssetLoader, ImageCacheError, ImgResourceLoader, LOADING_DELAY, Length, RenderImage,
     Resource, SharedString, Window, WindowBounds, WindowOptions, black, div, img, prelude::*,
     pulsating_between, px, red, size,
 };

@@ -15,9 +15,9 @@ use std::time::Duration;
 use anyhow::Result;
 use gpui::colors::Colors;
 use gpui::{
-    Animation, AnimationExt as _, App, AssetSource, Bounds, Context, Hsla,
-    SharedString, Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out,
-    linear, percentage, prelude::*, px, rgb, size as gpui_size, svg,
+    Animation, AnimationExt as _, App, AssetSource, Bounds, Context, Hsla, SharedString,
+    Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out, linear,
+    percentage, prelude::*, px, rgb, size as gpui_size, svg,
 };
 
 struct Assets {}

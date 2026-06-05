@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    rgb, size,
 };
 
 struct HelloWorld {

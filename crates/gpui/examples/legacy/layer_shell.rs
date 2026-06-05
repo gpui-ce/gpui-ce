@@ -11,9 +11,8 @@ mod example {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use gpui::{
-        App, Bounds, Context, FontWeight, Size, Window, WindowBackgroundAppearance,
-        WindowBounds, WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, rems,
-        rgba, white,
+        App, Bounds, Context, FontWeight, Size, Window, WindowBackgroundAppearance, WindowBounds,
+        WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, rems, rgba, white,
     };
 
     struct LayerShellExample;

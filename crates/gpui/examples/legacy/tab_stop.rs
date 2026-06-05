@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString,
-    Stateful, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
+    App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString, Stateful, Window,
+    WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
 
 actions!(example, [Tab, TabPrev]);

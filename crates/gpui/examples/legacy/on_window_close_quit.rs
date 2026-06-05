@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Context, FocusHandle, KeyBinding, Window, WindowBounds,
-    WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, FocusHandle, KeyBinding, Window, WindowBounds, WindowOptions, actions,
+    div, prelude::*, px, rgb, size,
 };
 
 actions!(example, [CloseWindow]);

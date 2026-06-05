@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Window, WindowBounds,
-    WindowKind, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Window, WindowBounds, WindowKind,
+    WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
 struct SubWindow {
