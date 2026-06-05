@@ -8,7 +8,7 @@
 
 use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
+    App, Bounds, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
     Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
@@ -493,7 +493,7 @@ fn main() {
             items: vec![MenuItem::action("Quit", Quit)],
             disabled: false,
         }]);
-        cx.on_window_closed(|cx| {
+        cx.on_window_closed(|cx, _window_id| {
             if cx.windows().is_empty() {
                 cx.quit();
             }

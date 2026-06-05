@@ -1,5 +1,5 @@
 use gpui::{
-    App, Application, Bounds, Context, DisplayId, Hsla, Pixels, SharedString, Size, Window,
+    App, Bounds, Context, DisplayId, Hsla, Pixels, SharedString, Size, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
     px, rgb,
 };

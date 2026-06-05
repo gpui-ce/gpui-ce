@@ -9,12 +9,12 @@
 
 use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
+    App, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
     WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 // Example 1: Basic Canvas Drawing

@@ -1,5 +1,5 @@
 use gpui::{
-    Application, Background, Bounds, ColorSpace, Context, Path, PathBuilder, Pixels, Render,
+    Background, Bounds, ColorSpace, Context, Path, PathBuilder, Pixels, Render,
     TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, linear_color_stop,
     linear_gradient, point, prelude::*, px, rgb, size,
 };

@@ -7,14 +7,14 @@
 //! 3. Task management - Storing, canceling, and detaching tasks
 //! 4. Progress updates - Communicating from background to UI
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use std::time::Duration;
 
 use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Context, Entity, Render, Task, Window, WindowBounds, WindowOptions,
+    App, Bounds, Context, Entity, Render, Task, Window, WindowBounds, WindowOptions,
     div, prelude::*, px, rgb, size,
 };
 

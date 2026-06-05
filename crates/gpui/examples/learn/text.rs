@@ -9,13 +9,13 @@
 //! 5. Styled Text - Inline style variations with highlights
 //! 6. Character Grid - Unicode and emoji support
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Context, FontStyle, FontWeight, Hsla, Render, StyledText,
-    TextOverflow, Window, WindowBounds, WindowOptions, colors::Colors, current_platform, div,
+    App, Bounds, Context, FontStyle, FontWeight, Hsla, Render, StyledText,
+    TextOverflow, Window, WindowBounds, WindowOptions, colors::Colors, div,
     prelude::*, px, relative, rgb, size,
 };
 

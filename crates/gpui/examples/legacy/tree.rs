@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use gpui::{
-    App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px,
     size,
 };
 

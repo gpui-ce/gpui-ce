@@ -2516,6 +2516,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "smallvec",
+ "smol",
  "spin 0.10.0",
  "stacksafe",
  "strum",

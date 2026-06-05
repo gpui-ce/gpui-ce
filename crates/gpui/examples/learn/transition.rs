@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates transition capabilities in GPUI via `use_keyed_transition`.
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use std::time::Duration;

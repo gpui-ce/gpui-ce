@@ -6,13 +6,13 @@
 //! 2. Grid - Two-dimensional layouts with spans
 //! 3. Common patterns - Sidebar, header/footer, centering
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
+    App, Bounds, Context, Div, Hsla, Render, Rgba, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
 };
 

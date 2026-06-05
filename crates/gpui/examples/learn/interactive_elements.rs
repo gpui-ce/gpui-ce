@@ -7,13 +7,13 @@
 //! 3. Mouse events - mouse down, mouse up, mouse move
 //! 4. Drag and drop - draggable elements and drop targets
 
-#[path = "../prelude.rs"]
+#[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::colors::Colors;
 use gpui::{
-    App, Application, Bounds, ClickEvent, Context, Entity, Half, Hsla, IntoElement, MouseButton,
+    App, Bounds, ClickEvent, Context, Entity, Half, Hsla, IntoElement, MouseButton,
     MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, size,
 };

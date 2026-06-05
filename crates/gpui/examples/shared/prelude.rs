@@ -3,7 +3,7 @@
 //! Common helpers for GPUI examples. Import with:
 //!
 //! ```ignore
-//! #[path = "../prelude.rs"]
+//! #[path = "../shared/prelude.rs"]
 //! mod example_prelude;
 //! use example_prelude::init_example;
 //! ```
