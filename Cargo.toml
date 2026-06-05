@@ -33,7 +33,7 @@ accesskit_windows = "0.32.1"
 anyhow = "1.0.86"
 backtrace = "0.3"
 bitflags = "2.6.0"
-collections = { git = "https://github.com/zed-industries/zed", version = "0.1.0" }
+collections = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9", version = "0.1.0" }
 ctor = "1.0.6"
 derive_more = { version = "2.1.1", features = [
     "add",
@@ -48,7 +48,7 @@ derive_more = { version = "2.1.1", features = [
 ] }
 futures = "0.3.32"
 futures-concurrency = "7.7.1"
-http_client = { git = "https://github.com/zed-industries/zed" }
+http_client = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 image = "0.25.1"
 inventory = "0.3.19"
 itertools = "0.14.0"
@@ -60,9 +60,9 @@ chrono = { version = "0.4", features = ["serde"] }
 profiling = "1"
 rand = "0.9"
 regex = "1.5"
-refineable = { git = "https://github.com/zed-industries/zed" }
-scheduler = { git = "https://github.com/zed-industries/zed" }
-util_macros = { git = "https://github.com/zed-industries/zed" }
+refineable = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+scheduler = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+util_macros = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 schemars = { version = "1.0", features = ["indexmap2"] }
 serde = { version = "1.0.221", features = ["derive", "rc"] }
 serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
@@ -83,14 +83,14 @@ cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
 core-video = { version = "0.5.2", features = ["metal"] }
-media = { git = "https://github.com/zed-industries/zed" }
+media = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 objc = "0.2"
 mach2 = "0.5"
 metal = "0.33"
 scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed" }
 env_logger = "0.11"
 unicode-segmentation = "1.10"
-reqwest_client = { git = "https://github.com/zed-industries/zed" }
+reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 wasm-bindgen = "0.2.120"
 heck = "0.5"
 proc-macro2 = "1.0.93"
@@ -106,14 +106,14 @@ ashpd = { version = "0.13", default-features = false, features = [
 ] }
 libc = "0.2"
 smol = "2.0"
-util = { git = "https://github.com/zed-industries/zed" }
+util = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [ "NSGraphics" ] }
 semver = { version = "1.0", features = ["serde"] }
 windows-core = "0.61"
 tokio = { version = "1" }
-gpui_util = { git = "https://github.com/zed-industries/zed" }
+gpui_util = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
 
 gpui = { path = "./crates/gpui/" }
 gpui_platform = { path = "./crates/gpui_platform/" }
