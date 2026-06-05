@@ -1,7 +1,9 @@
 mod binding;
+mod collection;
 mod context;
 
 pub use binding::*;
+pub use collection::*;
 pub use context::*;
 
 use crate::{Action, AsKeystroke, Keystroke, Unbind, is_no_action, is_unbind};
