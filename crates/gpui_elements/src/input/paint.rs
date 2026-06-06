@@ -1,12 +1,12 @@
 use crate::input::{Input, InputLineLayout, InputState, PaintColors};
 use gpui::{
     Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
-    ElementInputHandler, Entity, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
-    Hsla, InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun,
     TextStyle, Window, WrappedLine, fill, point, px, relative, size,
 };
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 const CURSOR_WIDTH: f32 = 2.0;
 const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
@@ -145,14 +145,29 @@ impl Element for Input {
             .update(cx, |input, cx| input.cursor_visible(is_focused, cx));
 
         let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
+            let precomputed_first_line = match (snapshot.layout, snapshot.line_layouts.first()) {
+                (
+                    super::InputLayout::SingleLine,
+                    Some(InputLineLayout {
+                        wrapped_line: Some(wrapped_line),
+                        ..
+                    }),
+                ) => Some(PrecomputedLinePosition::new(
+                    &snapshot.content,
+                    &**wrapped_line,
+                    snapshot.line_height,
+                )),
+                _ => None,
+            };
             let context = PaintContext {
                 snapshot,
-                focus_handle: &focus_handle,
+                is_focused,
                 bounds,
                 text_style: &text_style,
                 placeholder: placeholder.as_ref(),
                 colors: &colors,
                 cursor_visible,
+                precomputed_first_line,
             };
             context.process_mouse_events(&self.input, window, cx);
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -205,12 +220,13 @@ impl InputStateSnapshot {
 
 struct PaintContext<'app> {
     snapshot: InputStateSnapshot,
-    focus_handle: &'app FocusHandle,
+    is_focused: bool,
     bounds: Bounds<Pixels>,
     text_style: &'app TextStyle,
     placeholder: Option<&'app SharedString>,
     colors: &'app PaintColors,
     cursor_visible: bool,
+    precomputed_first_line: Option<PrecomputedLinePosition>,
 }
 
 impl<'app> PaintContext<'app> {
@@ -319,131 +335,486 @@ impl<'app> PaintContext<'app> {
     }
 
     pub fn paint(&self, window: &mut Window, cx: &mut App) {
+        if !self.snapshot.selected_range.is_empty() {
+            self.paint_selection(window);
+        }
+
+        if self.snapshot.content.is_empty() {
+            self.paint_placeholder(window, cx);
+        } else {
+            self.paint_text(window, cx);
+        }
+
+        self.paint_marked_underline(window);
+
+        if self.is_focused && self.snapshot.selected_range.is_empty() && self.cursor_visible {
+            self.paint_cursor(window);
+        }
+    }
+
+    fn paint_selection(&self, window: &mut Window) {
         match self.snapshot.layout {
             super::InputLayout::MultiLine => {
-                let is_focused = self.focus_handle.is_focused(window);
+                for line in &self.snapshot.line_layouts {
+                    let line_y = line.y_offset - self.snapshot.scroll_offset;
 
-                if !self.snapshot.selected_range.is_empty() {
-                    paint_multiline_selection(
-                        &self.snapshot.line_layouts,
-                        &self.snapshot.selected_range,
-                        self.bounds,
-                        self.snapshot.scroll_offset,
+                    if !is_line_visible(
+                        line_y,
                         self.snapshot.line_height,
-                        self.colors.selection,
-                        window,
-                    );
-                }
+                        line.visual_line_count,
+                        self.bounds.size.height,
+                    ) {
+                        continue;
+                    }
 
-                if self.snapshot.content.is_empty() {
-                    if let Some(placeholder_str) = self.placeholder {
-                        if !placeholder_str.is_empty() {
-                            paint_placeholder(
-                                placeholder_str,
-                                self.bounds,
-                                self.text_style,
-                                self.colors.placeholder,
+                    if !line_intersects_range(&line.text_range, &self.snapshot.selected_range) {
+                        continue;
+                    }
+
+                    if line.text_range.is_empty() {
+                        const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
+                        paint_selection_quad(
+                            window,
+                            self.colors.selection,
+                            &self.bounds,
+                            point(px(0.), line_y),
+                            point(
+                                EMPTY_LINE_SELECTION_WIDTH,
+                                line_y + self.snapshot.line_height,
+                            ),
+                        );
+                    } else if let Some(wrapped) = &line.wrapped_line {
+                        let line_start = line.text_range.start;
+                        let line_end = line.text_range.end;
+
+                        let sel_start =
+                            self.snapshot.selected_range.start.max(line_start) - line_start;
+                        let sel_end = self.snapshot.selected_range.end.min(line_end) - line_start;
+
+                        let start_pos = wrapped
+                            .position_for_index(sel_start, self.snapshot.line_height)
+                            .unwrap_or(point(px(0.), px(0.)));
+                        let end_pos = wrapped
+                            .position_for_index(sel_end, self.snapshot.line_height)
+                            .unwrap_or_else(|| {
+                                let last_line_y =
+                                    self.snapshot.line_height * (line.visual_line_count - 1) as f32;
+                                point(wrapped.width(), last_line_y)
+                            });
+
+                        let start_visual_line =
+                            compute_visual_line_index(start_pos.y, self.snapshot.line_height);
+                        let end_visual_line =
+                            compute_visual_line_index(end_pos.y, self.snapshot.line_height);
+
+                        if start_visual_line == end_visual_line {
+                            paint_selection_quad(
                                 window,
-                                cx,
-                                false,
+                                self.colors.selection,
+                                &self.bounds,
+                                point(start_pos.x, line_y + start_pos.y),
+                                point(end_pos.x, line_y + start_pos.y + self.snapshot.line_height),
+                            );
+                        } else {
+                            let line_width = wrapped.width();
+
+                            // First visual line
+                            paint_selection_quad(
+                                window,
+                                self.colors.selection,
+                                &self.bounds,
+                                point(start_pos.x, line_y + start_pos.y),
+                                point(line_width, line_y + start_pos.y + self.snapshot.line_height),
+                            );
+
+                            // Middle visual lines
+                            for visual_line in (start_visual_line + 1)..end_visual_line {
+                                let y = self.snapshot.line_height * visual_line as f32;
+                                paint_selection_quad(
+                                    window,
+                                    self.colors.selection,
+                                    &self.bounds,
+                                    point(px(0.), line_y + y),
+                                    point(line_width, line_y + y + self.snapshot.line_height),
+                                );
+                            }
+
+                            // Last visual line
+                            paint_selection_quad(
+                                window,
+                                self.colors.selection,
+                                &self.bounds,
+                                point(px(0.), line_y + end_pos.y),
+                                point(end_pos.x, line_y + end_pos.y + self.snapshot.line_height),
                             );
                         }
                     }
-                } else {
-                    paint_multiline_text(
-                        &self.snapshot.line_layouts,
-                        self.bounds,
-                        self.snapshot.scroll_offset,
-                        self.snapshot.line_height,
-                        window,
-                        cx,
-                    );
-                }
-
-                if let Some(marked_range) = &self.snapshot.marked_range {
-                    if !marked_range.is_empty() {
-                        paint_multiline_marked_underline(
-                            &self.snapshot.line_layouts,
-                            marked_range,
-                            self.bounds,
-                            self.snapshot.scroll_offset,
-                            self.snapshot.line_height,
-                            self.colors.cursor,
-                            window,
-                        );
-                    }
-                }
-
-                if is_focused && self.snapshot.selected_range.is_empty() && self.cursor_visible {
-                    paint_multiline_cursor(
-                        &self.snapshot.line_layouts,
-                        self.snapshot.cursor_offset,
-                        &self.snapshot.content,
-                        self.bounds,
-                        self.snapshot.scroll_offset,
-                        self.snapshot.line_height,
-                        self.colors.cursor,
-                        window,
-                    );
                 }
             }
             super::InputLayout::SingleLine => {
-                let state =
-                    SingleLinePaintState::from_input(&self.snapshot, self.focus_handle, window);
+                let precomputed = self
+                    .precomputed_first_line
+                    .as_ref()
+                    .expect("missing precomputed single-line");
+                let start_x = pos_in_string_for_char_index(
+                    &self.snapshot.content,
+                    &precomputed.char_positions,
+                    self.snapshot.selected_range.start,
+                    &precomputed.text_width,
+                ) - self.snapshot.scroll_offset;
+                let end_x = pos_in_string_for_char_index(
+                    &self.snapshot.content,
+                    &precomputed.char_positions,
+                    self.snapshot.selected_range.end,
+                    &precomputed.text_width,
+                ) - self.snapshot.scroll_offset;
 
-                if !self.snapshot.selected_range.is_empty() {
-                    paint_singleline_selection(
-                        &self.snapshot,
-                        &state,
-                        self.bounds,
-                        self.colors.selection,
-                        window,
-                    );
-                }
+                let y_offset =
+                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
 
-                if self.snapshot.content.is_empty() {
-                    if let Some(placeholder_str) = self.placeholder {
-                        if !placeholder_str.is_empty() {
-                            paint_placeholder(
-                                placeholder_str,
-                                self.bounds,
-                                self.text_style,
-                                self.colors.placeholder,
-                                window,
-                                cx,
-                                true,
-                            );
-                        }
+                paint_selection_quad(
+                    window,
+                    self.colors.selection,
+                    &self.bounds,
+                    point(start_x, y_offset),
+                    point(end_x, y_offset + self.snapshot.line_height),
+                );
+            }
+        }
+    }
+
+    fn paint_placeholder(&self, window: &mut Window, cx: &mut App) {
+        let baseline = matches!(self.snapshot.layout, super::InputLayout::SingleLine);
+        let Some(placeholder) = self.placeholder else {
+            return;
+        };
+        if placeholder.is_empty() {
+            return;
+        }
+
+        let run = TextRun {
+            len: placeholder.len(),
+            font: self.text_style.font(),
+            color: self.colors.placeholder,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+
+        let font_size = self.text_style.font_size.to_pixels(window.rem_size());
+        let shaped_line =
+            window
+                .text_system()
+                .shape_line(placeholder.clone(), font_size, &[run], None);
+        let line_height = self.text_style.line_height_in_pixels(window.rem_size());
+
+        let mut paint_origin = self.bounds.origin;
+        if baseline {
+            let y_offset = (self.bounds.size.height - line_height).max(px(0.)) / 2.0;
+            paint_origin.y += y_offset;
+        }
+
+        let _ = shaped_line.paint(paint_origin, line_height, TextAlign::Left, None, window, cx);
+    }
+
+    fn paint_text(&self, window: &mut Window, cx: &mut App) {
+        match self.snapshot.layout {
+            super::InputLayout::MultiLine => {
+                for line_layout in &self.snapshot.line_layouts {
+                    let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
+
+                    if !is_line_visible(
+                        line_y,
+                        self.snapshot.line_height,
+                        line_layout.visual_line_count,
+                        self.bounds.size.height,
+                    ) {
+                        continue;
                     }
-                } else {
-                    paint_singleline_text(&self.snapshot, &state, self.bounds, window, cx);
-                }
 
-                if let Some(marked_range) = &self.snapshot.marked_range {
-                    if !marked_range.is_empty() {
-                        paint_singleline_marked_underline(
-                            &self.snapshot,
-                            &state,
-                            marked_range,
-                            self.bounds,
-                            self.colors.cursor,
+                    if let Some(wrapped) = &line_layout.wrapped_line {
+                        let paint_pos = point(self.bounds.left(), self.bounds.top() + line_y);
+                        let _ = wrapped.paint(
+                            paint_pos,
+                            self.snapshot.line_height,
+                            TextAlign::Left,
+                            Some(self.bounds),
                             window,
+                            cx,
                         );
                     }
                 }
+            }
+            super::InputLayout::SingleLine => {
+                let Some(line_layout) = self.snapshot.line_layouts.first() else {
+                    return;
+                };
+                let Some(wrapped_line) = &line_layout.wrapped_line else {
+                    return;
+                };
 
-                if state.is_focused
-                    && self.snapshot.selected_range.is_empty()
-                    && self.cursor_visible
-                {
-                    paint_singleline_cursor(
-                        &self.snapshot,
-                        &state,
-                        self.bounds,
-                        self.colors.cursor,
-                        window,
-                    );
+                let y_offset =
+                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
+                let paint_origin = point(
+                    self.bounds.origin.x - self.snapshot.scroll_offset,
+                    self.bounds.origin.y + y_offset,
+                );
+
+                let _ = wrapped_line.paint(
+                    paint_origin,
+                    self.snapshot.line_height,
+                    TextAlign::Left,
+                    Some(self.bounds),
+                    window,
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn paint_marked_underline(&self, window: &mut Window) {
+        let Some(marked_range) = &self.snapshot.marked_range else {
+            return;
+        };
+        if marked_range.is_empty() {
+            return;
+        }
+        match self.snapshot.layout {
+            super::InputLayout::MultiLine => {
+                let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
+                let underline_offset = self.snapshot.line_height - underline_thickness;
+
+                for line in &self.snapshot.line_layouts {
+                    let line_y = line.y_offset - self.snapshot.scroll_offset;
+
+                    if !is_line_visible(
+                        line_y,
+                        self.snapshot.line_height,
+                        line.visual_line_count,
+                        self.bounds.size.height,
+                    ) {
+                        continue;
+                    }
+
+                    if !line_intersects_range(&line.text_range, marked_range) {
+                        continue;
+                    }
+
+                    if line.text_range.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(wrapped) = &line.wrapped_line {
+                        let line_start = line.text_range.start;
+                        let line_end = line.text_range.end;
+
+                        let mark_start = marked_range.start.max(line_start) - line_start;
+                        let mark_end = marked_range.end.min(line_end) - line_start;
+
+                        let start_pos = wrapped
+                            .position_for_index(mark_start, self.snapshot.line_height)
+                            .unwrap_or(point(px(0.), px(0.)));
+                        let end_pos = wrapped
+                            .position_for_index(mark_end, self.snapshot.line_height)
+                            .unwrap_or_else(|| {
+                                let last_line_y =
+                                    self.snapshot.line_height * (line.visual_line_count - 1) as f32;
+                                point(wrapped.width(), last_line_y)
+                            });
+
+                        let start_visual_line =
+                            compute_visual_line_index(start_pos.y, self.snapshot.line_height);
+                        let end_visual_line =
+                            compute_visual_line_index(end_pos.y, self.snapshot.line_height);
+
+                        if start_visual_line == end_visual_line {
+                            window.paint_quad(fill(
+                                Bounds::from_corners(
+                                    point(
+                                        self.bounds.left() + start_pos.x,
+                                        self.bounds.top() + line_y + start_pos.y + underline_offset,
+                                    ),
+                                    point(
+                                        self.bounds.left() + end_pos.x,
+                                        self.bounds.top()
+                                            + line_y
+                                            + start_pos.y
+                                            + self.snapshot.line_height,
+                                    ),
+                                ),
+                                self.colors.cursor,
+                            ));
+                        } else {
+                            // First visual line
+                            window.paint_quad(fill(
+                                Bounds::from_corners(
+                                    point(
+                                        self.bounds.left() + start_pos.x,
+                                        self.bounds.top() + line_y + start_pos.y + underline_offset,
+                                    ),
+                                    point(
+                                        self.bounds.left() + wrapped.width(),
+                                        self.bounds.top()
+                                            + line_y
+                                            + start_pos.y
+                                            + self.snapshot.line_height,
+                                    ),
+                                ),
+                                self.colors.cursor,
+                            ));
+
+                            // Middle visual lines
+                            for visual_line in (start_visual_line + 1)..end_visual_line {
+                                let y = self.snapshot.line_height * visual_line as f32;
+                                window.paint_quad(fill(
+                                    Bounds::from_corners(
+                                        point(
+                                            self.bounds.left(),
+                                            self.bounds.top() + line_y + y + underline_offset,
+                                        ),
+                                        point(
+                                            self.bounds.left() + wrapped.width(),
+                                            self.bounds.top()
+                                                + line_y
+                                                + y
+                                                + self.snapshot.line_height,
+                                        ),
+                                    ),
+                                    self.colors.cursor,
+                                ));
+                            }
+
+                            // Last visual line
+                            window.paint_quad(fill(
+                                Bounds::from_corners(
+                                    point(
+                                        self.bounds.left(),
+                                        self.bounds.top() + line_y + end_pos.y + underline_offset,
+                                    ),
+                                    point(
+                                        self.bounds.left() + end_pos.x,
+                                        self.bounds.top()
+                                            + line_y
+                                            + end_pos.y
+                                            + self.snapshot.line_height,
+                                    ),
+                                ),
+                                self.colors.cursor,
+                            ));
+                        }
+                    }
                 }
+            }
+            super::InputLayout::SingleLine => {
+                let Some(precomputed) = &self.precomputed_first_line else {
+                    return;
+                };
+                let start_x = pos_in_string_for_char_index(
+                    &self.snapshot.content,
+                    &precomputed.char_positions,
+                    marked_range.start,
+                    &precomputed.text_width,
+                ) - self.snapshot.scroll_offset;
+                let end_x = pos_in_string_for_char_index(
+                    &self.snapshot.content,
+                    &precomputed.char_positions,
+                    marked_range.end,
+                    &precomputed.text_width,
+                ) - self.snapshot.scroll_offset;
+
+                let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
+                let y_offset =
+                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
+                let underline_y =
+                    self.bounds.top() + y_offset + self.snapshot.line_height - underline_thickness;
+
+                window.paint_quad(fill(
+                    Bounds::from_corners(
+                        point(self.bounds.left() + start_x, underline_y),
+                        point(
+                            self.bounds.left() + end_x,
+                            underline_y + underline_thickness,
+                        ),
+                    ),
+                    self.colors.cursor,
+                ));
+            }
+        }
+    }
+
+    fn paint_cursor(&self, window: &mut Window) {
+        match self.snapshot.layout {
+            super::InputLayout::MultiLine => {
+                for line in &self.snapshot.line_layouts {
+                    let line_y = line.y_offset - self.snapshot.scroll_offset;
+
+                    if !is_line_visible(
+                        line_y,
+                        self.snapshot.line_height,
+                        line.visual_line_count,
+                        self.bounds.size.height,
+                    ) {
+                        continue;
+                    }
+
+                    // Since range is non-inclusive of the end value we need to check for it explicitly
+                    let is_cursor_in_line = if line.text_range.is_empty() {
+                        self.snapshot.cursor_offset == line.text_range.start
+                    } else {
+                        line.text_range.contains(&self.snapshot.cursor_offset)
+                            || self.snapshot.cursor_offset == line.text_range.end
+                    };
+
+                    if !is_cursor_in_line {
+                        continue;
+                    }
+
+                    let cursor_position = if let Some(wrapped) = &line.wrapped_line {
+                        let local_offset = self
+                            .snapshot
+                            .cursor_offset
+                            .saturating_sub(line.text_range.start);
+                        wrapped
+                            .position_for_index(local_offset, self.snapshot.line_height)
+                            .unwrap_or(point(px(0.), px(0.)))
+                    } else {
+                        point(px(0.), px(0.))
+                    };
+
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(
+                                self.bounds.left() + cursor_position.x,
+                                self.bounds.top() + line_y + cursor_position.y,
+                            ),
+                            size(px(CURSOR_WIDTH), self.snapshot.line_height),
+                        ),
+                        self.colors.cursor,
+                    ));
+                    break;
+                }
+            }
+            super::InputLayout::SingleLine => {
+                let Some(precomputed) = &self.precomputed_first_line else {
+                    return;
+                };
+                let cursor_x = pos_in_string_for_char_index(
+                    &self.snapshot.content,
+                    &precomputed.char_positions,
+                    self.snapshot.cursor_offset,
+                    &precomputed.text_width,
+                ) - self.snapshot.scroll_offset;
+
+                let y_offset =
+                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
+
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(self.bounds.left() + cursor_x, self.bounds.top() + y_offset),
+                        size(px(CURSOR_WIDTH), self.snapshot.line_height),
+                    ),
+                    self.colors.cursor,
+                ));
             }
         }
     }
@@ -474,360 +845,34 @@ fn compute_visual_line_index(y: Pixels, line_height: Pixels) -> usize {
     (y / line_height).floor() as usize
 }
 
-fn paint_multiline_selection(
-    line_layouts: &[InputLineLayout],
-    selected_range: &std::ops::Range<usize>,
-    bounds: Bounds<Pixels>,
-    scroll_offset: Pixels,
-    line_height: Pixels,
-    selection_color: Hsla,
-    window: &mut Window,
-) {
-    for line in line_layouts {
-        let line_y = line.y_offset - scroll_offset;
-
-        if !is_line_visible(
-            line_y,
-            line_height,
-            line.visual_line_count,
-            bounds.size.height,
-        ) {
-            continue;
-        }
-
-        if !line_intersects_range(&line.text_range, selected_range) {
-            continue;
-        }
-
-        if line.text_range.is_empty() {
-            const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
-            paint_selection_quad(
-                window,
-                selection_color,
-                &bounds,
-                point(px(0.), line_y),
-                point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
-            );
-        } else if let Some(wrapped) = &line.wrapped_line {
-            let line_start = line.text_range.start;
-            let line_end = line.text_range.end;
-
-            let sel_start = selected_range.start.max(line_start) - line_start;
-            let sel_end = selected_range.end.min(line_end) - line_start;
-
-            let start_pos = wrapped
-                .position_for_index(sel_start, line_height)
-                .unwrap_or(point(px(0.), px(0.)));
-            let end_pos = wrapped
-                .position_for_index(sel_end, line_height)
-                .unwrap_or_else(|| {
-                    let last_line_y = line_height * (line.visual_line_count - 1) as f32;
-                    point(wrapped.width(), last_line_y)
-                });
-
-            let start_visual_line = compute_visual_line_index(start_pos.y, line_height);
-            let end_visual_line = compute_visual_line_index(end_pos.y, line_height);
-
-            if start_visual_line == end_visual_line {
-                paint_selection_quad(
-                    window,
-                    selection_color,
-                    &bounds,
-                    point(start_pos.x, line_y + start_pos.y),
-                    point(end_pos.x, line_y + start_pos.y + line_height),
-                );
-            } else {
-                let line_width = wrapped.width();
-
-                // First visual line
-                paint_selection_quad(
-                    window,
-                    selection_color,
-                    &bounds,
-                    point(start_pos.x, line_y + start_pos.y),
-                    point(line_width, line_y + start_pos.y + line_height),
-                );
-
-                // Middle visual lines
-                for visual_line in (start_visual_line + 1)..end_visual_line {
-                    let y = line_height * visual_line as f32;
-                    paint_selection_quad(
-                        window,
-                        selection_color,
-                        &bounds,
-                        point(px(0.), line_y + y),
-                        point(line_width, line_y + y + line_height),
-                    );
-                }
-
-                // Last visual line
-                paint_selection_quad(
-                    window,
-                    selection_color,
-                    &bounds,
-                    point(px(0.), line_y + end_pos.y),
-                    point(end_pos.x, line_y + end_pos.y + line_height),
-                );
-            }
-        }
-    }
-}
-
-fn paint_multiline_text(
-    line_layouts: &[InputLineLayout],
-    bounds: Bounds<Pixels>,
-    scroll_offset: Pixels,
-    line_height: Pixels,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    for line_layout in line_layouts {
-        let line_y = line_layout.y_offset - scroll_offset;
-
-        if !is_line_visible(
-            line_y,
-            line_height,
-            line_layout.visual_line_count,
-            bounds.size.height,
-        ) {
-            continue;
-        }
-
-        if let Some(wrapped) = &line_layout.wrapped_line {
-            let paint_pos = point(bounds.left(), bounds.top() + line_y);
-            let _ = wrapped.paint(
-                paint_pos,
-                line_height,
-                TextAlign::Left,
-                Some(bounds),
-                window,
-                cx,
-            );
-        }
-    }
-}
-
-fn paint_multiline_marked_underline(
-    line_layouts: &[InputLineLayout],
-    marked_range: &std::ops::Range<usize>,
-    bounds: Bounds<Pixels>,
-    scroll_offset: Pixels,
-    line_height: Pixels,
-    underline_color: Hsla,
-    window: &mut Window,
-) {
-    let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-    let underline_offset = line_height - underline_thickness;
-
-    for line in line_layouts {
-        let line_y = line.y_offset - scroll_offset;
-
-        if !is_line_visible(
-            line_y,
-            line_height,
-            line.visual_line_count,
-            bounds.size.height,
-        ) {
-            continue;
-        }
-
-        if !line_intersects_range(&line.text_range, marked_range) {
-            continue;
-        }
-
-        if line.text_range.is_empty() {
-            continue;
-        }
-
-        if let Some(wrapped) = &line.wrapped_line {
-            let line_start = line.text_range.start;
-            let line_end = line.text_range.end;
-
-            let mark_start = marked_range.start.max(line_start) - line_start;
-            let mark_end = marked_range.end.min(line_end) - line_start;
-
-            let start_pos = wrapped
-                .position_for_index(mark_start, line_height)
-                .unwrap_or(point(px(0.), px(0.)));
-            let end_pos = wrapped
-                .position_for_index(mark_end, line_height)
-                .unwrap_or_else(|| {
-                    let last_line_y = line_height * (line.visual_line_count - 1) as f32;
-                    point(wrapped.width(), last_line_y)
-                });
-
-            let start_visual_line = compute_visual_line_index(start_pos.y, line_height);
-            let end_visual_line = compute_visual_line_index(end_pos.y, line_height);
-
-            if start_visual_line == end_visual_line {
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + start_pos.x,
-                            bounds.top() + line_y + start_pos.y + underline_offset,
-                        ),
-                        point(
-                            bounds.left() + end_pos.x,
-                            bounds.top() + line_y + start_pos.y + line_height,
-                        ),
-                    ),
-                    underline_color,
-                ));
-            } else {
-                // First visual line
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + start_pos.x,
-                            bounds.top() + line_y + start_pos.y + underline_offset,
-                        ),
-                        point(
-                            bounds.left() + wrapped.width(),
-                            bounds.top() + line_y + start_pos.y + line_height,
-                        ),
-                    ),
-                    underline_color,
-                ));
-
-                // Middle visual lines
-                for visual_line in (start_visual_line + 1)..end_visual_line {
-                    let y = line_height * visual_line as f32;
-                    window.paint_quad(fill(
-                        Bounds::from_corners(
-                            point(bounds.left(), bounds.top() + line_y + y + underline_offset),
-                            point(
-                                bounds.left() + wrapped.width(),
-                                bounds.top() + line_y + y + line_height,
-                            ),
-                        ),
-                        underline_color,
-                    ));
-                }
-
-                // Last visual line
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left(),
-                            bounds.top() + line_y + end_pos.y + underline_offset,
-                        ),
-                        point(
-                            bounds.left() + end_pos.x,
-                            bounds.top() + line_y + end_pos.y + line_height,
-                        ),
-                    ),
-                    underline_color,
-                ));
-            }
-        }
-    }
-}
-
-fn paint_multiline_cursor(
-    line_layouts: &[InputLineLayout],
-    cursor_offset: usize,
-    _content: &str,
-    bounds: Bounds<Pixels>,
-    scroll_offset: Pixels,
-    line_height: Pixels,
-    cursor_color: Hsla,
-    window: &mut Window,
-) {
-    for line in line_layouts.iter() {
-        let line_y = line.y_offset - scroll_offset;
-
-        if !is_line_visible(
-            line_y,
-            line_height,
-            line.visual_line_count,
-            bounds.size.height,
-        ) {
-            continue;
-        }
-
-        // Since range is non-inclusive of the end value we need to check for it explicitly
-        let is_cursor_in_line = if line.text_range.is_empty() {
-            cursor_offset == line.text_range.start
-        } else {
-            line.text_range.contains(&cursor_offset) || cursor_offset == line.text_range.end
-        };
-
-        if !is_cursor_in_line {
-            continue;
-        }
-
-        let cursor_position = if let Some(wrapped) = &line.wrapped_line {
-            let local_offset = cursor_offset.saturating_sub(line.text_range.start);
-            wrapped
-                .position_for_index(local_offset, line_height)
-                .unwrap_or(point(px(0.), px(0.)))
-        } else {
-            point(px(0.), px(0.))
-        };
-
-        window.paint_quad(fill(
-            Bounds::new(
-                point(
-                    bounds.left() + cursor_position.x,
-                    bounds.top() + line_y + cursor_position.y,
-                ),
-                size(px(CURSOR_WIDTH), line_height),
-            ),
-            cursor_color,
-        ));
-        break;
-    }
-}
-
-/// State for single-line painting that pre-computes character positions.
-struct SingleLinePaintState {
+struct PrecomputedLinePosition {
     text_width: Pixels,
-    is_focused: bool,
     char_positions: Vec<Pixels>,
-    wrapped_line: Option<Arc<WrappedLine>>,
 }
-
-impl SingleLinePaintState {
-    fn from_input(
-        snapshot: &InputStateSnapshot,
-        focus_handle: &FocusHandle,
-        window: &Window,
-    ) -> Self {
+impl PrecomputedLinePosition {
+    fn new(string: &str, line: &WrappedLine, line_height: Pixels) -> Self {
+        let text_width = line.width();
         let mut char_positions = Vec::new();
-        let mut text_width = px(0.);
 
-        if let Some(line) = snapshot.line_layouts.first() {
-            if let Some(wrapped) = &line.wrapped_line {
-                text_width = wrapped.width();
-                let content = &snapshot.content;
-                let mut idx = 0;
-                for ch in content.chars() {
-                    if let Some(pos) = wrapped.position_for_index(idx, snapshot.line_height) {
-                        char_positions.push(pos.x);
-                    } else {
-                        char_positions.push(text_width);
-                    }
-                    idx += ch.len_utf8();
-                }
+        let mut idx = 0;
+        for ch in string.chars() {
+            if let Some(pos) = line.position_for_index(idx, line_height) {
+                char_positions.push(pos.x);
+            } else {
                 char_positions.push(text_width);
             }
+            idx += ch.len_utf8();
         }
-
-        let wrapped_line = snapshot
-            .line_layouts
-            .first()
-            .and_then(|l| l.wrapped_line.clone());
+        char_positions.push(text_width);
 
         Self {
             text_width,
-            is_focused: focus_handle.is_focused(window),
             char_positions,
-            wrapped_line,
         }
     }
 }
 
-fn x_for_index<'chars>(
+fn pos_in_string_for_char_index<'chars>(
     content: &SharedString,
     char_positions: &'chars Vec<Pixels>,
     index: usize,
@@ -848,155 +893,5 @@ fn paint_selection_quad(
     window.paint_quad(fill(
         Bounds::from_corners(top_left + offset_start, top_left + offset_end),
         color,
-    ));
-}
-
-fn paint_singleline_selection(
-    snapshot: &InputStateSnapshot,
-    state: &SingleLinePaintState,
-    bounds: Bounds<Pixels>,
-    selection_color: Hsla,
-    window: &mut Window,
-) {
-    let start_x = x_for_index(
-        &snapshot.content,
-        &state.char_positions,
-        snapshot.selected_range.start,
-        &state.text_width,
-    ) - snapshot.scroll_offset;
-    let end_x = x_for_index(
-        &snapshot.content,
-        &state.char_positions,
-        snapshot.selected_range.end,
-        &state.text_width,
-    ) - snapshot.scroll_offset;
-
-    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
-
-    paint_selection_quad(
-        window,
-        selection_color,
-        &bounds,
-        point(start_x, y_offset),
-        point(end_x, y_offset + snapshot.line_height),
-    );
-}
-
-fn paint_placeholder(
-    placeholder: &SharedString,
-    bounds: Bounds<Pixels>,
-    text_style: &TextStyle,
-    color: Hsla,
-    window: &mut Window,
-    cx: &mut App,
-    baseline: bool,
-) {
-    let run = TextRun {
-        len: placeholder.len(),
-        font: text_style.font(),
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-
-    let font_size = text_style.font_size.to_pixels(window.rem_size());
-    let shaped_line = window
-        .text_system()
-        .shape_line(placeholder.clone(), font_size, &[run], None);
-    let line_height = text_style.line_height_in_pixels(window.rem_size());
-
-    let mut paint_origin = bounds.origin;
-    if baseline {
-        let y_offset = (bounds.size.height - line_height).max(px(0.)) / 2.0;
-        paint_origin.y += y_offset;
-    }
-
-    let _ = shaped_line.paint(paint_origin, line_height, TextAlign::Left, None, window, cx);
-}
-
-fn paint_singleline_text(
-    snapshot: &InputStateSnapshot,
-    state: &SingleLinePaintState,
-    bounds: Bounds<Pixels>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let Some(wrapped_line) = &state.wrapped_line else {
-        return;
-    };
-
-    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
-    let paint_origin = point(
-        bounds.origin.x - snapshot.scroll_offset,
-        bounds.origin.y + y_offset,
-    );
-
-    let _ = wrapped_line.paint(
-        paint_origin,
-        snapshot.line_height,
-        TextAlign::Left,
-        Some(bounds),
-        window,
-        cx,
-    );
-}
-
-fn paint_singleline_marked_underline(
-    snapshot: &InputStateSnapshot,
-    state: &SingleLinePaintState,
-    marked_range: &std::ops::Range<usize>,
-    bounds: Bounds<Pixels>,
-    underline_color: Hsla,
-    window: &mut Window,
-) {
-    let start_x = x_for_index(
-        &snapshot.content,
-        &state.char_positions,
-        marked_range.start,
-        &state.text_width,
-    ) - snapshot.scroll_offset;
-    let end_x = x_for_index(
-        &snapshot.content,
-        &state.char_positions,
-        marked_range.end,
-        &state.text_width,
-    ) - snapshot.scroll_offset;
-
-    let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
-    let underline_y = bounds.top() + y_offset + snapshot.line_height - underline_thickness;
-
-    window.paint_quad(fill(
-        Bounds::from_corners(
-            point(bounds.left() + start_x, underline_y),
-            point(bounds.left() + end_x, underline_y + underline_thickness),
-        ),
-        underline_color,
-    ));
-}
-
-fn paint_singleline_cursor(
-    snapshot: &InputStateSnapshot,
-    state: &SingleLinePaintState,
-    bounds: Bounds<Pixels>,
-    cursor_color: Hsla,
-    window: &mut Window,
-) {
-    let cursor_x = x_for_index(
-        &snapshot.content,
-        &state.char_positions,
-        snapshot.cursor_offset,
-        &state.text_width,
-    ) - snapshot.scroll_offset;
-
-    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
-
-    window.paint_quad(fill(
-        Bounds::new(
-            point(bounds.left() + cursor_x, bounds.top() + y_offset),
-            size(px(CURSOR_WIDTH), snapshot.line_height),
-        ),
-        cursor_color,
     ));
 }
