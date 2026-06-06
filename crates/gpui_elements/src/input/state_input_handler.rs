@@ -59,7 +59,7 @@ impl EntityInputHandler for super::InputState {
 
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        let text_to_insert = self.layout.sanitize_content(new_text);
+        let text_to_insert = self.layout_style.sanitize_content(new_text);
 
         // Record patch for undo before modifying content
         self.push_undo_patch(range.clone(), text_to_insert.len());
@@ -101,7 +101,7 @@ impl EntityInputHandler for super::InputState {
 
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        let text_to_insert = self.layout.sanitize_content(new_text);
+        let text_to_insert = self.layout_style.sanitize_content(new_text);
 
         // Update cached UTF-16 length incrementally if available
         if let Some(cached_len) = self.cached_utf16_len {
@@ -208,7 +208,7 @@ impl EntityInputHandler for super::InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let index = self.index_for_position(point);
+        let index = self.index_for_pixel_point(point);
         Some(self.utf_offset_8to16(index))
     }
 }

@@ -46,12 +46,12 @@ impl Element for Input {
             window,
             cx,
             |element_style, window, cx| {
-                let layout = self.input.read(cx).get_layout();
+                let layout = self.input.read(cx).layout_style();
                 window.with_text_style(element_style.text_style().cloned(), |window| {
                     resolved_text_style = Some(window.text_style());
 
                     let mut layout_style = element_style.clone();
-                    if matches!(layout, super::InputLayout::MultiLine) {
+                    if matches!(layout, super::InputLayoutStyle::MultiLine) {
                         if let Length::Auto = layout_style.size.width {
                             layout_style.size.width = relative(1.).into();
                         }
@@ -83,9 +83,9 @@ impl Element for Input {
             .text_style
             .line_height_in_pixels(window.rem_size());
 
-        let wrap_width = match self.input.read(cx).get_layout() {
-            super::InputLayout::SingleLine => None,
-            super::InputLayout::MultiLine => Some(bounds.size.width),
+        let wrap_width = match self.input.read(cx).layout_style() {
+            super::InputLayoutStyle::SingleLine => None,
+            super::InputLayoutStyle::MultiLine => Some(bounds.size.width),
         };
 
         self.input.update(cx, |input, _cx| {
@@ -157,7 +157,7 @@ impl Element for Input {
         let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
             let precomputed_first_line = match (snapshot.layout, snapshot.logical_lines.first()) {
                 (
-                    super::InputLayout::SingleLine,
+                    super::InputLayoutStyle::SingleLine,
                     Some(InputLogicalLine {
                         wrapped_line: Some(wrapped_line),
                         ..
@@ -197,7 +197,7 @@ impl Element for Input {
 }
 
 struct InputStateSnapshot {
-    layout: super::InputLayout,
+    layout: super::InputLayoutStyle,
     content: SharedString,
     selected_range: Range<usize>,
     marked_range: Option<Range<usize>>,
@@ -211,12 +211,12 @@ impl InputStateSnapshot {
         let input_state = entity.read(cx);
         let selected_range = input_state.selected_range().clone();
         let marked_range = input_state.marked_range().cloned();
-        let cursor_offset = input_state.cursor_offset();
+        let cursor_offset = input_state.cursor_position();
         let logical_lines = input_state.logical_lines.clone();
         let scroll_offset = input_state.scroll_offset;
         let line_height = input_state.line_height();
         Self {
-            layout: input_state.get_layout(),
+            layout: input_state.layout_style(),
             content: input_state.content().clone(),
             selected_range,
             marked_range,
@@ -378,7 +378,7 @@ impl<'app> PaintContext<'app> {
 
     fn paint_selection(&self, window: &mut Window) {
         match self.snapshot.layout {
-            super::InputLayout::MultiLine => {
+            super::InputLayoutStyle::MultiLine => {
                 for line in &self.snapshot.logical_lines {
                     let line_y = line.y_offset - self.snapshot.scroll_offset;
 
@@ -412,7 +412,7 @@ impl<'app> PaintContext<'app> {
                     }
                 }
             }
-            super::InputLayout::SingleLine => {
+            super::InputLayoutStyle::SingleLine => {
                 let precomputed = self
                     .precomputed_first_line
                     .as_ref()
@@ -468,7 +468,7 @@ impl<'app> PaintContext<'app> {
         let line_height = self.text_style.line_height_in_pixels(window.rem_size());
 
         let mut paint_origin = self.bounds.origin;
-        if matches!(self.snapshot.layout, super::InputLayout::SingleLine) {
+        if matches!(self.snapshot.layout, super::InputLayoutStyle::SingleLine) {
             let y_offset = (self.bounds.size.height - line_height).max(px(0.)) / 2.0;
             paint_origin.y += y_offset;
         }
@@ -478,7 +478,7 @@ impl<'app> PaintContext<'app> {
 
     fn paint_text(&self, window: &mut Window, cx: &mut App) {
         match self.snapshot.layout {
-            super::InputLayout::MultiLine => {
+            super::InputLayoutStyle::MultiLine => {
                 for line_layout in &self.snapshot.logical_lines {
                     let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
 
@@ -499,7 +499,7 @@ impl<'app> PaintContext<'app> {
                     }
                 }
             }
-            super::InputLayout::SingleLine => {
+            super::InputLayoutStyle::SingleLine => {
                 let Some(line_layout) = self.snapshot.logical_lines.first() else {
                     return;
                 };
@@ -537,7 +537,7 @@ impl<'app> PaintContext<'app> {
         let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
         let underline_offset = self.snapshot.line_height - underline_thickness;
         match self.snapshot.layout {
-            super::InputLayout::MultiLine => {
+            super::InputLayoutStyle::MultiLine => {
                 for line in &self.snapshot.logical_lines {
                     if !self.is_line_visible(line) {
                         continue;
@@ -560,7 +560,7 @@ impl<'app> PaintContext<'app> {
                     );
                 }
             }
-            super::InputLayout::SingleLine => {
+            super::InputLayoutStyle::SingleLine => {
                 let Some(precomputed) = &self.precomputed_first_line else {
                     return;
                 };
@@ -627,8 +627,8 @@ impl<'app> PaintContext<'app> {
 
     fn paint_cursor(&self, window: &mut Window) {
         let cursor_pos = match self.snapshot.layout {
-            super::InputLayout::MultiLine => self.find_cursor_position_in_layouts(),
-            super::InputLayout::SingleLine => {
+            super::InputLayoutStyle::MultiLine => self.find_cursor_position_in_layouts(),
+            super::InputLayoutStyle::SingleLine => {
                 let Some(precomputed) = &self.precomputed_first_line else {
                     return;
                 };

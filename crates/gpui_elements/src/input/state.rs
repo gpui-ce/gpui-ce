@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::InputLayout;
+use crate::input::InputLayoutStyle;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, Pixels, Point, SharedString, Size, Subscription, TextRun, TextStyle,
@@ -38,9 +38,8 @@ pub struct InputState {
     entity_id: EntityId,
     focus_handle: FocusHandle,
     content: SharedString,
-    placeholder: SharedString,
     pub(super) selected_range: Range<usize>,
-    pub(super) selection_reversed: bool,
+    pub(super) selection_reversed: bool, // TODO: NavigationDirection
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) logical_lines: Vec<InputLogicalLine>,
     // refreshed each update by the element, for conveinent access in mutations and painting
@@ -50,7 +49,7 @@ pub struct InputState {
     click_count: usize,
     /// Scroll offset - vertical for multiline, horizontal for single-line
     pub(super) scroll_offset: Pixels,
-    pub(super) layout: InputLayout,
+    pub(super) layout_style: InputLayoutStyle,
     history_grouping_interval: Duration,
     /// Stack of previous states for undo.
     undo_stack: Vec<super::HistoryEntry>,
@@ -124,7 +123,6 @@ impl InputState {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
-            placeholder: SharedString::default(),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -134,7 +132,7 @@ impl InputState {
             last_click_position: None,
             click_count: 0,
             scroll_offset: px(0.),
-            layout: InputLayout::SingleLine,
+            layout_style: InputLayoutStyle::SingleLine,
             history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
             undo_stack: Vec::new(),
             cached_utf16_len: None,
@@ -149,6 +147,7 @@ impl InputState {
         this
     }
 
+    /// Configure how often the cursor should blink when the input element has focus.
     pub fn cursor_blink<'app>(mut self, args: CursorBlinkType<'app>) -> Self {
         self.cursor_blink = match args {
             CursorBlinkType::Disabled => None,
@@ -163,42 +162,6 @@ impl InputState {
         self
     }
 
-    /// Processes a focus-flag update during window paint, returning whether the cursor should be visible in this frame.
-    /// Returns false if the cursor is blinking and not currently visible.
-    pub(super) fn toggle_cursor_on_focus_change(
-        &mut self,
-        is_focused: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        // Update cursor blink based on focus changes
-        let was_focused = self.was_focused;
-        self.was_focused = is_focused;
-
-        match &self.cursor_blink {
-            None => true,
-            Some((cursor_blink, _)) => match (is_focused, was_focused) {
-                (true, false) => {
-                    cursor_blink.update(cx, |cursor, cx| cursor.enable(cx));
-                    cx.emit(InputStateEvent::Focus);
-                    true
-                }
-                (false, true) => {
-                    cursor_blink.update(cx, |cursor, cx| cursor.disable(cx));
-                    cx.emit(InputStateEvent::Blur);
-                    false
-                }
-                _ => cursor_blink.read(cx).visible(),
-            },
-        }
-    }
-
-    /// Pauses cursor blinking temporarily (e.g., during typing).
-    pub(super) fn pause_cursor_blink(&self, cx: &mut Context<Self>) {
-        if let Some((cursor_blink, _)) = &self.cursor_blink {
-            cursor_blink.update(cx, |cb, cx| cb.pause_blinking(cx));
-        }
-    }
-
     /// Returns the current text content.
     pub fn content(&self) -> &SharedString {
         &self.content
@@ -207,7 +170,7 @@ impl InputState {
     /// Sets the text content, resetting selection to the beginning.
     /// This clears the undo/redo history.
     pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
-        let content = self.layout.sanitize_content(content.as_ref());
+        let content = self.layout_style.sanitize_content(content.as_ref());
         self.content = content.to_string().into();
         self.selected_range = 0..0;
         self.selection_reversed = false;
@@ -221,31 +184,640 @@ impl InputState {
         cx.notify();
     }
 
-    pub fn layout(mut self, layout: InputLayout) -> Self {
-        self.layout = layout;
+    /// Sets the input's layout style (single-line or multi-line/area).
+    pub fn with_layout_style(mut self, layout_style: InputLayoutStyle) -> Self {
+        self.layout_style = layout_style;
         self
     }
 
-    pub fn get_layout(&self) -> InputLayout {
-        self.layout
+    /// Returns the input's layout style.
+    pub fn layout_style(&self) -> InputLayoutStyle {
+        self.layout_style
     }
 
-    pub fn line_height(&self) -> Pixels {
-        self.layout_data.line_height
+    /// Returns the utf-8 character range that is currently selected within the current state of the text.
+    pub fn selected_range(&self) -> &Range<usize> {
+        &self.selected_range
     }
 
+    /// Sets the selection range directly.
+    pub fn set_selected_range(&mut self, range: Range<usize>) {
+        let range = range.start.min(self.content.len())..range.end.min(self.content.len());
+        self.selected_range = range;
+        self.selection_reversed = false;
+    }
+
+    /// Returns the current position of the cursor within the utf-8 character range of the current state of the text.
+    pub fn cursor_position(&self) -> usize {
+        match self.selection_reversed {
+            true => self.selected_range.start,
+            false => self.selected_range.end,
+        }
+    }
+
+    /// Returns the marked text range (for IME composition). Marked text range represents a collection of utf-8 characters that are treated as one group. (TBD need better explanation of marked text)
+    pub fn marked_range(&self) -> Option<&Range<usize>> {
+        self.marked_range.as_ref()
+    }
+
+    /// Returns true if the scroll position is at the top.
+    pub fn at_top(&self) -> bool {
+        self.scroll_offset <= px(0.)
+    }
+
+    /// Returns true if the scroll position is at the bottom.
+    pub fn at_bottom(&self) -> bool {
+        let content_height = self.total_content_height();
+        let visible_height = self.layout_data.available_size.height;
+
+        if content_height <= visible_height {
+            return true;
+        }
+
+        self.scroll_offset + visible_height >= content_height
+    }
+
+    /// Returns the scroll progress as a value from 0.0 (top) to 1.0 (bottom).
+    pub fn scroll_progress(&self) -> f32 {
+        let content_height = self.total_content_height();
+        let visible_height = self.layout_data.available_size.height;
+        let max_scroll = content_height - visible_height;
+
+        if max_scroll <= px(0.) {
+            return 0.0;
+        }
+
+        (self.scroll_offset / max_scroll).clamp(0.0, 1.0)
+    }
+
+    /// Returns how far the content is scrolled from the top in pixels.
+    pub fn distance_from_top(&self) -> Pixels {
+        self.scroll_offset.max(px(0.))
+    }
+
+    /// Returns how far the content is from the bottom in pixels.
+    pub fn distance_from_bottom(&self) -> Pixels {
+        let content_height = self.total_content_height();
+        let visible_height = self.layout_data.available_size.height;
+        let max_scroll = content_height - visible_height;
+
+        if max_scroll <= px(0.) {
+            return px(0.);
+        }
+
+        (max_scroll - self.scroll_offset).max(px(0.))
+    }
+
+    /// Configures how long the input will wait between user-input changes to create new logs in the history for undo/redo.
     pub fn set_history_group_interval(&mut self, interval: Duration) {
         self.history_grouping_interval = interval;
     }
 
-    /// Returns whether undo is available.
-    pub fn can_undo(&self) -> bool {
+    /// Returns whether undo is available based on the recorded states.
+    pub fn is_undo_available(&self) -> bool {
         !self.undo_stack.is_empty()
     }
 
-    /// Returns whether redo is available.
-    pub fn can_redo(&self) -> bool {
+    /// Returns whether redo is currently available based on the recorded states.
+    pub fn is_redo_available(&self) -> bool {
         !self.redo_stack.is_empty()
+    }
+
+    /// Inserts text at the current cursor position, replacing any content that is currently selected (i.e. `selection_range` is non-empty).
+    /// If any of the text is marked, that range will be replaced instead of the selected range.
+    pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let range = self
+            .marked_range
+            .clone()
+            .unwrap_or(self.selected_range.clone());
+        let range = range.start.min(self.content.len())..range.end.min(self.content.len());
+
+        let text_to_insert = self.layout_style.sanitize_content(text);
+
+        // Record patch for undo before modifying content
+        self.push_undo_patch(range.clone(), text_to_insert.len());
+
+        // Update cached UTF-16 length incrementally if available
+        if let Some(cached_len) = self.cached_utf16_len {
+            let removed_utf16_len: usize = self.content[range.clone()]
+                .chars()
+                .map(|c| c.len_utf16())
+                .sum();
+            let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
+            self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
+        }
+
+        self.replace_range(range.clone(), &text_to_insert);
+
+        self.selected_range =
+            range.start + text_to_insert.len()..range.start + text_to_insert.len();
+        self.marked_range.take();
+        self.layout_data.dirty = true;
+        self.pause_cursor_blink(cx);
+        cx.emit(InputStateEvent::TextChanged);
+        cx.notify();
+    }
+
+    /// Deletes the character before the cursor (convenience method for benchmarks).
+    pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.previous_boundary(self.cursor_position()), cx);
+        }
+        self.insert_text("", cx);
+    }
+
+    /// Reverts the last edit.
+    pub fn undo_action(&mut self, cx: &mut Context<Self>) {
+        if let Some(entry) = self.undo_stack.pop() {
+            let selected_range = entry.selected_range.clone();
+            let selection_reversed = entry.selection_reversed;
+
+            let redo_entry = entry.apply_undo(&mut self.content);
+            self.redo_stack.push(redo_entry);
+
+            self.selected_range = selected_range;
+            self.selection_reversed = selection_reversed;
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Undo);
+            cx.notify();
+        }
+    }
+
+    /// Restores the last edit reverted by `undo_action` (or the undo action binding).
+    pub fn redo_action(&mut self, cx: &mut Context<Self>) {
+        if let Some(entry) = self.redo_stack.pop() {
+            let undo_entry = entry.apply_redo(&mut self.content);
+
+            let cursor_pos = undo_entry.range.start;
+            self.selected_range = cursor_pos..cursor_pos;
+            self.selection_reversed = false;
+
+            self.undo_stack.push(undo_entry);
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Redo);
+            cx.notify();
+        }
+    }
+}
+
+// Action implementations
+impl InputState {
+    pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(entry) = self.undo_stack.pop() {
+            // Remember selection to restore
+            let selected_range = entry.selected_range.clone();
+            let selection_reversed = entry.selection_reversed;
+
+            // Apply the undo patch and get the redo patch
+            let redo_entry = entry.apply_undo(&mut self.content);
+            self.redo_stack.push(redo_entry);
+
+            // Restore selection state
+            self.selected_range = selected_range;
+            self.selection_reversed = selection_reversed;
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Undo);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(entry) = self.redo_stack.pop() {
+            // Apply the redo patch and get the undo patch
+            let undo_entry = entry.apply_redo(&mut self.content);
+
+            // The undo entry contains the selection state after the original edit
+            // We need to restore cursor to end of inserted text
+            let cursor_pos = undo_entry.range.start;
+            self.selected_range = cursor_pos..cursor_pos;
+            self.selection_reversed = false;
+
+            self.undo_stack.push(undo_entry);
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Redo);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
+
+    pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            let new_pos = self.previous_boundary(self.cursor_position());
+            self.move_to(new_pos, cx);
+        } else {
+            self.move_to(self.selected_range.start, cx);
+        }
+    }
+
+    pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            let new_pos = self.next_boundary(self.cursor_position());
+            self.move_to(new_pos, cx);
+        } else {
+            self.move_to(self.selected_range.end, cx);
+        }
+    }
+
+    pub(super) fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
+        self.pause_cursor_blink(cx);
+        match self.layout_style {
+            InputLayoutStyle::SingleLine => {
+                // In single-line mode, up moves to start
+                self.selected_range = 0..0;
+                self.selection_reversed = false;
+                self.scroll_to_cursor();
+                cx.notify();
+            }
+            InputLayoutStyle::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_position(), -1) {
+                    self.selected_range = new_offset..new_offset;
+                    self.selection_reversed = false;
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub(super) fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
+        self.pause_cursor_blink(cx);
+        match self.layout_style {
+            InputLayoutStyle::SingleLine => {
+                // In single-line mode, down moves to end
+                let end = self.content.len();
+                self.selected_range = end..end;
+                self.selection_reversed = false;
+                self.scroll_to_cursor();
+                cx.notify();
+            }
+            InputLayoutStyle::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_position(), 1) {
+                    self.selected_range = new_offset..new_offset;
+                    self.selection_reversed = false;
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.previous_boundary(self.cursor_position()), cx);
+    }
+
+    pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_boundary(self.cursor_position()), cx);
+    }
+
+    pub(super) fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
+        self.pause_cursor_blink(cx);
+        match self.layout_style {
+            InputLayoutStyle::SingleLine => {
+                // In single-line mode, select_up selects to start
+                self.select_to(0, cx);
+            }
+            InputLayoutStyle::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_position(), -1) {
+                    if self.selection_reversed {
+                        self.selected_range.start = new_offset;
+                    } else {
+                        self.selected_range.end = new_offset;
+                    }
+                    if self.selected_range.end < self.selected_range.start {
+                        self.selection_reversed = !self.selection_reversed;
+                        self.selected_range = self.selected_range.end..self.selected_range.start;
+                    }
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub(super) fn select_down(
+        &mut self,
+        _: &SelectDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pause_cursor_blink(cx);
+        match self.layout_style {
+            InputLayoutStyle::SingleLine => {
+                // In single-line mode, select_down selects to end
+                self.select_to(self.content.len(), cx);
+            }
+            InputLayoutStyle::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_position(), 1) {
+                    if self.selection_reversed {
+                        self.selected_range.start = new_offset;
+                    } else {
+                        self.selected_range.end = new_offset;
+                    }
+                    if self.selected_range.end < self.selected_range.start {
+                        self.selection_reversed = !self.selection_reversed;
+                        self.selected_range = self.selected_range.end..self.selected_range.start;
+                    }
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        let line_start = self.find_line_start(self.cursor_position());
+        self.move_to(line_start, cx);
+    }
+
+    pub(super) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        let line_end = self.find_line_end(self.cursor_position());
+        self.move_to(line_end, cx);
+    }
+
+    pub(super) fn move_to_beginning(
+        &mut self,
+        _: &MoveToBeginning,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_to(0, cx);
+    }
+
+    pub(super) fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.content.len(), cx);
+    }
+
+    pub(super) fn select_to_beginning(
+        &mut self,
+        _: &SelectToBeginning,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(0, cx);
+    }
+
+    pub(super) fn select_to_end(
+        &mut self,
+        _: &SelectToEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.content.len(), cx);
+    }
+
+    pub(super) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let new_pos = self.previous_word_boundary(self.cursor_position());
+        self.move_to(new_pos, cx);
+    }
+
+    pub(super) fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        let new_pos = self.next_word_boundary(self.cursor_position());
+        self.move_to(new_pos, cx);
+    }
+
+    pub(super) fn select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_pos = self.previous_word_boundary(self.cursor_position());
+        self.select_to(new_pos, cx);
+    }
+
+    pub(super) fn select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_pos = self.next_word_boundary(self.cursor_position());
+        self.select_to(new_pos, cx);
+    }
+
+    pub(super) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(&self.layout_style, InputLayoutStyle::MultiLine) {
+            self.replace_text_in_range(None, "\n", window, cx);
+        }
+    }
+
+    pub(super) fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.replace_text_in_range(None, "\t", window, cx);
+    }
+
+    pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.previous_boundary(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.next_boundary(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.previous_word_boundary(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.next_word_boundary(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete_to_beginning_of_line(
+        &mut self,
+        _: &DeleteToBeginningOfLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.find_line_start(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete_to_end_of_line(
+        &mut self,
+        _: &DeleteToEndOfLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.find_line_end(self.cursor_position()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        let text = self.layout_style.sanitize_content(&text);
+        self.replace_text_in_range(None, &text, window, cx);
+    }
+
+    pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selected_range.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.content[self.selected_range.clone()].to_string(),
+            ));
+        }
+    }
+
+    pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selected_range.is_empty() {
+            // Cut selected text
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.content[self.selected_range.clone()].to_string(),
+            ));
+            self.replace_text_in_range(None, "", window, cx);
+        } else {
+            // No selection: cut the entire current line (including newline)
+            let cursor = self.cursor_position();
+            let line_start = self.find_line_start(cursor);
+            let line_end = self.find_line_end(cursor);
+
+            // Include the newline character if there is one after the line
+            let cut_end = if line_end < self.content.len() {
+                line_end + 1 // Include the newline
+            } else if line_start > 0 {
+                // Last line with no trailing newline - include preceding newline instead
+                line_end
+            } else {
+                line_end
+            };
+
+            // For last line, also remove the preceding newline if it exists
+            let cut_start = if line_end >= self.content.len() && line_start > 0 {
+                line_start - 1 // Include preceding newline for last line
+            } else {
+                line_start
+            };
+
+            let line_text = self.content[cut_start..cut_end].to_string();
+            cx.write_to_clipboard(ClipboardItem::new_string(line_text));
+
+            self.selected_range = cut_start..cut_end;
+            self.replace_text_in_range(None, "", window, cx);
+        }
+    }
+
+    pub(super) fn on_mouse_down(
+        &mut self,
+        position: Point<Pixels>,
+        click_count: usize,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle, cx);
+        self.is_selecting = true;
+
+        let is_same_position = self
+            .last_click_position
+            .map(|last| {
+                let threshold = px(4.);
+                (position.x - last.x).abs() < threshold && (position.y - last.y).abs() < threshold
+            })
+            .unwrap_or(false);
+
+        if is_same_position && click_count > 1 {
+            self.click_count = click_count;
+        } else {
+            self.click_count = 1;
+        }
+        self.last_click_position = Some(position);
+
+        let character_pos = self.index_for_pixel_point(position);
+
+        match self.click_count {
+            2 => {
+                let (word_start, word_end) = self.word_range_at(character_pos);
+                self.selected_range = word_start..word_end;
+                self.selection_reversed = false;
+                cx.notify();
+            }
+            3 => {
+                let line_start = self.find_line_start(character_pos);
+                let line_end = self.find_line_end(character_pos);
+                let line_end_with_newline = if line_end < self.content.len() {
+                    line_end + 1
+                } else {
+                    line_end
+                };
+                self.selected_range = line_start..line_end_with_newline;
+                self.selection_reversed = false;
+                cx.notify();
+            }
+            _ => {
+                if shift {
+                    self.select_to(character_pos, cx);
+                } else {
+                    self.move_to(character_pos, cx);
+                }
+            }
+        }
+    }
+
+    pub(super) fn on_mouse_up(&mut self, _cx: &mut Context<Self>) {
+        self.is_selecting = false;
+    }
+
+    pub(super) fn on_mouse_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.is_selecting && self.click_count == 1 {
+            self.select_to(self.index_for_pixel_point(position), cx);
+        }
+    }
+}
+
+// Internal implementations
+impl InputState {
+    pub(super) fn line_height(&self) -> Pixels {
+        self.layout_data.line_height
+    }
+
+    /// Replaces the provided utf-8 character range with the provided text
+    pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
+        crate::input::replace_range(&mut self.content, range, &text);
+    }
+
+    /// Pauses cursor blinking temporarily (e.g., during typing).
+    pub(super) fn pause_cursor_blink(&self, cx: &mut Context<Self>) {
+        if let Some((cursor_blink, _)) = &self.cursor_blink {
+            cursor_blink.update(cx, |cb, cx| cb.pause_blinking(cx));
+        }
     }
 
     /// Records a patch for undo. Called before making changes to content.
@@ -288,690 +860,24 @@ impl InputState {
         self.redo_stack.clear();
     }
 
-    /// Returns the placeholder text shown when content is empty.
-    pub fn placeholder(&self) -> &SharedString {
-        &self.placeholder
-    }
-
-    /// Sets the placeholder text.
-    pub fn set_placeholder(
-        &mut self,
-        placeholder: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        self.placeholder = placeholder.into();
-        cx.notify();
-    }
-
-    /// Returns the current selection range.
-    pub fn selected_range(&self) -> &Range<usize> {
-        &self.selected_range
-    }
-
-    /// Returns true if the selection is reversed (cursor at start).
-    pub fn selection_reversed(&self) -> bool {
-        self.selection_reversed
-    }
-
-    /// Returns the current cursor offset.
-    pub fn cursor_offset(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
-    }
-
-    /// Returns the marked text range (for IME composition).
-    pub fn marked_range(&self) -> Option<&Range<usize>> {
-        self.marked_range.as_ref()
-    }
-
-    /// Sets the selection range directly.
-    pub fn set_selected_range(&mut self, range: Range<usize>) {
-        let range = range.start.min(self.content.len())..range.end.min(self.content.len());
-        self.selected_range = range;
-        self.selection_reversed = false;
-    }
-
-    pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
-        crate::input::replace_range(&mut self.content, range, &text);
-    }
-
-    /// Inserts text at the current cursor position, replacing any selection.
-    pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        let range = self
-            .marked_range
-            .clone()
-            .unwrap_or(self.selected_range.clone());
-        let range = range.start.min(self.content.len())..range.end.min(self.content.len());
-
-        let text_to_insert = self.layout.sanitize_content(text);
-
-        // Record patch for undo before modifying content
-        self.push_undo_patch(range.clone(), text_to_insert.len());
-
-        // Update cached UTF-16 length incrementally if available
-        if let Some(cached_len) = self.cached_utf16_len {
-            let removed_utf16_len: usize = self.content[range.clone()]
-                .chars()
-                .map(|c| c.len_utf16())
-                .sum();
-            let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
-            self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
-        }
-
-        self.replace_range(range.clone(), &text_to_insert);
-
-        self.selected_range =
-            range.start + text_to_insert.len()..range.start + text_to_insert.len();
-        self.marked_range.take();
-        self.layout_data.dirty = true;
-        self.pause_cursor_blink(cx);
-        cx.emit(InputStateEvent::TextChanged);
-        cx.notify();
-    }
-
-    /// Deletes the character before the cursor (convenience method for benchmarks).
-    pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-        }
-        self.insert_text("", cx);
-    }
-
-    /// Undoes the last edit (convenience method without Window).
-    pub fn undo_action(&mut self, cx: &mut Context<Self>) {
-        if let Some(entry) = self.undo_stack.pop() {
-            let selected_range = entry.selected_range.clone();
-            let selection_reversed = entry.selection_reversed;
-
-            let redo_entry = entry.apply_undo(&mut self.content);
-            self.redo_stack.push(redo_entry);
-
-            self.selected_range = selected_range;
-            self.selection_reversed = selection_reversed;
-            self.layout_data.dirty = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Undo);
-            cx.notify();
-        }
-    }
-
-    /// Redoes the last undone edit (convenience method without Window).
-    pub fn redo_action(&mut self, cx: &mut Context<Self>) {
-        if let Some(entry) = self.redo_stack.pop() {
-            let undo_entry = entry.apply_redo(&mut self.content);
-
-            let cursor_pos = undo_entry.range.start;
-            self.selected_range = cursor_pos..cursor_pos;
-            self.selection_reversed = false;
-
-            self.undo_stack.push(undo_entry);
-            self.layout_data.dirty = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Redo);
-            cx.notify();
-        }
-    }
-}
-
-// Action implementations
-impl InputState {
-    /// Undoes the last edit by applying the reverse patch.
-    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.undo_stack.pop() {
-            // Remember selection to restore
-            let selected_range = entry.selected_range.clone();
-            let selection_reversed = entry.selection_reversed;
-
-            // Apply the undo patch and get the redo patch
-            let redo_entry = entry.apply_undo(&mut self.content);
-            self.redo_stack.push(redo_entry);
-
-            // Restore selection state
-            self.selected_range = selected_range;
-            self.selection_reversed = selection_reversed;
-            self.layout_data.dirty = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Undo);
-            cx.notify();
-        }
-    }
-
-    /// Redoes the last undone edit by applying the forward patch.
-    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.redo_stack.pop() {
-            // Apply the redo patch and get the undo patch
-            let undo_entry = entry.apply_redo(&mut self.content);
-
-            // The undo entry contains the selection state after the original edit
-            // We need to restore cursor to end of inserted text
-            let cursor_pos = undo_entry.range.start;
-            self.selected_range = cursor_pos..cursor_pos;
-            self.selection_reversed = false;
-
-            self.undo_stack.push(undo_entry);
-            self.layout_data.dirty = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Redo);
-            cx.notify();
-        }
-    }
-
-    /// Selects all text.
-    pub fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.content.len();
-        self.selection_reversed = false;
-        cx.notify();
-    }
-
-    pub(crate) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            let new_pos = self.previous_boundary(self.cursor_offset());
-            self.move_to(new_pos, cx);
-        } else {
-            self.move_to(self.selected_range.start, cx);
-        }
-    }
-
-    pub(crate) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            let new_pos = self.next_boundary(self.cursor_offset());
-            self.move_to(new_pos, cx);
-        } else {
-            self.move_to(self.selected_range.end, cx);
-        }
-    }
-
-    pub(crate) fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
-        match self.layout {
-            InputLayout::SingleLine => {
-                // In single-line mode, up moves to start
-                self.selected_range = 0..0;
-                self.selection_reversed = false;
-                self.scroll_to_cursor();
-                cx.notify();
-            }
-            InputLayout::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
-                    self.selected_range = new_offset..new_offset;
-                    self.selection_reversed = false;
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
-        match self.layout {
-            InputLayout::SingleLine => {
-                // In single-line mode, down moves to end
-                let end = self.content.len();
-                self.selected_range = end..end;
-                self.selection_reversed = false;
-                self.scroll_to_cursor();
-                cx.notify();
-            }
-            InputLayout::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
-                    self.selected_range = new_offset..new_offset;
-                    self.selection_reversed = false;
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-    }
-
-    pub(crate) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
-    }
-
-    pub(crate) fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
-        match self.layout {
-            InputLayout::SingleLine => {
-                // In single-line mode, select_up selects to start
-                self.select_to(0, cx);
-            }
-            InputLayout::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
-                    if self.selection_reversed {
-                        self.selected_range.start = new_offset;
-                    } else {
-                        self.selected_range.end = new_offset;
-                    }
-                    if self.selected_range.end < self.selected_range.start {
-                        self.selection_reversed = !self.selection_reversed;
-                        self.selected_range = self.selected_range.end..self.selected_range.start;
-                    }
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn select_down(
-        &mut self,
-        _: &SelectDown,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.pause_cursor_blink(cx);
-        match self.layout {
-            InputLayout::SingleLine => {
-                // In single-line mode, select_down selects to end
-                self.select_to(self.content.len(), cx);
-            }
-            InputLayout::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
-                    if self.selection_reversed {
-                        self.selected_range.start = new_offset;
-                    } else {
-                        self.selected_range.end = new_offset;
-                    }
-                    if self.selected_range.end < self.selected_range.start {
-                        self.selection_reversed = !self.selection_reversed;
-                        self.selected_range = self.selected_range.end..self.selected_range.start;
-                    }
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        let line_start = self.find_line_start(self.cursor_offset());
-        self.move_to(line_start, cx);
-    }
-
-    pub(crate) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
-        let line_end = self.find_line_end(self.cursor_offset());
-        self.move_to(line_end, cx);
-    }
-
-    pub(crate) fn move_to_beginning(
-        &mut self,
-        _: &MoveToBeginning,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.move_to(0, cx);
-    }
-
-    pub(crate) fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
-    }
-
-    pub(crate) fn select_to_beginning(
-        &mut self,
-        _: &SelectToBeginning,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.select_to(0, cx);
-    }
-
-    pub(crate) fn select_to_end(
-        &mut self,
-        _: &SelectToEnd,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.select_to(self.content.len(), cx);
-    }
-
-    pub(crate) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
-        let new_pos = self.previous_word_boundary(self.cursor_offset());
-        self.move_to(new_pos, cx);
-    }
-
-    pub(crate) fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
-        let new_pos = self.next_word_boundary(self.cursor_offset());
-        self.move_to(new_pos, cx);
-    }
-
-    pub(crate) fn select_word_left(
-        &mut self,
-        _: &SelectWordLeft,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let new_pos = self.previous_word_boundary(self.cursor_offset());
-        self.select_to(new_pos, cx);
-    }
-
-    pub(crate) fn select_word_right(
-        &mut self,
-        _: &SelectWordRight,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let new_pos = self.next_word_boundary(self.cursor_offset());
-        self.select_to(new_pos, cx);
-    }
-
-    pub(crate) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(&self.layout, InputLayout::MultiLine) {
-            self.replace_text_in_range(None, "\n", window, cx);
-        }
-    }
-
-    pub(crate) fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.replace_text_in_range(None, "\t", window, cx);
-    }
-
-    pub(crate) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn delete_word_left(
-        &mut self,
-        _: &DeleteWordLeft,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_word_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn delete_word_right(
-        &mut self,
-        _: &DeleteWordRight,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_word_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn delete_to_beginning_of_line(
-        &mut self,
-        _: &DeleteToBeginningOfLine,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.find_line_start(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn delete_to_end_of_line(
-        &mut self,
-        _: &DeleteToEndOfLine,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.find_line_end(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    pub(crate) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
-        };
-        let text = self.layout.sanitize_content(&text);
-        self.replace_text_in_range(None, &text, window, cx);
-    }
-
-    pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
-        }
-    }
-
-    pub(crate) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            // Cut selected text
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
-            self.replace_text_in_range(None, "", window, cx);
-        } else {
-            // No selection: cut the entire current line (including newline)
-            let cursor = self.cursor_offset();
-            let line_start = self.find_line_start(cursor);
-            let line_end = self.find_line_end(cursor);
-
-            // Include the newline character if there is one after the line
-            let cut_end = if line_end < self.content.len() {
-                line_end + 1 // Include the newline
-            } else if line_start > 0 {
-                // Last line with no trailing newline - include preceding newline instead
-                line_end
-            } else {
-                line_end
-            };
-
-            // For last line, also remove the preceding newline if it exists
-            let cut_start = if line_end >= self.content.len() && line_start > 0 {
-                line_start - 1 // Include preceding newline for last line
-            } else {
-                line_start
-            };
-
-            let line_text = self.content[cut_start..cut_end].to_string();
-            cx.write_to_clipboard(ClipboardItem::new_string(line_text));
-
-            self.selected_range = cut_start..cut_end;
-            self.replace_text_in_range(None, "", window, cx);
-        }
-    }
-
-    pub(crate) fn on_mouse_down(
-        &mut self,
-        position: Point<Pixels>,
-        click_count: usize,
-        shift: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.focus_handle, cx);
-        self.is_selecting = true;
-
-        let is_same_position = self
-            .last_click_position
-            .map(|last| {
-                let threshold = px(4.);
-                (position.x - last.x).abs() < threshold && (position.y - last.y).abs() < threshold
-            })
-            .unwrap_or(false);
-
-        if is_same_position && click_count > 1 {
-            self.click_count = click_count;
-        } else {
-            self.click_count = 1;
-        }
-        self.last_click_position = Some(position);
-
-        let clicked_offset = self.index_for_position(position);
-
-        match self.click_count {
-            2 => {
-                let (word_start, word_end) = self.word_range_at(clicked_offset);
-                self.selected_range = word_start..word_end;
-                self.selection_reversed = false;
-                cx.notify();
-            }
-            3 => {
-                let line_start = self.find_line_start(clicked_offset);
-                let line_end = self.find_line_end(clicked_offset);
-                let line_end_with_newline = if line_end < self.content.len() {
-                    line_end + 1
-                } else {
-                    line_end
-                };
-                self.selected_range = line_start..line_end_with_newline;
-                self.selection_reversed = false;
-                cx.notify();
-            }
-            _ => {
-                if shift {
-                    self.select_to(clicked_offset, cx);
-                } else {
-                    self.move_to(clicked_offset, cx);
-                }
-            }
-        }
-    }
-
-    pub(crate) fn on_mouse_up(&mut self, _cx: &mut Context<Self>) {
-        self.is_selecting = false;
-    }
-
-    pub(crate) fn on_mouse_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        if self.is_selecting && self.click_count == 1 {
-            self.select_to(self.index_for_position(position), cx);
-        }
-    }
-
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
-        let offset = offset.min(self.content.len());
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
-        self.scroll_to_cursor();
-        cx.notify();
-    }
-
-    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
-        let offset = offset.min(self.content.len());
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
-        self.scroll_to_cursor();
-        cx.notify();
-    }
-
-    fn move_vertically(&self, offset: usize, direction: i32) -> Option<usize> {
-        let (visual_line_idx, x_pixels) = self.find_visual_line_and_x_offset(offset);
-        let target_visual_line_idx = (visual_line_idx as i32 + direction).max(0) as usize;
-
-        let mut current_visual_line = 0;
-        for layout in self.logical_lines.iter() {
-            let visual_lines_in_layout = layout.visual_line_count;
-
-            if target_visual_line_idx < current_visual_line + visual_lines_in_layout {
-                let visual_line_within_layout = target_visual_line_idx - current_visual_line;
-
-                if layout.text_range.is_empty() {
-                    return Some(layout.text_range.start);
-                }
-
-                if let Some(wrapped) = &layout.wrapped_line {
-                    let y_within_wrapped = self.line_height() * visual_line_within_layout as f32;
-                    let target_point = point(px(x_pixels), y_within_wrapped);
-
-                    let closest_result =
-                        wrapped.closest_index_for_position(target_point, self.line_height());
-
-                    let closest_idx = closest_result.unwrap_or_else(|closest| closest);
-                    let clamped = closest_idx.min(wrapped.text.len());
-                    let result = layout.text_range.start + clamped;
-
-                    return Some(result);
-                }
-
-                return Some(layout.text_range.start);
-            }
-
-            current_visual_line += visual_lines_in_layout;
-        }
-
-        if direction > 0 {
-            Some(self.content.len())
-        } else {
-            None
-        }
-    }
-}
-
-impl InputState {
-    pub(crate) fn find_line_start(&self, offset: usize) -> usize {
-        self.content[..offset.min(self.content.len())]
+    /// Returns the utf-8 character position of first character after the first new-line preceeding the character at the provided utf-8 character position.
+    pub(super) fn find_line_start(&self, position: usize) -> usize {
+        self.content[..position.min(self.content.len())]
             .rfind('\n')
             .map(|pos| pos + 1)
             .unwrap_or(0)
     }
 
-    pub(crate) fn find_line_end(&self, offset: usize) -> usize {
-        self.content[offset.min(self.content.len())..]
+    /// Returns the utf-8 character position of the character immediately before the first new-line character after the character at the provided utf-8 character position.
+    pub(super) fn find_line_end(&self, position: usize) -> usize {
+        self.content[position.min(self.content.len())..]
             .find('\n')
-            .map(|pos| offset + pos)
+            .map(|pos| position + pos)
             .unwrap_or(self.content.len())
     }
 
-    fn find_visual_line_and_x_offset(&self, offset: usize) -> (usize, f32) {
-        if self.logical_lines.is_empty() {
-            return (0, 0.0);
-        }
-
-        let mut visual_line_idx = 0;
-
-        for line in &self.logical_lines {
-            if line.text_range.is_empty() {
-                if offset == line.text_range.start {
-                    return (visual_line_idx, 0.0);
-                }
-            } else if offset >= line.text_range.start && offset <= line.text_range.end {
-                if let Some(wrapped) = &line.wrapped_line {
-                    let local_offset = (offset - line.text_range.start).min(wrapped.text.len());
-                    if let Some(position) =
-                        wrapped.position_for_index(local_offset, self.line_height())
-                    {
-                        let visual_line_within = (position.y / self.line_height()).floor() as usize;
-                        return (visual_line_idx + visual_line_within, position.x.into());
-                    }
-                }
-                return (visual_line_idx, 0.0);
-            }
-            visual_line_idx += line.visual_line_count;
-        }
-
-        (visual_line_idx.saturating_sub(1), 0.0)
-    }
-
-    pub(crate) fn index_for_position(&self, position: Point<Pixels>) -> usize {
+    /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
+    pub(super) fn index_for_pixel_point(&self, point: Point<Pixels>) -> usize {
         if self.content.is_empty() {
             return 0;
         }
@@ -979,122 +885,120 @@ impl InputState {
         for line in self.logical_lines.iter() {
             let line_height_total = self.line_height() * line.visual_line_count as f32;
 
-            if position.y >= line.y_offset && position.y < line.y_offset + line_height_total {
+            if point.y >= line.y_offset && point.y < line.y_offset + line_height_total {
                 if line.text_range.is_empty() {
                     return line.text_range.start;
                 }
+                let Some(wrapped) = &line.wrapped_line else {
+                    return line.text_range.start;
+                };
 
-                if let Some(wrapped) = &line.wrapped_line {
-                    let relative_y = position.y - line.y_offset;
-                    let relative_point = point(position.x, relative_y);
+                let relative_y = point.y - line.y_offset;
+                let relative_point = gpui::point(point.x, relative_y);
 
-                    let closest_result =
-                        wrapped.closest_index_for_position(relative_point, self.line_height());
+                let closest_result =
+                    wrapped.closest_index_for_position(relative_point, self.line_height());
 
-                    let local_idx = closest_result.unwrap_or_else(|closest| closest);
-                    let clamped = local_idx.min(wrapped.text.len());
-                    return line.text_range.start + clamped;
-                }
-                return line.text_range.start;
+                let local_idx = closest_result.unwrap_or_else(|closest| closest);
+                let clamped = local_idx.min(wrapped.text.len());
+                return line.text_range.start + clamped;
             }
         }
 
         self.content.len()
     }
 
-    pub(crate) fn scroll_to_cursor(&mut self) {
+    pub(super) fn scroll_to_cursor(&mut self) {
         if self.logical_lines.is_empty() {
             return;
         }
 
-        let cursor_offset = self.cursor_offset();
-        match self.layout {
-            InputLayout::SingleLine => self.scroll_to_cursor_horizontal(cursor_offset),
-            InputLayout::MultiLine => self.scroll_to_cursor_vertical(cursor_offset),
-        }
-    }
+        let cursor_offset = self.cursor_position();
+        match self.layout_style {
+            InputLayoutStyle::SingleLine => {
+                if self.layout_data.available_size.width <= px(0.) {
+                    return;
+                }
 
-    fn scroll_to_cursor_vertical(&mut self, cursor_offset: usize) {
-        if self.layout_data.available_size.height <= px(0.) {
-            return;
-        }
-
-        let line_height = self.line_height();
-
-        for line in &self.logical_lines {
-            let is_cursor_in_line = if line.text_range.is_empty() {
-                cursor_offset == line.text_range.start
-            } else {
-                line.text_range.contains(&cursor_offset)
-                    || (cursor_offset == line.text_range.end && cursor_offset == self.content.len())
-            };
-
-            if is_cursor_in_line {
-                let cursor_visual_y = if let Some(wrapped) = &line.wrapped_line {
-                    let local_offset = cursor_offset.saturating_sub(line.text_range.start);
-                    if let Some(position) =
-                        wrapped.position_for_index(local_offset, self.line_height())
-                    {
-                        line.y_offset + position.y
-                    } else {
-                        line.y_offset
-                    }
-                } else {
-                    line.y_offset
+                // For single-line input, get cursor x position from the first (only) line
+                let Some(line) = self.logical_lines.first() else {
+                    return;
                 };
 
-                let visible_top = self.scroll_offset;
-                let visible_bottom = self.scroll_offset + self.layout_data.available_size.height;
+                let cursor_x = if let Some(wrapped) = &line.wrapped_line {
+                    let local_offset = cursor_offset.saturating_sub(line.text_range.start);
+                    wrapped
+                        .position_for_index(local_offset, self.line_height())
+                        .map(|p| p.x)
+                        .unwrap_or(px(0.))
+                } else {
+                    px(0.)
+                };
 
-                if cursor_visual_y < visible_top {
-                    self.scroll_offset = cursor_visual_y;
-                } else if cursor_visual_y + line_height > visible_bottom {
-                    self.scroll_offset =
-                        (cursor_visual_y + line_height) - self.layout_data.available_size.height;
+                let visible_left = self.scroll_offset;
+                let visible_right = self.scroll_offset + self.layout_data.available_size.width;
+
+                // Add some padding so cursor isn't right at the edge
+                let padding = px(2.0);
+
+                if cursor_x < visible_left + padding {
+                    self.scroll_offset = (cursor_x - padding).max(px(0.));
+                } else if cursor_x > visible_right - padding {
+                    self.scroll_offset = cursor_x - self.layout_data.available_size.width + padding;
                 }
 
                 self.scroll_offset = self.scroll_offset.max(px(0.));
-                break;
+            }
+            InputLayoutStyle::MultiLine => {
+                if self.layout_data.available_size.height <= px(0.) {
+                    return;
+                }
+
+                let line_height = self.line_height();
+
+                for line in &self.logical_lines {
+                    let is_cursor_in_line = if line.text_range.is_empty() {
+                        cursor_offset == line.text_range.start
+                    } else {
+                        line.text_range.contains(&cursor_offset)
+                            || (cursor_offset == line.text_range.end
+                                && cursor_offset == self.content.len())
+                    };
+
+                    if is_cursor_in_line {
+                        let cursor_visual_y = if let Some(wrapped) = &line.wrapped_line {
+                            let local_offset = cursor_offset.saturating_sub(line.text_range.start);
+                            if let Some(position) =
+                                wrapped.position_for_index(local_offset, self.line_height())
+                            {
+                                line.y_offset + position.y
+                            } else {
+                                line.y_offset
+                            }
+                        } else {
+                            line.y_offset
+                        };
+
+                        let visible_top = self.scroll_offset;
+                        let visible_bottom =
+                            self.scroll_offset + self.layout_data.available_size.height;
+
+                        if cursor_visual_y < visible_top {
+                            self.scroll_offset = cursor_visual_y;
+                        } else if cursor_visual_y + line_height > visible_bottom {
+                            self.scroll_offset = (cursor_visual_y + line_height)
+                                - self.layout_data.available_size.height;
+                        }
+
+                        self.scroll_offset = self.scroll_offset.max(px(0.));
+                        break;
+                    }
+                }
             }
         }
     }
 
-    fn scroll_to_cursor_horizontal(&mut self, cursor_offset: usize) {
-        if self.layout_data.available_size.width <= px(0.) {
-            return;
-        }
-
-        // For single-line input, get cursor x position from the first (only) line
-        let Some(line) = self.logical_lines.first() else {
-            return;
-        };
-
-        let cursor_x = if let Some(wrapped) = &line.wrapped_line {
-            let local_offset = cursor_offset.saturating_sub(line.text_range.start);
-            wrapped
-                .position_for_index(local_offset, self.line_height())
-                .map(|p| p.x)
-                .unwrap_or(px(0.))
-        } else {
-            px(0.)
-        };
-
-        let visible_left = self.scroll_offset;
-        let visible_right = self.scroll_offset + self.layout_data.available_size.width;
-
-        // Add some padding so cursor isn't right at the edge
-        let padding = px(2.0);
-
-        if cursor_x < visible_left + padding {
-            self.scroll_offset = (cursor_x - padding).max(px(0.));
-        } else if cursor_x > visible_right - padding {
-            self.scroll_offset = cursor_x - self.layout_data.available_size.width + padding;
-        }
-
-        self.scroll_offset = self.scroll_offset.max(px(0.));
-    }
-
-    /// Called internally during prepaint to layout the content into logical lines based on viewport bounds wrapping.
+    /// Called internally during window prepaint to layout the content into logical lines based on viewport bounds wrapping.
     pub(super) fn build_logical_lines(
         content: &str,
         window: &mut Window,
@@ -1190,59 +1094,137 @@ impl InputState {
         logical_lines
     }
 
-    pub(crate) fn total_content_height(&self) -> Pixels {
+    /// Processes a focus-flag update during window paint, returning whether the cursor should be visible in this frame.
+    /// Returns false if the cursor is blinking and not currently visible.
+    pub(super) fn toggle_cursor_on_focus_change(
+        &mut self,
+        is_focused: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Update cursor blink based on focus changes
+        let was_focused = self.was_focused;
+        self.was_focused = is_focused;
+
+        match &self.cursor_blink {
+            None => true,
+            Some((cursor_blink, _)) => match (is_focused, was_focused) {
+                (true, false) => {
+                    cursor_blink.update(cx, |cursor, cx| cursor.enable(cx));
+                    cx.emit(InputStateEvent::Focus);
+                    true
+                }
+                (false, true) => {
+                    cursor_blink.update(cx, |cursor, cx| cursor.disable(cx));
+                    cx.emit(InputStateEvent::Blur);
+                    false
+                }
+                _ => cursor_blink.read(cx).visible(),
+            },
+        }
+    }
+
+    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.pause_cursor_blink(cx);
+        let offset = offset.min(self.content.len());
+        self.selected_range = offset..offset;
+        self.selection_reversed = false;
+        self.scroll_to_cursor();
+        cx.notify();
+    }
+
+    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.pause_cursor_blink(cx);
+        let offset = offset.min(self.content.len());
+        if self.selection_reversed {
+            self.selected_range.start = offset;
+        } else {
+            self.selected_range.end = offset;
+        }
+        if self.selected_range.end < self.selected_range.start {
+            self.selection_reversed = !self.selection_reversed;
+            self.selected_range = self.selected_range.end..self.selected_range.start;
+        }
+        self.scroll_to_cursor();
+        cx.notify();
+    }
+
+    fn find_visual_line_and_x_offset(&self, offset: usize) -> (usize, f32) {
+        if self.logical_lines.is_empty() {
+            return (0, 0.0);
+        }
+
+        let mut visual_line_idx = 0;
+
+        for line in &self.logical_lines {
+            if line.text_range.is_empty() {
+                if offset == line.text_range.start {
+                    return (visual_line_idx, 0.0);
+                }
+            } else if offset >= line.text_range.start && offset <= line.text_range.end {
+                if let Some(wrapped) = &line.wrapped_line {
+                    let local_offset = (offset - line.text_range.start).min(wrapped.text.len());
+                    if let Some(position) =
+                        wrapped.position_for_index(local_offset, self.line_height())
+                    {
+                        let visual_line_within = (position.y / self.line_height()).floor() as usize;
+                        return (visual_line_idx + visual_line_within, position.x.into());
+                    }
+                }
+                return (visual_line_idx, 0.0);
+            }
+            visual_line_idx += line.visual_line_count;
+        }
+
+        (visual_line_idx.saturating_sub(1), 0.0)
+    }
+
+    fn move_vertically(&self, offset: usize, direction: i32) -> Option<usize> {
+        let (visual_line_idx, x_pixels) = self.find_visual_line_and_x_offset(offset);
+        let target_visual_line_idx = (visual_line_idx as i32 + direction).max(0) as usize;
+
+        let mut current_visual_line = 0;
+        for layout in self.logical_lines.iter() {
+            let visual_lines_in_layout = layout.visual_line_count;
+
+            if target_visual_line_idx < current_visual_line + visual_lines_in_layout {
+                let visual_line_within_layout = target_visual_line_idx - current_visual_line;
+
+                if layout.text_range.is_empty() {
+                    return Some(layout.text_range.start);
+                }
+
+                if let Some(wrapped) = &layout.wrapped_line {
+                    let y_within_wrapped = self.line_height() * visual_line_within_layout as f32;
+                    let target_point = point(px(x_pixels), y_within_wrapped);
+
+                    let closest_result =
+                        wrapped.closest_index_for_position(target_point, self.line_height());
+
+                    let closest_idx = closest_result.unwrap_or_else(|closest| closest);
+                    let clamped = closest_idx.min(wrapped.text.len());
+                    let result = layout.text_range.start + clamped;
+
+                    return Some(result);
+                }
+
+                return Some(layout.text_range.start);
+            }
+
+            current_visual_line += visual_lines_in_layout;
+        }
+
+        if direction > 0 {
+            Some(self.content.len())
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn total_content_height(&self) -> Pixels {
         self.logical_lines
             .last()
             .map(|last| last.y_offset + self.line_height() * last.visual_line_count as f32)
             .unwrap_or(px(0.))
-    }
-
-    /// Returns true if the scroll position is at the top.
-    pub fn at_top(&self) -> bool {
-        self.scroll_offset <= px(0.)
-    }
-
-    /// Returns true if the scroll position is at the bottom.
-    pub fn at_bottom(&self) -> bool {
-        let content_height = self.total_content_height();
-        let visible_height = self.layout_data.available_size.height;
-
-        if content_height <= visible_height {
-            return true;
-        }
-
-        self.scroll_offset + visible_height >= content_height
-    }
-
-    /// Returns the scroll progress as a value from 0.0 (top) to 1.0 (bottom).
-    pub fn scroll_progress(&self) -> f32 {
-        let content_height = self.total_content_height();
-        let visible_height = self.layout_data.available_size.height;
-        let max_scroll = content_height - visible_height;
-
-        if max_scroll <= px(0.) {
-            return 0.0;
-        }
-
-        (self.scroll_offset / max_scroll).clamp(0.0, 1.0)
-    }
-
-    /// Returns how far the content is scrolled from the top in pixels.
-    pub fn distance_from_top(&self) -> Pixels {
-        self.scroll_offset.max(px(0.))
-    }
-
-    /// Returns how far the content is from the bottom in pixels.
-    pub fn distance_from_bottom(&self) -> Pixels {
-        let content_height = self.total_content_height();
-        let visible_height = self.layout_data.available_size.height;
-        let max_scroll = content_height - visible_height;
-
-        if max_scroll <= px(0.) {
-            return px(0.);
-        }
-
-        (max_scroll - self.scroll_offset).max(px(0.))
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -1351,7 +1333,7 @@ mod tests {
     ) -> WindowHandle<TestView> {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
-                let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
+                let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::MultiLine);
                 input.content = content.to_string().into();
                 input.selected_range = range;
                 input
@@ -1368,7 +1350,7 @@ mod tests {
     ) -> WindowHandle<TestView> {
         let view = cx.add_window(|window, cx| {
             let input = cx.new(|cx| {
-                let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
+                let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::MultiLine);
                 input.content = content.to_string().into();
                 input.selected_range = range;
                 input.layout_data.line_height = px(20.);
@@ -2319,7 +2301,7 @@ mod tests {
     ) -> WindowHandle<TestView> {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
-                let mut input = InputState::new(cx).layout(InputLayout::SingleLine);
+                let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::SingleLine);
                 input.content = content.to_string().into();
                 input.selected_range = selected_range;
                 input
@@ -2408,7 +2390,7 @@ mod tests {
         let view = create_single_line_input(cx, "hello", 0..0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                assert_eq!(input.get_layout(), InputLayout::SingleLine);
+                assert_eq!(input.layout_style(), InputLayoutStyle::SingleLine);
             });
         })
         .unwrap();
@@ -2417,7 +2399,7 @@ mod tests {
         multiline_view
             .update(cx, |view, _window, cx| {
                 view.input.update(cx, |input, _cx| {
-                    assert_eq!(input.get_layout(), InputLayout::MultiLine);
+                    assert_eq!(input.layout_style(), InputLayoutStyle::MultiLine);
                 });
             })
             .unwrap();
@@ -2472,7 +2454,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                assert!(!input.can_undo());
+                assert!(!input.is_undo_available());
                 input.undo(&Undo, window, cx);
                 assert_eq!(input.content(), "hello");
             });
@@ -2485,7 +2467,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                assert!(!input.can_redo());
+                assert!(!input.is_redo_available());
                 input.redo(&Redo, window, cx);
                 assert_eq!(input.content(), "hello");
             });
@@ -2560,12 +2542,12 @@ mod tests {
 
                 input.undo(&Undo, window, cx);
                 assert_eq!(input.content(), "hello");
-                assert!(input.can_redo());
+                assert!(input.is_redo_available());
 
                 // New edit should clear redo stack
                 input.replace_text_in_range(None, "!", window, cx);
                 assert_eq!(input.content(), "hello!");
-                assert!(!input.can_redo());
+                assert!(!input.is_redo_available());
             });
         })
         .unwrap();
@@ -2579,11 +2561,11 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.replace_text_in_range(None, " world", window, cx);
-                assert!(input.can_undo());
+                assert!(input.is_undo_available());
 
                 input.set_content("new content", cx);
-                assert!(!input.can_undo());
-                assert!(!input.can_redo());
+                assert!(!input.is_undo_available());
+                assert!(!input.is_redo_available());
             });
         })
         .unwrap();
@@ -2596,20 +2578,20 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.set_history_group_interval(Duration::from_secs(0));
 
-                assert!(!input.can_undo());
-                assert!(!input.can_redo());
+                assert!(!input.is_undo_available());
+                assert!(!input.is_redo_available());
 
                 input.replace_text_in_range(None, "!", window, cx);
-                assert!(input.can_undo());
-                assert!(!input.can_redo());
+                assert!(input.is_undo_available());
+                assert!(!input.is_redo_available());
 
                 input.undo(&Undo, window, cx);
-                assert!(!input.can_undo());
-                assert!(input.can_redo());
+                assert!(!input.is_undo_available());
+                assert!(input.is_redo_available());
 
                 input.redo(&Redo, window, cx);
-                assert!(input.can_undo());
-                assert!(!input.can_redo());
+                assert!(input.is_undo_available());
+                assert!(!input.is_redo_available());
             });
         })
         .unwrap();

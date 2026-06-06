@@ -1,10 +1,10 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum InputLayout {
+pub enum InputLayoutStyle {
     SingleLine,
     MultiLine,
 }
 
-impl InputLayout {
+impl InputLayoutStyle {
     pub(super) fn sanitize_content<'s>(&self, content: &'s str) -> std::borrow::Cow<'s, str> {
         match self {
             // Strip newlines for single-line input
