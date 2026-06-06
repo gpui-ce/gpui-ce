@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::{InputLayout, unicode::UnicodeString};
+use crate::input::InputLayout;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, Pixels, Point, SharedString, Size, Subscription, TextRun, TextStyle,
@@ -37,7 +37,7 @@ impl EventEmitter<InputStateEvent> for InputState {}
 pub struct InputState {
     entity_id: EntityId,
     focus_handle: FocusHandle,
-    pub(super) content: SharedString,
+    content: SharedString,
     placeholder: SharedString,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
@@ -115,6 +115,7 @@ impl Focusable for InputState {
     }
 }
 
+// External API
 impl InputState {
     /// Creates a new `Input` with the specified multiline setting.
     /// Cursor blinking is enabled by default.
@@ -333,9 +334,8 @@ impl InputState {
         self.selection_reversed = false;
     }
 
-    /// Returns the selected text range in UTF-16 offsets (for IME).
-    pub fn selected_text_range_utf16(&self) -> Range<usize> {
-        self.utf_range_8to16(&self.selected_range)
+    pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
+        crate::input::replace_range(&mut self.content, range, &text);
     }
 
     /// Inserts text at the current cursor position, replacing any selection.
@@ -361,7 +361,8 @@ impl InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        crate::input::replace_range(&mut self.content, range.clone(), &text_to_insert);
+        self.replace_range(range.clone(), &text_to_insert);
+
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
