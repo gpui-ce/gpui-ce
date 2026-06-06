@@ -37,7 +37,7 @@ impl EventEmitter<InputStateEvent> for InputState {}
 pub struct InputState {
     entity_id: EntityId,
     focus_handle: FocusHandle,
-    content: SharedString,
+    content: String,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_direction: NavigationDirection,
     pub(super) marked_range: Option<Range<usize>>,
@@ -122,7 +122,7 @@ impl InputState {
         let mut this = Self {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
-            content: SharedString::default(),
+            content: String::default(),
             selected_range: 0..0,
             selection_direction: NavigationDirection::Forward,
             marked_range: None,
@@ -163,7 +163,7 @@ impl InputState {
     }
 
     /// Returns the current text content.
-    pub fn content(&self) -> &SharedString {
+    pub fn content(&self) -> &String {
         &self.content
     }
 
@@ -269,8 +269,16 @@ impl InputState {
     }
 
     /// Configures how long the input will wait between user-input changes to create new logs in the history for undo/redo.
+    /// The interval by default is 300ms (defined by `DEFAULT_GROUP_INTERVAL`).
     pub fn set_history_group_interval(&mut self, interval: Duration) {
         self.history_grouping_interval = interval;
+    }
+
+    /// Configures how long the input will wait between user-input changes to create new logs in the history for undo/redo.
+    /// The interval by default is 300ms (defined by `DEFAULT_GROUP_INTERVAL`).
+    pub fn with_history_group_interval(mut self, interval: Duration) -> Self {
+        self.set_history_group_interval(interval);
+        self
     }
 
     /// Returns whether undo is available based on the recorded states.
@@ -796,7 +804,7 @@ impl InputState {
 
     /// Replaces the provided utf-8 character range with the provided text
     pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
-        crate::input::replace_range(&mut self.content, range, &text);
+        self.content.replace_range(range, &text);
     }
 
     /// Pauses cursor blinking temporarily (e.g., during typing).
