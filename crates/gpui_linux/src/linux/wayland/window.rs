@@ -613,6 +613,9 @@ impl WaylandWindowStatePtr {
 
     fn update_ime_enabled(&self) {
         let mut state = self.state.borrow_mut();
+        if !state.active {
+            return;
+        }
         let client = state.client.clone();
         let ime_enabled = state
             .input_handler
