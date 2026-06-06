@@ -1,6 +1,6 @@
-use crate::input::{InputState, PaintColors};
+use crate::input::{InputColors, InputState};
 use gpui::{
-    Action, App, Context, Entity, FocusHandle, Focusable, InteractiveElement, Interactivity,
+    Action, App, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement, Interactivity,
     IntoElement, SharedString, StyleRefinement, Styled, Window,
 };
 
@@ -14,7 +14,7 @@ pub struct Input {
     pub(super) input: Entity<InputState>,
     pub(super) interactivity: Interactivity,
     pub(super) placeholder: Option<SharedString>,
-    pub(super) colors: PaintColors,
+    pub(super) colors: InputColors,
 }
 
 impl Input {
@@ -25,7 +25,7 @@ impl Input {
             input: input_state.clone(),
             interactivity: Interactivity::new(),
             placeholder: None,
-            colors: PaintColors::default(),
+            colors: InputColors::default(),
         };
         input.register_actions();
         input
@@ -127,6 +127,40 @@ impl Input {
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Sets the styling colors for the input element
+    pub fn colors(mut self, colors: InputColors) -> Self {
+        self.colors = colors;
+        self
+    }
+
+    /// Sets the "selection" color for the input element.
+    /// This is the background color applied to the range of text that is currently selected by the user.
+    pub fn selection_color(mut self, color: Hsla) -> Self {
+        self.colors.selection = color;
+        self
+    }
+
+    /// Sets the "cursor" color for the input element.
+    /// This is the color of the user's text cursor.
+    pub fn cursor_color(mut self, color: Hsla) -> Self {
+        self.colors.cursor = color;
+        self
+    }
+
+    /// Sets the "placeholder" color for the input element.
+    /// This is the color of the placeholder string, when one is assigned and the text field is empty.
+    pub fn placeholder_color(mut self, color: Hsla) -> Self {
+        self.colors.placeholder = color;
+        self
+    }
+
+    /// Sets the "marked" color for the input element.
+    /// Marking text comes from IME and needs further doc clarification.
+    pub fn marked_color(mut self, color: Hsla) -> Self {
+        self.colors.marked = color;
         self
     }
 }

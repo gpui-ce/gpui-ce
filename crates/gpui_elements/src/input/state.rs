@@ -95,7 +95,7 @@ pub(super) struct InputLogicalLine {
     /// The shaped and wrapped text for this line, if available.
     pub wrapped_line: Option<Arc<WrappedLine>>,
     /// The vertical offset from the top of the text area in pixels.
-    pub y_offset: Pixels,
+    pub y_offset: Pixels, // TODO: replace with a counter such that the offset is determined by multipling the counter by the line_height
     /// The number of visual lines this logical line spans (due to wrapping).
     pub visual_line_count: usize,
 }

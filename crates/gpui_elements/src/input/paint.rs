@@ -1,4 +1,4 @@
-use crate::input::{Input, InputLayoutData, InputLogicalLine, InputState, PaintColors};
+use crate::input::{Input, InputColors, InputLayoutData, InputLogicalLine, InputState};
 use gpui::{
     Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -228,7 +228,7 @@ struct PaintContext<'app> {
     bounds: Bounds<Pixels>,
     text_style: &'app TextStyle,
     placeholder: Option<&'app SharedString>,
-    colors: &'app PaintColors,
+    colors: &'app InputColors,
     cursor_visible: bool,
 }
 
@@ -491,7 +491,7 @@ impl<'app> PaintContext<'app> {
                 window,
                 line,
                 marked_range,
-                self.colors.cursor,
+                self.colors.marked,
                 underline_offset,
             );
         }
