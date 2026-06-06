@@ -391,65 +391,14 @@ impl<'app> PaintContext<'app> {
                                 line_y + self.snapshot.line_height,
                             ),
                         );
-                    } else if let Some(wrapped) = &line.wrapped_line {
-                        let line_start = line.text_range.start;
-                        let line_end = line.text_range.end;
-
-                        let sel_start =
-                            self.snapshot.selected_range.start.max(line_start) - line_start;
-                        let sel_end = self.snapshot.selected_range.end.min(line_end) - line_start;
-
-                        let start_pos = wrapped
-                            .position_for_index(sel_start, self.snapshot.line_height)
-                            .unwrap_or_default();
-                        let end_pos = wrapped
-                            .position_for_index(sel_end, self.snapshot.line_height)
-                            .unwrap_or_else(|| {
-                                let last_line_y =
-                                    self.snapshot.line_height * (line.visual_line_count - 1) as f32;
-                                point(wrapped.width(), last_line_y)
-                            });
-
-                        let start_visual_line = self.compute_visual_line_index(start_pos.y);
-                        let end_visual_line = self.compute_visual_line_index(end_pos.y);
-
-                        if start_visual_line == end_visual_line {
-                            self.paint_bounds_quad(
-                                window,
-                                self.colors.selection,
-                                point(start_pos.x, line_y + start_pos.y),
-                                point(end_pos.x, line_y + start_pos.y + self.snapshot.line_height),
-                            );
-                        } else {
-                            let line_width = wrapped.width();
-
-                            // First visual line
-                            self.paint_bounds_quad(
-                                window,
-                                self.colors.selection,
-                                point(start_pos.x, line_y + start_pos.y),
-                                point(line_width, line_y + start_pos.y + self.snapshot.line_height),
-                            );
-
-                            // Middle visual lines
-                            for visual_line in (start_visual_line + 1)..end_visual_line {
-                                let y = self.snapshot.line_height * visual_line as f32;
-                                self.paint_bounds_quad(
-                                    window,
-                                    self.colors.selection,
-                                    point(px(0.), line_y + y),
-                                    point(line_width, line_y + y + self.snapshot.line_height),
-                                );
-                            }
-
-                            // Last visual line
-                            self.paint_bounds_quad(
-                                window,
-                                self.colors.selection,
-                                point(px(0.), line_y + end_pos.y),
-                                point(end_pos.x, line_y + end_pos.y + self.snapshot.line_height),
-                            );
-                        }
+                    } else {
+                        self.paint_line_range(
+                            window,
+                            line,
+                            &self.snapshot.selected_range,
+                            self.colors.selection,
+                            px(0.),
+                        );
                     }
                 }
             }
@@ -582,10 +531,6 @@ impl<'app> PaintContext<'app> {
                 for line in &self.snapshot.line_layouts {
                     let line_y = line.y_offset - self.snapshot.scroll_offset;
 
-                    if line.text_range.is_empty() {
-                        continue;
-                    }
-
                     if !self.is_line_visible(line_y, line.visual_line_count) {
                         continue;
                     }
@@ -594,67 +539,17 @@ impl<'app> PaintContext<'app> {
                         continue;
                     }
 
-                    let Some(wrapped) = &line.wrapped_line else {
+                    if line.text_range.is_empty() {
                         continue;
-                    };
-                    let line_start = line.text_range.start;
-                    let line_end = line.text_range.end;
-
-                    let mark_start = marked_range.start.max(line_start) - line_start;
-                    let mark_end = marked_range.end.min(line_end) - line_start;
-
-                    let start_pos = wrapped
-                        .position_for_index(mark_start, self.snapshot.line_height)
-                        .unwrap_or_default();
-                    let end_pos = wrapped
-                        .position_for_index(mark_end, self.snapshot.line_height)
-                        .unwrap_or_else(|| {
-                            let last_line_y =
-                                self.snapshot.line_height * (line.visual_line_count - 1) as f32;
-                            point(wrapped.width(), last_line_y)
-                        });
-
-                    let start_visual_line = self.compute_visual_line_index(start_pos.y);
-                    let end_visual_line = self.compute_visual_line_index(end_pos.y);
-
-                    if start_visual_line == end_visual_line {
-                        self.paint_bounds_quad(
-                            window,
-                            self.colors.cursor,
-                            point(start_pos.x, line_y + start_pos.y + underline_offset),
-                            point(end_pos.x, line_y + start_pos.y + self.snapshot.line_height),
-                        );
-                    } else {
-                        // First visual line
-                        self.paint_bounds_quad(
-                            window,
-                            self.colors.cursor,
-                            point(start_pos.x, line_y + start_pos.y + underline_offset),
-                            point(
-                                wrapped.width(),
-                                line_y + start_pos.y + self.snapshot.line_height,
-                            ),
-                        );
-
-                        // Middle visual lines
-                        for visual_line in (start_visual_line + 1)..end_visual_line {
-                            let y = self.snapshot.line_height * visual_line as f32;
-                            self.paint_bounds_quad(
-                                window,
-                                self.colors.cursor,
-                                point(px(0.), line_y + y + underline_offset),
-                                point(wrapped.width(), line_y + y + self.snapshot.line_height),
-                            );
-                        }
-
-                        // Last visual line
-                        self.paint_bounds_quad(
-                            window,
-                            self.colors.cursor,
-                            point(px(0.), line_y + end_pos.y + underline_offset),
-                            point(end_pos.x, line_y + end_pos.y + self.snapshot.line_height),
-                        );
                     }
+
+                    self.paint_line_range(
+                        window,
+                        line,
+                        marked_range,
+                        self.colors.cursor,
+                        underline_offset,
+                    );
                 }
             }
             super::InputLayout::SingleLine => {
@@ -761,6 +656,78 @@ impl<'app> PaintContext<'app> {
 
     fn compute_visual_line_index(&self, y: Pixels) -> usize {
         (y / self.snapshot.line_height).floor() as usize
+    }
+
+    fn paint_line_range(
+        &self,
+        window: &mut Window,
+        line: &InputLineLayout,
+        subrange: &Range<usize>,
+        color: Hsla,
+        quad_offset_y: Pixels,
+    ) {
+        let Some(wrapped) = &line.wrapped_line else {
+            return;
+        };
+
+        let line_y = line.y_offset - self.snapshot.scroll_offset;
+
+        let line_start = line.text_range.start;
+        let line_end = line.text_range.end;
+
+        let subrange_start = subrange.start.max(line_start) - line_start;
+        let subrange_end = subrange.end.min(line_end) - line_start;
+
+        let start_pos = wrapped
+            .position_for_index(subrange_start, self.snapshot.line_height)
+            .unwrap_or_default();
+        let end_pos = wrapped
+            .position_for_index(subrange_end, self.snapshot.line_height)
+            .unwrap_or_else(|| {
+                let last_line_y = self.snapshot.line_height * (line.visual_line_count - 1) as f32;
+                point(wrapped.width(), last_line_y)
+            });
+
+        let start_visual_line = self.compute_visual_line_index(start_pos.y);
+        let end_visual_line = self.compute_visual_line_index(end_pos.y);
+
+        if start_visual_line == end_visual_line {
+            self.paint_bounds_quad(
+                window,
+                color,
+                point(start_pos.x, line_y + start_pos.y + quad_offset_y),
+                point(end_pos.x, line_y + start_pos.y + self.snapshot.line_height),
+            );
+        } else {
+            let line_width = wrapped.width();
+
+            // First visual line
+            self.paint_bounds_quad(
+                window,
+                color,
+                point(start_pos.x, line_y + start_pos.y + quad_offset_y),
+                point(line_width, line_y + start_pos.y + self.snapshot.line_height),
+            );
+
+            // Middle visual lines
+            for visual_line in (start_visual_line + 1)..end_visual_line {
+                let y = self.snapshot.line_height * visual_line as f32;
+                self.paint_bounds_quad(
+                    window,
+                    color,
+                    point(px(0.), line_y + y + quad_offset_y),
+                    point(line_width, line_y + y + self.snapshot.line_height),
+                );
+            }
+
+            // Last visual line
+            self.paint_bounds_quad(
+                window,
+                color,
+                point(px(0.), line_y + end_pos.y + quad_offset_y),
+                point(end_pos.x, line_y + end_pos.y + self.snapshot.line_height),
+            );
+        }
     }
 }
 
