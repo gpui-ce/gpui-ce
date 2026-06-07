@@ -3206,6 +3206,7 @@ impl Window {
             corner_radii: corner_radii.scale(scale_factor),
             blur_radius: radius.scale(scale_factor),
             opacity: self.element_opacity(),
+            _pad: 0,
         });
     }
 

@@ -2184,17 +2184,6 @@ impl WgpuRenderer {
                             // Use actual surface texture size (may differ from configured size)
                             let surface_size = surface_texture.texture.size();
 
-                            eprintln!(
-                                "[backdrop_filter debug] count={} first_radius={:?} first_bounds={:?} surface_size={:?} blur_texture_size=({}, {}) match={}",
-                                count,
-                                backdrop_filters.first().map(|f| f.blur_radius),
-                                backdrop_filters.first().map(|f| f.bounds),
-                                surface_size,
-                                blur_texture.width(),
-                                blur_texture.height(),
-                                surface_size.width == blur_texture.width() && surface_size.height == blur_texture.height(),
-                            );
-
                             // Only copy if sizes match (otherwise skip to avoid validation error)
                             if surface_size.width == blur_texture.width()
                                 && surface_size.height == blur_texture.height()
@@ -2318,6 +2307,7 @@ impl WgpuRenderer {
                                 corner_radii: start_boundary.corner_radii,
                                 blur_radius: start_boundary.blur_radius,
                                 opacity: start_boundary.opacity,
+                                _pad: 0,
                             };
                             let composite_buffer = self.context.device.create_buffer_init(
                                 &wgpu::util::BufferInitDescriptor {

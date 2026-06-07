@@ -592,13 +592,23 @@ impl From<Shadow> for Primitive {
 #[repr(C)]
 pub(crate) struct BackdropFilter {
     pub order: DrawOrder,
+    /// The largest blur radius among the element's backdrop filters, in scaled (device) pixels.
+    ///
+    /// Placed directly after `order` (rather than next to the other filter parameters) so the
+    /// four bytes naturally pad the struct to an 8-byte boundary before `bounds`: WGSL aligns
+    /// `Bounds` (built from `vec2<f32>`s) to 8 bytes in the storage buffer, and without an
+    /// explicit 4-byte field here the compiler-inserted padding would desync this `#[repr(C)]`
+    /// struct's layout from the shader's `BackdropFilter` struct, corrupting every field read on
+    /// the GPU.
+    pub blur_radius: ScaledPixels,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
-    /// The largest blur radius among the element's backdrop filters, in scaled (device) pixels.
-    pub blur_radius: ScaledPixels,
     /// Element opacity captured at paint time, multiplied into the composited result.
     pub opacity: f32,
+    /// Pads the struct to 64 bytes (a multiple of 8) to match the storage-buffer stride WGSL
+    /// derives for `array<BackdropFilter>` — see the note on `blur_radius` above.
+    pub _pad: u32,
 }
 
 impl From<BackdropFilter> for Primitive {

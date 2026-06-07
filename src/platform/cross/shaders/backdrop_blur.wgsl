@@ -20,11 +20,15 @@ struct Corners {
 
 struct BackdropFilter {
     order: u32,
+    // Placed directly after `order` so these two 4-byte fields naturally pad the struct to an
+    // 8-byte boundary before `bounds` (WGSL aligns `Bounds`, built from `vec2<f32>`s, to 8 bytes
+    // in storage buffers) — keeping this layout byte-compatible with the `#[repr(C)]` Rust struct.
+    blur_radius: f32,
     bounds: Bounds,
     content_mask: Bounds,
     corner_radii: Corners,
-    blur_radius: f32,
     opacity: f32,
+    _pad: u32,
 }
 
 struct BackdropFilterVarying {
