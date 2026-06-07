@@ -32,7 +32,7 @@ pub fn init_example(cx: &mut App, name: impl Into<SharedString>) {
     }]);
 
     // Quit the app when all windows are closed
-    cx.on_window_closed(|cx| {
+    cx.on_window_closed(|cx, _window_id| {
         if cx.windows().is_empty() {
             cx.quit();
         }

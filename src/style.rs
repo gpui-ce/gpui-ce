@@ -9,7 +9,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextColor, TextRun, Window,
-    black, phi, point, quad, rems, size, solid_text_color, transparent_black, transparent_white,
+    black, phi, point, quad, rems, size, solid_text_color,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -261,11 +261,11 @@ pub struct Style {
     /// The opacity of this element
     pub opacity: Option<f32>,
 
-    /// A fast, frosted blur radius for this element and its children.
-    pub blur: Option<f32>,
+    /// Filters applied to this element's own content and children (CSS `filter`).
+    pub filter: Vec<Filter>,
 
-    /// Backdrop blur radius - blurs content BEHIND this element (CSS backdrop-filter: blur())
-    pub backdrop_blur: Option<f32>,
+    /// Filters applied to the content rendered behind this element (CSS `backdrop-filter`).
+    pub backdrop_filter: Vec<Filter>,
 
     /// The grid columns of this element
     /// Equivalent to the Tailwind `grid-cols-<number>`
@@ -321,6 +321,28 @@ pub struct BoxShadow {
     pub blur_radius: Pixels,
     /// How much should the shadow spread?
     pub spread_radius: Pixels,
+}
+
+/// A graphical filter that can be applied either to an element's own content
+/// (via [`Styled::filter`], like CSS `filter`) or to the content rendered behind
+/// it (via [`Styled::backdrop_filter`], like CSS `backdrop-filter`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Filter {
+    /// A gaussian blur with the given radius, in logical pixels. Maps to CSS `blur(<px>)`.
+    Blur(Pixels),
+}
+
+impl Filter {
+    /// The largest blur radius across a list of filters. Used to skip painting entirely when
+    /// there is no visible effect, and (in the renderers) to size the blur kernel and the
+    /// dilated region the blur passes are scissored to.
+    pub fn max_blur_radius(filters: &[Filter]) -> Pixels {
+        filters
+            .iter()
+            .fold(Pixels::ZERO, |acc, filter| match filter {
+                Filter::Blur(radius) => acc.max(*radius),
+            })
+    }
 }
 
 /// How to handle whitespace in text
@@ -631,58 +653,34 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
-        let blur_radius = window.element_blur();
-        if blur_radius > 0.0 {
-            let blur_pixels = Pixels(blur_radius);
-            let opacity = window.element_opacity();
-            let blur_glow = BoxShadow {
-                color: transparent_white().opacity(0.14 * opacity),
-                offset: Point::default(),
-                blur_radius: blur_pixels,
-                spread_radius: Pixels::ZERO,
-            };
-            let blur_depth = BoxShadow {
-                color: transparent_black().opacity(0.06 * opacity),
-                offset: Point::default(),
-                blur_radius: blur_pixels,
-                spread_radius: Pixels::ZERO,
-            };
-            let blur_shadows = [blur_glow, blur_depth];
-            window.paint_shadows(bounds, corner_radii, &blur_shadows);
-        }
-
         window.paint_shadows(bounds, corner_radii, &self.box_shadow);
 
-        let background_color = self.background.as_ref().and_then(Fill::color);
-        if background_color.is_some_and(|color| !color.is_transparent()) {
-            let mut border_color = match background_color {
-                Some(color) => match color.tag {
-                    BackgroundTag::Solid => color.solid,
-                    BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => color
-                        .colors
-                        .first()
-                        .map(|stop| stop.color)
-                        .unwrap_or_default(),
-                    BackgroundTag::PatternSlash => color.solid,
-                },
-                None => Hsla::default(),
-            };
-            border_color.a = 0.;
+        // Blur the content behind this element before its (typically translucent) background
+        // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
+        if !self.backdrop_filter.is_empty() {
+            window.paint_backdrop_filter(bounds, corner_radii, &self.backdrop_filter);
+        }
 
-            // Use backdrop blur if specified, otherwise regular quad
-            if let Some(backdrop_blur_radius) = self.backdrop_blur {
-                window.paint_backdrop_blur_quad(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        background_color.unwrap_or_default(),
-                        Edges::default(),
-                        border_color,
-                        self.border_style,
-                    ),
-                    Pixels(backdrop_blur_radius),
-                );
-            } else {
+        // The element's own box — background, inset shadows, children, and border — painted as a
+        // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
+        // and its children together as one group; without a filter it paints directly.
+        let paint_box = |window: &mut Window, cx: &mut App| {
+            let background_color = self.background.as_ref().and_then(Fill::color);
+            if background_color.is_some_and(|color| !color.is_transparent()) {
+                let mut border_color = match background_color {
+                    Some(color) => match color.tag {
+                        BackgroundTag::Solid => color.solid,
+                        BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => color
+                            .colors
+                            .first()
+                            .map(|stop| stop.color)
+                            .unwrap_or_default(),
+                        BackgroundTag::PatternSlash => color.solid,
+                    },
+                    None => Hsla::default(),
+                };
+                border_color.a = 0.;
+
                 window.paint_quad(quad(
                     bounds,
                     corner_radii,
@@ -692,70 +690,80 @@ impl Style {
                     self.border_style,
                 ));
             }
-        }
 
-        continuation(window, cx);
+            continuation(window, cx);
 
-        if self.is_border_visible() {
-            let border_widths = self.border_widths.to_pixels(rem_size);
-            let max_border_width = border_widths.max();
-            let max_corner_radius = corner_radii.max();
+            if self.is_border_visible() {
+                let border_widths = self.border_widths.to_pixels(rem_size);
+                let max_border_width = border_widths.max();
+                let max_corner_radius = corner_radii.max();
 
-            let top_bounds = Bounds::from_corners(
-                bounds.origin,
-                bounds.top_right() + point(Pixels::ZERO, max_border_width.max(max_corner_radius)),
-            );
-            let bottom_bounds = Bounds::from_corners(
-                bounds.bottom_left() - point(Pixels::ZERO, max_border_width.max(max_corner_radius)),
-                bounds.bottom_right(),
-            );
-            let left_bounds = Bounds::from_corners(
-                top_bounds.bottom_left(),
-                bottom_bounds.origin + point(max_border_width, Pixels::ZERO),
-            );
-            let right_bounds = Bounds::from_corners(
-                top_bounds.bottom_right() - point(max_border_width, Pixels::ZERO),
-                bottom_bounds.top_right(),
-            );
+                let top_bounds = Bounds::from_corners(
+                    bounds.origin,
+                    bounds.top_right()
+                        + point(Pixels::ZERO, max_border_width.max(max_corner_radius)),
+                );
+                let bottom_bounds = Bounds::from_corners(
+                    bounds.bottom_left()
+                        - point(Pixels::ZERO, max_border_width.max(max_corner_radius)),
+                    bounds.bottom_right(),
+                );
+                let left_bounds = Bounds::from_corners(
+                    top_bounds.bottom_left(),
+                    bottom_bounds.origin + point(max_border_width, Pixels::ZERO),
+                );
+                let right_bounds = Bounds::from_corners(
+                    top_bounds.bottom_right() - point(max_border_width, Pixels::ZERO),
+                    bottom_bounds.top_right(),
+                );
 
-            let mut background = self.border_color.unwrap_or_default();
-            background.a = 0.;
-            let quad = quad(
-                bounds,
-                corner_radii,
-                background,
-                border_widths,
-                self.border_color.unwrap_or_default(),
-                self.border_style,
-            );
+                let mut background = self.border_color.unwrap_or_default();
+                background.a = 0.;
+                let quad = quad(
+                    bounds,
+                    corner_radii,
+                    background,
+                    border_widths,
+                    self.border_color.unwrap_or_default(),
+                    self.border_style,
+                );
 
-            window.with_content_mask(Some(ContentMask { bounds: top_bounds }), |window| {
-                window.paint_quad(quad.clone());
+                window.with_content_mask(Some(ContentMask { bounds: top_bounds }), |window| {
+                    window.paint_quad(quad.clone());
+                });
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: right_bounds,
+                    }),
+                    |window| {
+                        window.paint_quad(quad.clone());
+                    },
+                );
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: bottom_bounds,
+                    }),
+                    |window| {
+                        window.paint_quad(quad.clone());
+                    },
+                );
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: left_bounds,
+                    }),
+                    |window| {
+                        window.paint_quad(quad);
+                    },
+                );
+            }
+        };
+
+        if self.filter.is_empty() {
+            paint_box(window, cx);
+        } else {
+            window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
+                paint_box(window, cx);
             });
-            window.with_content_mask(
-                Some(ContentMask {
-                    bounds: right_bounds,
-                }),
-                |window| {
-                    window.paint_quad(quad.clone());
-                },
-            );
-            window.with_content_mask(
-                Some(ContentMask {
-                    bounds: bottom_bounds,
-                }),
-                |window| {
-                    window.paint_quad(quad.clone());
-                },
-            );
-            window.with_content_mask(
-                Some(ContentMask {
-                    bounds: left_bounds,
-                }),
-                |window| {
-                    window.paint_quad(quad);
-                },
-            );
         }
 
         #[cfg(debug_assertions)]
@@ -812,8 +820,8 @@ impl Default for Style {
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,
-            blur: None,
-            backdrop_blur: None,
+            filter: Default::default(),
+            backdrop_filter: Default::default(),
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

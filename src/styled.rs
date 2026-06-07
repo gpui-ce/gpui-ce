@@ -1,7 +1,7 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, Hsla, JustifyContent, Length, LinearColorStop, SharedString,
+    DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
+    FontWeight, GridPlacement, Hsla, JustifyContent, Length, LinearColorStop, Pixels, SharedString,
     StrikethroughStyle, StyleRefinement, TextAlign, TextColor, TextOverflow, TextStyleRefinement,
     UnderlineStyle, WhiteSpace, px, relative, rems,
 };
@@ -810,16 +810,34 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets a fast, frosted blur radius for this element and its children.
-    fn blur(mut self, blur_radius: f32) -> Self {
-        self.style().blur = Some(blur_radius.max(0.0));
+    /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
+    ///
+    /// This isolates the element's subtree, blurs it as a group, and composites the
+    /// result back. To blur the content *behind* the element instead (frosted glass),
+    /// use [`Styled::backdrop_blur`].
+    fn blur(mut self, radius: impl Into<Pixels>) -> Self {
+        self.style().filter = Some(vec![Filter::Blur(radius.into())]);
         self
     }
 
-    /// Sets the backdrop blur radius of the element in pixels.
-    /// This blurs the content BEHIND the element, like CSS backdrop-filter: blur()
-    fn backdrop_blur(mut self, blur_radius: f32) -> Self {
-        self.style().backdrop_blur = Some(blur_radius.max(0.0));
+    /// Set the full list of filters applied to this element's own content, like CSS `filter`.
+    fn filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
+        self.style().filter = Some(filters.into());
+        self
+    }
+
+    /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
+    /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::bg`]
+    /// so the background tints the blurred backdrop.
+    fn backdrop_blur(mut self, radius: impl Into<Pixels>) -> Self {
+        self.style().backdrop_filter = Some(vec![Filter::Blur(radius.into())]);
+        self
+    }
+
+    /// Set the full list of filters applied to the content behind this element, like CSS
+    /// `backdrop-filter`.
+    fn backdrop_filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
+        self.style().backdrop_filter = Some(filters.into());
         self
     }
 
