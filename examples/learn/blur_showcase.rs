@@ -9,11 +9,53 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, rgba, size,
+    App, Application, Bounds, Context, Render, ScrollHandle, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, rgba, size,
 };
 
-struct BlurShowcase;
+struct BlurShowcase {
+    scroll_handle: ScrollHandle,
+}
+
+/// A thin overlay scrollbar for `scroll_handle`'s vertical axis: a track spanning the
+/// viewport's right edge with a thumb sized/positioned from the handle's current offset and
+/// content extent. The showcase has many tall sections, so this gives a visual cue (and a
+/// draggable-looking affordance) for how far there is left to scroll.
+fn vertical_scrollbar(scroll_handle: &ScrollHandle) -> impl IntoElement {
+    let bounds = scroll_handle.bounds();
+    let max_offset = scroll_handle.max_offset();
+    let viewport_height = bounds.size.height;
+    let content_height = viewport_height + max_offset.height;
+
+    if max_offset.height <= px(0.) || content_height <= px(0.) {
+        return div().into_any_element();
+    }
+
+    let viewport_fraction = (viewport_height / content_height).clamp(0.0, 1.0);
+    let scrolled_fraction = (scroll_handle.offset().y.abs() / max_offset.height).clamp(0.0, 1.0);
+
+    let thumb_height = (viewport_height * viewport_fraction).max(px(24.));
+    let track_room = viewport_height - thumb_height;
+    let thumb_top = track_room * scrolled_fraction;
+
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_1()
+        .w(px(6.))
+        .child(
+            div()
+                .absolute()
+                .top(thumb_top)
+                .right_0()
+                .w(px(6.))
+                .h(thumb_height)
+                .rounded_full()
+                .bg(rgba(0xffffff55)),
+        )
+        .into_any_element()
+}
 
 fn color_strip() -> impl IntoElement {
     div()
@@ -367,14 +409,21 @@ fn radial_demo_row(
 }
 
 impl Render for BlurShowcase {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_5()
+            .relative()
             .bg(rgb(0x1e1e1e))
+            .child(
+                div()
+                    .id("blur-showcase-scroll")
+                    .track_scroll(&self.scroll_handle)
+                    .overflow_y_scroll()
+                    .size_full()
+                    .p_6()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
             .child(div().text_lg().font_weight(gpui::FontWeight::BOLD).child("Backdrop Blur Showcase"))
             .child(
                 div()
@@ -439,7 +488,9 @@ impl Render for BlurShowcase {
             .child(content_blur_demo_row("content-soft", "blur(4.0)", 4.0))
             .child(content_blur_demo_row("content-strong", "blur(12.0)", 12.0))
             .child(section_heading("filter: blur — nested filter groups"))
-            .child(nested_blur_demo())
+            .child(nested_blur_demo()),
+            )
+            .child(vertical_scrollbar(&self.scroll_handle))
     }
 }
 
@@ -453,7 +504,11 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| BlurShowcase),
+            |_, cx| {
+                cx.new(|_| BlurShowcase {
+                    scroll_handle: ScrollHandle::new(),
+                })
+            },
         )
         .expect("open window");
     });
