@@ -255,7 +255,7 @@ fn nested_blur_demo() -> impl IntoElement {
                         .child(div().text_xs().text_color(rgb(0x666666)).child("Unblurred"))
                         .child(
                             div()
-                                .h_28()
+                                .h(px(112.))
                                 .rounded_lg()
                                 .overflow_hidden()
                                 .bg(rgb(0x333355))
@@ -297,7 +297,7 @@ fn nested_blur_demo() -> impl IntoElement {
                         .child(
                             div()
                                 .blur(px(4.0))
-                                .h_28()
+                                .h(px(112.))
                                 .rounded_lg()
                                 .overflow_hidden()
                                 .bg(rgb(0x333355))
