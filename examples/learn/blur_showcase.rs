@@ -9,52 +9,121 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Context, Render, ScrollHandle, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, rgb, rgba, size,
+    App, Application, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Render, ScrollHandle, Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px,
+    rgb, rgba, size,
 };
+
+const SCROLLBAR_THUMB_WIDTH: Pixels = px(6.);
 
 struct BlurShowcase {
     scroll_handle: ScrollHandle,
+    /// The pointer's offset from the thumb's top edge when a drag starts, so dragging doesn't
+    /// snap the thumb to the pointer position.
+    scrollbar_drag_offset: Option<Pixels>,
 }
 
-/// A thin overlay scrollbar for `scroll_handle`'s vertical axis: a track spanning the
-/// viewport's right edge with a thumb sized/positioned from the handle's current offset and
-/// content extent. The showcase has many tall sections, so this gives a visual cue (and a
-/// draggable-looking affordance) for how far there is left to scroll.
-fn vertical_scrollbar(scroll_handle: &ScrollHandle) -> impl IntoElement {
-    let bounds = scroll_handle.bounds();
-    let max_offset = scroll_handle.max_offset();
-    let viewport_height = bounds.size.height;
-    let content_height = viewport_height + max_offset.height;
+impl BlurShowcase {
+    /// A thin draggable overlay scrollbar for `self.scroll_handle`'s vertical axis: a thumb
+    /// sized from the viewport/content ratio and positioned from the current scroll offset.
+    /// Mirrors the `canvas` + `window.on_mouse_event` pattern other examples (e.g.
+    /// `bench/data_table`) use to drag scrollbar thumbs, since dragging needs to keep tracking
+    /// the pointer even once it leaves the thumb's own hitbox.
+    fn render_scrollbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scroll_handle = self.scroll_handle.clone();
+        let bounds = scroll_handle.bounds();
+        let max_offset = scroll_handle.max_offset();
+        let viewport_height = bounds.size.height;
+        let content_height = viewport_height + max_offset.height;
 
-    if max_offset.height <= px(0.) || content_height <= px(0.) {
-        return div().into_any_element();
+        if max_offset.height <= px(0.) || content_height <= px(0.) {
+            return div().id("blur-showcase-scrollbar").into_any_element();
+        }
+
+        let viewport_fraction = (viewport_height / content_height).clamp(0.0, 1.0);
+        let scrolled_fraction =
+            (scroll_handle.offset().y.abs() / max_offset.height).clamp(0.0, 1.0);
+
+        let thumb_height = (viewport_height * viewport_fraction).max(px(24.));
+        let track_room = viewport_height - thumb_height;
+        let thumb_top = track_room * scrolled_fraction;
+
+        let entity = cx.entity();
+
+        div()
+            .id("blur-showcase-scrollbar")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_1()
+            .w(SCROLLBAR_THUMB_WIDTH)
+            .child(
+                div()
+                    .absolute()
+                    .top(thumb_top)
+                    .right_0()
+                    .w(SCROLLBAR_THUMB_WIDTH)
+                    .h(thumb_height)
+                    .rounded_full()
+                    .bg(rgba(0xffffff55))
+                    .hover(|this| this.bg(rgba(0xffffff88)))
+                    .child(
+                        canvas(
+                            |_, _, _| (),
+                            move |thumb_bounds, _, window, _| {
+                                window.on_mouse_event({
+                                    let entity = entity.clone();
+                                    move |ev: &MouseDownEvent, _, _, cx| {
+                                        if !thumb_bounds.contains(&ev.position) {
+                                            return;
+                                        }
+
+                                        let drag_offset = ev.position.y - thumb_bounds.origin.y;
+                                        entity.update(cx, |this, _| {
+                                            this.scrollbar_drag_offset = Some(drag_offset);
+                                        })
+                                    }
+                                });
+                                window.on_mouse_event({
+                                    let entity = entity.clone();
+                                    move |_: &MouseUpEvent, _, _, cx| {
+                                        entity.update(cx, |this, _| {
+                                            this.scrollbar_drag_offset = None;
+                                        })
+                                    }
+                                });
+
+                                let scroll_handle = scroll_handle.clone();
+                                window.on_mouse_event(move |ev: &MouseMoveEvent, _, _, cx| {
+                                    if !ev.dragging() {
+                                        return;
+                                    }
+
+                                    let Some(drag_offset) =
+                                        entity.read(cx).scrollbar_drag_offset
+                                    else {
+                                        return;
+                                    };
+
+                                    let thumb_top = (ev.position.y - bounds.origin.y
+                                        - drag_offset)
+                                        .clamp(px(0.), track_room);
+                                    let scrolled_fraction = if track_room > px(0.) {
+                                        thumb_top / track_room
+                                    } else {
+                                        0.
+                                    };
+                                    let offset_y = max_offset.height * scrolled_fraction;
+                                    scroll_handle.set_offset(point(px(0.), -offset_y));
+                                    cx.notify(entity.entity_id());
+                                })
+                            },
+                        )
+                        .size_full(),
+                    ),
+            )
+            .into_any_element()
     }
-
-    let viewport_fraction = (viewport_height / content_height).clamp(0.0, 1.0);
-    let scrolled_fraction = (scroll_handle.offset().y.abs() / max_offset.height).clamp(0.0, 1.0);
-
-    let thumb_height = (viewport_height * viewport_fraction).max(px(24.));
-    let track_room = viewport_height - thumb_height;
-    let thumb_top = track_room * scrolled_fraction;
-
-    div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .right_1()
-        .w(px(6.))
-        .child(
-            div()
-                .absolute()
-                .top(thumb_top)
-                .right_0()
-                .w(px(6.))
-                .h(thumb_height)
-                .rounded_full()
-                .bg(rgba(0xffffff55)),
-        )
-        .into_any_element()
 }
 
 fn color_strip() -> impl IntoElement {
@@ -410,7 +479,10 @@ fn radial_demo_row(
 }
 
 impl Render for BlurShowcase {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scroll_handle = self.scroll_handle.clone();
+        let scrollbar = self.render_scrollbar(window, cx);
+
         div()
             .size_full()
             .relative()
@@ -418,7 +490,7 @@ impl Render for BlurShowcase {
             .child(
                 div()
                     .id("blur-showcase-scroll")
-                    .track_scroll(&self.scroll_handle)
+                    .track_scroll(&scroll_handle)
                     .overflow_y_scroll()
                     .size_full()
                     .p_6()
@@ -491,7 +563,7 @@ impl Render for BlurShowcase {
             .child(section_heading("filter: blur — nested filter groups"))
             .child(nested_blur_demo()),
             )
-            .child(vertical_scrollbar(&self.scroll_handle))
+            .child(scrollbar)
     }
 }
 
@@ -508,6 +580,7 @@ fn main() {
             |_, cx| {
                 cx.new(|_| BlurShowcase {
                     scroll_handle: ScrollHandle::new(),
+                    scrollbar_drag_offset: None,
                 })
             },
         )
