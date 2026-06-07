@@ -1348,3 +1348,121 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
 
     return textureSampleLevel(t_surface, s_surface, input.texture_position, 0.0);
 }
+
+// --- blur --- //
+//
+// Backdrop and content filters share these passes:
+//   1. `fs_blur_downsample` copies a source texture into the half-resolution blur texture
+//      (also reused to blit the offscreen scene into the swapchain).
+//   2. `fs_blur` runs one axis of a separable gaussian; the host invokes it twice.
+//   3. `fs_blur_composite` samples the blurred texture and composites it into a rounded
+//      rectangle, clipped and modulated by opacity.
+//
+// Notes (review #5, #7): the scene/blur textures use the swapchain's (typically non-sRGB)
+// format, so the gaussian runs on gamma-encoded values rather than linear light — consistent
+// with the rest of gpui's compositing and close to what browsers do; bright detail darkens
+// slightly. A content-filter group's texture is transparent outside the painted subtree, so
+// the blur bleeds toward transparent at the group's edges (a soft edge ring) before the
+// rounded-rect clip — this matches CSS `filter: blur` edge behaviour.
+
+struct BlurParams {
+    bounds: Bounds,
+    content_mask: Bounds,
+    corner_radii: vec4<f32>,
+    direction: vec2<f32>,
+    sigma: f32,
+    opacity: f32,
+    tap_count: f32,
+    // Spacing between taps, in pixels. >1 when the radius is so large the kernel would need more
+    // than `tap_count` taps to span ±3σ — the taps spread out instead of truncating the gaussian.
+    tap_step: f32,
+    // 1.0 = clip the composite to the rounded rect (backdrop); 0.0 = let the blurred result fade
+    // out on its own (content `filter` bleeds past the element box like CSS).
+    clip_rounded: f32,
+    pad1: f32,
+}
+
+@group(1) @binding(0) var<uniform> blur_locals: BlurParams;
+@group(1) @binding(1) var t_blur: texture_2d<f32>;
+@group(1) @binding(2) var s_blur: sampler;
+
+struct BlurVarying {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(3) clip_distances: vec4<f32>,
+}
+
+@vertex
+fn vs_blur_fullscreen(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
+    // A single triangle large enough to cover the whole framebuffer.
+    let uv = vec2<f32>(f32((vertex_id << 1u) & 2u), f32(vertex_id & 2u));
+    var out = BlurVarying();
+    out.uv = uv;
+    out.position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    out.clip_distances = vec4<f32>(1.0);
+    return out;
+}
+
+@fragment
+fn fs_blur_downsample(input: BlurVarying) -> @location(0) vec4<f32> {
+    // A single bilinear tap at a half-resolution texel center averages the 4 covered source
+    // texels, giving a cheap 2x2 box downsample (and an exact copy at matching resolution).
+    return textureSampleLevel(t_blur, s_blur, input.uv, 0.0);
+}
+
+@fragment
+fn fs_blur(input: BlurVarying) -> @location(0) vec4<f32> {
+    let sigma = blur_locals.sigma;
+    let taps = i32(blur_locals.tap_count);
+    let step = blur_locals.tap_step;
+    var color = vec4<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var i = -taps; i <= taps; i = i + 1) {
+        let offset = f32(i) * step;
+        let weight = gaussian(offset, sigma);
+        let uv = input.uv + blur_locals.direction * offset;
+        color += textureSampleLevel(t_blur, s_blur, uv, 0.0) * weight;
+        weight_sum += weight;
+    }
+    return color / max(weight_sum, 1e-5);
+}
+
+@vertex
+fn vs_blur_composite(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
+    let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    var out = BlurVarying();
+    out.position = to_device_position(unit_vertex, blur_locals.bounds);
+    out.uv = unit_vertex;
+    out.clip_distances = distance_from_clip_rect(unit_vertex, blur_locals.bounds, blur_locals.content_mask);
+    return out;
+}
+
+@fragment
+fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+
+    // The blurred texture spans the whole screen, so sample it by screen position.
+    let uv = input.position.xy / globals.viewport_size;
+    let blurred = textureSampleLevel(t_blur, s_blur, uv, 0.0);
+
+    let corner_radii = Corners(
+        blur_locals.corner_radii.x,
+        blur_locals.corner_radii.y,
+        blur_locals.corner_radii.z,
+        blur_locals.corner_radii.w,
+    );
+    // Backdrop blur clips to the rounded rect (the frosted panel has a defined shape). Content
+    // blur does not — it bleeds past the element box like CSS `filter: blur`, so the soft fade
+    // isn't sharply truncated at the edge; its shape comes from the blurred group's own alpha.
+    let distance = quad_sdf(input.position.xy, blur_locals.bounds, corner_radii);
+    let coverage = select(1.0, saturate(0.5 - distance), blur_locals.clip_rounded > 0.5);
+
+    // The blurred sample is premultiplied (blurring against the transparent, rgb=0 surround scales
+    // rgb with the fading alpha), so output premultiplied and let the pipeline blend premultiplied.
+    // A backdrop's scene is opaque (alpha ~= 1) so this replaces; a content-filter group is
+    // transparent outside its subtree, so the target shows through there instead of darkening.
+    let c = coverage * blur_locals.opacity;
+    return vec4<f32>(blurred.rgb * c, blurred.a * c);
+}
