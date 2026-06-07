@@ -215,6 +215,10 @@ path = "examples/learn/text.rs"
 name = "transition"
 path = "examples/learn/transition.rs"
 
+[[example]]
+name = "blur"
+path = "examples/learn/blur.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
