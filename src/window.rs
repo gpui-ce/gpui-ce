@@ -1798,8 +1798,11 @@ impl Window {
     ///
     /// If called from within a view, it will notify that view on the next frame. Otherwise, it will refresh the entire window.
     pub fn request_animation_frame(&self) {
-        let entity = self.current_view();
-        self.on_next_frame(move |_, cx| cx.notify(entity));
+        if let Some(entity) = self.rendered_entity_stack.last().copied() {
+            self.on_next_frame(move |_, cx| cx.notify(entity));
+        } else {
+            self.on_next_frame(|window, _| window.refresh());
+        }
     }
 
     /// Spawn the future returned by the given closure on the application thread pool.
