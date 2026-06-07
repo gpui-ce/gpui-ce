@@ -287,6 +287,12 @@ pub struct Style {
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
 
+    /// Filters applied to this element's own content and children (CSS `filter`).
+    pub filter: Vec<Filter>,
+
+    /// Filters applied to the content rendered behind this element (CSS `backdrop-filter`).
+    pub backdrop_filter: Vec<Filter>,
+
     /// The text style of this element
     #[refineable]
     pub text: TextStyleRefinement,
@@ -353,6 +359,28 @@ pub struct BoxShadow {
     pub spread_radius: Pixels,
     /// Whether this is an inset shadow (drawn inside the element's bounds).
     pub inset: bool,
+}
+
+/// A graphical filter that can be applied either to an element's own content
+/// (via [`Styled::filter`], like CSS `filter`) or to the content rendered behind
+/// it (via [`Styled::backdrop_filter`], like CSS `backdrop-filter`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Filter {
+    /// A gaussian blur with the given radius, in logical pixels. Maps to CSS `blur(<px>)`.
+    Blur(Pixels),
+}
+
+impl Filter {
+    /// The largest blur radius across a list of filters. Used to skip painting entirely when
+    /// there is no visible effect, and (in the renderers) to size the blur kernel and the
+    /// dilated region the blur passes are scissored to.
+    pub fn max_blur_radius(filters: &[Filter]) -> Pixels {
+        filters
+            .iter()
+            .fold(Pixels::ZERO, |acc, filter| match filter {
+                Filter::Blur(radius) => acc.max(*radius),
+            })
+    }
 }
 
 /// How to handle whitespace in text
@@ -669,49 +697,68 @@ impl Style {
 
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
-        let background_color = self.background.as_ref().and_then(Fill::color);
-        if background_color.is_some_and(|color| !color.is_transparent()) {
-            let mut border_color = match background_color {
-                Some(color) => match color.tag {
-                    BackgroundTag::Solid
-                    | BackgroundTag::PatternSlash
-                    | BackgroundTag::Checkerboard => color.solid,
-
-                    BackgroundTag::LinearGradient => color
-                        .colors
-                        .first()
-                        .map(|stop| stop.color)
-                        .unwrap_or_default(),
-                },
-                None => Hsla::default(),
-            };
-            border_color.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background_color.unwrap_or_default(),
-                Edges::default(),
-                border_color,
-                self.border_style,
-            ));
+        // Blur the content behind this element before its (typically translucent) background
+        // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
+        if !self.backdrop_filter.is_empty() {
+            window.paint_backdrop_filter(bounds, corner_radii, &self.backdrop_filter);
         }
 
-        window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+        // The element's own box — background, inset shadows, children, and border — painted as a
+        // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
+        // and its children together as one group; without a filter it paints directly.
+        let paint_box = |window: &mut Window, cx: &mut App| {
+            let background_color = self.background.as_ref().and_then(Fill::color);
+            if background_color.is_some_and(|color| !color.is_transparent()) {
+                let mut border_color = match background_color {
+                    Some(color) => match color.tag {
+                        BackgroundTag::Solid
+                        | BackgroundTag::PatternSlash
+                        | BackgroundTag::Checkerboard => color.solid,
 
-        continuation(window, cx);
+                        BackgroundTag::LinearGradient => color
+                            .colors
+                            .first()
+                            .map(|stop| stop.color)
+                            .unwrap_or_default(),
+                    },
+                    None => Hsla::default(),
+                };
+                border_color.a = 0.;
+                window.paint_quad(quad(
+                    bounds,
+                    corner_radii,
+                    background_color.unwrap_or_default(),
+                    Edges::default(),
+                    border_color,
+                    self.border_style,
+                ));
+            }
 
-        if self.is_border_visible() {
-            let border_widths = self.border_widths.to_pixels(rem_size);
-            let mut background = self.border_color.unwrap_or_default();
-            background.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background,
-                border_widths,
-                self.border_color.unwrap_or_default(),
-                self.border_style,
-            ));
+            window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+
+            continuation(window, cx);
+
+            if self.is_border_visible() {
+                let border_widths = self.border_widths.to_pixels(rem_size);
+                let mut background = self.border_color.unwrap_or_default();
+                background.a = 0.;
+                window.paint_quad(quad(
+                    bounds,
+                    corner_radii,
+                    background,
+                    border_widths,
+                    self.border_color.unwrap_or_default(),
+                    self.border_style,
+                ));
+            }
+        };
+
+        if self.filter.is_empty() {
+            paint_box(window, cx);
+        } else {
+            window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
+                paint_box(window, cx);
+            });
         }
 
         #[cfg(debug_assertions)]
@@ -765,6 +812,8 @@ impl Default for Style {
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            filter: Default::default(),
+            backdrop_filter: Default::default(),
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

@@ -2,12 +2,12 @@
 use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    AsyncWindowContext, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds, BoxShadow,
+    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-    KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
+    EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
+    GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+    Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
     MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
@@ -2938,6 +2938,11 @@ impl Window {
             return;
         }
 
+        // Deferred draws are overlays (tooltips, popovers, drag images) and must sort above the
+        // whole main scene. Raise the order floor so they do — this also keeps a deferred
+        // backdrop's order from falling inside a content-filter order range left by the main scene.
+        self.next_frame.scene.raise_order_floor();
+
         let traversal_order = self.deferred_draw_traversal_order();
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
         for deferred_draw_ix in traversal_order {
@@ -3675,6 +3680,90 @@ impl Window {
                 pad: 0,
             });
         }
+    }
+
+    /// Paint a backdrop filter into the scene for the next frame at the current z-index. The
+    /// renderer blurs the content already painted behind `bounds` and composites the result
+    /// into the rounded rectangle described by `bounds` and `corner_radii` — the CSS
+    /// `backdrop-filter` effect (frosted glass). Typically the element then paints a translucent
+    /// background quad on top so its color tints the blurred backdrop.
+    ///
+    /// Does nothing when `filters` produce no visible blur.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_filter(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        let radius = Filter::max_blur_radius(filters);
+        if radius <= Pixels::ZERO {
+            return;
+        }
+
+        let scale_factor = self.scale_factor();
+        self.next_frame.scene.insert_primitive(BackdropFilter {
+            order: 0,
+            bounds: self.snap_bounds(bounds),
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(scale_factor),
+            blur_radius: radius.scale(scale_factor),
+            opacity: self.element_opacity(),
+        });
+    }
+
+    /// Isolate the painting performed by `f` into a content-filter group: the renderer renders
+    /// everything `f` paints into an offscreen target, blurs it as a single layer, and
+    /// composites the result back into the rounded rectangle described by `bounds` and
+    /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
+    ///
+    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
+    /// indirection.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn with_filter_layer<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let radius = Filter::max_blur_radius(filters);
+        if radius <= Pixels::ZERO {
+            return f(self);
+        }
+
+        // Snapshot the (scaled) group parameters once so the start and end markers agree.
+        //
+        // `opacity` is 1.0 — NOT `element_opacity()`. The group's children/bg/border are painted
+        // through the normal paint methods while `element_opacity` is still in effect, so they
+        // already carry the element's opacity (consistent with gpui's per-primitive opacity for
+        // non-filtered elements). Re-applying it at composite time would double it (e.g.
+        // `.blur(r).opacity(0.5)` would render at 0.25 instead of 0.5).
+        let scale_factor = self.scale_factor();
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds: self.snap_bounds(bounds),
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(scale_factor),
+            blur_radius: radius.scale(scale_factor),
+            opacity: 1.0,
+            is_start: true,
+        };
+
+        self.next_frame.scene.insert_primitive(boundary);
+        let result = f(self);
+        self.next_frame.scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+
+        result
     }
 
     /// Paint one or more quads into the scene for the next frame at the current stacking context.
