@@ -7,9 +7,9 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use gpui::{
-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, MonochromeSprite, PaintSurface,
-    Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
-    Surface, Underline, point, size,
+    AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
+    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -125,6 +125,11 @@ pub(crate) struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
+    // Blur pipelines: downsample (no blend, also used for the final blit), separable gaussian
+    // (no blend), and composite (alpha blend into a rounded rect). See `shaders.metal`.
+    blur_downsample_pipeline_state: metal::RenderPipelineState,
+    blur_pipeline_state: metal::RenderPipelineState,
+    blur_composite_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -132,7 +137,57 @@ pub(crate) struct MetalRenderer {
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
+    // Offscreen scene target (the scene is rendered here, then blitted to the drawable, so blur
+    // passes can sample already-painted content), the half-res ping/pong blur targets, and a
+    // full-res target for content-filter groups.
+    scene_color_texture: Option<metal::Texture>,
+    blur_ping_texture: Option<metal::Texture>,
+    blur_pong_texture: Option<metal::Texture>,
+    group_texture: Option<metal::Texture>,
     path_sample_count: u32,
+}
+
+/// Mirrors the `BlurParams` struct in `shaders.metal`. Passed to the blur pipelines via
+/// `setVertexBytes`/`setFragmentBytes`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BlurUniform {
+    bounds: Bounds<ScaledPixels>,
+    content_mask: Bounds<ScaledPixels>,
+    corner_radii: Corners<ScaledPixels>,
+    direction: [f32; 2],
+    sigma: f32,
+    opacity: f32,
+    tap_count: f32,
+    /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur bleed past
+    /// its bounds like CSS `filter: blur`.
+    clip_rounded: f32,
+    pad1: f32,
+    pad2: f32,
+}
+
+impl Default for BlurUniform {
+    fn default() -> Self {
+        BlurUniform {
+            bounds: Bounds::default(),
+            content_mask: Bounds::default(),
+            corner_radii: Corners::default(),
+            direction: [0.0, 0.0],
+            sigma: 0.0,
+            opacity: 1.0,
+            tap_count: 0.0,
+            clip_rounded: 0.0,
+            pad1: 0.0,
+            pad2: 0.0,
+        }
+    }
+}
+
+#[repr(C)]
+enum BlurInputIndex {
+    Vertices = 0,
+    Params = 1,
+    ViewportSize = 2,
 }
 
 #[repr(C)]
@@ -318,6 +373,32 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        let blur_downsample_pipeline_state = build_blur_pipeline_state(
+            &device,
+            &library,
+            "blur_downsample",
+            "blur_fullscreen_vertex",
+            "blur_downsample_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
+        let blur_pipeline_state = build_blur_pipeline_state(
+            &device,
+            &library,
+            "blur",
+            "blur_fullscreen_vertex",
+            "blur_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
+        // Premultiplied blend (One / OneMinusSourceAlpha) — the composite outputs a premultiplied
+        // blurred sample; straight-alpha blending would darken the faded edges.
+        let blur_composite_pipeline_state = build_path_sprite_pipeline_state(
+            &device,
+            &library,
+            "blur_composite",
+            "blur_composite_vertex",
+            "blur_composite_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
 
         let command_queue = device.new_command_queue();
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
@@ -340,12 +421,19 @@ impl MetalRenderer {
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
+            blur_downsample_pipeline_state,
+            blur_pipeline_state,
+            blur_composite_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
+            scene_color_texture: None,
+            blur_ping_texture: None,
+            blur_pong_texture: None,
+            group_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
         }
     }
@@ -395,6 +483,10 @@ impl MetalRenderer {
         if size.width.0 <= 0 || size.height.0 <= 0 {
             self.path_intermediate_texture = None;
             self.path_intermediate_msaa_texture = None;
+            self.scene_color_texture = None;
+            self.blur_ping_texture = None;
+            self.blur_pong_texture = None;
+            self.group_texture = None;
             return;
         }
 
@@ -406,6 +498,25 @@ impl MetalRenderer {
         texture_descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.path_intermediate_texture = Some(self.device.new_texture(&texture_descriptor));
+
+        // Full-res scene + group targets, and half-res ping/pong blur targets.
+        let make_color_texture = |width: u64, height: u64| {
+            let descriptor = metal::TextureDescriptor::new();
+            descriptor.set_width(width.max(1));
+            descriptor.set_height(height.max(1));
+            descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+            descriptor.set_usage(
+                metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead,
+            );
+            self.device.new_texture(&descriptor)
+        };
+        let full_w = size.width.0 as u64;
+        let full_h = size.height.0 as u64;
+        self.scene_color_texture = Some(make_color_texture(full_w, full_h));
+        self.group_texture = Some(make_color_texture(full_w, full_h));
+        self.blur_ping_texture = Some(make_color_texture(full_w / 2, full_h / 2));
+        self.blur_pong_texture = Some(make_color_texture(full_w / 2, full_h / 2));
 
         if self.path_sample_count > 1 {
             // https://developer.apple.com/documentation/metal/choosing-a-resource-storage-mode-for-apple-gpus
@@ -751,9 +862,31 @@ impl MetalRenderer {
         let alpha = if self.opaque { 1. } else { 0. };
         let mut instance_offset = 0;
 
+        // Render the scene into an offscreen color texture (so filters can sample it), then
+        // blit it to `texture`. Owned clones keep the textures borrowable without borrowing
+        // `self` across the batch loop (which calls `&mut self` methods like `draw_surfaces`).
+        // Only route through the offscreen scene texture when the scene actually contains blur
+        // filters; otherwise render straight to `texture` exactly as before (no regression, no
+        // extra blit for the common case).
+        let use_offscreen =
+            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let scene_color_owned = self.scene_color_texture.clone();
+        let blur_ping_owned = self.blur_ping_texture.clone();
+        let blur_pong_owned = self.blur_pong_texture.clone();
+        let group_owned = self.group_texture.clone();
+        let scene_color: &metal::TextureRef = if use_offscreen {
+            scene_color_owned.as_deref().unwrap_or(texture)
+        } else {
+            texture
+        };
+        // The active render target; switches to the group texture inside a content-filter group.
+        let mut current_target: &metal::TextureRef = scene_color;
+        // (boundary, parent target to composite back into, whether this level is isolated).
+        let mut filter_stack: Vec<(FilterBoundary, &metal::TextureRef, bool)> = Vec::new();
+
         let mut command_encoder = new_command_encoder_for_texture(
             command_buffer,
-            texture,
+            current_target,
             viewport_size,
             |color_attachment| {
                 color_attachment.set_load_action(metal::MTLLoadAction::Clear);
@@ -791,7 +924,7 @@ impl MetalRenderer {
 
                     command_encoder = new_command_encoder_for_texture(
                         command_buffer,
-                        texture,
+                        current_target,
                         viewport_size,
                         |color_attachment| {
                             color_attachment.set_load_action(metal::MTLLoadAction::Load);
@@ -842,6 +975,96 @@ impl MetalRenderer {
                     viewport_size,
                     command_encoder,
                 ),
+                PrimitiveBatch::BackdropFilters(range) => {
+                    command_encoder.end_encoding();
+                    if let (Some(ping), Some(pong)) =
+                        (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
+                    {
+                        for filter in &scene.backdrop_filters[range] {
+                            self.metal_blur_and_composite(
+                                command_buffer,
+                                current_target,
+                                current_target,
+                                ping,
+                                pong,
+                                viewport_size,
+                                filter.bounds,
+                                filter.content_mask.bounds,
+                                filter.corner_radii,
+                                filter.blur_radius.0,
+                                filter.opacity,
+                                true,
+                            );
+                        }
+                    }
+                    command_encoder = new_command_encoder_for_texture(
+                        command_buffer,
+                        current_target,
+                        viewport_size,
+                        |color_attachment| {
+                            color_attachment.set_load_action(metal::MTLLoadAction::Load);
+                        },
+                    );
+                    true
+                }
+                PrimitiveBatch::FilterBoundary(ix) => {
+                    let boundary = scene.filter_boundaries[ix];
+                    if boundary.is_start {
+                        // Only one nesting level can be isolated at a time (single group texture).
+                        let can_isolate =
+                            group_owned.is_some() && !filter_stack.iter().any(|entry| entry.2);
+                        if can_isolate {
+                            command_encoder.end_encoding();
+                            let parent = current_target;
+                            current_target = group_owned.as_deref().unwrap();
+                            filter_stack.push((boundary, parent, true));
+                            command_encoder = new_command_encoder_for_texture(
+                                command_buffer,
+                                current_target,
+                                viewport_size,
+                                |color_attachment| {
+                                    color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                                    color_attachment
+                                        .set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
+                                },
+                            );
+                        } else {
+                            filter_stack.push((boundary, current_target, false));
+                        }
+                    } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
+                        if isolated {
+                            command_encoder.end_encoding();
+                            if let (Some(ping), Some(pong)) =
+                                (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
+                            {
+                                self.metal_blur_and_composite(
+                                    command_buffer,
+                                    current_target,
+                                    parent,
+                                    ping,
+                                    pong,
+                                    viewport_size,
+                                    boundary.bounds,
+                                    boundary.content_mask.bounds,
+                                    boundary.corner_radii,
+                                    boundary.blur_radius.0,
+                                    boundary.opacity,
+                                    false,
+                                );
+                            }
+                            current_target = parent;
+                            command_encoder = new_command_encoder_for_texture(
+                                command_buffer,
+                                current_target,
+                                viewport_size,
+                                |color_attachment| {
+                                    color_attachment.set_load_action(metal::MTLLoadAction::Load);
+                                },
+                            );
+                        }
+                    }
+                    true
+                }
                 PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
             };
             if !ok {
@@ -861,6 +1084,19 @@ impl MetalRenderer {
 
         command_encoder.end_encoding();
 
+        // Present the offscreen scene by copying it into the drawable/target texture.
+        if use_offscreen && scene_color_owned.is_some() {
+            self.run_metal_blur_pass(
+                command_buffer,
+                &self.blur_downsample_pipeline_state,
+                texture,
+                scene_color,
+                viewport_size,
+                BlurUniform::default(),
+                false,
+            );
+        }
+
         if !self.is_unified_memory {
             // Sync the instance buffer to the GPU
             instance_buffer.metal_buffer.did_modify_range(NSRange {
@@ -870,6 +1106,161 @@ impl MetalRenderer {
         }
 
         Ok(command_buffer.to_owned())
+    }
+
+    /// Run a single blur pass: draw a full-screen (or composite) quad sampling `source` into
+    /// `target`. `params` is supplied to both shader stages; `load` keeps existing target
+    /// contents (used by the composite), otherwise the target is cleared.
+    #[allow(clippy::too_many_arguments)]
+    fn run_metal_blur_pass(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        pipeline: &metal::RenderPipelineState,
+        target: &metal::TextureRef,
+        source: &metal::TextureRef,
+        target_viewport: Size<DevicePixels>,
+        params: BlurUniform,
+        load: bool,
+    ) {
+        let encoder = new_command_encoder_for_texture(
+            command_buffer,
+            target,
+            target_viewport,
+            |color_attachment| {
+                if load {
+                    color_attachment.set_load_action(metal::MTLLoadAction::Load);
+                } else {
+                    color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                    color_attachment.set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
+                }
+            },
+        );
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_vertex_buffer(
+            BlurInputIndex::Vertices as u64,
+            Some(&self.unit_vertices),
+            0,
+        );
+        encoder.set_vertex_bytes(
+            BlurInputIndex::Params as u64,
+            mem::size_of::<BlurUniform>() as u64,
+            &params as *const BlurUniform as *const _,
+        );
+        encoder.set_vertex_bytes(
+            BlurInputIndex::ViewportSize as u64,
+            mem::size_of_val(&target_viewport) as u64,
+            &target_viewport as *const Size<DevicePixels> as *const _,
+        );
+        encoder.set_fragment_bytes(
+            BlurInputIndex::Params as u64,
+            mem::size_of::<BlurUniform>() as u64,
+            &params as *const BlurUniform as *const _,
+        );
+        encoder.set_fragment_bytes(
+            BlurInputIndex::ViewportSize as u64,
+            mem::size_of_val(&target_viewport) as u64,
+            &target_viewport as *const Size<DevicePixels> as *const _,
+        );
+        encoder.set_fragment_texture(0, Some(source));
+        encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
+        encoder.end_encoding();
+    }
+
+    /// Blur `source` (full-resolution) using the half-res ping/pong textures and composite the
+    /// result into `target`, clipped to `bounds`/`corner_radii`/`content_mask` and modulated by
+    /// `opacity`. Shared by the backdrop and content-filter paths.
+    #[allow(clippy::too_many_arguments)]
+    fn metal_blur_and_composite(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        source: &metal::TextureRef,
+        target: &metal::TextureRef,
+        ping: &metal::TextureRef,
+        pong: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: Bounds<ScaledPixels>,
+        corner_radii: Corners<ScaledPixels>,
+        blur_radius: f32,
+        opacity: f32,
+        // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
+        clip_rounded: bool,
+    ) {
+        // Sigma is halved because the blur runs at half resolution.
+        let sigma = (blur_radius * 0.5).max(0.0);
+        if sigma <= 0.0 {
+            return;
+        }
+        let tap_count = (3.0 * sigma).ceil().clamp(1.0, 32.0);
+        // Content blur bleeds ~3·radius past the box, so its composite quad covers a dilated rect.
+        let composite_bounds = if clip_rounded {
+            bounds
+        } else {
+            bounds.dilate(ScaledPixels(3.0 * blur_radius))
+        };
+        let half = Size {
+            width: DevicePixels((i32::from(viewport_size.width) / 2).max(1)),
+            height: DevicePixels((i32::from(viewport_size.height) / 2).max(1)),
+        };
+        let half_w = i32::from(half.width) as f32;
+        let half_h = i32::from(half.height) as f32;
+
+        // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
+        self.run_metal_blur_pass(
+            command_buffer,
+            &self.blur_downsample_pipeline_state,
+            ping,
+            source,
+            half,
+            BlurUniform::default(),
+            false,
+        );
+        self.run_metal_blur_pass(
+            command_buffer,
+            &self.blur_pipeline_state,
+            pong,
+            ping,
+            half,
+            BlurUniform {
+                direction: [1.0 / half_w, 0.0],
+                sigma,
+                tap_count,
+                ..Default::default()
+            },
+            false,
+        );
+        self.run_metal_blur_pass(
+            command_buffer,
+            &self.blur_pipeline_state,
+            ping,
+            pong,
+            half,
+            BlurUniform {
+                direction: [0.0, 1.0 / half_h],
+                sigma,
+                tap_count,
+                ..Default::default()
+            },
+            false,
+        );
+
+        // Composite the blurred result into the target (preserving its contents).
+        self.run_metal_blur_pass(
+            command_buffer,
+            &self.blur_composite_pipeline_state,
+            target,
+            ping,
+            viewport_size,
+            BlurUniform {
+                bounds: composite_bounds,
+                content_mask,
+                corner_radii,
+                opacity,
+                clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
+                ..Default::default()
+            },
+            true,
+        );
     }
 
     fn draw_paths_to_intermediate(
@@ -1609,6 +2000,36 @@ fn build_path_rasterization_pipeline_state(
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
     color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+
+    device
+        .new_render_pipeline_state(&descriptor)
+        .expect("could not create render pipeline state")
+}
+
+// Blur downsample/gaussian passes overwrite their target (no blending). The composite pass
+// uses the normal alpha-blending pipeline (`build_pipeline_state`) instead.
+fn build_blur_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    label: &str,
+    vertex_fn_name: &str,
+    fragment_fn_name: &str,
+    pixel_format: metal::MTLPixelFormat,
+) -> metal::RenderPipelineState {
+    let vertex_fn = library
+        .get_function(vertex_fn_name, None)
+        .expect("error locating vertex function");
+    let fragment_fn = library
+        .get_function(fragment_fn_name, None)
+        .expect("error locating fragment function");
+
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label(label);
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(pixel_format);
+    color_attachment.set_blending_enabled(false);
 
     device
         .new_render_pipeline_state(&descriptor)
