@@ -15,9 +15,11 @@ path = "src/gpui_windows.rs"
 default = ["gpui/default"]
 test-support = ["gpui/test-support"]
 screen-capture = ["gpui/screen-capture", "scap"]
+wgpu = ["dep:gpui_wgpu"]
 
 [dependencies]
 gpui.workspace = true
+gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit.workspace = true

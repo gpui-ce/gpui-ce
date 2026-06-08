@@ -32,6 +32,9 @@ use crate::direct_manipulation::DirectManipulationHandler;
 use crate::*;
 use gpui::*;
 
+#[cfg(feature = "wgpu")]
+use gpui_wgpu::{WgpuRenderer, WgpuSurfaceConfig, wgpu};
+
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
 impl std::ops::Deref for WindowsWindow {
@@ -62,6 +65,9 @@ pub struct WindowsWindowState {
     pub hovered: Cell<bool>,
     pub direct_manipulation: DirectManipulationHandler,
 
+    #[cfg(feature = "wgpu")]
+    pub renderer: RefCell<WgpuRenderer>,
+    #[cfg(not(feature = "wgpu"))]
     pub renderer: RefCell<DirectXRenderer>,
     /// Set after a GPU device-lost recovery so the next `draw_window` call is
     /// treated as a forced render. This guarantees the next frame both
@@ -104,6 +110,7 @@ pub(crate) struct WindowsWindowInner {
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
+        #[cfg(not(feature = "wgpu"))]
         directx_devices: &DirectXDevices,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
@@ -119,19 +126,33 @@ impl WindowsWindowState {
             monitor_dpi / USER_DEFAULT_SCREEN_DPI as f32
         };
         let origin = logical_point(window_params.x as f32, window_params.y as f32, scale_factor);
-        let logical_size = {
-            let physical_size = size(
-                DevicePixels(window_params.cx),
-                DevicePixels(window_params.cy),
-            );
-            physical_size.to_pixels(scale_factor)
-        };
+        let physical_size = size(
+            DevicePixels(window_params.cx),
+            DevicePixels(window_params.cy),
+        );
+        let logical_size = { physical_size.to_pixels(scale_factor) };
         let fullscreen_restore_bounds = Bounds {
             origin,
             size: logical_size,
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
+        #[cfg(feature = "wgpu")]
+        let renderer = WgpuRenderer::new(
+            Rc::new(RefCell::new(None)),
+            &RawWindow { hwnd },
+            WgpuSurfaceConfig {
+                size: size(
+                    DevicePixels(1280),
+                    DevicePixels(720),
+                ),
+                transparent: false,
+                preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
+            },
+            None,
+        )
+        .context("Creating Wgpu renderer")?;
+        #[cfg(not(feature = "wgpu"))]
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
         let callbacks = Callbacks::default();
@@ -244,6 +265,7 @@ impl WindowsWindowInner {
     fn new(context: &mut WindowCreateContext, hwnd: HWND, cs: &CREATESTRUCTW) -> Result<Rc<Self>> {
         let state = WindowsWindowState::new(
             hwnd,
+            #[cfg(not(feature = "wgpu"))]
             &context.directx_devices,
             cs,
             context.current_cursor,
@@ -394,6 +416,7 @@ struct WindowCreateContext {
     platform_window_handle: HWND,
     appearance: WindowAppearance,
     disable_direct_composition: bool,
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: DirectXDevices,
     invalidate_devices: Arc<AtomicBool>,
     parent_hwnd: Option<HWND>,
@@ -415,6 +438,7 @@ impl WindowsWindow {
             main_receiver,
             platform_window_handle,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
             invalidate_devices,
         } = creation_info;
@@ -497,6 +521,7 @@ impl WindowsWindow {
             platform_window_handle,
             appearance,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
             invalidate_devices,
             parent_hwnd,
@@ -545,6 +570,35 @@ impl WindowsWindow {
         }
 
         Ok(Self(this))
+    }
+}
+
+#[cfg(feature = "wgpu")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RawWindow {
+    pub hwnd: HWND,
+}
+
+#[cfg(feature = "wgpu")]
+unsafe impl Send for RawWindow {}
+#[cfg(feature = "wgpu")]
+unsafe impl Sync for RawWindow {}
+
+#[cfg(feature = "wgpu")]
+impl rwh::HasWindowHandle for RawWindow {
+    fn window_handle(&self) -> std::result::Result<rwh::WindowHandle<'_>, rwh::HandleError> {
+        let raw = rwh::Win32WindowHandle::new(unsafe {
+            NonZeroIsize::new_unchecked(self.hwnd.0 as isize)
+        })
+        .into();
+        Ok(unsafe { rwh::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl rwh::HasDisplayHandle for RawWindow {
+    fn display_handle(&self) -> std::result::Result<rwh::DisplayHandle<'_>, rwh::HandleError> {
+        Ok(rwh::DisplayHandle::windows())
     }
 }
 
@@ -951,15 +1005,43 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn draw(&self, scene: &Scene) {
-        self.state
-            .renderer
-            .borrow_mut()
-            .draw(scene, self.state.background_appearance.get())
-            .log_err();
+        #[cfg(not(feature = "wgpu"))]
+        {
+            self.state
+                .renderer
+                .borrow_mut()
+                .draw(scene, self.state.background_appearance.get())
+                .log_err();
+        }
+
+        #[cfg(feature = "wgpu")]
+        {
+            let mut renderer = self.state.renderer.borrow_mut();
+            if renderer.device_lost() {
+                match renderer.recover(&RawWindow {
+                    hwnd: self.platform_window_handle,
+                }) {
+                    Ok(()) => {}
+                    Err(err) => {
+                        log::warn!("GPU recovery failed, will retry on next frame: {err}");
+                    }
+                }
+
+                self.state.force_render_after_recovery.set(true);
+                return;
+            }
+            if !renderer.draw(scene) {
+                log::error!("failed to render scene");
+            }
+
+            if renderer.needs_redraw() {
+                self.state.force_render_after_recovery.set(true);
+            }
+        }
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
-        self.state.renderer.borrow().sprite_atlas()
+        self.state.renderer.borrow().sprite_atlas().clone()
     }
 
     fn get_raw_handle(&self) -> HWND {
@@ -967,6 +1049,9 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
+        #[cfg(feature = "wgpu")]
+        return Some(self.state.renderer.borrow().gpu_specs());
+        #[cfg(not(feature = "wgpu"))]
         self.state.renderer.borrow().gpu_specs().log_err()
     }
 
