@@ -110,8 +110,7 @@ pub(crate) struct WindowsWindowInner {
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
-        #[cfg(not(feature = "wgpu"))]
-        directx_devices: &DirectXDevices,
+        #[cfg(not(feature = "wgpu"))] directx_devices: &DirectXDevices,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
         cursor_visible: Arc<AtomicBool>,
@@ -142,10 +141,7 @@ impl WindowsWindowState {
             Rc::new(RefCell::new(None)),
             &RawWindow { hwnd },
             WgpuSurfaceConfig {
-                size: size(
-                    DevicePixels(1280),
-                    DevicePixels(720),
-                ),
+                size: physical_size,
                 transparent: false,
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             },
