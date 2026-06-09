@@ -13,6 +13,9 @@ use std::{
 };
 use winit::event_loop::EventLoopProxy;
 
+#[cfg(target_os = "linux")]
+use winit::platform::linux::WindowExtLinux;
+
 #[cfg(target_os = "windows")]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
 
@@ -37,6 +40,7 @@ pub(crate) struct CrossWindowState {
     pub(crate) capslock: Cell<Capslock>,
     pub(crate) is_hovered: Cell<bool>,
     pub(crate) resize_detector: ResizeDetector,
+    pub(crate) app_id: RefCell<Option<String>>,
 }
 
 #[derive(Default)]
@@ -272,6 +276,12 @@ impl PlatformWindow for CrossWindow {
 
     fn set_title(&mut self, title: &str) {
         self.window().set_title(title);
+    }
+
+    fn set_app_id(&mut self, app_id: &str) {
+        self.0.state.app_id.borrow_mut().replace(app_id.to_owned());
+        #[cfg(target_os = "linux")]
+        self.window().set_app_id(Some(app_id));
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {

@@ -16,9 +16,10 @@ pub(crate) struct TestWindowState {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) handle: AnyWindowHandle,
     display: Rc<dyn PlatformDisplay>,
-    pub(crate) title: Option<String>,
-    pub(crate) edited: bool,
     platform: Weak<TestPlatform>,
+    pub(crate) title: Option<String>,
+    pub(crate) app_id: Option<String>,
+    pub(crate) edited: bool,
     sprite_atlas: Arc<dyn PlatformAtlas>,
     pub(crate) should_close_handler: Option<Box<dyn FnMut() -> bool>>,
     hit_test_window_control_callback: Option<Box<dyn FnMut() -> Option<WindowControlArea>>>,
@@ -64,6 +65,7 @@ impl TestWindow {
             handle,
             sprite_atlas: Arc::new(TestAtlas::new()),
             title: Default::default(),
+            app_id: Default::default(),
             edited: false,
             should_close_handler: None,
             hit_test_window_control_callback: None,
@@ -203,7 +205,9 @@ impl PlatformWindow for TestWindow {
         self.0.lock().title = Some(title.to_owned());
     }
 
-    fn set_app_id(&mut self, _app_id: &str) {}
+    fn set_app_id(&mut self, app_id: &str) {
+        self.0.lock().app_id = Some(app_id.to_owned());
+    }
 
     fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
 
