@@ -1052,7 +1052,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -1484,7 +1484,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2310,7 +2310,7 @@ dependencies = [
  "chrono",
  "cocoa 0.26.0",
  "cocoa-foundation 0.2.0",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "core-foundation 0.10.0",
  "core-foundation-sys",
  "core-graphics 0.24.0",
@@ -2406,7 +2406,7 @@ dependencies = [
  "bytemuck",
  "calloop",
  "calloop-wayland-source",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "filedescriptor",
  "futures",
  "gpui",
@@ -2453,7 +2453,7 @@ dependencies = [
  "block",
  "cbindgen",
  "cocoa 0.26.0",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "core-foundation 0.10.0",
  "core-foundation-sys",
  "core-graphics 0.24.0",
@@ -2531,7 +2531,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "anyhow",
  "log",
@@ -2566,7 +2566,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "cosmic-text",
  "criterion",
  "etagere",
@@ -2596,7 +2596,7 @@ dependencies = [
  "accesskit",
  "accesskit_windows",
  "anyhow",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "etagere",
  "futures",
  "gpui",
@@ -3424,7 +3424,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4103,9 +4103,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "serde",
  "serde_json",
 ]
@@ -4736,7 +4736,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "derive_refineable",
 ]
@@ -4950,7 +4950,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "async-task",
  "backtrace",
@@ -6115,12 +6115,12 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "anyhow",
  "async-fs",
  "async_zip",
- "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d)",
+ "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1)",
  "command-fds",
  "dirs",
  "dunce",
@@ -6154,7 +6154,7 @@ dependencies = [
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=c8554b46e78985931b0709a3d024462924e39c8d#c8554b46e78985931b0709a3d024462924e39c8d"
+source = "git+https://github.com/zed-industries/zed?rev=170b2dbc96213d2fd910f0cdddf774bbb29322d1#170b2dbc96213d2fd910f0cdddf774bbb29322d1"
 dependencies = [
  "perf",
  "quote",
