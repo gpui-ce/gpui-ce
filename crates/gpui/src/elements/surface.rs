@@ -27,13 +27,13 @@ pub enum SurfaceSource {
 
 impl Clone for SurfaceSource {
     fn clone(&self) -> Self {
-        match self {
+        match *self {
             #[cfg(target_os = "macos")]
-            SurfaceSource::Surface(buf) => SurfaceSource::Surface(buf.clone()),
+            SurfaceSource::Surface(ref buf) => SurfaceSource::Surface(buf.clone()),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            SurfaceSource::Texture { texture, size } => SurfaceSource::Texture {
+            SurfaceSource::Texture { ref texture, size } => SurfaceSource::Texture {
                 texture: Arc::clone(texture),
-                size: *size,
+                size,
             },
         }
     }
@@ -41,9 +41,9 @@ impl Clone for SurfaceSource {
 
 impl std::fmt::Debug for SurfaceSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        match *self {
             #[cfg(target_os = "macos")]
-            SurfaceSource::Surface(buf) => f.debug_tuple("Surface").field(buf).finish(),
+            SurfaceSource::Surface(ref buf) => f.debug_tuple("Surface").field(buf).finish(),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             SurfaceSource::Texture { size, .. } => f
                 .debug_struct("Texture")
@@ -130,16 +130,19 @@ impl Element for Surface {
         window: &mut Window,
         _: &mut App,
     ) {
-        match &self.source {
+        match self.source {
             #[cfg(target_os = "macos")]
-            SurfaceSource::Surface(surface) => {
+            SurfaceSource::Surface(ref surface) => {
                 let size = crate::size(surface.get_width().into(), surface.get_height().into());
                 let new_bounds = self.object_fit.get_bounds(bounds, size);
                 // TODO: Add support for corner_radii
                 window.paint_surface(new_bounds, surface.clone());
             }
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            SurfaceSource::Texture { texture, size } => {
+            SurfaceSource::Texture {
+                ref texture,
+                ref size,
+            } => {
                 let new_bounds = self.object_fit.get_bounds(bounds, *size);
                 window.paint_surface(new_bounds, Arc::clone(texture), *size);
             }
