@@ -22,9 +22,28 @@ gpui = { package = "gpui", git = "https://github.com/gpui-ce/gpui-ce" }
 
 Then use `gpui::{import}` as normal.
 
----
+## FAQ
+#### How does the project compare to other forks in the ecosystem?
+Other efforts (namely WGPUI) are actively maintained, but have diverged quite a bit from mainline usage. They typically serve the interests of the projects that they're used within, leading to a diverse yet fragmented ecosystem. GPUI-CE strives to focus on the general use-case first, and over time, grow in the facilities to support the same outside adaptations through a single consistent API.
 
-todo: rewrite below...
+#### What is the long-term goal of GPUI-CE?
+We'd like to be a premiere Rust GUI library! For the time being, we're working incrementally, in an effort to better understand the codebase and where is the right direction to take it, so we're okay being limited by mainline Zed. We will not stay this way forever! The spirit of the project is independence, so "limited" is loose, and we have and will continue to add features that mainline will never have. We will make your contribution work :)
+
+If you'd like to join discussions and help us forge an path forward, please join the discord.
+
+#### Can I use GPUI-CE with gpui-component?
+100% Because we're a drop-in for GPUI, any component library or surrounding project should work 1:1 through the use of a [patch block](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html).
+
+Example:
+```toml
+[patch.crates-io]
+gpui = { git = "https://github.com/gpui-ce/gpui-ce", package = "gpui-ce" }
+```
+
+#### Is there a community I could... join?
+For sure! Join the [discord](https://discord.gg/WYEmCKuv)
+
+<!-- todo: rewrite below... -->
 
 # Welcome to GPUI!
 
