@@ -85,6 +85,7 @@ pub struct WindowsWindowState {
     pub display: Cell<WindowsDisplay>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
+    #[cfg(not(feature = "wgpu"))]
     pub invalidate_devices: Arc<AtomicBool>,
     fullscreen: Cell<Option<StyleAndBounds>>,
     initial_placement: Cell<Option<WindowOpenStatus>>,
@@ -117,8 +118,8 @@ impl WindowsWindowState {
         display: WindowsDisplay,
         min_size: Option<Size<Pixels>>,
         appearance: WindowAppearance,
-        disable_direct_composition: bool,
-        invalidate_devices: Arc<AtomicBool>,
+        #[cfg(not(feature = "wgpu"))] disable_direct_composition: bool,
+        #[cfg(not(feature = "wgpu"))] invalidate_devices: Arc<AtomicBool>,
     ) -> Result<Self> {
         let scale_factor = {
             let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
@@ -192,6 +193,7 @@ impl WindowsWindowState {
             fullscreen: Cell::new(fullscreen),
             initial_placement: Cell::new(initial_placement),
             hwnd,
+            #[cfg(not(feature = "wgpu"))]
             invalidate_devices,
             direct_manipulation,
             a11y: RefCell::new(None),
@@ -269,7 +271,9 @@ impl WindowsWindowInner {
             context.display,
             context.min_size,
             context.appearance,
+            #[cfg(not(feature = "wgpu"))]
             context.disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             context.invalidate_devices.clone(),
         )?;
 
@@ -411,9 +415,11 @@ struct WindowCreateContext {
     main_receiver: PriorityQueueReceiver<RunnableVariant>,
     platform_window_handle: HWND,
     appearance: WindowAppearance,
+    #[cfg(not(feature = "wgpu"))]
     disable_direct_composition: bool,
     #[cfg(not(feature = "wgpu"))]
     directx_devices: DirectXDevices,
+    #[cfg(not(feature = "wgpu"))]
     invalidate_devices: Arc<AtomicBool>,
     parent_hwnd: Option<HWND>,
 }
@@ -438,6 +444,10 @@ impl WindowsWindow {
             directx_devices,
             invalidate_devices,
         } = creation_info;
+        #[cfg(feature = "wgpu")]
+        {
+            _ = invalidate_devices;
+        }
         register_window_class(icon);
         let parent_hwnd = if params.kind == WindowKind::Dialog {
             let parent_window = unsafe { GetActiveWindow() };
@@ -516,9 +526,11 @@ impl WindowsWindow {
             main_receiver,
             platform_window_handle,
             appearance,
+            #[cfg(not(feature = "wgpu"))]
             disable_direct_composition,
             #[cfg(not(feature = "wgpu"))]
             directx_devices,
+            #[cfg(not(feature = "wgpu"))]
             invalidate_devices,
             parent_hwnd,
         };

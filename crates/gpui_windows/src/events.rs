@@ -1221,6 +1221,7 @@ impl WindowsWindowInner {
         }
         #[cfg(feature = "wgpu")]
         {
+            _ = lparam;
             if let Err(err) = self.state.renderer.borrow_mut().recover(&RawWindow {
                 hwnd: self.platform_window_handle,
             }) {
@@ -1243,7 +1244,6 @@ impl WindowsWindowInner {
     #[inline]
     fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
         let mut request_frame = self.state.callbacks.request_frame.take()?;
-
         self.state.direct_manipulation.update();
 
         let events = self.state.direct_manipulation.drain_events();
@@ -1255,9 +1255,9 @@ impl WindowsWindowInner {
                 self.state.callbacks.input.set(Some(func));
             }
         }
+        let force_render = force_render || self.state.force_render_after_recovery.take();
         #[cfg(not(feature = "wgpu"))]
         {
-            let force_render = force_render || self.state.force_render_after_recovery.take();
             if force_render {
                 // Re-enable drawing after a device loss recovery. The forced render
                 // will rebuild the scene with fresh atlas textures.

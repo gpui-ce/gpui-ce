@@ -15,11 +15,13 @@ use futures::channel::oneshot::{self, Receiver};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
+#[cfg(not(feature = "wgpu"))]
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::{
     UI::ViewManagement::UISettings,
     Win32::{
         Foundation::*,
-        Graphics::{Direct3D11::ID3D11Device, Gdi::*},
+        Graphics::Gdi::*,
         Security::Credentials::*,
         System::{Com::*, LibraryLoader::*, Ole::*, SystemInformation::*},
         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
@@ -39,6 +41,7 @@ pub struct WindowsPlatform {
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
     text_system: Arc<dyn PlatformTextSystem>,
+    #[cfg(not(feature = "wgpu"))]
     direct_write_text_system: Option<Arc<DirectWriteTextSystem>>,
     drop_target_helper: Option<IDropTargetHelper>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
@@ -65,6 +68,7 @@ pub(crate) struct WindowsPlatformState {
     pub(crate) current_cursor: Cell<Option<HCURSOR>>,
     /// Shared with each window so `WM_SETCURSOR` can read it directly.
     pub(crate) cursor_visible: Arc<AtomicBool>,
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: RefCell<Option<DirectXDevices>>,
 }
 
@@ -80,7 +84,7 @@ struct PlatformCallbacks {
 }
 
 impl WindowsPlatformState {
-    fn new(directx_devices: Option<DirectXDevices>) -> Self {
+    fn new(#[cfg(not(feature = "wgpu"))] directx_devices: Option<DirectXDevices>) -> Self {
         let callbacks = PlatformCallbacks::default();
         let jump_list = JumpList::new();
         let current_cursor = load_cursor(CursorStyle::Arrow);
@@ -90,6 +94,7 @@ impl WindowsPlatformState {
             jump_list: RefCell::new(jump_list),
             current_cursor: Cell::new(current_cursor),
             cursor_visible: Arc::new(AtomicBool::new(true)),
+            #[cfg(not(feature = "wgpu"))]
             directx_devices: RefCell::new(directx_devices),
             menus: RefCell::new(Vec::new()),
         }
@@ -101,6 +106,7 @@ impl WindowsPlatform {
         unsafe {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
+        #[cfg(not(feature = "wgpu"))]
         let (directx_devices, text_system, direct_write_text_system) = if !headless {
             let devices = DirectXDevices::new().context("Creating DirectX devices")?;
             let dw_text_system = Arc::new(
@@ -119,6 +125,9 @@ impl WindowsPlatform {
                 None,
             )
         };
+        #[cfg(feature = "wgpu")]
+        let text_system =
+            Arc::new(gpui_wgpu::CosmicTextSystem::new("Segoe UI")) as Arc<dyn PlatformTextSystem>;
 
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let validation_number = if usize::BITS == 64 {
@@ -135,6 +144,7 @@ impl WindowsPlatform {
             validation_number,
             main_sender: Some(main_sender),
             main_receiver: Some(main_receiver),
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
             dispatcher: None,
         };
@@ -164,6 +174,9 @@ impl WindowsPlatform {
             .context("CreateWindowExW did not run correctly")?;
         let handle = result?;
 
+        #[cfg(feature = "wgpu")]
+        let disable_direct_composition = true;
+        #[cfg(not(feature = "wgpu"))]
         let disable_direct_composition = std::env::var(DISABLE_DIRECT_COMPOSITION)
             .is_ok_and(|value| value == "true" || value == "1");
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
@@ -192,6 +205,7 @@ impl WindowsPlatform {
             background_executor,
             foreground_executor,
             text_system,
+            #[cfg(not(feature = "wgpu"))]
             direct_write_text_system,
             disable_direct_composition,
             drop_target_helper,
@@ -296,17 +310,24 @@ impl WindowsPlatform {
     }
 
     fn begin_vsync_thread(&self) {
+        #[cfg(not(feature = "wgpu"))]
         let Some(directx_devices) = self.inner.state.directx_devices.borrow().clone() else {
             return;
         };
+        #[cfg(not(feature = "wgpu"))]
         let Some(direct_write_text_system) = &self.direct_write_text_system else {
             return;
         };
+        #[cfg(not(feature = "wgpu"))]
         let mut directx_device = directx_devices;
+        #[cfg(not(feature = "wgpu"))]
         let platform_window: SafeHwnd = self.handle.into();
+        #[cfg(not(feature = "wgpu"))]
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
+        #[cfg(not(feature = "wgpu"))]
         let text_system = Arc::downgrade(direct_write_text_system);
+        #[cfg(not(feature = "wgpu"))]
         let invalidate_devices = self.invalidate_devices.clone();
 
         std::thread::Builder::new()
@@ -315,17 +336,20 @@ impl WindowsPlatform {
                 let vsync_provider = VSyncProvider::new();
                 loop {
                     vsync_provider.wait_for_vsync();
-                    if check_device_lost(&directx_device.device)
-                        || invalidate_devices.fetch_and(false, Ordering::Acquire)
+                    #[cfg(not(feature = "wgpu"))]
                     {
-                        if let Err(err) = handle_gpu_device_lost(
-                            &mut directx_device,
-                            platform_window.as_raw(),
-                            validation_number,
-                            &all_windows,
-                            &text_system,
-                        ) {
-                            panic!("Device lost: {err}");
+                        if check_device_lost(&directx_device.device)
+                            || invalidate_devices.fetch_and(false, Ordering::Acquire)
+                        {
+                            if let Err(err) = handle_gpu_device_lost(
+                                &mut directx_device,
+                                platform_window.as_raw(),
+                                validation_number,
+                                &all_windows,
+                                &text_system,
+                            ) {
+                                panic!("Device lost: {err}");
+                            }
                         }
                     }
                     let Some(all_windows) = all_windows.upgrade() else {
@@ -841,7 +865,10 @@ impl Platform for WindowsPlatform {
 
 impl WindowsPlatformInner {
     fn new(context: &mut PlatformWindowCreateContext) -> Result<Rc<Self>> {
+        #[cfg(not(feature = "wgpu"))]
         let state = WindowsPlatformState::new(context.directx_devices.take());
+        #[cfg(feature = "wgpu")]
+        let state = WindowsPlatformState::new();
         Ok(Rc::new(Self {
             state,
             raw_window_handles: context.raw_window_handles.clone(),
@@ -906,7 +933,12 @@ impl WindowsPlatformInner {
             WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.run_foreground_task(),
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
-            WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_GPU_DEVICE_LOST => {
+                #[cfg(not(feature = "wgpu"))]
+                return self.handle_device_lost(lparam);
+                #[cfg(feature = "wgpu")]
+                Some(0)
+            }
             _ => unreachable!(),
         }
     }
@@ -1020,6 +1052,7 @@ impl WindowsPlatformInner {
         Some(0)
     }
 
+    #[cfg(not(feature = "wgpu"))]
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };
@@ -1064,6 +1097,7 @@ struct PlatformWindowCreateContext {
     validation_number: usize,
     main_sender: Option<PriorityQueueSender<RunnableVariant>>,
     main_receiver: Option<PriorityQueueReceiver<RunnableVariant>>,
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: Option<DirectXDevices>,
     dispatcher: Option<Arc<WindowsDispatcher>>,
 }
@@ -1251,6 +1285,7 @@ fn should_auto_hide_scrollbars() -> Result<bool> {
     Ok(ui_settings.AutoHideScrollBars()?)
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn check_device_lost(device: &ID3D11Device) -> bool {
     let device_state = unsafe { device.GetDeviceRemovedReason() };
     match device_state {
@@ -1262,6 +1297,7 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
     }
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn handle_gpu_device_lost(
     directx_devices: &mut DirectXDevices,
     platform_window: HWND,
