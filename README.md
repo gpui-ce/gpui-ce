@@ -32,12 +32,17 @@ We'd like to be a premiere Rust GUI library! For the time being, we're working i
 If you'd like to join discussions and help us forge an path forward, please join the discord.
 
 #### Can I use GPUI-CE with gpui-component?
-100% Because we're a drop-in for GPUI, any component library or surrounding project should work 1:1 through the use of a [patch block](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html).
+100% Because we're a drop-in for GPUI, any component library or surrounding project should work 1:1 through the use of a [patch block](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html). DO NOTE: We track the latest upstream -- if there's breaking changes and the library you're pulling in hasn't updated yet, gpui-ce cannot help you. Otherwise, we treat any mismatches as bugs.
 
 Example:
 ```toml
+# If they're using the crates release
 [patch.crates-io]
 gpui = { git = "https://github.com/gpui-ce/gpui-ce", package = "gpui-ce" }
+
+# If they're using the git remote
+[patch."https://github.com/zed-industries/zed.git"]
+gpui = { git = "https://github.com/gpui-ce/gpui-ce }
 ```
 
 #### Is there a community I could... join?
