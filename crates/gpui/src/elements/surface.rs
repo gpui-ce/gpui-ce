@@ -47,7 +47,7 @@ impl std::fmt::Debug for SurfaceSource {
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             SurfaceSource::Texture { size, .. } => f
                 .debug_struct("Texture")
-                .field("size", size)
+                .field("size", &size)
                 .finish_non_exhaustive(),
         }
     }
