@@ -222,6 +222,23 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.cached_value.borrow_mut().take();
     }
 
+    /// Scale the transition's start and end goals by the given ratio.
+    ///
+    /// This preserves the relative progress of an in-flight animation when the
+    /// coordinate space changes (e.g. on window resize).  Both the start and
+    /// end goal are multiplied by `ratio` so the interpolated value remains
+    /// proportionally correct.
+    pub fn scale_by(&self, ratio: f32, cx: &mut App)
+    where
+        T: std::ops::Mul<f32, Output = T>,
+    {
+        self.state.update(cx, |state, _cx| {
+            state.start_goal = state.start_goal.clone() * ratio;
+            state.end_goal = state.end_goal.clone() * ratio;
+        });
+        self.cached_value.borrow_mut().take();
+    }
+
     /// Returns the entity ID associated with this transition's state.
     ///
     /// This can be useful for tracking or comparing transitions.
