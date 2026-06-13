@@ -42,7 +42,7 @@ gpui = { git = "https://github.com/gpui-ce/gpui-ce", package = "gpui-ce" }
 
 # If they're using the git remote
 [patch."https://github.com/zed-industries/zed.git"]
-gpui = { git = "https://github.com/gpui-ce/gpui-ce }
+gpui = { git = "https://github.com/gpui-ce/gpui-ce" }
 ```
 
 #### Is there a community I could... join?
