@@ -208,6 +208,20 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         was_updated
     }
 
+    /// Instantly set the transition to the given target value without animation.
+    ///
+    /// Sets both the start and end goals to `target` so that subsequent evaluations
+    /// return `target` immediately. This is useful for transitions that require a
+    /// different start value on each update.
+    pub fn jump_to(&self, target: T, cx: &mut App) {
+        self.state.update(cx, |state, _cx| {
+            state.start_goal = target.clone();
+            state.end_goal = target;
+            state.goal_last_updated_at = Some(Instant::now());
+        });
+        self.cached_value.borrow_mut().take();
+    }
+
     /// Returns the entity ID associated with this transition's state.
     ///
     /// This can be useful for tracking or comparing transitions.
