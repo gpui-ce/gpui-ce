@@ -8,7 +8,7 @@ use gpui::{
     Bounds, Context, ImageSource, KeyBinding, Menu, MenuItem, Point, SharedString, SharedUri,
     TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
-use reqwest_client::ReqwestClient;
+use std::sync::Arc;
 
 struct Assets {
     base: PathBuf,
@@ -155,8 +155,7 @@ fn main() {
             base: manifest_dir.join("examples"),
         })
         .run(move |cx: &mut App| {
-            let http_client = ReqwestClient::user_agent("gpui example").unwrap();
-            cx.set_http_client(Arc::new(http_client));
+            cx.set_http_client(Arc::new(gpui::http_client::BlockedHttpClient::new()));
 
             cx.activate(true);
             cx.on_action(|_: &Quit, cx| cx.quit());
