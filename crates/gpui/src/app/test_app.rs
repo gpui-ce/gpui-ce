@@ -88,7 +88,7 @@ impl TestApp {
             ),
             None => TestPlatform::new(background_executor.clone(), foreground_executor.clone()),
         };
-        let http_client = http_client::FakeHttpClient::with_404_response();
+        let http_client = crate::http_client::FakeHttpClient::with_404_response();
         let text_system = Arc::new(TextSystem::new(
             platform_text_system.unwrap_or_else(|| platform.text_system.clone()),
         ));
