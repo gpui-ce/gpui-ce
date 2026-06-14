@@ -7,7 +7,7 @@ use calloop::{
 use collections::HashMap;
 use core::str;
 use gpui::{Capslock, TaskTiming, profiler};
-use http_client::Url;
+use url::Url;
 use log::Level;
 use smallvec::SmallVec;
 use std::{
