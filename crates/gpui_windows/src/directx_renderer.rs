@@ -48,7 +48,7 @@ pub(crate) struct DirectXRenderer {
     width: u32,
     height: u32,
 
-    /// Whether we want to skip drwaing due to device lost events.
+    /// Whether we want to skip drawing due to device lost events.
     ///
     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
     /// meaning we lost all the allocated gpu textures and scene resources.
