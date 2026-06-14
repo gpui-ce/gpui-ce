@@ -8,7 +8,8 @@ use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
+    PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
+    Window, black, phi,
     point, quad, rems, size,
 };
 use collections::HashSet;
@@ -371,16 +372,38 @@ pub enum Filter {
 }
 
 impl Filter {
-    /// The largest blur radius across a list of filters. Used to skip painting entirely when
-    /// there is no visible effect, and (in the renderers) to size the blur kernel and the
-    /// dilated region the blur passes are scissored to.
-    pub fn max_blur_radius(filters: &[Filter]) -> Pixels {
-        filters
-            .iter()
-            .fold(Pixels::ZERO, |acc, filter| match filter {
-                Filter::Blur(radius) => acc.max(*radius),
-            })
+    /// Whether this filter has no visible effect, so painting can skip it entirely (and the
+    /// element can avoid the offscreen isolation pass when *all* of its filters are identities).
+    ///
+    /// Each variant declares its own no-op case here rather than the pipeline special-casing
+    /// blur — adding a filter that this returns `true` for is silently dropped before it ever
+    /// reaches the renderer.
+    pub fn is_identity(&self) -> bool {
+        match self {
+            Filter::Blur(radius) => *radius <= Pixels::ZERO,
+        }
     }
+
+    /// Lower this logical-pixel filter into its scene-space ([`ScaledFilter`]) form for the
+    /// renderer, scaling any pixel magnitudes by `factor` (the window scale factor).
+    pub fn scale(&self, factor: f32) -> ScaledFilter {
+        match self {
+            Filter::Blur(radius) => ScaledFilter::Blur(radius.scale(factor)),
+        }
+    }
+}
+
+/// The scene-space (device-pixel) form of a [`Filter`], carried on the scene primitives that the
+/// renderers consume. Produced by [`Filter::scale`]; pixel magnitudes are in [`ScaledPixels`].
+///
+/// This is intentionally a separate enum from [`Filter`] (rather than reusing it) so the scene
+/// stays in device space like every other primitive, and so the renderers `match` on it
+/// exhaustively — adding a filter variant breaks each backend's match, forcing a deliberate
+/// implement-or-decline decision per backend instead of silently rendering nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScaledFilter {
+    /// A gaussian blur with the given radius, in scaled (device) pixels.
+    Blur(ScaledPixels),
 }
 
 /// How to handle whitespace in text

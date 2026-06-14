@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    Point, Radians, ScaledFilter, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
+use smallvec::SmallVec;
 use std::{
     fmt::Debug,
     iter::Peekable,
@@ -154,7 +155,7 @@ impl Scene {
             }
             Primitive::BackdropFilter(filter) => {
                 filter.order = order;
-                self.backdrop_filters.push(*filter);
+                self.backdrop_filters.push(filter.clone());
             }
             Primitive::FilterBoundary(boundary) => {
                 boundary.order = order;
@@ -166,7 +167,7 @@ impl Scene {
                     // `raise_order_floor`.
                     self.primitive_bounds.set_order_floor(order + 1);
                 }
-                self.filter_boundaries.push(*boundary);
+                self.filter_boundaries.push(boundary.clone());
             }
         }
         self.paint_operations
@@ -666,15 +667,20 @@ impl From<Shadow> for Primitive {
 /// A backdrop filter blurs (and may otherwise filter) the content already rendered behind
 /// `bounds`, compositing the result into a rounded rectangle — the frosted-glass effect.
 /// Emitted by [`crate::Window::paint_backdrop_filter`]; produces the CSS `backdrop-filter` effect.
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Clone)]
 #[expect(missing_docs)]
 pub struct BackdropFilter {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
-    /// The largest blur radius among the element's backdrop filters, in scaled (device) pixels.
-    pub blur_radius: ScaledPixels,
+    /// The filter chain applied to the backdrop, in scene (device-pixel) space. Identity filters
+    /// are dropped at paint time, so a `BackdropFilter` is only emitted when this is non-empty.
+    ///
+    /// Inline capacity is 4: a `SmallVec<[ScaledFilter; 4]>` is the same size as capacity 1 here
+    /// (the heap repr already occupies that space), so chains up to 4 filters avoid allocating
+    /// at no extra struct size.
+    pub filters: SmallVec<[ScaledFilter; 4]>,
     /// Element opacity captured at paint time, multiplied into the composited result.
     pub opacity: f32,
 }
@@ -689,14 +695,17 @@ impl From<BackdropFilter> for Primitive {
 /// subtree is painted between a matched start/end pair; the renderer redirects that span into
 /// an offscreen target, filters it, and composites it back at `bounds`. Produces the CSS
 /// `filter` effect (e.g. blurring the element and its children as a single group).
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 #[expect(missing_docs)]
 pub struct FilterBoundary {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
-    pub blur_radius: ScaledPixels,
+    /// The filter chain applied to the isolated group, in scene (device-pixel) space. Identity
+    /// filters are dropped at paint time, so a `FilterBoundary` is only emitted when non-empty.
+    /// Inline capacity 4 (same struct size as 1 here — see [`BackdropFilter::filters`]).
+    pub filters: SmallVec<[ScaledFilter; 4]>,
     pub opacity: f32,
     /// `true` for the start marker (opens the group), `false` for the end marker (closes it).
     pub is_start: bool,
@@ -1133,7 +1142,7 @@ mod tests {
             bounds: full_bounds(),
             content_mask: mask(),
             corner_radii: Corners::default(),
-            blur_radius: sp(8.0),
+            filters: smallvec::smallvec![ScaledFilter::Blur(sp(8.0))],
             opacity: 1.0,
             is_start,
         }
@@ -1144,7 +1153,7 @@ mod tests {
             bounds: full_bounds(),
             content_mask: mask(),
             corner_radii: Corners::default(),
-            blur_radius: sp(20.0),
+            filters: smallvec::smallvec![ScaledFilter::Blur(sp(20.0))],
             opacity: 1.0,
             ..Default::default()
         }

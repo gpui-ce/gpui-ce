@@ -3,9 +3,22 @@ use bytemuck::{Pod, Zeroable};
 use gpui::{
     AtlasTextureId, BackdropFilter, Background, Bounds, DevicePixels, FilterBoundary, GpuSpecs,
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline, get_gamma_correction_ratios,
+    ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline,
+    get_gamma_correction_ratios,
 };
 use log::warn;
+
+/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
+/// blur kernel and the dilated region the blur passes are scissored to.
+///
+/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
+/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
+/// dropping it.
+fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
+    filters.iter().fold(0.0, |acc, filter| match filter {
+        ScaledFilter::Blur(radius) => acc.max(radius.0),
+    })
+}
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::cell::RefCell;
@@ -1631,7 +1644,7 @@ impl WgpuRenderer {
                             true
                         }
                         PrimitiveBatch::FilterBoundary(ix) => {
-                            let boundary = scene.filter_boundaries[ix];
+                            let boundary = scene.filter_boundaries[ix].clone();
                             if boundary.is_start {
                                 // Each isolated nesting level uses its own group texture from the
                                 // pool (indexed by current isolation depth). Beyond the pool size
@@ -1679,7 +1692,7 @@ impl WgpuRenderer {
                                             boundary.corner_radii.bottom_right.0,
                                             boundary.corner_radii.bottom_left.0,
                                         ],
-                                        boundary.blur_radius.0,
+                                        max_blur_radius(&boundary.filters),
                                         boundary.opacity,
                                         false,
                                     );
@@ -2129,7 +2142,7 @@ impl WgpuRenderer {
                 filter.corner_radii.bottom_right.0,
                 filter.corner_radii.bottom_left.0,
             ],
-            filter.blur_radius.0,
+            max_blur_radius(&filter.filters),
             filter.opacity,
             true,
         );

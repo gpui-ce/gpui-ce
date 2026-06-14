@@ -9,8 +9,20 @@ use cocoa::{
 use gpui::{
     AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    ScaledFilter, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
+
+/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
+/// blur kernel and the dilated region the blur passes are scissored to.
+///
+/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
+/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
+/// dropping it.
+fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
+    filters.iter().fold(0.0, |acc, filter| match filter {
+        ScaledFilter::Blur(radius) => acc.max(radius.0),
+    })
+}
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 
@@ -1008,7 +1020,7 @@ impl MetalRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
-                                filter.blur_radius.0,
+                                max_blur_radius(&filter.filters),
                                 filter.opacity,
                                 true,
                             );
@@ -1025,7 +1037,7 @@ impl MetalRenderer {
                     true
                 }
                 PrimitiveBatch::FilterBoundary(ix) => {
-                    let boundary = scene.filter_boundaries[ix];
+                    let boundary = scene.filter_boundaries[ix].clone();
                     if boundary.is_start {
                         // Each isolated nesting level uses its own group texture from the pool
                         // (indexed by current isolation depth). Beyond the pool size
@@ -1066,7 +1078,7 @@ impl MetalRenderer {
                                     boundary.bounds,
                                     boundary.content_mask.bounds,
                                     boundary.corner_radii,
-                                    boundary.blur_radius.0,
+                                    max_blur_radius(&boundary.filters),
                                     boundary.opacity,
                                     false,
                                 );

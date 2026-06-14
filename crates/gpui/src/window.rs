@@ -12,7 +12,8 @@ use crate::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
+    SharedString, Size,
     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
@@ -3699,18 +3700,22 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        let radius = Filter::max_blur_radius(filters);
-        if radius <= Pixels::ZERO {
+        let scale_factor = self.scale_factor();
+        let filters: SmallVec<[ScaledFilter; 4]> = filters
+            .iter()
+            .filter(|filter| !filter.is_identity())
+            .map(|filter| filter.scale(scale_factor))
+            .collect();
+        if filters.is_empty() {
             return;
         }
 
-        let scale_factor = self.scale_factor();
         self.next_frame.scene.insert_primitive(BackdropFilter {
             order: 0,
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
-            blur_radius: radius.scale(scale_factor),
+            filters,
             opacity: self.element_opacity(),
         });
     }
@@ -3733,8 +3738,13 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint();
 
-        let radius = Filter::max_blur_radius(filters);
-        if radius <= Pixels::ZERO {
+        let scale_factor = self.scale_factor();
+        let filters: SmallVec<[ScaledFilter; 4]> = filters
+            .iter()
+            .filter(|filter| !filter.is_identity())
+            .map(|filter| filter.scale(scale_factor))
+            .collect();
+        if filters.is_empty() {
             return f(self);
         }
 
@@ -3745,18 +3755,17 @@ impl Window {
         // already carry the element's opacity (consistent with gpui's per-primitive opacity for
         // non-filtered elements). Re-applying it at composite time would double it (e.g.
         // `.blur(r).opacity(0.5)` would render at 0.25 instead of 0.5).
-        let scale_factor = self.scale_factor();
         let boundary = FilterBoundary {
             order: 0,
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
-            blur_radius: radius.scale(scale_factor),
+            filters,
             opacity: 1.0,
             is_start: true,
         };
 
-        self.next_frame.scene.insert_primitive(boundary);
+        self.next_frame.scene.insert_primitive(boundary.clone());
         let result = f(self);
         self.next_frame.scene.insert_primitive(FilterBoundary {
             is_start: false,

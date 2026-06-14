@@ -38,12 +38,21 @@ pub trait Styled: Sized {
     /// This isolates the element's subtree, blurs it as a group, and composites the
     /// result back. To blur the content *behind* the element instead (frosted glass),
     /// use [`Styled::backdrop_blur`].
+    ///
+    /// *Appends* to the element's filter chain, so it composes with other convenience
+    /// setters (`.blur(8.).<other_filter>()`). To replace the whole chain, use
+    /// [`Styled::filter`].
     fn blur(mut self, radius: impl Into<Pixels>) -> Self {
-        self.style().filter = Some(vec![Filter::Blur(radius.into())]);
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Blur(radius.into()));
         self
     }
 
-    /// Set the full list of filters applied to this element's own content, like CSS `filter`.
+    /// Set (replacing any existing) the full list of filters applied to this element's own
+    /// content, like CSS `filter`. To add a single filter to the chain instead, use the
+    /// convenience setters such as [`Styled::blur`].
     fn filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
         self.style().filter = Some(filters.into());
         self
@@ -52,13 +61,20 @@ pub trait Styled: Sized {
     /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
     /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::bg`]
     /// so the background tints the blurred backdrop.
+    ///
+    /// *Appends* to the element's backdrop-filter chain. To replace the whole chain, use
+    /// [`Styled::backdrop_filter`].
     fn backdrop_blur(mut self, radius: impl Into<Pixels>) -> Self {
-        self.style().backdrop_filter = Some(vec![Filter::Blur(radius.into())]);
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Blur(radius.into()));
         self
     }
 
-    /// Set the full list of filters applied to the content behind this element, like CSS
-    /// `backdrop-filter`.
+    /// Set (replacing any existing) the full list of filters applied to the content behind this
+    /// element, like CSS `backdrop-filter`. To add a single filter to the chain instead, use the
+    /// convenience setters such as [`Styled::backdrop_blur`].
     fn backdrop_filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
         self.style().backdrop_filter = Some(filters.into());
         self
