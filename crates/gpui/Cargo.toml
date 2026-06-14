@@ -21,7 +21,6 @@ default = ["font-kit", "wayland", "x11", "windows-manifest"]
 test-support = [
     "leak-detection",
     "collections/test-support",
-    "http_client/test-support",
     "wayland",
     "x11",
     "proptest",
@@ -59,7 +58,7 @@ futures.workspace = true
 futures-concurrency.workspace = true
 gpui_macros.workspace = true
 gpui_shared_string.workspace = true
-http_client.workspace = true
+http.workspace = true
 image.workspace = true
 inventory.workspace = true
 itertools.workspace = true
@@ -159,9 +158,7 @@ rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
 unicode-segmentation = { workspace = true }
 
-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-http_client = { workspace = true, features = ["test-support"] }
-reqwest_client = { workspace = true, features = ["test-support"] }
+
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
