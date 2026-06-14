@@ -11,16 +11,23 @@ use web_time::Instant;
 #[cfg(feature = "multithreaded")]
 const MIN_BACKGROUND_THREADS: usize = 2;
 
-#[cfg(feature = "multithreaded")]
 fn shared_memory_supported() -> bool {
-    let global = js_sys::global();
-    let has_shared_array_buffer =
-        js_sys::Reflect::has(&global, &JsValue::from_str("SharedArrayBuffer")).unwrap_or(false);
-    let has_atomics = js_sys::Reflect::has(&global, &JsValue::from_str("Atomics")).unwrap_or(false);
-    let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
-    let buffer = memory.buffer();
-    let is_shared_buffer = buffer.is_instance_of::<js_sys::SharedArrayBuffer>();
-    has_shared_array_buffer && has_atomics && is_shared_buffer
+    #[cfg(feature = "multithreaded")]
+    {
+        let global = js_sys::global();
+        let has_shared_array_buffer =
+            js_sys::Reflect::has(&global, &JsValue::from_str("SharedArrayBuffer")).unwrap_or(false);
+        let has_atomics =
+            js_sys::Reflect::has(&global, &JsValue::from_str("Atomics")).unwrap_or(false);
+        let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
+        let buffer = memory.buffer();
+        let is_shared_buffer = buffer.is_instance_of::<js_sys::SharedArrayBuffer>();
+        has_shared_array_buffer && has_atomics && is_shared_buffer
+    }
+    #[cfg(not(feature = "multithreaded"))]
+    {
+        false
+    }
 }
 
 enum MainThreadItem {
@@ -138,7 +145,7 @@ unsafe impl Send for WebDispatcher {}
 unsafe impl Sync for WebDispatcher {}
 
 impl WebDispatcher {
-    pub fn new(browser_window: web_sys::Window, allow_threads: bool) -> Self {
+    pub fn new(browser_window: web_sys::Window, _allow_threads: bool) -> Self {
         #[cfg(feature = "multithreaded")]
         let (background_sender, background_receiver) = PriorityQueueReceiver::new();
         #[cfg(not(feature = "multithreaded"))]
@@ -147,7 +154,7 @@ impl WebDispatcher {
         let main_thread_mailbox = Arc::new(MainThreadMailbox::new());
 
         #[cfg(feature = "multithreaded")]
-        let supports_threads = allow_threads && shared_memory_supported();
+        let supports_threads = _allow_threads && shared_memory_supported();
         #[cfg(not(feature = "multithreaded"))]
         let supports_threads = false;
 
