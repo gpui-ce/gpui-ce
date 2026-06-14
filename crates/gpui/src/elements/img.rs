@@ -618,27 +618,25 @@ impl Asset for ImageAssetLoader {
         async move {
             let bytes = match source.clone() {
                 Resource::Path(uri) => fs::read(uri.as_ref())?,
-                Resource::Uri(uri) => {
-                    use anyhow::Context as _;
-                    use futures::AsyncReadExt as _;
+                    Resource::Uri(uri) => {
+                        use anyhow::Context as _;
 
-                    let mut response = client
-                        .get(uri.as_ref(), ().into(), true)
-                        .await
-                        .with_context(|| format!("loading image asset from {uri:?}"))?;
-                    let mut body = Vec::new();
-                    response.body_mut().read_to_end(&mut body).await?;
-                    if !response.status().is_success() {
-                        let mut body = String::from_utf8_lossy(&body).into_owned();
-                        let first_line = body.lines().next().unwrap_or("").trim_end();
-                        body.truncate(first_line.len());
-                        return Err(ImageCacheError::BadStatus {
-                            uri,
-                            status: response.status(),
-                            body,
-                        });
-                    }
-                    body
+                        let response = client
+                            .get(uri.as_ref(), true)
+                            .await
+                            .with_context(|| format!("loading image asset from {uri:?}"))?;
+                        if !response.status.is_success() {
+                            let mut error_body =
+                                String::from_utf8_lossy(&response.body).into_owned();
+                            let first_line = error_body.lines().next().unwrap_or("").trim_end();
+                            error_body.truncate(first_line.len());
+                            return Err(ImageCacheError::BadStatus {
+                                uri,
+                                status: response.status,
+                                body: error_body,
+                            });
+                        }
+                        response.body
                 }
                 Resource::Embedded(path) => {
                     let data = asset_source.load(&path).ok().flatten();
@@ -763,7 +761,7 @@ pub enum ImageCacheError {
         /// The URI of the image.
         uri: SharedUri,
         /// The HTTP status code.
-        status: http_client::StatusCode,
+        status: http::StatusCode,
         /// The HTTP response body.
         body: String,
     },
