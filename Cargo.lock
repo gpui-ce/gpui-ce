@@ -2565,7 +2565,6 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "collections 0.1.0 (git+https://github.com/zed-industries/zed?rev=876ec5a8a074ba83cce2129ed4d76b59c05a37e9)",
- "core-video",
  "cosmic-text",
  "criterion",
  "etagere",
