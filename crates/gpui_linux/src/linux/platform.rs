@@ -26,7 +26,7 @@ use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DisplayId,
     ForegroundExecutor, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, Result, RunnableVariant, Task, ThermalState, WindowAppearance,
+    PlatformWindow, Result, RunnableVariant, SharedString, Task, ThermalState, WindowAppearance,
     WindowButtonLayout, WindowParams,
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -41,7 +41,7 @@ pub(crate) const SCROLL_LINES: f32 = 3.0;
 pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) const DOUBLE_CLICK_DISTANCE: Pixels = px(5.0);
-pub(crate) const KEYRING_LABEL: &str = "zed-github-account";
+pub(crate) const KEYRING_LABEL: &str = "gpui-ce";
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 const FILE_PICKER_PORTAL_MISSING: &str =
@@ -124,6 +124,7 @@ pub(crate) struct LinuxCommon {
     pub(crate) callbacks: PlatformHandlers,
     pub(crate) signal: LoopSignal,
     pub(crate) menus: Vec<OwnedMenu>,
+    pub(crate) keyring_label: SharedString,
 }
 
 impl LinuxCommon {
@@ -151,6 +152,7 @@ impl LinuxCommon {
             callbacks,
             signal,
             menus: Vec::new(),
+            keyring_label: KEYRING_LABEL.into(),
         };
 
         (common, main_receiver)
@@ -319,6 +321,11 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
     fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
         self.inner.set_gpu_requirements(requirements);
+    }
+
+    fn set_keyring_label(&self, label: SharedString) {
+        self.inner
+            .with_common(|common| common.keyring_label = label);
     }
 
     fn open_url(&self, url: &str) {
@@ -555,12 +562,15 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         let url = url.to_string();
         let username = username.to_string();
         let password = password.to_vec();
+        let label = self
+            .inner
+            .with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
             keyring
                 .create_item(
-                    KEYRING_LABEL,
+                    &label,
                     &vec![("url", &url), ("username", &username)],
                     password,
                     true,
@@ -572,6 +582,9 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
         let url = url.to_string();
+        let label = self
+            .inner
+            .with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
@@ -579,7 +592,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
             let items = keyring.search_items(&vec![("url", &url)]).await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                if item.label().await.is_ok_and(|l| l == label.as_ref()) {
                     let attributes = item.attributes().await?;
                     let username = attributes
                         .get("username")
@@ -600,6 +613,9 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
         let url = url.to_string();
+        let label = self
+            .inner
+            .with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
@@ -607,7 +623,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
             let items = keyring.search_items(&vec![("url", &url)]).await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                if item.label().await.is_ok_and(|l| l == label.as_ref()) {
                     item.delete().await?;
                     return Ok(());
                 }

@@ -22,6 +22,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use slotmap::SlotMap;
 
+use crate::http_client::{HttpClient, NullHttpClient};
 pub use async_context::*;
 use collections::{FxHashMap, FxHashSet, HashMap, VecDeque};
 pub use context::*;
@@ -29,7 +30,6 @@ pub use entity_map::*;
 use gpui_util::{ResultExt, debug_panic};
 #[cfg(any(test, feature = "test-support"))]
 pub use headless_app_context::*;
-use crate::http_client::{HttpClient, NullHttpClient};
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_app::*;
@@ -1127,6 +1127,12 @@ impl App {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
         self.platform.set_gpu_requirements(requirements);
+    }
+
+    /// Sets the label applied to credentials stored in the system keyring.
+    /// Call before writing credentials. Only Linux/FreeBSD apply the label.
+    pub fn set_keyring_label(&self, label: impl Into<SharedString>) {
+        self.platform.set_keyring_label(label.into());
     }
 
     /// Returns a handle to the window that is currently focused at the platform level, if one exists.
@@ -2709,8 +2715,6 @@ pub struct KeystrokeEvent {
     /// The context stack at the time
     pub context_stack: Vec<KeyContext>,
 }
-
-
 
 /// A mutable reference to an entity owned by GPUI
 pub struct GpuiBorrow<'a, T> {

@@ -248,6 +248,10 @@ pub trait Platform: 'static {
     /// `gpui_wgpu::WgpuDeviceRequirements`.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
+
+    /// Sets the label applied to credentials stored in the system keyring.
+    /// Only Linux/FreeBSD use this label.
+    fn set_keyring_label(&self, _label: SharedString) {}
 }
 
 /// A handle to a platform's display, e.g. a monitor or laptop screen.
