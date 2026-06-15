@@ -135,6 +135,7 @@ struct WgpuPipelines {
     mono_sprites: wgpu::RenderPipeline,
     subpixel_sprites: Option<wgpu::RenderPipeline>,
     poly_sprites: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
     /// Copies a source texture into the (smaller) target with one bilinear tap. Used both to
     /// downsample the scene into the half-resolution blur texture and to blit the offscreen
@@ -166,6 +167,7 @@ struct WgpuResources {
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
     surface_sampler: wgpu::Sampler,
+    #[allow(dead_code)]
     surface_uniform_buffer: wgpu::Buffer,
     /// One reused uniform buffer holding [`BlurParams`] for every blur pass in a frame, each at a
     /// distinct (alignment-strided) offset. Avoids allocating a buffer per pass; distinct offsets
@@ -1041,7 +1043,7 @@ impl WgpuRenderer {
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,
-            &[Some(color_target.clone())],
+            &[Some(color_target)],
             1,
             &shader_module,
         );
@@ -1845,6 +1847,7 @@ impl WgpuRenderer {
         )
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn draw_surfaces(&self, surfaces: &[PaintSurface], pass: &mut wgpu::RenderPass<'_>) -> bool {
         let resources = self.resources();
         for surface in surfaces {
@@ -1891,6 +1894,11 @@ impl WgpuRenderer {
             pass.set_bind_group(1, &bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
+        true
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    fn draw_surfaces(&self, _surfaces: &[PaintSurface], _pass: &mut wgpu::RenderPass<'_>) -> bool {
         true
     }
 

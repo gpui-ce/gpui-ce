@@ -24,4 +24,4 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-gpui = { workspace = true, features = ["inspector"] }
+gpui = { workspace = true, features = ["inspector", "test-support"] }

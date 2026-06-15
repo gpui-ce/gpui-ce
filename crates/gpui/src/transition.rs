@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn test_state_with_point() {
         let initial: Point<f32> = Point { x: 10.0, y: 20.0 };
-        let state = TransitionState::new(initial.clone());
+        let state = TransitionState::new(initial);
 
         assert_eq!(state.initial_goal.x, 10.0);
         assert_eq!(state.initial_goal.y, 20.0);

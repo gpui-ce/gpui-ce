@@ -19,23 +19,17 @@ workspace = true
 [features]
 default = ["font-kit", "wayland", "x11", "windows-manifest"]
 test-support = [
-    "leak-detection",
-    "collections/test-support",
-    "wayland",
-    "x11",
-    "proptest",
+  "leak-detection",
+  "collections/test-support",
+  "wayland",
+  "x11",
+  "proptest",
 ]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
-wayland = [
-    "bitflags",
-]
-x11 = [
-    "scap?/x11",
-]
-screen-capture = [
-    "scap",
-]
+wayland = ["bitflags"]
+x11 = ["scap?/x11"]
+screen-capture = ["scap"]
 windows-manifest = ["dep:embed-resource"]
 input-latency-histogram = ["dep:hdrhistogram"]
 
@@ -76,10 +70,10 @@ regex.workspace = true
 refineable.workspace = true
 scheduler.workspace = true
 resvg = { version = "0.45.0", default-features = false, features = [
-    "text",
-    "system-fonts",
-    "memmap-fonts",
-    "raster-images"
+  "text",
+  "system-fonts",
+  "memmap-fonts",
+  "raster-images",
 ] }
 usvg = { version = "0.45.0", default-features = false }
 ttf-parser = "0.25"
@@ -140,7 +134,6 @@ pathfinder_geometry = "0.5"
 scap = { workspace = true, optional = true }
 
 
-
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation"] }
 
@@ -157,7 +150,6 @@ proptest = { workspace = true }
 rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
 unicode-segmentation = { workspace = true }
-
 
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]

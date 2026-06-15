@@ -1,16 +1,15 @@
 [files]
 ignore-files = true
 ignore-hidden = false
-extend-exclude = [
-    ".git/",
-]
+extend-exclude = [".git/"]
 
 [default]
 extend-ignore-re = [
-    # macOS version
-    "Big Sur",
-    # Stripped version of reserved keyword `type`
-    "typ",
+  # macOS version
+  "Big Sur",
+
+  # Stripped version of reserved keyword `type`
+  "typ",
 ]
 check-filename = true
 

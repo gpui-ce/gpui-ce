@@ -9,8 +9,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
-    Window, black, phi,
-    point, quad, rems, size,
+    Window, black, phi, point, quad, rems, size,
 };
 use collections::HashSet;
 use refineable::Refineable;

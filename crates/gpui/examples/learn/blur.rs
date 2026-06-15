@@ -138,9 +138,11 @@ fn content_blurred_rich() -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap_3()
-        .children([0xef4444, 0x22c55e, 0x3b82f6].into_iter().map(|hex| {
-            div().w(px(48.)).h(px(48.)).rounded_md().bg(rgb(hex))
-        }))
+        .children(
+            [0xef4444, 0x22c55e, 0x3b82f6]
+                .into_iter()
+                .map(|hex| div().w(px(48.)).h(px(48.)).rounded_md().bg(rgb(hex))),
+        )
 }
 
 /// Nested content blur: a `blur()` element inside another `blur()` element. The inner block is

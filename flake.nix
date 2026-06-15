@@ -106,7 +106,13 @@
 
         devShells.default = pkgs.mkShell {
           inputsFrom = [ gpui ];
-          packages = [ toolchain ];
+          packages = [
+            toolchain
+            pkgs.cargo-machete
+            pkgs.taplo
+            pkgs.typos
+            pkgs.just
+          ];
 
           shellHook = ''
             export RUST_BACKTRACE=1
