@@ -22,6 +22,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use slotmap::SlotMap;
 
+use crate::http_client::{HttpClient, NullHttpClient};
 pub use async_context::*;
 use collections::{FxHashMap, FxHashSet, HashMap, VecDeque};
 pub use context::*;
@@ -29,7 +30,6 @@ pub use entity_map::*;
 use gpui_util::{ResultExt, debug_panic};
 #[cfg(any(test, feature = "test-support"))]
 pub use headless_app_context::*;
-use crate::http_client::{HttpClient, NullHttpClient};
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_app::*;
@@ -2709,8 +2709,6 @@ pub struct KeystrokeEvent {
     /// The context stack at the time
     pub context_stack: Vec<KeyContext>,
 }
-
-
 
 /// A mutable reference to an entity owned by GPUI
 pub struct GpuiBorrow<'a, T> {

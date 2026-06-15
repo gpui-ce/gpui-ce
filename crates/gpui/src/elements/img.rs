@@ -618,25 +618,24 @@ impl Asset for ImageAssetLoader {
         async move {
             let bytes = match source.clone() {
                 Resource::Path(uri) => fs::read(uri.as_ref())?,
-                    Resource::Uri(uri) => {
-                        use anyhow::Context as _;
+                Resource::Uri(uri) => {
+                    use anyhow::Context as _;
 
-                        let response = client
-                            .get(uri.as_ref(), true)
-                            .await
-                            .with_context(|| format!("loading image asset from {uri:?}"))?;
-                        if !response.status.is_success() {
-                            let mut error_body =
-                                String::from_utf8_lossy(&response.body).into_owned();
-                            let first_line = error_body.lines().next().unwrap_or("").trim_end();
-                            error_body.truncate(first_line.len());
-                            return Err(ImageCacheError::BadStatus {
-                                uri,
-                                status: response.status,
-                                body: error_body,
-                            });
-                        }
-                        response.body
+                    let response = client
+                        .get(uri.as_ref(), true)
+                        .await
+                        .with_context(|| format!("loading image asset from {uri:?}"))?;
+                    if !response.status.is_success() {
+                        let mut error_body = String::from_utf8_lossy(&response.body).into_owned();
+                        let first_line = error_body.lines().next().unwrap_or("").trim_end();
+                        error_body.truncate(first_line.len());
+                        return Err(ImageCacheError::BadStatus {
+                            uri,
+                            status: response.status,
+                            body: error_body,
+                        });
+                    }
+                    response.body
                 }
                 Resource::Embedded(path) => {
                     let data = asset_source.load(&path).ok().flatten();
