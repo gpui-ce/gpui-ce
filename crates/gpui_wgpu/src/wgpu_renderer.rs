@@ -135,6 +135,7 @@ struct WgpuPipelines {
     mono_sprites: wgpu::RenderPipeline,
     subpixel_sprites: Option<wgpu::RenderPipeline>,
     poly_sprites: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
     /// Copies a source texture into the (smaller) target with one bilinear tap. Used both to
     /// downsample the scene into the half-resolution blur texture and to blit the offscreen
@@ -166,6 +167,7 @@ struct WgpuResources {
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
     surface_sampler: wgpu::Sampler,
+    #[allow(dead_code)]
     surface_uniform_buffer: wgpu::Buffer,
     /// One reused uniform buffer holding [`BlurParams`] for every blur pass in a frame, each at a
     /// distinct (alignment-strided) offset. Avoids allocating a buffer per pass; distinct offsets
