@@ -216,6 +216,10 @@ path = "examples/learn/transition.rs"
 name = "blur"
 path = "examples/learn/blur.rs"
 
+[[example]]
+name = "keyring"
+path = "examples/learn/keyring.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
