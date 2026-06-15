@@ -1,9 +1,7 @@
 [files]
 ignore-files = true
 ignore-hidden = false
-extend-exclude = [
-    ".git/",
-]
+extend-exclude = [".git/"]
 
 [default]
 extend-ignore-re = [

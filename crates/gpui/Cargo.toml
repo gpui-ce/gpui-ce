@@ -152,7 +152,6 @@ scheduler = { workspace = true, features = ["test-support"] }
 unicode-segmentation = { workspace = true }
 
 
-
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
 gpui_web.workspace = true
