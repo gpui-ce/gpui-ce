@@ -1041,7 +1041,7 @@ impl WgpuRenderer {
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,
-            &[Some(color_target.clone())],
+            &[Some(color_target)],
             1,
             &shader_module,
         );
@@ -1896,11 +1896,7 @@ impl WgpuRenderer {
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    fn draw_surfaces(
-        &self,
-        _surfaces: &[PaintSurface],
-        _pass: &mut wgpu::RenderPass<'_>,
-    ) -> bool {
+    fn draw_surfaces(&self, _surfaces: &[PaintSurface], _pass: &mut wgpu::RenderPass<'_>) -> bool {
         true
     }
 
