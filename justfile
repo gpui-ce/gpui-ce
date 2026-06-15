@@ -6,7 +6,7 @@ set positional-arguments := true
 set allow-duplicate-variables := true
 
 project_root := justfile_directory()
-msrv := "1.85.0"
+msrv := "1.92.0"
 
 # ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ #
 #      Recipes      #
