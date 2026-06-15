@@ -412,12 +412,14 @@ impl<E: Element> Drawable<E> {
                     inspector_id = None;
                 }
 
-                let (layout_id, request_layout) = self.element.request_layout(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    window,
-                    cx,
-                );
+                let (layout_id, request_layout) = subsecond::HotFn::current(E::request_layout)
+                    .call((
+                        &mut self.element,
+                        global_id.as_ref(),
+                        inspector_id.as_ref(),
+                        window,
+                        cx,
+                    ));
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
@@ -477,14 +479,15 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
-                let prepaint = self.element.prepaint(
+                let prepaint = subsecond::HotFn::current(E::prepaint).call((
+                    &mut self.element,
                     global_id.as_ref(),
                     inspector_id.as_ref(),
                     bounds,
                     &mut request_layout,
                     window,
                     cx,
-                );
+                ));
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {
@@ -529,7 +532,8 @@ impl<E: Element> Drawable<E> {
                 }
 
                 window.next_frame.dispatch_tree.set_active_node(node_id);
-                self.element.paint(
+                subsecond::HotFn::current(E::paint).call((
+                    &mut self.element,
                     global_id.as_ref(),
                     inspector_id.as_ref(),
                     bounds,
@@ -537,7 +541,7 @@ impl<E: Element> Drawable<E> {
                     &mut prepaint,
                     window,
                     cx,
-                );
+                ));
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();

@@ -39,6 +39,8 @@ use refineable::Refineable;
 use scheduler::Instant;
 use slotmap::SlotMap;
 use smallvec::SmallVec;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{self};
 use std::{
     any::{Any, TypeId},
     borrow::Cow,
@@ -1427,6 +1429,17 @@ impl Window {
             let needs_present = needs_present.clone();
             let next_frame_callbacks = next_frame_callbacks.clone();
             let input_rate_tracker = input_rate_tracker.clone();
+
+            #[cfg(debug_assertions)]
+            let reloaded = Arc::new(AtomicBool::new(false));
+            #[cfg(debug_assertions)]
+            subsecond::register_handler({
+                let reloaded = reloaded.clone();
+                Arc::new(move || {
+                    reloaded.store(true, atomic::Ordering::Release);
+                })
+            });
+
             move |request_frame_options| {
                 let thermal_state = handle
                     .update(&mut cx, |_, _, cx| cx.thermal_state())
@@ -1483,7 +1496,14 @@ impl Window {
                     || needs_present.get()
                     || (active.get() && input_rate_tracker.borrow_mut().is_high_rate());
 
-                if invalidator.is_dirty() || request_frame_options.force_render {
+                #[cfg(debug_assertions)]
+                let hotpatch = reloaded.swap(false, atomic::Ordering::AcqRel);
+
+                #[cfg(not(debug_assertions))]
+                let hotpatch = false;
+
+                // if invalidator.is_dirty() || request_frame_options.force_render {
+                if invalidator.is_dirty() || request_frame_options.force_render || hotpatch {
                     measure("frame duration", || {
                         handle
                             .update(&mut cx, |_, window, cx| {

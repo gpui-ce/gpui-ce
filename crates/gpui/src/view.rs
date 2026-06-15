@@ -122,6 +122,7 @@ impl Element for AnyView {
                     (layout_id, None)
                 }
                 _ => {
+                    // let mut element = subsecond::HotFn::current(self.render).call((self, window, cx));
                     let mut element = (self.render)(self, window, cx);
                     let layout_id = element.request_layout(window, cx);
                     (layout_id, Some(element))
@@ -306,7 +307,11 @@ mod any_view {
         cx: &mut App,
     ) -> AnyElement {
         let view = view.clone().downcast::<V>().unwrap();
-        view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+        view.update(cx, |view, cx| {
+            subsecond::HotFn::current(V::render)
+                .call((view, window, cx))
+                .into_any_element()
+        })
     }
 }
 
