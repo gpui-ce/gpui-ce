@@ -40,12 +40,12 @@ impl Clone for SurfaceSource {
 }
 
 impl std::fmt::Debug for SurfaceSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             #[cfg(target_os = "macos")]
-            SurfaceSource::Surface(ref buf) => f.debug_tuple("Surface").field(buf).finish(),
+            SurfaceSource::Surface(ref buf) => _f.debug_tuple("Surface").field(buf).finish(),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            SurfaceSource::Texture { size, .. } => f
+            SurfaceSource::Texture { size, .. } => _f
                 .debug_struct("Texture")
                 .field("size", &size)
                 .finish_non_exhaustive(),
@@ -124,27 +124,27 @@ impl Element for Surface {
         &mut self,
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
-        window: &mut Window,
+        _window: &mut Window,
         _: &mut App,
     ) {
         match self.source {
             #[cfg(target_os = "macos")]
             SurfaceSource::Surface(ref surface) => {
                 let size = crate::size(surface.get_width().into(), surface.get_height().into());
-                let new_bounds = self.object_fit.get_bounds(bounds, size);
+                let new_bounds = self.object_fit.get_bounds(_bounds, size);
                 // TODO: Add support for corner_radii
-                window.paint_surface(new_bounds, surface.clone());
+                _window.paint_surface(new_bounds, surface.clone());
             }
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             SurfaceSource::Texture {
                 ref texture,
                 ref size,
             } => {
-                let new_bounds = self.object_fit.get_bounds(bounds, *size);
-                window.paint_surface(new_bounds, Arc::clone(texture), *size);
+                let new_bounds = self.object_fit.get_bounds(_bounds, *size);
+                _window.paint_surface(new_bounds, Arc::clone(texture), *size);
             }
         }
     }
