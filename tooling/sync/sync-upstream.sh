@@ -31,6 +31,7 @@ die()  { printf '%s%s%s\n' "$c_red" "$*" "$c_off" >&2; exit 1; }
 ok()   { printf '%s%s%s\n' "$c_grn" "$*" "$c_off" >&2; }
 warn() { printf '%s%s%s\n' "$c_yel" "$*" "$c_off" >&2; }
 
+[ -n "${ZED_REPO:-}" ] || die "ZED_REPO is not set. Point it at a local Zed checkout: ZED_REPO=/path/to/zed $(basename "$0") ..."
 [ -d "$ZED_REPO/.git" ] || die "ZED_REPO=$ZED_REPO is not a git repo."
 
 # Forked crate paths = gpui* crates present in BOTH repos.
@@ -79,11 +80,11 @@ bump_cargo_rev() {
   [ -n "$oldsha" ] || { warn "No zed rev found in Cargo.toml; skipping pin bump."; return 0; }
   [ "$oldsha" = "$newsha" ] && { git -C "$ROOT" add Cargo.toml Cargo.lock 2>/dev/null || true; return 0; }
   sed -i "s/$oldsha/$newsha/g" "$ROOT/Cargo.toml"
-  if ( cd "$ROOT" && cargo update -p collections -p refineable -p scheduler \
-         -p util_macros -p media -p util -p gpui_util >/dev/null 2>&1 ); then
+  # Let cargo re-resolve Cargo.lock
+  if ( cd "$ROOT" && cargo metadata --format-version 1 >/dev/null 2>&1 ); then
     git -C "$ROOT" add Cargo.toml Cargo.lock
   else
-    warn "cargo update failed (offline / objects not fetched). Staged Cargo.toml only;"
+    warn "cargo couldn't refresh Cargo.lock (offline / objects not fetched). Staged Cargo.toml only;"
     warn "the 'verify' build will refresh Cargo.lock. Use 'git commit --amend' to add it back in."
     git -C "$ROOT" add Cargo.toml
   fi
@@ -123,9 +124,19 @@ cmd_next() {
   say "Applying ${c_yel}$(git -C "$ZED_REPO" log -1 --format='%h %s' "$sha")${c_off}"
   printf '%s' "$sha" > "$AM_CURSOR"
 
+  local before; before="$(git -C "$ROOT" rev-parse HEAD)"
   if patch_for "$sha" | git -C "$ROOT" am --3way --keep-non-patch; then
+    if [ "$(git -C "$ROOT" rev-parse HEAD)" = "$before" ]; then
+      # `git am` made no commit ("Patch already applied").
+      # Record an empty marker (preserving the upstream author) so the cursor advances.
+      git -C "$ZED_REPO" log -1 --format='%B' "$sha" \
+        | git -C "$ROOT" commit --allow-empty -q -F - \
+            --author="$(git -C "$ZED_REPO" log -1 --format='%an <%ae>' "$sha")" \
+            --date="$(git -C "$ZED_REPO" log -1 --format='%aD' "$sha")"
+      warn "No changes. Recorded an empty marker commit."
+    fi
     finalize_commit "$sha"; rm -f "$AM_CURSOR"
-    ok "Applied cleanly. Now run: $(basename "$0") verify"
+    ok "Applied. Now run: $(basename "$0") verify"
   else
     warn ""
     warn "Conflict applying $sha. Resolve it, then run '$(basename "$0") continue':"
@@ -155,8 +166,17 @@ cmd_abort() {
 }
 
 cmd_verify() {
-  command -v just >/dev/null || die "just not found; install it or run fmt/clippy/tests manually."
-  ( cd "$ROOT" && just fmt && just clippy && just test-nextest )
+  cd "$ROOT"
+  say "▶ cargo fmt --check"
+  cargo fmt --all -- --check
+  say "▶ cargo clippy --workspace --all-targets -D warnings"
+  cargo clippy --workspace --all-targets -- -D warnings
+  say "▶ tests"
+  if cargo nextest --version >/dev/null 2>&1; then
+    cargo nextest run --workspace
+  else
+    cargo test --workspace
+  fi
   ok "verify passed (fmt + clippy + tests)."
 }
 
