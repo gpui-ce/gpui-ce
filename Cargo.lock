@@ -2399,6 +2399,7 @@ dependencies = [
  "filedescriptor",
  "futures",
  "gpui",
+ "gpui_util",
  "gpui_wgpu",
  "image",
  "itertools 0.14.0",
@@ -2416,7 +2417,6 @@ dependencies = [
  "strum",
  "swash",
  "url",
- "util",
  "uuid",
  "wayland-backend",
  "wayland-client",
@@ -2455,6 +2455,7 @@ dependencies = [
  "foreign-types",
  "futures",
  "gpui",
+ "gpui_util",
  "image",
  "itertools 0.14.0",
  "libc",
@@ -2469,8 +2470,7 @@ dependencies = [
  "raw-window-handle",
  "semver",
  "smallvec",
- "strum",
- "util",
+ "strum 0.27.2",
  "uuid",
  "zed-font-kit",
 ]
@@ -2513,8 +2513,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "gpui_util",
  "tokio",
- "util",
 ]
 
 [[package]]
@@ -2524,6 +2524,7 @@ source = "git+https://github.com/zed-industries/zed?rev=876ec5a8a074ba83cce2129e
 dependencies = [
  "anyhow",
  "log",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -2586,9 +2587,11 @@ dependencies = [
  "accesskit_windows",
  "anyhow",
  "collections",
+ "dunce",
  "etagere",
  "futures",
  "gpui",
+ "gpui_util",
  "image",
  "itertools 0.14.0",
  "log",
@@ -2596,7 +2599,6 @@ dependencies = [
  "rand 0.9.4",
  "raw-window-handle",
  "smallvec",
- "util",
  "uuid",
  "windows 0.61.3",
  "windows-core 0.61.2",
