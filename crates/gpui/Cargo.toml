@@ -21,6 +21,7 @@ default = ["font-kit", "wayland", "x11", "windows-manifest"]
 test-support = [
   "leak-detection",
   "collections/test-support",
+  "http_client/test-support",
   "wayland",
   "x11",
   "proptest",
