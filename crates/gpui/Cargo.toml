@@ -101,7 +101,7 @@ url.workspace = true
 uuid.workspace = true
 web-time.workspace = true
 subsecond = "0.7.9"
-dioxus-devtools = "0.7.9"
+dioxus-devtools = { version = "0.7.9", features = ["serve"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
