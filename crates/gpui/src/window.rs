@@ -1432,7 +1432,7 @@ impl Window {
 
             #[cfg(debug_assertions)]
             let reloaded = Arc::new(AtomicBool::new(false));
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, not(target_family = "wasm")))]
             subsecond::register_handler({
                 let reloaded = reloaded.clone();
                 Arc::new(move || {

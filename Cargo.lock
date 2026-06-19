@@ -2464,7 +2464,7 @@ dependencies = [
  "gpui_macros",
  "gpui_platform",
  "gpui_shared_string",
- "gpui_util 0.1.0 (git+https://github.com/zed-industries/zed?rev=876ec5a8a074ba83cce2129ed4d76b59c05a37e9)",
+ "gpui_util",
  "gpui_web",
  "hdrhistogram",
  "http",
@@ -2674,15 +2674,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_util"
-version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#ce22d1ab28b6b7545290de33d427d63c363d7f16"
-dependencies = [
- "anyhow",
- "log",
-]
-
-[[package]]
 name = "gpui_web"
 version = "0.1.0"
 dependencies = [
@@ -2716,7 +2707,7 @@ dependencies = [
  "criterion",
  "etagere",
  "gpui",
- "gpui_util 0.1.0 (git+https://github.com/zed-industries/zed?rev=876ec5a8a074ba83cce2129ed4d76b59c05a37e9)",
+ "gpui_util",
  "itertools 0.14.0",
  "js-sys",
  "log",
@@ -6395,7 +6386,7 @@ dependencies = [
  "futures",
  "futures-lite 1.13.0",
  "globset",
- "gpui_util 0.1.0 (git+https://github.com/zed-industries/zed?rev=876ec5a8a074ba83cce2129ed4d76b59c05a37e9)",
+ "gpui_util",
  "itertools 0.14.0",
  "libc",
  "log",
