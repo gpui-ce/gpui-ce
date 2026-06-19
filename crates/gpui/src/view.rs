@@ -122,7 +122,6 @@ impl Element for AnyView {
                     (layout_id, None)
                 }
                 _ => {
-                    // let mut element = subsecond::HotFn::current(self.render).call((self, window, cx));
                     let mut element = (self.render)(self, window, cx);
                     let layout_id = element.request_layout(window, cx);
                     (layout_id, Some(element))
