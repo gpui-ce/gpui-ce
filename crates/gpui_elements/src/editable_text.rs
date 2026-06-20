@@ -14,3 +14,13 @@ pub use shared_state::*;
 pub use storage::*;
 pub use text_area_element::*;
 pub use text_area_state::*;
+
+#[allow(dead_code)]
+fn make_input(_app: &mut gpui::App) -> impl gpui::IntoElement {
+    input(0)
+}
+
+#[allow(dead_code)]
+fn make_textarea(_app: &mut gpui::App) -> impl gpui::IntoElement {
+    text_area(0)
+}

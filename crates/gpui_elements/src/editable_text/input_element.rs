@@ -1,13 +1,15 @@
 use crate::editable_text::{
-    EditableInputActionElement, InitStorage, StateBackedElement, TextInputLayoutData,
-    TextInputState,
+    EditableInputActionElement, EditableTextActionHandler, InitStorage, StateBackedElement,
+    TextInputLayoutData, TextInputState,
 };
 use gpui::{
-    App, Bounds, ContentMask, CursorStyle, Display, Element, ElementId, ElementInputHandler,
-    Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
-    Interactivity, IntoElement, PaintQuad, Pixels, ShapedLine, SharedString, Style,
+    Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Display, Element, ElementId,
+    ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
+    InteractiveElement, Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Style,
     StyleRefinement, Styled, TextRun, TextStyle, Window, fill, point, size,
 };
+use smallvec::SmallVec;
 
 #[track_caller]
 pub fn input(id: impl Into<ElementId>) -> TextInputElement {
@@ -71,7 +73,14 @@ impl super::StateBackedElement for TextInputElement {
     }
 }
 
+enum PrepaintElement {
+    Line(ShapedLine),
+    Quad(PaintQuad),
+}
+
 pub mod element {
+    use smallvec::SmallVec;
+
     use super::*;
 
     #[doc(hidden)]
@@ -83,10 +92,8 @@ pub mod element {
     #[doc(hidden)]
     pub struct PrepaintState {
         pub hitbox: Option<Hitbox>,
-        pub line: Option<ShapedLine>,
         pub focus_handle: FocusHandle,
-        pub selection: Option<PaintQuad>,
-        pub caret_quad: Option<PaintQuad>,
+        pub(super) elements: SmallVec<[PrepaintElement; 3]>,
         pub scroll_x: Pixels,
         pub display_text: SharedString,
         pub caret_visible: bool,
@@ -163,6 +170,8 @@ impl Element for TextInputElement {
         let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
         let caret_color = Hsla::white(); // TODO: as an element param
 
+        let mut elements = SmallVec::new();
+
         let text_value = input.storage().content_utf8();
         let is_empty = text_value.is_empty();
 
@@ -201,7 +210,8 @@ impl Element for TextInputElement {
         }
         scroll_x = scroll_x.clamp(Pixels::ZERO, max_scroll_x);
 
-        let (selection_quad, cursor_quad) = if !selection.is_empty() && !is_empty {
+        let has_selection = !selection.is_empty() && !is_empty;
+        if has_selection {
             let start_x = line.x_for_index(selection.start);
             let end_x = line.x_for_index(selection.end);
             let quad = fill(
@@ -214,8 +224,13 @@ impl Element for TextInputElement {
                 ),
                 selection_color,
             );
-            (Some(quad), None)
-        } else {
+            elements.push(PrepaintElement::Quad(quad));
+        }
+
+        elements.push(PrepaintElement::Line(line));
+
+        let is_focused = focus_handle.is_focused(window);
+        if !has_selection && is_focused && cursor_visible {
             let cursor_paint_x = bounds.left() + caret_x_line - scroll_x;
             let quad = fill(
                 Bounds::new(
@@ -224,8 +239,8 @@ impl Element for TextInputElement {
                 ),
                 caret_color,
             );
-            (None, Some(quad))
-        };
+            elements.push(PrepaintElement::Quad(quad));
+        }
 
         let hitbox = self.interactivity.prepaint(
             global_id,
@@ -241,10 +256,8 @@ impl Element for TextInputElement {
 
         Self::PrepaintState {
             hitbox,
-            line: Some(line),
             focus_handle,
-            selection: selection_quad,
-            caret_quad: cursor_quad,
+            elements,
             scroll_x,
             display_text,
             caret_visible: cursor_visible,
@@ -265,54 +278,148 @@ impl Element for TextInputElement {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
 
-        // NOTE: Skip when disabled
-        let ime_handler = ElementInputHandler::new(bounds, request_layout.state.clone());
-        window.handle_input(&prepaint.focus_handle, ime_handler, cx);
-
         let mut layout_data = TextInputLayoutData::default();
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
             }
-            layout_data = window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                if let Some(sel) = prepaint.selection.take() {
-                    window.paint_quad(sel);
-                }
 
-                let line = prepaint
-                    .line
-                    .take()
-                    .expect("prepaint always produces a line");
-                let origin_x = bounds.left() - prepaint.scroll_x;
-                let _ = line.paint(
-                    point(origin_x, bounds.top()),
-                    window.line_height(),
-                    gpui::TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+            // NOTE: Skip when disabled
+            let ime_handler = ElementInputHandler::new(bounds, request_layout.state.clone());
+            window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+
+            let get_relative_position = {
+                let bounds = bounds.clone();
+                move |position: Point<Pixels>| {
+                    // Converts a screen position to a position relative to the text area origin,
+                    // adjusted for scroll offset.
+                    let scroll_distance = gpui::px(0.); // TODO: STUB
+                    (position - bounds.origin)
+                        .apply_along(Axis::Horizontal, |pos| pos + scroll_distance)
+                }
+            };
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    if !bounds.contains(&event.position) {
+                        return;
+                    }
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    let text_position = get_relative_position(event.position);
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_down(event, text_position, window, cx);
+                    });
+                }
+            });
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_up(event, window, cx);
+                    });
+                }
+            });
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+
+                    let text_position = get_relative_position(event.position);
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_move(event, text_position, window, cx);
+                    });
+                }
+            });
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                /*
+                let content_size = match axis {
+                    gpui::Axis::Horizontal => {
+                        let state = input.read(cx);
+                        let line = state.lines().first();
+                        let line = line.and_then(|l| l.wrapped_line.as_ref());
+                        line.map(|w| w.width()).unwrap_or(px(0.))
+                    }
+                    gpui::Axis::Vertical => input.read(cx).total_content_height(),
+                };
+                let max_scroll = (content_size - bounds.size.along(axis)).max(px(0.));
+                */
+                // TODO: Scroll mouse wheel
+                move |event: &ScrollWheelEvent, phase, _window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    if !bounds.contains(&event.position) {
+                        return;
+                    }
+
+                    // use shift to alter horizontal scroll on text area
+                    //event.modifiers.shift;
+
+                    /*
+                    let pixel_delta = event.delta.pixel_delta(px(20.));
+                    state.update(cx, |state, cx| {
+                        let delta = match axis {
+                            gpui::Axis::Horizontal => pixel_delta.y,
+                            gpui::Axis::Vertical => {
+                                if pixel_delta.x.abs() > pixel_delta.y.abs() {
+                                    pixel_delta.x
+                                } else {
+                                    pixel_delta.y
+                                }
+                            }
+                        };
+                        state.apply_scroll_delta(delta, max_scroll);
+                        cx.notify();
+                    });
+                    */
+                }
+            });
+
+            layout_data = window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let mut lines = Vec::with_capacity(prepaint.elements.len());
+                for element in prepaint.elements.drain(..) {
+                    match element {
+                        PrepaintElement::Line(line) => {
+                            let origin_x = bounds.left() - prepaint.scroll_x;
+                            let _ = line.paint(
+                                point(origin_x, bounds.top()),
+                                window.line_height(),
+                                gpui::TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                            lines.push(line);
+                        }
+                        PrepaintElement::Quad(quad) => window.paint_quad(quad),
+                    }
+                }
 
                 // TODO: Render marked IME underlines
 
-                let is_focused = prepaint.focus_handle.is_focused(window);
-                if is_focused
-                    && prepaint.caret_visible
-                    && let Some(cur) = prepaint.caret_quad.take()
-                {
-                    window.paint_quad(cur);
-                }
-
-                TextInputLayoutData {
-                    lines: vec![line],
-                    bounds,
-                }
+                TextInputLayoutData { lines, bounds }
             });
         };
         self.interactivity.paint(
             global_id,
             inspector_id,
-            bounds,
+            bounds.clone(),
             prepaint.hitbox.as_ref(),
             window,
             cx,
