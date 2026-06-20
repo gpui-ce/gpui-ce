@@ -1,13 +1,7 @@
 #import "sidebar.typ": sidebar
 
 #let template(current: str, doc) = {
-  // Typst doesn't have file globbing so we have to add everything here and also in the rheo file oh well
-  let site-nav = (
-    (title: "Getting Started", items: (
-      (id: "index", title: "Home", url: "./index.html"),
-    )),
-  )
-
+  let site-nav = yaml("site-nav.yaml")
 
   show: sidebar.with(
     nav: site-nav,
