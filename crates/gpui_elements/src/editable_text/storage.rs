@@ -1,4 +1,3 @@
-use gpui::SharedString;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -8,6 +7,8 @@ pub trait UnicodeTextStorage {
 
     /// Returns the UTF-16 length of the content.
     fn len_utf16(&self) -> usize;
+
+    fn replace_range(&mut self, range: Range<usize>, text: &str);
 
     fn utf_offset_8to16(&self, pos_uft8: usize) -> usize {
         // Fast path: if offset is 0, return 0
@@ -148,14 +149,8 @@ impl UnicodeTextStorage for String {
     fn len_utf16(&self) -> usize {
         self.len()
     }
-}
 
-impl UnicodeTextStorage for SharedString {
-    fn content_utf8(&self) -> &str {
-        self.as_str()
-    }
-
-    fn len_utf16(&self) -> usize {
-        self.len()
+    fn replace_range(&mut self, range: Range<usize>, text: &str) {
+        self.replace_range(range, &text);
     }
 }
