@@ -3,10 +3,10 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, Bounds, ClipboardItem, Entity, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
-    ShapedLine, UTF16Selection, Window,
+    App, Bounds, ClipboardItem, Entity, FocusHandle, Focusable, Hsla, NavigationDirection, Pixels,
+    Point, ShapedLine, SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine,
 };
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 pub trait TextStateNotifier {
     fn notify_changed(&mut self);
@@ -54,17 +54,47 @@ pub struct TextInputStateBase {
 
     focus_handle: FocusHandle,
 
+    layout_wrapping: TextLayoutWrapping,
     layout_data: TextInputLayoutData,
+}
+
+#[derive(Default)]
+pub(super) struct TextLayoutWrapping {
+    text_style: TextStyle,
+    wrap_width: Option<Pixels>,
+    dirty: bool,
+}
+impl TextLayoutWrapping {
+    pub fn new(text_style: TextStyle, wrap_width: Option<Pixels>) -> Self {
+        Self {
+            text_style,
+            wrap_width,
+            dirty: false,
+        }
+    }
 }
 
 #[derive(Default)]
 pub(super) struct TextInputLayoutData {
     /// The `ShapedLine` produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
-    pub lines: Vec<ShapedLine>,
+    pub lines: Vec<TextLineSegment>,
     /// The bounds of the text area, in window coordinates.
     /// Cached for IME operations.
     pub bounds: Bounds<Pixels>,
+}
+pub(super) struct TextLineSegment {
+    /// The utf8 byte range in the content string that this line covers.
+    pub text_range: Range<usize>,
+    /// The shaped and wrapped text for this line, if available.
+    pub wrapped_line: Option<Arc<WrappedLine>>,
+
+    /// The y-coordinate of this segment which can be multiplied by the line_height
+    /// to get its pixel location relative to the bounds of the text area.
+    pub pos_y: usize,
+    /// The number of segments up to and including this segment in the literal line that has been wrapped.
+    /// There may be other segments after this one with a larger counter.
+    pub num_visual_lines: usize,
 }
 
 impl Focusable for TextInputStateBase {
@@ -87,6 +117,10 @@ impl TextInputStateBase {
 
             focus_handle: cx.focus_handle(),
 
+            layout_wrapping: TextLayoutWrapping {
+                dirty: true,
+                ..TextLayoutWrapping::default()
+            },
             layout_data: TextInputLayoutData::default(),
         }
     }
@@ -118,12 +152,125 @@ impl TextInputStateBase {
         self.selected_range = range;
     }
 
+    pub fn marked_range(&self) -> Option<Range<usize>> {
+        self.marked_range.clone()
+    }
+
     pub(super) fn layout_data(&self) -> &TextInputLayoutData {
         &self.layout_data
     }
 
     pub(super) fn layout_data_mut(&mut self) -> &mut TextInputLayoutData {
         &mut self.layout_data
+    }
+}
+
+impl TextInputStateBase {
+    pub fn apply_wrapping(
+        &mut self,
+        wrapping: TextLayoutWrapping,
+        display_text: &str,
+        window: &Window,
+    ) {
+        let dirty = self.layout_wrapping.dirty
+            || self.layout_wrapping.wrap_width != wrapping.wrap_width
+            || self.layout_wrapping.text_style != wrapping.text_style;
+        self.layout_wrapping = wrapping;
+        if dirty {
+            self.layout_data.lines = self.build_wrapped_lines(display_text, window);
+        }
+    }
+
+    pub fn line_segments(&self) -> &Vec<TextLineSegment> {
+        &self.layout_data.lines
+    }
+
+    fn build_wrapped_lines(&self, content: &str, window: &Window) -> Vec<TextLineSegment> {
+        let text_style = &self.layout_wrapping.text_style;
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let mut lines = Vec::new();
+
+        if content.is_empty() {
+            lines.push(TextLineSegment {
+                text_range: 0..0,
+                wrapped_line: None,
+                pos_y: 0,
+                num_visual_lines: 1,
+            });
+            return lines;
+        }
+
+        let mut pos_y = 0;
+        let mut current_pos = 0;
+
+        while current_pos < content.len() {
+            let line_end = content[current_pos..]
+                .find('\n')
+                .map(|pos| current_pos + pos)
+                .unwrap_or(content.len());
+
+            let line_slice = &content[current_pos..line_end];
+
+            if line_slice.is_empty() {
+                lines.push(TextLineSegment {
+                    text_range: current_pos..current_pos,
+                    wrapped_line: None,
+                    pos_y,
+                    num_visual_lines: 1,
+                });
+                pos_y += 1;
+            } else {
+                let run = TextRun {
+                    len: line_slice.len(),
+                    font: text_style.font(),
+                    // TODO: This is the actual text color that is stored in WrappedLine,
+                    // needs to reflect the style color provided by paint
+                    color: Hsla::default(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+
+                let wrapped_lines = window
+                    .text_system()
+                    .shape_text(
+                        SharedString::from(line_slice.to_string()),
+                        font_size,
+                        &[run],
+                        self.layout_wrapping.wrap_width,
+                        None,
+                    )
+                    .unwrap_or_default();
+
+                for wrapped in wrapped_lines {
+                    let num_visual_lines = wrapped.wrap_boundaries().len() + 1;
+                    lines.push(TextLineSegment {
+                        text_range: current_pos..line_end,
+                        wrapped_line: Some(Arc::new(wrapped)),
+                        pos_y,
+                        num_visual_lines,
+                    });
+                    pos_y += num_visual_lines;
+                }
+            }
+
+            current_pos = if line_end < content.len() {
+                line_end + 1
+            } else {
+                content.len()
+            };
+        }
+
+        if content.ends_with('\n') {
+            lines.push(TextLineSegment {
+                text_range: content.len()..content.len(),
+                wrapped_line: None,
+                pos_y,
+                num_visual_lines: 1,
+            });
+        }
+
+        lines
     }
 }
 

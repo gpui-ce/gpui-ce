@@ -1,13 +1,16 @@
+use std::{ops::Range, sync::Arc};
+
 use crate::editable_text::{
     EditableInputActionElement, EditableTextActionHandler, InitStorage, StateBackedElement,
-    TextInputLayoutData, TextInputState,
+    TextInputLayoutData, TextInputState, TextLayoutWrapping, TextLineSegment,
 };
 use gpui::{
     Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Display, Element, ElementId,
     ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Style,
-    StyleRefinement, Styled, TextAlign, TextRun, TextStyle, Window, fill, point, size,
+    StyleRefinement, Styled, TextAlign, TextRun, TextStyle, Window, WrappedLine, fill, point, px,
+    size,
 };
 use smallvec::SmallVec;
 
@@ -75,11 +78,24 @@ impl super::StateBackedElement for TextInputElement {
 
 enum PrepaintElement {
     Line {
-        line: ShapedLine,
+        line: Arc<WrappedLine>,
         point: Point<Pixels>,
         align: TextAlign,
     },
     Quad(PaintQuad),
+}
+impl PrepaintElement {
+    fn build_quads(
+        offset_corners: Vec<(Point<Pixels>, Point<Pixels>)>,
+        origin: Point<Pixels>,
+        color: Hsla,
+    ) -> impl Iterator<Item = Self> {
+        let iter = offset_corners.into_iter();
+        iter.map(move |(offset_start, offset_end)| {
+            let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
+            PrepaintElement::Quad(fill(bounds, color))
+        })
+    }
 }
 
 pub mod element {
@@ -99,7 +115,6 @@ pub mod element {
         pub focus_handle: FocusHandle,
         pub(super) elements: SmallVec<[PrepaintElement; 3]>,
         pub scroll_offset: Point<Pixels>,
-        pub display_text: SharedString,
         pub caret_visible: bool,
     }
 }
@@ -159,11 +174,33 @@ impl Element for TextInputElement {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> Self::PrepaintState {
+        // TODO: no wrapping in single-line
+        let wrap_width = Some(bounds.size.width);
+
+        let wrapping = TextLayoutWrapping::new(request_layout.text_style.clone(), wrap_width);
+        let showing_placeholder = request_layout.state.update(cx, |state, _cx| {
+            let text_value = state.storage().content_utf8();
+            let is_empty = text_value.is_empty();
+            let display_text = match is_empty {
+                false => text_value,
+                true => self
+                    .placeholder
+                    .as_ref()
+                    .map(SharedString::as_str)
+                    .unwrap_or_default(),
+            };
+
+            state.layout_data_mut().bounds = bounds;
+            state.apply_wrapping(wrapping, display_text, window);
+            is_empty
+        });
+
         let input = request_layout.state.read(cx);
 
         let focus_handle = input.focus_handle(cx);
         let caret_pos = input.caret_pos();
         let selection = input.selected_range();
+        let ime_range = input.marked_range();
         // TODO: Cursor blinking
         let cursor_visible = true; // input.cursor_visible();
 
@@ -174,18 +211,7 @@ impl Element for TextInputElement {
 
         let mut elements = SmallVec::new();
 
-        let text_value = input.storage().content_utf8();
-        let is_empty = text_value.is_empty();
-
-        let (display_text, run_color) = match is_empty {
-            // TODO: Can the SharedString allocation be avoided?
-            false => (SharedString::new(text_value), text_color),
-            true => {
-                let value = self.placeholder.as_ref().cloned().unwrap_or_default();
-                (value, placeholder_color)
-            }
-        };
-
+        // TODO: how do we enable scrolling? overflow on interactivity?
         let (hitbox, scroll_offset) = self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -200,55 +226,111 @@ impl Element for TextInputElement {
             },
         );
 
-        let style = window.text_style();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let run = TextRun {
-            len: display_text.len(),
-            font: style.font(),
-            color: run_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let line = window
-            .text_system()
-            .shape_line(display_text.clone(), font_size, &[run], None);
+        let line_height = window.line_height();
+        let is_range_contained_by_range =
+            |text_range: &Range<usize>, containing_range: &Range<usize>| {
+                if text_range.is_empty() {
+                    containing_range.start <= text_range.start
+                        && containing_range.end > text_range.start
+                } else {
+                    containing_range.end > text_range.start
+                        && containing_range.start < text_range.end
+                }
+            };
+        let mut carent_point = Point::default();
+        for segment in input.line_segments() {
+            let line_distance_from_top = segment.pos_y * line_height;
+            let line_y = line_distance_from_top - scroll_offset.y;
+            let line_bottom = line_y + line_height * segment.num_visual_lines as f32;
+            let line_visible = line_bottom >= Pixels::ZERO && line_y <= bounds.size.height;
+            if !line_visible {
+                continue;
+            }
 
-        let has_selection = !selection.is_empty() && !is_empty;
-        if has_selection {
-            let start_x = line.x_for_index(selection.start);
-            let end_x = line.x_for_index(selection.end);
-            let quad = fill(
-                Bounds::from_corners(
-                    point(
-                        bounds.left() + start_x.min(end_x) - scroll_offset.x,
-                        bounds.top(),
-                    ),
-                    point(
-                        bounds.left() + start_x.max(end_x) - scroll_offset.x,
-                        bounds.bottom(),
-                    ),
-                ),
-                selection_color,
-            );
-            elements.push(PrepaintElement::Quad(quad));
+            // TODO: First render all lines (underlines for IME), then all selections, then cursor if no selection
+
+            if let Some(wrapped) = &segment.wrapped_line {
+                let point = bounds.origin + point(Pixels::ZERO, line_y);
+                elements.push(PrepaintElement::Line {
+                    line: wrapped.clone(),
+                    point,
+                    align: TextAlign::Left,
+                });
+            }
+
+            let segment_is_empty = segment.text_range.is_empty();
+
+            if is_range_contained_by_range(&segment.text_range, &selection) {
+                if segment_is_empty {
+                    const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
+                    elements.push(PrepaintElement::Quad(fill(
+                        Bounds::from_corners(
+                            bounds.origin + point(Pixels::ZERO, line_y),
+                            bounds.origin + point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
+                        ),
+                        selection_color,
+                    )));
+                } else {
+                    let offset_corners = build_quad_over_text(
+                        &selection,
+                        segment,
+                        line_y,
+                        line_height,
+                        Pixels::ZERO,
+                    );
+                    elements.extend(PrepaintElement::build_quads(
+                        offset_corners,
+                        bounds.origin,
+                        selection_color,
+                    ));
+                }
+            }
+
+            if !segment_is_empty && let Some(ime_range) = &ime_range {
+                if !ime_range.is_empty()
+                    && is_range_contained_by_range(&segment.text_range, &ime_range)
+                {
+                    const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
+                    let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
+                    let underline_offset = line_height - underline_thickness;
+
+                    let offset_corners = build_quad_over_text(
+                        &ime_range,
+                        segment,
+                        line_y,
+                        line_height,
+                        underline_offset,
+                    );
+                    elements.extend(PrepaintElement::build_quads(
+                        offset_corners,
+                        bounds.origin,
+                        selection_color,
+                    ));
+                }
+            }
+
+            let is_cursor_in_line = if segment_is_empty {
+                caret_pos == segment.text_range.start
+            } else {
+                segment.text_range.contains(&caret_pos) || caret_pos == segment.text_range.end
+            };
+            if is_cursor_in_line && let Some(wrapped) = &segment.wrapped_line {
+                let local_offset = caret_pos.saturating_sub(segment.text_range.start);
+                let caret_px = wrapped
+                    .position_for_index(local_offset, line_height)
+                    .unwrap_or_default();
+                carent_point = caret_px + point(Pixels::ZERO, line_y);
+            }
         }
 
-        let caret_x_line = line.x_for_index(caret_pos);
-        elements.push(PrepaintElement::Line {
-            line,
-            point: bounds.origin - point(scroll_offset.x, gpui::px(0.)),
-            align: TextAlign::Left,
-        });
-
+        let has_selection = !selection.is_empty() && !showing_placeholder;
         let is_focused = focus_handle.is_focused(window);
         if !has_selection && is_focused && cursor_visible {
-            let cursor_thickness = gpui::px(2.0);
-            let cursor_paint_x = bounds.left() + caret_x_line - scroll_offset.x;
+            const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
-                    point(cursor_paint_x, bounds.top()),
-                    size(cursor_thickness, bounds.bottom() - bounds.top()),
+                    bounds.origin + carent_point - scroll_offset,
+                    size(gpui::px(CURSOR_WIDTH), line_height),
                 ),
                 caret_color,
             );
@@ -260,7 +342,6 @@ impl Element for TextInputElement {
             focus_handle,
             elements,
             scroll_offset,
-            display_text,
             caret_visible: cursor_visible,
         }
     }
@@ -279,7 +360,6 @@ impl Element for TextInputElement {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
 
-        let mut layout_data = TextInputLayoutData::default();
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
@@ -392,13 +472,13 @@ impl Element for TextInputElement {
                 }
             });
 
-            layout_data = window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 let line_h = window.line_height();
                 let mut lines = Vec::with_capacity(prepaint.elements.len());
                 for element in prepaint.elements.drain(..) {
                     match element {
                         PrepaintElement::Line { line, point, align } => {
-                            let _ = line.paint(point, line_h, align, None, window, cx);
+                            let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
                             lines.push(line);
                         }
                         PrepaintElement::Quad(quad) => window.paint_quad(quad),
@@ -406,8 +486,6 @@ impl Element for TextInputElement {
                 }
 
                 // TODO: Render marked IME underlines
-
-                TextInputLayoutData { lines, bounds }
             });
         };
         self.interactivity.paint(
@@ -419,9 +497,69 @@ impl Element for TextInputElement {
             cx,
             perform_paint,
         );
+    }
+}
 
-        request_layout.state.update(cx, |state, _cx| {
-            *state.layout_data_mut() = layout_data;
+fn build_quad_over_text(
+    containing_range: &Range<usize>,
+    segment: &TextLineSegment,
+    line_y: Pixels,
+    line_height: Pixels,
+    offset_y: Pixels,
+) -> Vec<(Point<Pixels>, Point<Pixels>)> {
+    let Some(wrapped) = &segment.wrapped_line else {
+        return vec![];
+    };
+
+    let line_start = segment.text_range.start;
+    let line_end = segment.text_range.end;
+
+    let subrange_start = containing_range.start.max(line_start) - line_start;
+    let subrange_end = containing_range.end.min(line_end) - line_start;
+
+    let start_pos = wrapped
+        .position_for_index(subrange_start, line_height)
+        .unwrap_or_default();
+    let end_pos = wrapped
+        .position_for_index(subrange_end, line_height)
+        .unwrap_or_else(|| {
+            let last_line_y = line_height * (segment.num_visual_lines - 1) as f32;
+            point(wrapped.width(), last_line_y)
         });
+
+    let start_visual_line = (start_pos.y / line_height).floor() as usize;
+    let end_visual_line = (end_pos.y / line_height).floor() as usize;
+
+    if start_visual_line == end_visual_line {
+        vec![(
+            point(start_pos.x, line_y + start_pos.y + offset_y),
+            point(end_pos.x, line_y + start_pos.y + line_height),
+        )]
+    } else {
+        let line_width = wrapped.width();
+        let middle_lines = (start_visual_line + 1)..end_visual_line;
+        let mut quad_corners = Vec::with_capacity(middle_lines.end - middle_lines.start + 2);
+
+        quad_corners.push((
+            point(start_pos.x, line_y + start_pos.y + offset_y),
+            point(line_width, line_y + start_pos.y + line_height),
+        ));
+
+        // Middle visual lines
+        for visual_line in (start_visual_line + 1)..end_visual_line {
+            let y = line_height * visual_line as f32;
+            quad_corners.push((
+                point(Pixels::ZERO, line_y + y + offset_y),
+                point(line_width, line_y + y + line_height),
+            ));
+        }
+
+        // Last visual line
+        quad_corners.push((
+            point(Pixels::ZERO, line_y + end_pos.y + offset_y),
+            point(end_pos.x, line_y + end_pos.y + line_height),
+        ));
+
+        quad_corners
     }
 }
