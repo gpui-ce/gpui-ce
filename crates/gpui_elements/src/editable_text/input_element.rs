@@ -1,11 +1,10 @@
 use crate::editable_text::{
-    EditableInputActionElement, StateBackedElement, TextInputState, UnicodeTextStorage,
+    EditableInputActionElement, InitStorage, StateBackedElement, TextInputState,
 };
 use gpui::{
     App, Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity, IntoElement,
     SharedString, StyleRefinement, Styled, TextStyle, Window,
 };
-use std::rc::Rc;
 
 #[track_caller]
 pub fn input(id: impl Into<ElementId>) -> TextInputElement {
@@ -47,17 +46,6 @@ impl IntoElement for TextInputElement {
     }
 }
 
-#[derive(Clone, Default)]
-pub(super) struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
-impl InitStorage {
-    fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
-        match &self.0 {
-            None => Box::new(String::new()),
-            Some(init) => (*init)(cx),
-        }
-    }
-}
-
 impl EditableInputActionElement for TextInputElement {}
 impl super::StateBackedElement for TextInputElement {
     type State = TextInputState;
@@ -80,20 +68,24 @@ impl super::StateBackedElement for TextInputElement {
     }
 }
 
-#[doc(hidden)]
-pub struct LayoutState {
-    state: Entity<TextInputState>,
-    text_style: TextStyle,
-}
+pub mod element {
+    use super::*;
 
-#[doc(hidden)]
-pub struct PrepaintState {
-    hitbox: Option<Hitbox>,
+    #[doc(hidden)]
+    pub struct LayoutState {
+        pub state: Entity<TextInputState>,
+        pub text_style: TextStyle,
+    }
+
+    #[doc(hidden)]
+    pub struct PrepaintState {
+        pub hitbox: Option<Hitbox>,
+    }
 }
 
 impl Element for TextInputElement {
-    type RequestLayoutState = LayoutState;
-    type PrepaintState = PrepaintState;
+    type RequestLayoutState = element::LayoutState;
+    type PrepaintState = element::PrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         self.interactivity.element_id.clone()
@@ -130,7 +122,7 @@ impl Element for TextInputElement {
             },
         );
 
-        let layout_state = LayoutState {
+        let layout_state = element::LayoutState {
             state,
             text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
         };

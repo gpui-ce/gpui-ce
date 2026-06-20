@@ -1,5 +1,6 @@
 use crate::editable_text::{
     EditableTextActionHandler, TextBoundary, TextInputStateBase, TextStateNotifier,
+    UnicodeTextStorage,
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
@@ -14,6 +15,13 @@ pub struct TextAreaState {
 
 impl EventEmitter<TextChanged> for TextAreaState {}
 impl EventEmitter<TextHistoryPushed> for TextAreaState {}
+
+impl TextAreaState {
+    pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
+        let internal = TextInputStateBase::new(storage, cx);
+        Self { internal }
+    }
+}
 
 impl TextStateNotifier for Context<'_, TextAreaState> {
     fn notify_changed(&mut self) {

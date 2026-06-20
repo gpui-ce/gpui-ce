@@ -1,5 +1,5 @@
-use gpui::NavigationDirection;
-use std::ops::Range;
+use gpui::{App, NavigationDirection};
+use std::{ops::Range, rc::Rc};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub enum TextBoundary {
@@ -11,6 +11,17 @@ pub enum TextBoundary {
     Line,
     /// The rest of the text to the start/end of a document
     Document,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
+impl InitStorage {
+    pub fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
+        match &self.0 {
+            None => Box::new(String::new()),
+            Some(init) => (*init)(cx),
+        }
+    }
 }
 
 pub trait UnicodeTextStorage {
