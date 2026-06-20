@@ -1,0 +1,11 @@
+- title: "Getting Started"
+  items:
+    - id: "index"
+      title: "Home"
+      url: "./index.html"
+      
+- title: "Differences between GPUI-CE and GPUI"
+  items:
+    - id: "hot-patching"
+      title: "Experimental: Hot-patching"
+      url: "./hot-patching.html"
