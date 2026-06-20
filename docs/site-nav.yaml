@@ -1,0 +1,5 @@
+- title: "Getting Started"
+  items:
+    - id: "index"
+      title: "Home"
+      url: "./index.html"
