@@ -190,7 +190,13 @@ pub trait EditableTextActionHandler {
     fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut App) {}
     fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut App) {}
 
-    fn show_character_palette(&mut self, _: &ShowCharacterPalette, _w: &mut Window, _cx: &mut App) {
+    fn show_character_palette(
+        &mut self,
+        _: &ShowCharacterPalette,
+        window: &mut Window,
+        _cx: &mut App,
+    ) {
+        window.show_character_palette();
     }
 
     fn on_mouse_down(
