@@ -39,6 +39,13 @@ pub struct TextInputElement {
     placeholder: Option<SharedString>,
 }
 
+impl TextInputElement {
+    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
+        self.placeholder = Some(text.into());
+        self
+    }
+}
+
 impl InteractiveElement for TextInputElement {
     fn interactivity(&mut self) -> &mut Interactivity {
         &mut self.interactivity
@@ -203,7 +210,7 @@ impl Element for TextInputElement {
         } = prepaint;
 
         let text_color = request_layout.text_style.color;
-        let placeholder_color = Hsla::black().opacity(0.5); // TODO: as an element param
+        let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
         let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
         let caret_color = Hsla::white(); // TODO: as an element param
 
