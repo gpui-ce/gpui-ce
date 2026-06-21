@@ -11,17 +11,21 @@ use gpui::{
     Styled, TextAlign, TextStyle, Window, WrappedLine, fill, point, px, size,
 };
 use smallvec::SmallVec;
-use std::{ops::Range, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
 #[track_caller]
-pub fn input() -> TextInputElement {
+pub fn input(id: impl Into<ElementId>) -> TextInputElement {
+    let element_id = id.into();
     let mut this = TextInputElement {
         placeholder: None,
         interactivity: Interactivity::new(),
-        init_storage: InitStorage::default(),
+        state_key: Rc::new(RefCell::new((element_id.clone(), InitStorage::default()))),
     };
+    this.interactivity.element_id = Some(element_id);
+
     this = this.key_context(DEFAULT_INPUT_CONTEXT);
     this.register_actions();
+
     this
 }
 
@@ -29,7 +33,7 @@ pub fn input() -> TextInputElement {
 pub struct TextInputElement {
     placeholder: Option<SharedString>,
     interactivity: Interactivity,
-    init_storage: InitStorage,
+    state_key: Rc<RefCell<(ElementId, InitStorage)>>,
 }
 
 impl InteractiveElement for TextInputElement {
@@ -54,11 +58,10 @@ impl IntoElement for TextInputElement {
 impl EditableInputActionElement for TextInputElement {}
 impl super::StateBackedElement for TextInputElement {
     type State = TextInputState;
-    type InitProps = (Option<ElementId>, InitStorage);
+    type InitProps = Rc<RefCell<(ElementId, InitStorage)>>;
 
     fn init_props(&self) -> Self::InitProps {
-        let element_id = self.interactivity.element_id.clone();
-        (element_id, self.init_storage.clone())
+        self.state_key.clone()
     }
 
     fn get_or_init_state(
@@ -66,15 +69,13 @@ impl super::StateBackedElement for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TextInputState> {
+        let (element_id, init_storage) = init_props.borrow().clone();
+        println!("get_or_init_state {element_id:?}");
+        // TODO: This can only be called during layout, prepaint, or paint. It cannot be called during an action handler, which occurs between frames.
         // Get the state from the app using the element's id as the key.
         // If it doesnt exist, initialize a new state with the user's desired storage medium.
-        // TODO: how to best garuntee an element id?
-        let element_id = init_props
-            .0
-            .clone()
-            .expect("user MUST assign an element id");
         window.use_keyed_state(element_id, cx, |_window, cx| {
-            TextInputState::new(init_props.1.exec(cx), cx)
+            TextInputState::new(init_storage.exec(cx), cx)
         })
     }
 }
@@ -145,6 +146,8 @@ impl Element for TextInputElement {
 
         let state = self.get_state(window, cx);
 
+        self.interactivity
+            .track_focus(state.read(cx).focus_handle(cx));
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
