@@ -391,7 +391,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
         }
 
         let is_focused = focus_handle.is_focused(window);
-        if !state.layout_data.lines_represent_placeholder && is_focused && cursor_visible {
+        if is_focused && cursor_visible {
             const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
