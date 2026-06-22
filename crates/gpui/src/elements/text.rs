@@ -622,7 +622,121 @@ struct TextLayoutInner {
     bounds: Option<Bounds<Pixels>>,
 }
 
+/// Metadata about how text should be truncated. Generated during text layout via `TextLayout::evaluate_overflow`.
+pub struct TextLayoutTruncation {
+    /// The width that the text can occupy before it is truncated.
+    pub width: Option<Pixels>,
+    /// The text to affix to the displayed text if truncating (e.g. an ellipsis `...`).
+    pub affix: SharedString,
+    /// What side of the text will be truncated if it does not fit.
+    pub source: TruncateFrom,
+}
+
+impl TextLayoutTruncation {
+    /// Creates a truncation by using the overflow as the affix, given the provided width.
+    fn overflow_width(text_overflow: TextOverflow, width: Option<Pixels>) -> Self {
+        match text_overflow {
+            TextOverflow::Truncate(s) => TextLayoutTruncation {
+                width,
+                affix: s,
+                source: TruncateFrom::End,
+            },
+            TextOverflow::TruncateStart(s) => TextLayoutTruncation {
+                width,
+                affix: s,
+                source: TruncateFrom::Start,
+            },
+        }
+    }
+}
+
 impl TextLayout {
+    /// Evaluates the width to wrap the text at.
+    pub fn evaluate_wrap_width(
+        white_space: &WhiteSpace,
+        known_dimensions: Size<Option<Pixels>>,
+        available_space: Size<crate::AvailableSpace>,
+    ) -> Option<Pixels> {
+        use crate::AvailableSpace::*;
+        match white_space {
+            // Text does not wrap, no max width
+            WhiteSpace::Nowrap => None,
+            // If the text wraps, return the already calculated width.
+            WhiteSpace::Normal => known_dimensions.width.or(match available_space.width {
+                // Otherwise if the available space is a concrete value, then that is the width to wrap to.
+                Definite(x) => Some(x),
+                // If the wrapping is content-based, then there is no wrapping of text.
+                MaxContent | MinContent => None,
+            }),
+        }
+    }
+
+    /// Evaluates how truncation should be applied if the text overflows the available space.
+    pub fn evaluate_overflow(
+        text_style: &TextStyle,
+        known_dimensions: Size<Option<Pixels>>,
+        available_space: Size<crate::AvailableSpace>,
+    ) -> TextLayoutTruncation {
+        match text_style.text_overflow.clone() {
+            Some(text_overflow) => {
+                // Calculate the desired width, prioritizing the calculated dimensions,
+                // falling back on calculating a width from the available space and
+                // number of lines to clamp to via text style.
+                let width = known_dimensions.width.or(match available_space.width {
+                    crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
+                        Some(max_lines) => Some(x * max_lines),
+                        None => Some(x),
+                    },
+                    _ => None,
+                });
+
+                TextLayoutTruncation::overflow_width(text_overflow, width)
+            }
+            None => TextLayoutTruncation {
+                width: None,
+                affix: SharedString::default(),
+                source: TruncateFrom::End,
+            },
+        }
+    }
+
+    /// Conditionally applies truncation to some text and outputs how the text should be displayed.
+    pub fn apply_truncation<'runs>(
+        text: SharedString,
+        text_style: &TextStyle,
+        font_size: Pixels,
+        wrap_width: Option<Pixels>,
+        truncation: &TextLayoutTruncation,
+        runs: &'runs [TextRun],
+        cx: &mut App,
+    ) -> (SharedString, Cow<'runs, [TextRun]>) {
+        let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+        if truncation.width.is_some() {
+            if let Some(max_lines) = text_style.line_clamp
+                && let Some(wrap_width) = wrap_width
+            {
+                line_wrapper.truncate_wrapped_line(
+                    text,
+                    wrap_width,
+                    max_lines,
+                    &truncation.affix,
+                    &runs,
+                    truncation.source,
+                )
+            } else {
+                line_wrapper.truncate_line(
+                    text,
+                    truncation.width.unwrap_or(Pixels::MAX),
+                    &truncation.affix,
+                    &runs,
+                    truncation.source,
+                )
+            }
+        } else {
+            (text, std::borrow::Cow::Borrowed(runs))
+        }
+    }
+
     fn layout(
         &self,
         text: SharedString,
@@ -647,32 +761,14 @@ impl TextLayout {
             let element_state = self.clone();
 
             move |known_dimensions, available_space, window, cx| {
-                let wrap_width = if text_style.white_space == WhiteSpace::Normal {
-                    known_dimensions.width.or(match available_space.width {
-                        crate::AvailableSpace::Definite(x) => Some(x),
-                        _ => None,
-                    })
-                } else {
-                    None
-                };
+                let wrap_width = Self::evaluate_wrap_width(
+                    &text_style.white_space,
+                    known_dimensions,
+                    available_space,
+                );
 
-                let (truncate_width, truncation_affix, truncate_from) =
-                    if let Some(text_overflow) = text_style.text_overflow.clone() {
-                        let width = known_dimensions.width.or(match available_space.width {
-                            crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
-                                Some(max_lines) => Some(x * max_lines),
-                                None => Some(x),
-                            },
-                            _ => None,
-                        });
-
-                        match text_overflow {
-                            TextOverflow::Truncate(s) => (width, s, TruncateFrom::End),
-                            TextOverflow::TruncateStart(s) => (width, s, TruncateFrom::Start),
-                        }
-                    } else {
-                        (None, "".into(), TruncateFrom::End)
-                    };
+                let truncation =
+                    Self::evaluate_overflow(&text_style, known_dimensions, available_space);
 
                 // Only use cached layout if:
                 // 1. We have a cached size
@@ -682,36 +778,20 @@ impl TextLayout {
                 if let Some(text_layout) = element_state.0.borrow().as_ref()
                     && let Some(size) = text_layout.size
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
-                    && truncate_width.is_none()
+                    && truncation.width.is_none()
                 {
                     return size;
                 }
 
-                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
-                let (text, runs) = if truncate_width.is_some() {
-                    if let Some(max_lines) = text_style.line_clamp
-                        && let Some(wrap_width) = wrap_width
-                    {
-                        line_wrapper.truncate_wrapped_line(
-                            text.clone(),
-                            wrap_width,
-                            max_lines,
-                            &truncation_affix,
-                            &runs,
-                            truncate_from,
-                        )
-                    } else {
-                        line_wrapper.truncate_line(
-                            text.clone(),
-                            truncate_width.unwrap_or(Pixels::MAX),
-                            &truncation_affix,
-                            &runs,
-                            truncate_from,
-                        )
-                    }
-                } else {
-                    (text.clone(), Cow::Borrowed(&*runs))
-                };
+                let (text, runs) = Self::apply_truncation(
+                    text.clone(),
+                    &text_style,
+                    font_size,
+                    wrap_width,
+                    &truncation,
+                    &runs,
+                    cx,
+                );
                 let len = text.len();
 
                 let Some(lines) = window
