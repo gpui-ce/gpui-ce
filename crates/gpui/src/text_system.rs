@@ -504,11 +504,20 @@ impl WindowTextSystem {
     }
 
     /// Shape a multi line string of text, at the given font_size, for painting to the screen.
-    /// Subsets of the text can be styled independently with the `runs` parameter.
+    /// Subsets of the text can be styled independently with the `runs` parameter,
+    /// where each run dictates the length of utf8 characters in `text` that it styles.
+    /// The length (utf8 characters) of last item in `runs` is semantically ignored as it
+    /// represents the "rest" of the `text`.
+    ///
     /// If `wrap_width` is provided, the line breaks will be adjusted to fit within the given width.
-    pub fn shape_text(
+    ///
+    /// If the text provided is SharedString and does not contain new-lines,
+    /// it will be used as-is without additional allocations.
+    /// If the text provided is not a SharedString or contains new-lines, new SharedStrings
+    /// will be allocated for each substring between new-line characters (minimum of 1).
+    pub fn shape_text<S: AsRef<str> + Into<SharedString>>(
         &self,
-        text: SharedString,
+        text: S,
         font_size: Pixels,
         runs: &[TextRun],
         wrap_width: Option<Pixels>,
@@ -598,7 +607,7 @@ impl WindowTextSystem {
             }
         };
 
-        let mut split_lines = text.split('\n');
+        let mut split_lines = text.as_ref().split('\n');
 
         // Special case single lines to prevent allocating a sharedstring
         if let Some(first_line) = split_lines.next()
@@ -625,8 +634,8 @@ impl WindowTextSystem {
                 );
             }
         } else {
-            let end = text.len();
-            process_line(text, 0, end);
+            let end = text.as_ref().len();
+            process_line(text.into(), 0, end);
         }
 
         self.font_runs_pool.lock().push(font_runs);

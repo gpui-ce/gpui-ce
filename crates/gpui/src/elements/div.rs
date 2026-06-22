@@ -2278,7 +2278,7 @@ impl Interactivity {
                 if let Some(text) = window
                     .text_system()
                     .shape_text(
-                        element_id.into(),
+                        &element_id,
                         FONT_SIZE,
                         &[window.text_style().to_run(str_len)],
                         None,
