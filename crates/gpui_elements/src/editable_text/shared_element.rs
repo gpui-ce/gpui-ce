@@ -180,17 +180,6 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                                 )
                                 .unwrap_or_default();
 
-                            let line_ranges = wrapped_lines.iter().fold(
-                                Vec::<Range<usize>>::new(),
-                                |mut ranges, line| {
-                                    let prev_end =
-                                        ranges.last().map(|range| range.end).unwrap_or_default();
-                                    ranges.push(prev_end..prev_end + line.len());
-                                    ranges
-                                },
-                            );
-                            println!("{line_ranges:?}");
-
                             // Build the size of the text and convert the wrapped_lines into
                             // lines that will be cached in state and painted.
                             let mut size: Size<Pixels> = Size::default();
@@ -257,17 +246,23 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> PrepaintState {
+        // should reflect the text content layout size of the stored text,
+        // so that scrolling can take it into account during prepaint.
+        let content_size = {
+            let state = request_layout.state.read(cx);
+            state.layout_data.size.unwrap_or_else(|| bounds.size)
+        };
+
         struct InteractivityPrepaint {
             hitbox: Option<Hitbox>,
             scroll_offset: Point<Pixels>,
             padding: gpui::Edges<Pixels>,
         }
-        // TODO: how do we enable scrolling? overflow on interactivity?
         let prepaint = self.interactivity().prepaint(
             global_id,
             inspector_id,
             bounds,
-            bounds.size,
+            content_size,
             window,
             cx,
             |style, scroll_offset, hitbox, window, _cx| {
@@ -321,10 +316,10 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                         && containing_range.start < text_range.end
                 }
             };
-        let mut carent_point = Point::default();
+        let mut caret_point = None::<Point<Pixels>>;
         for segment in &state.layout_data.lines {
             let line_distance_from_top = segment.pos_y * line_height;
-            let line_y = line_distance_from_top - scroll_offset.y;
+            let line_y = line_distance_from_top + scroll_offset.y;
             let line_bottom = line_y + line_height * segment.num_visual_lines as f32;
             let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
             if !line_visible {
@@ -334,7 +329,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             // TODO: First render all lines (underlines for IME), then all selections, then cursor if no selection
 
             if let Some(wrapped) = &segment.wrapped_line {
-                let point = inner_bounds.origin + point(Pixels::ZERO, line_y);
+                let point = inner_bounds.origin + point(scroll_offset.x, line_y);
                 elements.push(PrepaintElement::Line {
                     line: wrapped.clone(),
                     point,
@@ -407,16 +402,19 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                 let caret_px = wrapped
                     .position_for_index(local_offset, line_height)
                     .unwrap_or_default();
-                carent_point = caret_px + point(Pixels::ZERO, line_y);
+                caret_point = Some(caret_px + point(scroll_offset.x, line_y));
             }
         }
 
         let is_focused = focus_handle.is_focused(window);
-        if is_focused && cursor_visible {
+        if is_focused
+            && cursor_visible
+            && let Some(carent_point) = caret_point
+        {
             const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
-                    inner_bounds.origin + carent_point - scroll_offset,
+                    inner_bounds.origin + carent_point,
                     size(gpui::px(CURSOR_WIDTH), line_height),
                 ),
                 caret_color,
@@ -452,7 +450,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
         }
 
         let inner_bounds = prepaint.inner_bounds;
-        let bounds_origin = bounds.origin;
+        let to_local_position = -(bounds.origin + prepaint.scroll_offset);
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
@@ -462,13 +460,6 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             let ime_handler = ElementInputHandler::new(inner_bounds, request_layout.state.clone());
             window.handle_input(&prepaint.focus_handle, ime_handler, cx);
 
-            let get_relative_position = move |position: Point<Pixels>| {
-                // Converts a screen position to a position relative to the text area origin,
-                // adjusted for scroll offset.
-                let scroll_distance = gpui::px(0.); // TODO: STUB
-                (position - bounds_origin)
-                    .apply_along(Axis::Horizontal, |pos| pos + scroll_distance)
-            };
             window.on_mouse_event({
                 let state = request_layout.state.clone();
                 move |event: &MouseDownEvent, phase, window, cx| {
@@ -482,7 +473,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                         return;
                     }
 
-                    let text_position = get_relative_position(event.position);
+                    let text_position = event.position + to_local_position;
                     state.update(cx, |state, cx| {
                         state.on_mouse_down(event, text_position, window, cx);
                     });
@@ -510,74 +501,24 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                         return;
                     }
 
-                    let text_position = get_relative_position(event.position);
+                    let text_position = event.position + to_local_position;
                     state.update(cx, |state, cx| {
                         state.on_mouse_move(event, text_position, window, cx);
                     });
                 }
             });
-            window.on_mouse_event({
-                let state = request_layout.state.clone();
-                /*
-                let content_size = match axis {
-                    gpui::Axis::Horizontal => {
-                        let state = input.read(cx);
-                        let line = state.lines().first();
-                        let line = line.and_then(|l| l.wrapped_line.as_ref());
-                        line.map(|w| w.width()).unwrap_or(px(0.))
-                    }
-                    gpui::Axis::Vertical => input.read(cx).total_content_height(),
-                };
-                let max_scroll = (content_size - bounds.size.along(axis)).max(px(0.));
-                */
-                // TODO: Scroll mouse wheel
-                move |event: &ScrollWheelEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    if !inner_bounds.contains(&event.position) {
-                        return;
-                    }
 
-                    // use shift to alter horizontal scroll on text area
-                    //event.modifiers.shift;
-
-                    /*
-                    let pixel_delta = event.delta.pixel_delta(px(20.));
-                    state.update(cx, |state, cx| {
-                        let delta = match axis {
-                            gpui::Axis::Horizontal => pixel_delta.y,
-                            gpui::Axis::Vertical => {
-                                if pixel_delta.x.abs() > pixel_delta.y.abs() {
-                                    pixel_delta.x
-                                } else {
-                                    pixel_delta.y
-                                }
-                            }
-                        };
-                        state.apply_scroll_delta(delta, max_scroll);
-                        cx.notify();
-                    });
-                    */
+            let line_h = window.line_height();
+            let mut lines = Vec::with_capacity(prepaint.elements.len());
+            for element in prepaint.elements.drain(..) {
+                match element {
+                    PrepaintElement::Line { line, point, align } => {
+                        let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
+                        lines.push(line);
+                    }
+                    PrepaintElement::Quad(quad) => window.paint_quad(quad),
                 }
-            });
-
-            let inner_bounds_mask = Some(ContentMask {
-                bounds: inner_bounds,
-            });
-            window.with_content_mask(inner_bounds_mask, |window| {
-                let line_h = window.line_height();
-                let mut lines = Vec::with_capacity(prepaint.elements.len());
-                for element in prepaint.elements.drain(..) {
-                    match element {
-                        PrepaintElement::Line { line, point, align } => {
-                            let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
-                            lines.push(line);
-                        }
-                        PrepaintElement::Quad(quad) => window.paint_quad(quad),
-                    }
-                }
-            });
+            }
         };
         self.interactivity().paint(
             global_id,

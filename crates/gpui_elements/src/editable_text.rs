@@ -14,3 +14,15 @@ pub use shared_state::*;
 pub use storage::*;
 pub use text_area_element::*;
 pub use text_area_state::*;
+
+/* TODO list
+- default-value
+- naming clean up (EditableText)
+- remove gpuikit based input
+- cursor blinking
+- color styling configs
+- undo/redo
+- text sanitation
+- test IME (char palette only available on macos)
+- unit tests
+*/
