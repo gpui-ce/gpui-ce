@@ -15,9 +15,9 @@ use calloop::{
 use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
+use gpui_util::ResultExt as _;
 use smallvec::SmallVec;
-use url::Url;
-use util::ResultExt as _;
+use http_client::Url;
 use wayland_backend::client::ObjectId;
 use wayland_backend::protocol::WEnum;
 use wayland_client::event_created_child;
@@ -97,7 +97,7 @@ use gpui::{
     ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
     Pixels, PlatformDisplay, PlatformInput, PlatformKeyboardLayout, PlatformWindow, Point,
-    ScrollDelta, ScrollWheelEvent, SharedString, Size, TaskTiming, TouchPhase, WindowButtonLayout,
+    ScrollDelta, ScrollWheelEvent, SharedString, Size, TouchPhase, WindowButtonLayout,
     WindowParams, point, profiler, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
@@ -580,20 +580,11 @@ impl WaylandClient {
                 move |event, _, _: &mut WaylandClientStatePtr| {
                     if let calloop::channel::Event::Msg(runnable) = event {
                         handle.insert_idle(|_| {
-                            let start = Instant::now();
                             let location = runnable.metadata().location;
-                            let mut timing = TaskTiming {
-                                location,
-                                start,
-                                end: None,
-                            };
-                            profiler::add_task_timing(timing);
-
+                            let spawned = runnable.metadata().spawned;
+                            profiler::update_running_task(spawned, location);
                             runnable.run();
-
-                            let end = Instant::now();
-                            timing.end = Some(end);
-                            profiler::add_task_timing(timing);
+                            profiler::save_task_timing();
                         });
                     }
                 }

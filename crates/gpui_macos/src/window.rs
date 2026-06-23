@@ -42,6 +42,7 @@ use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
 use core_graphics::display::{CGDirectDisplayID, CGPoint, CGRect};
 use ctor::ctor;
 use futures::channel::oneshot;
+use gpui_util::ResultExt;
 use objc::{
     class,
     declare::ClassDecl,
@@ -67,7 +68,6 @@ use std::{
     },
     time::Duration,
 };
-use util::ResultExt;
 
 const WINDOW_STATE_IVAR: &str = "windowState";
 
