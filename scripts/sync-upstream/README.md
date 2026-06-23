@@ -23,18 +23,29 @@ fork keeps the same crates at the **same relative paths**, so upstream changes a
 identical paths here. The script uses a **vendor-branch 3-way merge** (a generalized
 `git subtree` merge):
 
-1. A local branch `vendor/zed-gpui` holds *filtered* snapshots — only the tracked
-   `crates/gpui*` trees, extracted from upstream via a throwaway git index (no
-   working-tree churn).
-2. Each sync appends a new snapshot and `git merge`s it. Git's merge base is the
-   previous snapshot, so the merge replays exactly the upstream delta since the last
-   sync — and anything this fork already cherry-picked upstream produces **no conflict**.
-3. Real conflicts → `claude -p` (`resolve-conflicts.prompt.md`), looped up to
-   `--retries` times until no markers remain.
+1. A local branch `vendor/zed-gpui` holds a *filtered replay* of upstream's actual
+   gpui-touching commits — each keeps its original author/date/message (plus a
+   `zed-upstream: <sha>` trailer) but carries only the tracked `crates/gpui*` trees,
+   built via a throwaway git index (no working-tree churn). Non-gpui and merge commits
+   are dropped.
+2. Each sync extends that chain with the new commits and `git merge`s its tip. Git's
+   merge base is the previous tip, so the merge replays exactly the upstream delta since
+   the last sync — anything this fork already cherry-picked upstream produces **no
+   conflict** — and every upstream commit is preserved in the merge's **second-parent
+   history** (so `git log` shows both histories; `git log --first-parent` shows just the
+   -ce line).
+3. The merge is committed as **two commits** for reviewability:
+   - **Commit 1 — raw merge:** git's auto-merges applied, conflict markers committed in
+     as-is (deterministic add/delete conflicts settled by policy: gpui-ce's deletions
+     kept). This captures exactly what git could *not* resolve.
+   - **Commit 2 — resolution:** `claude -p` (`resolve-conflicts.prompt.md`, looped up to
+     `--retries`) edits out the markers. Because it's a separate commit, its diff shows
+     *exactly* what was chosen — auditable in isolation, distinct from git's auto-merge.
+   (A conflict-free sync is just one clean merge commit.)
 4. The pinned `zed-industries/zed` git-dep revs in the root `Cargo.toml` are bumped to
    the synced commit, then `just check` runs; on failure `claude -p`
-   (`fix-build.prompt.md`) is looped up to `--retries` times to make it compile.
-   **Tests are not run or fixed automatically.**
+   (`fix-build.prompt.md`) is looped up to `--retries` times to make it compile —
+   committed as a **third** commit. **Tests are not run or fixed automatically.**
 
 ### Tracked vs. untracked
 

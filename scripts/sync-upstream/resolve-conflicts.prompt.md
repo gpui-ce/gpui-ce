@@ -6,9 +6,10 @@ upstream Zed monorepo (`zed-industries/zed`) at the **same relative paths**:
 `crates/gpui_platform`, `crates/gpui_shared_string`, `crates/gpui_tokio`, `crates/gpui_web`,
 `crates/gpui_wgpu`, `crates/gpui_windows`.
 
-A 3-way `git merge` of the upstream delta is in progress and produced conflicts. Your job is to
-resolve **every** conflict so the result is correct gpui-ce code that incorporates the upstream
-changes.
+A 3-way `git merge` of the upstream delta produced conflicts, and the raw merge — with conflict
+markers committed in — is already its own commit. Your job is to resolve **every** marker in the
+listed files so the result is correct gpui-ce code that incorporates the upstream changes. Your
+edits land as a **separate, reviewable resolution commit** diffed against that raw merge.
 
 ## Rules
 
