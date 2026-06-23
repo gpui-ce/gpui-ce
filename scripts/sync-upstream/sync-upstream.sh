@@ -149,17 +149,26 @@ render_prompt() { # <resolve|build> <payload>
 }
 
 run_claude() { # <prompt-text>
-  local prompt="$1"
+  # Never fatal: claude hitting --max-turns or the timeout exits non-zero AFTER doing
+  # useful work. We warn and return 0; the surrounding loop re-checks actual progress
+  # (markers/unmerged paths) and retries up to RETRIES, so a partial pass isn't wasted.
+  local prompt="$1" rc=0
   local -a cmd=("$CLAUDE_BIN" -p "$prompt"
     --model "$MODEL"
     --permission-mode acceptEdits
     --allowedTools "$CLAUDE_ALLOWED_TOOLS")
   [ "${CLAUDE_MAX_TURNS:-0}" -gt 0 ] && cmd+=(--max-turns "$CLAUDE_MAX_TURNS")
   if [ "${CLAUDE_TIMEOUT:-0}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-    timeout "$CLAUDE_TIMEOUT" "${cmd[@]}" || die "claude invocation failed or timed out"
+    timeout "$CLAUDE_TIMEOUT" "${cmd[@]}" || rc=$?
   else
-    "${cmd[@]}" || die "claude invocation failed"
+    "${cmd[@]}" || rc=$?
   fi
+  case "$rc" in
+    0)   ;;
+    124) warn "claude hit the ${CLAUDE_TIMEOUT}s timeout — re-checking progress, may retry" ;;
+    *)   warn "claude exited non-zero ($rc; likely --max-turns) — re-checking progress, may retry" ;;
+  esac
+  return 0
 }
 
 # ── conflict resolution ──────────────────────────────────────────────────────
@@ -173,8 +182,27 @@ has_unresolved() {
   grep -rqE '^(<{7}|>{7}|\|{7})' crates/ 2>/dev/null && return 0
   return 1
 }
+# Deterministically settle add/delete conflicts that claude can't express via edits:
+#   DU = deleted by us (gpui-ce), modified by them (upstream) → honor gpui-ce's deletion
+#   UD = modified by us, deleted by them                      → keep gpui-ce's version (flag)
+auto_resolve_add_delete() {
+  local line code path handled=0
+  while IFS= read -r line; do
+    code="${line:0:2}"; path="${line:3}"
+    case "$code" in
+      DU) log "  modify/delete — keeping gpui-ce's deletion of $path"
+          git rm -q --force -- "$path" >/dev/null 2>&1 || true; handled=1 ;;
+      UD) warn "  delete/modify — upstream deleted $path; keeping gpui-ce's version (review)"
+          git add -- "$path" >/dev/null 2>&1 || true; handled=1 ;;
+    esac
+  done < <(git status --porcelain)
+  [ "$handled" = 1 ] && ok "auto-resolved add/delete conflicts"
+  return 0
+}
+
 resolve_conflicts_loop() { # <branch> (for the error message)
-  local branch="$1" attempt=0 files
+  local branch="$1" attempt=0 files before after
+  auto_resolve_add_delete
   while has_unresolved; do
     attempt=$((attempt + 1))
     if [ "$attempt" -gt "$RETRIES" ]; then
@@ -183,10 +211,14 @@ resolve_conflicts_loop() { # <branch> (for the error message)
       die "conflict resolution failed; branch '$branch' left mid-merge for manual finishing"
     fi
     files="$(conflicted_files)"
-    log "claude conflict-resolution pass $attempt/$RETRIES"
+    before="$(printf '%s\n' "$files" | grep -c . || true)"
+    log "claude conflict-resolution pass $attempt/$RETRIES ($before file(s) remaining)"
     printf '%s\n' "$files" | sed "s/^/    ${C_D}conflict:${C_0} /"
     run_claude "$(render_prompt resolve "$files")"
     git add -A
+    after="$(conflicted_files | grep -c . || true)"
+    [ "$after" -gt 0 ] && [ "$after" -ge "$before" ] && \
+      warn "no progress this pass ($before → $after files) — claude may be stuck on these"
   done
 }
 
