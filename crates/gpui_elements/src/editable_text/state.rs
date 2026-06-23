@@ -49,6 +49,7 @@ pub(super) struct TextInputLayoutData {
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
     pub lines: Vec<TextLineSegment>,
 }
+/// A segment of text that is a single logical/document line but can take up multiple rows due to wrapping.
 pub(super) struct TextLineSegment {
     /// The utf8 byte range in the content string that this line covers.
     pub text_range: Range<usize>,
@@ -58,13 +59,11 @@ pub(super) struct TextLineSegment {
     /// The y-coordinate of this segment which can be multiplied by the line_height
     /// to get its pixel location relative to the bounds of the text area.
     pub pos_y: usize,
-    /// The number of segments up to and including this segment in the literal line that has been wrapped.
-    /// There may be other segments after this one with a larger counter.
-    /// TODO: Deprecated in favor of `wrap_boundaries`
-    pub num_visual_lines: usize,
 }
 impl TextLineSegment {
-    pub fn wrap_boundaries(&self) -> usize {
+    /// The number of visual lines this segment encapsulates,
+    /// since it can occupy multiple rows due to wrapping.
+    pub fn row_count(&self) -> usize {
         let count = self
             .wrapped_line
             .as_ref()
@@ -134,7 +133,7 @@ impl EditableTextState {
 
 impl EditableTextState {
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
-    pub fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
+    fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();
         if storage_len_utf8 == 0 {
             return 0;
@@ -142,7 +141,7 @@ impl EditableTextState {
 
         for line in &self.layout_data.lines {
             let y_offset = line.pos_y * line_height;
-            let line_height_total = line_height * line.num_visual_lines as f32;
+            let line_height_total = line_height * line.row_count() as f32;
 
             if point.y >= y_offset && point.y < y_offset + line_height_total {
                 if line.text_range.is_empty() {
@@ -166,9 +165,7 @@ impl EditableTextState {
 
         storage_len_utf8
     }
-}
 
-impl EditableTextState {
     fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
         // Use a series of fallbacks to pick the range to operate on.
         // Fallback order: IME provided range, active IME marked range, selection
@@ -344,7 +341,7 @@ impl EditableTextState {
                 return (segment_index, Point::default());
             }
 
-            segment_index += segment.wrap_boundaries();
+            segment_index += segment.row_count();
         }
 
         (segment_index.saturating_sub(1), Point::default())
@@ -361,7 +358,7 @@ impl EditableTextState {
 
         let mut current_visual_line = 0;
         for segment in &self.layout_data.lines {
-            let wrap_boundary_len = segment.wrap_boundaries();
+            let wrap_boundary_len = segment.row_count();
 
             if line_index < current_visual_line + wrap_boundary_len {
                 let visual_line_within_layout = line_index - current_visual_line;
@@ -514,7 +511,7 @@ impl EntityInputHandler for EditableTextState {
                     let end_pos = wrapped
                         .position_for_index(local_end, line_height)
                         .unwrap_or_else(|| {
-                            let last_line_y = line_height * (line.num_visual_lines - 1) as f32;
+                            let last_line_y = line_height * (line.row_count() - 1) as f32;
                             point(wrapped.width(), last_line_y)
                         });
 

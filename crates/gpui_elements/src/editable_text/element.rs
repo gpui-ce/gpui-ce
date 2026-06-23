@@ -305,7 +305,6 @@ impl Element for EditableTextElement {
                                 size.height += line_size.height;
                                 size.width = size.width.max(line_size.width).ceil();
 
-                                let num_visual_lines = line.wrap_boundaries().len() + 1;
                                 let mut line_len = line.len();
                                 if line_len < text_len {
                                     // to offset for new-line characters that are
@@ -313,14 +312,14 @@ impl Element for EditableTextElement {
                                     line_len += 1;
                                 }
 
-                                lines.push(TextLineSegment {
+                                let segment = TextLineSegment {
                                     text_range: line_start..line_start + line_len,
                                     wrapped_line: Some(Arc::new(line)),
                                     pos_y,
-                                    num_visual_lines,
-                                });
+                                };
                                 line_start += line_len;
-                                pos_y += num_visual_lines;
+                                pos_y += segment.row_count();
+                                lines.push(segment);
                             }
 
                             let layout_data = TextInputLayoutData {
@@ -435,7 +434,7 @@ impl Element for EditableTextElement {
         for segment in &state.layout_data.lines {
             let line_distance_from_top = segment.pos_y * line_height;
             let line_y = line_distance_from_top + scroll_offset.y;
-            let line_bottom = line_y + line_height * segment.num_visual_lines as f32;
+            let line_bottom = line_y + line_height * segment.row_count() as f32;
             let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
             if !line_visible {
                 continue;
@@ -670,7 +669,7 @@ fn build_quad_over_text(
     let end_pos = wrapped
         .position_for_index(subrange_end, line_height)
         .unwrap_or_else(|| {
-            let last_line_y = line_height * (segment.num_visual_lines - 1) as f32;
+            let last_line_y = line_height * (segment.row_count() - 1) as f32;
             point(wrapped.width(), last_line_y)
         });
 
