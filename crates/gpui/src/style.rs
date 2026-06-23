@@ -9,7 +9,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
-    Window, black, phi, point, quad, rems, size,
+    Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -405,6 +405,39 @@ pub enum ScaledFilter {
     Blur(ScaledPixels),
 }
 
+impl BoxShadow {
+    /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
+    /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
+    /// spread radius, and inset.
+    pub fn new(offset_x: Pixels, offset_y: Pixels, color: Hsla) -> Self {
+        Self {
+            color,
+            offset: point(offset_x, offset_y),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: false,
+        }
+    }
+
+    /// Sets the shadow blur radius.
+    pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
+        self.blur_radius = blur_radius;
+        self
+    }
+
+    /// Sets the shadow spread radius.
+    pub fn spread_radius(mut self, spread_radius: Pixels) -> Self {
+        self.spread_radius = spread_radius;
+        self
+    }
+
+    /// Marks the shadow as inset (drawn inside the element's bounds).
+    pub fn inset(mut self) -> Self {
+        self.inset = true;
+        self
+    }
+}
+
 /// How to handle whitespace in text
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum WhiteSpace {
@@ -425,6 +458,10 @@ pub enum TextOverflow {
     /// displaying the provided string at the beginning (e.g., "…ong text here").
     /// Typically more adequate for file paths where the end is more important than the beginning.
     TruncateStart(SharedString),
+    /// Truncate the text in the middle when it doesn't fit, preserving both the start and end
+    /// of the string (e.g., "long fi…name.rs"). Useful for filenames where both the prefix
+    /// and the extension are important context.
+    TruncateMiddle(SharedString),
 }
 
 /// How to align text within the element

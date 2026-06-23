@@ -25,6 +25,7 @@ test-support = [
   "x11",
   "proptest",
 ]
+bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
 wayland = ["bitflags"]
@@ -32,6 +33,7 @@ x11 = ["scap?/x11"]
 screen-capture = ["scap"]
 windows-manifest = ["dep:embed-resource"]
 input-latency-histogram = ["dep:hdrhistogram"]
+profiler = []
 
 [lib]
 path = "src/gpui.rs"
@@ -45,6 +47,7 @@ backtrace = { workspace = true, optional = true }
 bitflags = { workspace = true, optional = true }
 
 collections.workspace = true
+criterion = { workspace = true, optional = true }
 ctor.workspace = true
 derive_more.workspace = true
 etagere = "0.2"
@@ -100,6 +103,7 @@ pollster.workspace = true
 url.workspace = true
 uuid.workspace = true
 web-time.workspace = true
+heapless.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
@@ -121,7 +125,7 @@ foreign-types = "0.5"
 log.workspace = true
 media.workspace = true
 objc.workspace = true
-objc2 = { version = "0.6", optional = true }
+objc2 = { workspace = true, optional = true }
 objc2-metal = { version = "0.3", optional = true }
 mach2.workspace = true
 #TODO: replace with "objc2"
@@ -146,11 +150,9 @@ env_logger.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }
-proptest = { workspace = true }
 rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
 unicode-segmentation = { workspace = true }
-
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
