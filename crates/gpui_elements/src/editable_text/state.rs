@@ -8,7 +8,7 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     NavigationDirection, Pixels, Point, Size, UTF16Selection, Window, WrappedLine, point,
 };
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 
 pub struct EditableTextState {
     storage: Box<dyn UnicodeTextStorage>,
@@ -39,8 +39,12 @@ pub struct EditableTextState {
 
 #[derive(Default)]
 pub(super) struct TextInputLayoutData {
+    /// Whether the element supports multiple lines of text
     pub supports_multiline: bool,
+    /// Whether the element is currently accepting inputs
     pub accepts_input: bool,
+    /// The last seen scroll position and size of the element
+    pub scroll_bounds: Bounds<Pixels>,
     /// The last known width at which the lines were wrapped.
     pub wrap_width: Option<Pixels>,
     /// The last known size of the text, as generated during layout.
@@ -50,6 +54,10 @@ pub(super) struct TextInputLayoutData {
     /// The `ShapedLine` produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
     pub lines: Vec<TextLineSegment>,
+    pub line_height: Pixels,
+    /// The next position the scroll view should move to.
+    /// Set by the state in response to user actions.
+    pub next_scroll_offset: Option<Point<Pixels>>,
 }
 /// A segment of text that is a single logical/document line but can take up multiple rows due to wrapping.
 pub(super) struct TextLineSegment {
@@ -71,6 +79,14 @@ impl TextLineSegment {
             .as_ref()
             .map(|line| line.wrap_boundaries().len());
         count.unwrap_or_default() + 1
+    }
+
+    pub fn contains_position(&self, pos: usize) -> bool {
+        if self.text_range.is_empty() {
+            pos == self.text_range.start
+        } else {
+            pos >= self.text_range.start && pos < self.text_range.end
+        }
     }
 }
 
@@ -248,11 +264,58 @@ impl EditableTextState {
 }
 
 impl EditableTextState {
+    fn scroll_to_caret(&mut self) {
+        if self.layout_data.scroll_bounds.is_empty() {
+            return;
+        }
+        let Some(content_size) = self.layout_data.size else {
+            return;
+        };
+
+        // point will be relative to content_size, and may or may not be within the current scroll_bounds
+        let point = self.find_point_for_character_position(self.caret_pos());
+
+        println!("{point:?} ?= {:?}", self.layout_data.scroll_bounds);
+
+        // this scroll_offset diverges from the rest of gpui, as it is stored in the
+        // positive real number space (interactivity stores it in the negatives)
+        let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
+
+        if self.layout_data.scroll_bounds.contains(&point) {
+            return;
+        }
+
+        // No existing "shift bounds origin so <point> is contained", but that is effectively what this does
+        if point.x < self.layout_data.scroll_bounds.left() {
+            scroll_offset.to_mut().x = point.x;
+        }
+        if point.y < self.layout_data.scroll_bounds.top() {
+            scroll_offset.to_mut().y = point.y;
+        }
+        let right = self.layout_data.scroll_bounds.right();
+        if point.x > right {
+            scroll_offset.to_mut().x += point.x - right;
+        }
+        let bottom = self.layout_data.scroll_bounds.bottom();
+        let point_bottom = point.y + self.layout_data.line_height;
+        if point_bottom > bottom {
+            let delta = point_bottom - bottom;
+            scroll_offset.to_mut().y += delta;
+        }
+
+        if let Cow::Owned(mut offset) = scroll_offset {
+            offset.x = offset.x.clamp(Pixels::ZERO, content_size.width);
+            offset.y = offset.y.clamp(Pixels::ZERO, content_size.height);
+            println!("shift to {offset:?}");
+            self.layout_data.next_scroll_offset = Some(offset);
+        }
+    }
+
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
-        //self.scroll_to_cursor();
+        self.scroll_to_caret();
         cx.notify();
     }
 
@@ -260,7 +323,7 @@ impl EditableTextState {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range.start = caret_pos;
-        //self.scroll_to_cursor();
+        self.scroll_to_caret();
         cx.notify();
     }
 
@@ -309,7 +372,24 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
-    pub fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
+    pub fn select_document(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.storage.content_utf8().len();
+        cx.notify();
+    }
+
+    pub fn select_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        cx: &mut Context<Self>,
+    ) {
+        let caret_pos = self
+            .storage
+            .offset_from_caret(self.caret_pos(), direction, boundary);
+        self.select_to(caret_pos, cx);
+    }
+
+    fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
         if self.layout_data.lines.is_empty() {
             return (0, Point::default());
         }
@@ -342,13 +422,12 @@ impl EditableTextState {
         (segment_index.saturating_sub(1), Point::default())
     }
 
-    pub fn find_position_in_vertical_direction(
+    fn find_position_in_vertical_direction(
         &self,
         direction: i32,
         line_height: Pixels,
     ) -> Option<usize> {
         let (line_index, point) = self.line_index_and_point_at_caret(line_height);
-        println!("{line_index:?} {point:?}");
         let line_index = line_index.saturating_add_signed(direction as isize);
 
         let mut current_visual_line = 0;
@@ -372,7 +451,6 @@ impl EditableTextState {
                     let closest_idx = closest_result.unwrap_or_else(|closest| closest);
                     let clamped = closest_idx.min(wrapped.text.len());
                     let result = segment.text_range.start + clamped;
-                    println!("{result:?}");
                     return Some(result);
                 }
 
@@ -385,21 +463,26 @@ impl EditableTextState {
         (direction > 0).then(|| self.storage.content_utf8().len())
     }
 
-    pub fn select_document(&mut self, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.storage.content_utf8().len();
-        cx.notify();
-    }
+    fn find_point_for_character_position(&self, character_pos: usize) -> Point<Pixels> {
+        let line_height = self.layout_data.line_height;
+        let mut row_count = 0;
+        for segment in &self.layout_data.lines {
+            if !segment.contains_position(character_pos) {
+                row_count += segment.row_count();
+                continue;
+            }
 
-    pub fn select_linear(
-        &mut self,
-        direction: NavigationDirection,
-        boundary: TextBoundary,
-        cx: &mut Context<Self>,
-    ) {
-        let caret_pos = self
-            .storage
-            .offset_from_caret(self.caret_pos(), direction, boundary);
-        self.select_to(caret_pos, cx);
+            let line_origin = point(Pixels::ZERO, row_count * line_height);
+            return match &segment.wrapped_line {
+                None => line_origin,
+                Some(wrapped) => {
+                    let local_offset = character_pos.saturating_sub(segment.text_range.start);
+                    let position = wrapped.position_for_index(local_offset, line_height);
+                    position.unwrap_or_default() + line_origin
+                }
+            };
+        }
+        Point::default()
     }
 }
 
@@ -602,7 +685,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         if !self.layout_data.accepts_input {
             return;
         }
-        // TODO: Why is the cursor appearing at the start of the entire field instead of on the new line?
         self.replace_text_in_range(None, "\n", window, cx);
     }
 
@@ -738,8 +820,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         if let Some(caret_pos) = self.find_position_in_vertical_direction(-1, window.line_height())
         {
             self.select_to(caret_pos, cx);
-            //self.scroll_to_cursor();
-            cx.notify();
         }
     }
 
@@ -752,8 +832,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         if let Some(caret_pos) = self.find_position_in_vertical_direction(1, window.line_height()) {
             self.select_to(caret_pos, cx);
-            //self.scroll_to_cursor();
-            cx.notify();
         }
     }
 

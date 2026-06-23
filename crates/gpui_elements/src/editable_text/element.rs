@@ -16,7 +16,7 @@ use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 #[track_caller]
 pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     let mut this = EditableTextElement {
-        interactivity: Interactivity::new(),
+        interactivity: Interactivity::default(),
         state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
         supports_multiline: true,
         init_storage: InitStorage::default(),
@@ -192,23 +192,28 @@ impl Element for EditableTextElement {
             focus_handle = state.focus_handle(cx);
             show_placeholder = state.storage().content_utf8().is_empty();
             storage_version = state.storage().version();
+
+            if let Some(scroll_offset) = state.layout_data.next_scroll_offset {
+                self.interactivity
+                    .set_scroll_offset(global_id, window, -scroll_offset);
+            }
         }
 
         // TODO: This required a gpui api change in order to sync the focus handle between Interactivity and TextInputStateBase
-        self.interactivity().track_focus(focus_handle);
+        self.interactivity.track_focus(focus_handle);
 
         let placeholder = self.placeholder.clone();
         let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
         let supports_multiline = self.supports_multiline;
         let accepts_input = self.accepts_input;
-        let layout_id = self.interactivity().request_layout(
+        let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
             window,
             cx,
             |style, window, cx| {
                 let state = state.clone();
-                window.with_text_style(style.text_style().cloned(), |window| {
+                window.with_text_style(style.text_style().cloned(), move |window| {
                     // NOTE: Loosely mirrors TextLayout::layout
                     let text_layout_id = window.request_measured_layout(Default::default(), {
                         let text_style = window.text_style();
@@ -325,10 +330,13 @@ impl Element for EditableTextElement {
                             let layout_data = TextInputLayoutData {
                                 supports_multiline,
                                 accepts_input,
+                                scroll_bounds: Bounds::default(),
                                 wrap_width,
                                 size: Some(size),
                                 last_seen_storage_version,
                                 lines,
+                                line_height,
+                                next_scroll_offset: None,
                             };
 
                             // Update the state for use in prepaint, paint, and action handlers.
@@ -370,7 +378,7 @@ impl Element for EditableTextElement {
         struct InteractivityPrepaint {
             hitbox: Option<Hitbox>,
             scroll_offset: Point<Pixels>,
-            padding: gpui::Edges<Pixels>,
+            inner_bounds: Bounds<Pixels>,
         }
         let prepaint = self.interactivity().prepaint(
             global_id,
@@ -379,31 +387,38 @@ impl Element for EditableTextElement {
             content_size,
             window,
             cx,
-            |style, scroll_offset, hitbox, window, _cx| {
+            |style, scroll_offset, hitbox, window, cx| {
                 let hitbox =
                     hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
-                let padding = style
-                    .padding
-                    .to_pixels(bounds.size.into(), window.rem_size());
+                let inner_bounds = {
+                    let padding = style
+                        .padding
+                        .to_pixels(bounds.size.into(), window.rem_size());
+
+                    let mut bounds = bounds;
+                    bounds.origin += point(padding.left, padding.top);
+                    bounds.size.width -= padding.left + padding.right;
+                    bounds.size.height -= padding.top + padding.bottom;
+                    bounds
+                };
+                request_layout.state.update(cx, |state, _cx| {
+                    // while gpui tracks scroll_offset with negative values,
+                    // this is converted into positive for usage with bounds
+                    state.layout_data.scroll_bounds =
+                        Bounds::new(-scroll_offset, inner_bounds.size);
+                });
                 InteractivityPrepaint {
                     hitbox,
                     scroll_offset,
-                    padding,
+                    inner_bounds,
                 }
             },
         );
         let InteractivityPrepaint {
             hitbox,
             scroll_offset,
-            padding,
+            inner_bounds,
         } = prepaint;
-        let inner_bounds = {
-            let mut bounds = bounds;
-            bounds.origin += point(padding.left, padding.top);
-            bounds.size.width -= padding.left + padding.right;
-            bounds.size.height -= padding.top + padding.bottom;
-            bounds
-        };
 
         let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
         let caret_color = Hsla::white(); // TODO: as an element param
@@ -503,11 +518,7 @@ impl Element for EditableTextElement {
                 }
             }
 
-            let is_cursor_in_line = if segment_is_empty {
-                caret_pos == segment.text_range.start
-            } else {
-                segment.text_range.contains(&caret_pos) || caret_pos == segment.text_range.end
-            };
+            let is_cursor_in_line = segment.contains_position(caret_pos);
             if is_cursor_in_line && let Some(wrapped) = &segment.wrapped_line {
                 // TODO: when the cursor is functionally at a character that is on the next line
                 // (a line that spans multiple rows), the cursor displays at the end of the previous
