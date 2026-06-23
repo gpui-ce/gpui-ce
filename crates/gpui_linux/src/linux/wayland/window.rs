@@ -1488,14 +1488,17 @@ impl PlatformWindow for WaylandWindow {
                 .globals
                 .compositor
                 .create_region(&state.globals.qh, ());
-            for rect in rects {
-                region.add(
-                    f32::from(rect.origin.x) as i32,
-                    f32::from(rect.origin.y) as i32,
-                    f32::from(rect.size.width) as i32,
-                    f32::from(rect.size.height) as i32,
-                );
-            }
+            rects
+                .iter()
+                .map(|rect| rect.map(|pixels| f32::from(pixels) as i32))
+                .for_each(|rect| {
+                    region.add(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.width,
+                        rect.size.height,
+                    )
+                });
             state.surface.set_input_region(Some(&region));
             region.destroy();
         }
