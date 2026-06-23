@@ -1189,7 +1189,9 @@ impl WgpuRenderer {
             self.surface_config.height = clamped_height.max(1);
             let surface_config = self.surface_config.clone();
 
-            let resources = self.resources_mut();
+            let Some(resources) = self.resources.as_mut() else {
+                return;
+            };
 
             // Wait for any in-flight GPU work to complete before destroying textures
             if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
