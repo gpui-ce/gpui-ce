@@ -1945,6 +1945,14 @@ impl Window {
         self.platform_window.request_decorations(decorations);
     }
 
+    /// Set the window's input region to the union of `rects`. Pointer events
+    /// outside the region pass through to whatever is below the window.
+    /// An empty slice resets the input region, so the window will receive all
+    /// pointer events again. (wayland only)
+    pub fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
+        self.platform_window.set_input_region(rects);
+    }
+
     /// Start a window resize operation (Wayland)
     pub fn start_window_resize(&self, edge: ResizeEdge) {
         self.platform_window.start_window_resize(edge);

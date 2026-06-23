@@ -1471,6 +1471,29 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
+        let state = self.borrow();
+        if rects.is_empty() {
+            state.surface.set_input_region(None);
+        } else {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+            for rect in rects {
+                region.add(
+                    f32::from(rect.origin.x) as i32,
+                    f32::from(rect.origin.y) as i32,
+                    f32::from(rect.size.width) as i32,
+                    f32::from(rect.size.height) as i32,
+                );
+            }
+            state.surface.set_input_region(Some(&region));
+            region.destroy();
+        }
+        state.surface.commit();
+    }
+
     fn window_decorations(&self) -> Decorations {
         let state = self.borrow();
         match state.decorations {
