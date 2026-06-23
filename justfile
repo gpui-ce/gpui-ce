@@ -426,6 +426,22 @@ publish dry="false":
     print "\n✅ All crates published!"
 
 
+[doc('Sync upstream Zed GPUI changes into this fork (local-only, never pushes)')]
+[group('sync')]
+sync-upstream *args:
+    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh sync {{ args }}
+
+[doc('One-time: record the upstream baseline to sync from (defaults to the pinned zed dep rev)')]
+[group('sync')]
+sync-upstream-bootstrap *args:
+    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh bootstrap {{ args }}
+
+[doc('Show how far behind upstream Zed GPUI this fork is')]
+[group('sync')]
+sync-upstream-status:
+    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh status
+
+
 [doc('Generate project documentation')]
 [group('docs')]
 doc *flags:
@@ -458,3 +474,4 @@ alias l   := lint
 alias d   := doc
 alias up  := update
 alias cl  := clean
+alias sync := sync-upstream
