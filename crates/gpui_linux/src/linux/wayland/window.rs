@@ -286,6 +286,14 @@ impl WaylandSurfaceState {
         }
     }
 
+    fn set_exclusive_zone(&self, zone: i32) {
+        if let WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) =
+            self
+        {
+            layer_surface.set_exclusive_zone(zone);
+        }
+    }
+
     fn destroy(&mut self) {
         match self {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState {
@@ -1491,6 +1499,14 @@ impl PlatformWindow for WaylandWindow {
             state.surface.set_input_region(Some(&region));
             region.destroy();
         }
+        state.surface.commit();
+    }
+
+    fn set_exclusive_zone(&self, zone: Pixels) {
+        let state = self.borrow();
+        state
+            .surface_state
+            .set_exclusive_zone(f32::from(zone) as i32);
         state.surface.commit();
     }
 

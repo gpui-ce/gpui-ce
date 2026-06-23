@@ -1953,6 +1953,13 @@ impl Window {
         self.platform_window.set_input_region(rects);
     }
 
+    /// Controls how a surface interacts with surrounding screen space.
+    /// Positive values reserve space, 0 avoids reserved space, and -1 ignores
+    /// reserved space and may extend underneath other surfaces. (wayland only)
+    pub fn set_exclusive_zone(&self, zone: Pixels) {
+        self.platform_window.set_exclusive_zone(zone);
+    }
+
     /// Start a window resize operation (Wayland)
     pub fn start_window_resize(&self, edge: ResizeEdge) {
         self.platform_window.start_window_resize(edge);
