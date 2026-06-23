@@ -174,7 +174,7 @@ tracked_pathspec() { # echoes "crates/gpui crates/gpui_linux ..."
 render_prompt() { # <resolve|build> <payload>
   case "$1" in
     resolve)
-      printf '%s\n\n' "You are resolving git merge conflicts from syncing upstream Zed's GPUI crates into the standalone \`gpui-ce\` fork. The working tree is mid-merge."
+      printf '%s\n\n' "You are resolving git merge conflicts from syncing upstream Zed's GPUI crates into the standalone \`gpui-ce\` fork. A merge commit with the conflict markers committed in already exists; edit the working-tree files to remove every marker. Your edits become a SEPARATE resolution commit that will be reviewed in isolation, so resolve faithfully."
       printf 'Conflicted / unresolved files:\n'
       printf '%s\n' "$2" | sed 's/^/  - /'
       printf '\n'
@@ -243,7 +243,6 @@ auto_resolve_add_delete() {
 
 resolve_conflicts_loop() { # <branch> (for the error message)
   local branch="$1" attempt=0 files before after
-  auto_resolve_add_delete
   while has_unresolved; do
     attempt=$((attempt + 1))
     if [ "$attempt" -gt "$RETRIES" ]; then
@@ -370,23 +369,52 @@ cmd_sync() { # [ref]
   git switch -C "$branch" >/dev/null
   ok "working on branch '$branch'"
 
-  local merge_msg="merge: sync zed gpui ${last:0:12}..${target:0:12}
+  local upstream_note="The individual upstream commits are preserved in this merge's second-parent
+history (filtered to the tracked crates)."
+  local merge_clean_msg="merge: sync zed gpui ${last:0:12}..${target:0:12}
 
-Synced tracked GPUI crates from zed-industries/zed ($ZED_REF).
-The individual upstream commits are preserved in this merge's second-parent
-history (filtered to the tracked crates); conflicts are resolved here.
+Synced tracked GPUI crates from zed-industries/zed ($ZED_REF); no conflicts.
+$upstream_note
 Upstream range: $last..$target"
+  local merge_raw_msg="merge: sync zed gpui ${last:0:12}..${target:0:12} (raw, conflict markers)
+
+git's automatic 3-way merge of the filtered upstream history. Files git could
+NOT auto-merge are committed here WITH their conflict markers intact; the very
+next commit contains the resolution, so it can be reviewed as an isolated diff
+against this raw state. Deterministic add/delete conflicts were settled by
+policy (gpui-ce's deletions kept).
+$upstream_note
+Upstream range: $last..$target"
+  local resolution_msg="resolve conflicts from zed gpui sync ${last:0:12}..${target:0:12}
+
+Resolution of the conflict markers left by the preceding merge commit, performed
+by claude -p. Review THIS diff in isolation to audit the resolution — it shows
+exactly which side/lines were chosen, distinct from what git auto-merged."
 
   log "merging upstream delta…"
-  if git merge --no-ff --no-edit -m "$merge_msg" "$vnew"; then
+  # 3-way merge but DON'T auto-commit, so we can split raw conflicts from the resolution.
+  if git merge --no-ff --no-commit "$vnew"; then
+    git commit --no-edit -m "$merge_clean_msg" >/dev/null
     ok "merged cleanly (no conflicts)"
   else
     git rev-parse -q --verify MERGE_HEAD >/dev/null \
       || die "git merge failed without conflicts to resolve; aborting"
-    warn "conflicts detected — invoking claude to resolve"
-    resolve_conflicts_loop "$branch"
-    git commit --no-edit -m "$merge_msg" >/dev/null
-    ok "conflicts resolved; merge committed"
+    # Settle deterministic add/delete conflicts (kept out of the LLM step).
+    auto_resolve_add_delete
+    local nconf; nconf="$(conflicted_files | grep -c . || true)"
+    # Commit 1: the RAW merge — auto-merges applied, conflict markers committed in.
+    git add -A
+    git commit --no-edit -m "$merge_raw_msg" >/dev/null
+    ok "committed raw merge with conflict markers ($nconf file(s) to resolve)"
+    if [ "$nconf" -gt 0 ]; then
+      # Commit 2: claude's resolution of the markers — reviewable as an isolated diff.
+      warn "resolving conflict markers with claude…"
+      resolve_conflicts_loop "$branch"
+      git commit -m "$resolution_msg" >/dev/null
+      ok "committed conflict resolution (separate, reviewable commit)"
+    else
+      ok "no content conflicts (only add/delete, settled in the merge commit)"
+    fi
   fi
 
   [ "$BUMP_ZED_DEPS" = 1 ] && bump_zed_deps "$target"
