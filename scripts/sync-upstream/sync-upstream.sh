@@ -98,29 +98,70 @@ default_baseline() {
     "$REPO_ROOT/Cargo.toml" | head -1
 }
 
-# Build a filtered commit containing ONLY the tracked crates from <sha>, at their
-# correct relative paths. Optional <parent> chains it onto the vendor history.
-# Echoes the new commit sha. Uses a throwaway index — no working-tree churn.
-build_vendor_snapshot() { # <sha> [parent]  -> commit sha (stdout)
-  local sha="$1" parent="${2:-}" idx tree c added=0
+# Build a tree object containing ONLY the tracked crates from <sha>, at their correct
+# relative paths. Echoes the tree sha. Uses a throwaway index — no working-tree churn.
+filtered_tree() { # <sha> -> tree sha (stdout); returns 1 if no tracked crate present
+  local sha="$1" idx tree c added=0
   idx="$(mktemp -u)"
   GIT_INDEX_FILE="$idx" git read-tree --empty
   for c in "${TRACKED_CRATES[@]}"; do
     if git cat-file -e "$sha:crates/$c" 2>/dev/null; then
       GIT_INDEX_FILE="$idx" git read-tree --prefix="crates/$c/" "$sha:crates/$c"
       added=$((added + 1))
-    else
-      warn "crates/$c absent at ${sha:0:12}; skipping"
     fi
   done
-  [ "$added" -gt 0 ] || { rm -f "$idx"; die "no tracked crates found at ${sha:0:12}"; }
+  if [ "$added" -eq 0 ]; then rm -f "$idx"; return 1; fi
   tree="$(GIT_INDEX_FILE="$idx" git write-tree)"
   rm -f "$idx"
+  printf '%s' "$tree"
+}
+
+# Bootstrap baseline: a single filtered snapshot commit (no upstream history precedes the
+# baseline). Optional <parent> chains it. Echoes the commit sha.
+build_vendor_snapshot() { # <sha> [parent] -> commit sha (stdout)
+  local sha="$1" parent="${2:-}" tree
+  tree="$(filtered_tree "$sha")" || die "no tracked crates found at ${sha:0:12}"
   if [ -n "$parent" ]; then
-    git commit-tree "$tree" -p "$parent" -m "vendor: zed gpui @ ${sha:0:12}"
+    git commit-tree "$tree" -p "$parent" -m "vendor: zed gpui baseline @ ${sha:0:12}"
   else
-    git commit-tree "$tree" -m "vendor: zed gpui @ ${sha:0:12}"
+    git commit-tree "$tree" -m "vendor: zed gpui baseline @ ${sha:0:12}"
   fi
+}
+
+# Replay one upstream commit as a filtered commit, preserving its author, committer, dates
+# and message (plus a zed-upstream sha trailer). The tree is the filtered snapshot at that
+# commit, so the diff vs <parent> is exactly that commit's gpui change. Echoes the new sha.
+replay_commit() { # <tree> <parent> <orig_commit> -> commit sha (stdout)
+  local tree="$1" parent="$2" oc="$3" msg
+  msg="$(git show -s --format=%B "$oc")"
+  GIT_AUTHOR_NAME="$(git show -s --format=%an "$oc")" \
+  GIT_AUTHOR_EMAIL="$(git show -s --format=%ae "$oc")" \
+  GIT_AUTHOR_DATE="$(git show -s --format=%aI "$oc")" \
+  GIT_COMMITTER_NAME="$(git show -s --format=%cn "$oc")" \
+  GIT_COMMITTER_EMAIL="$(git show -s --format=%ce "$oc")" \
+  GIT_COMMITTER_DATE="$(git show -s --format=%cI "$oc")" \
+  git commit-tree "$tree" -p "$parent" -m "$msg
+
+zed-upstream: $oc"
+}
+
+# Replay upstream's gpui-touching commits from <from>..<to> as a filtered, metadata-
+# preserving chain onto <parent>. Merging the resulting tip keeps every upstream commit in
+# history (second-parent ancestry) while the cumulative delta equals a single snapshot.
+# Empty (non-gpui) commits and merge commits are dropped. Echoes the new tip sha.
+build_vendor_history() { # <parent_commit> <from_sha> <to_sha> -> tip sha (stdout)
+  local parent="$1" from="$2" to="$3" prev="$1" c tree ptree n=0 commits
+  # shellcheck disable=SC2046
+  commits="$(git rev-list --reverse --topo-order --no-merges "$from..$to" -- $(tracked_pathspec))"
+  for c in $commits; do
+    tree="$(filtered_tree "$c")" || continue
+    ptree="$(git rev-parse "$prev^{tree}")"
+    [ "$tree" = "$ptree" ] && continue   # no net change inside the tracked crates
+    prev="$(replay_commit "$tree" "$prev" "$c")"
+    n=$((n + 1))
+  done
+  log "replayed $n upstream gpui commit(s) into vendor history" >&2
+  printf '%s' "$prev"
 }
 
 tracked_pathspec() { # echoes "crates/gpui crates/gpui_linux ..."
@@ -319,8 +360,11 @@ cmd_sync() { # [ref]
   git merge-base --is-ancestor "$vendor_tip" HEAD \
     || die "vendor_tip not in current branch history — run sync from the branch that holds the last sync (usually main)"
 
-  local vnew; vnew="$(build_vendor_snapshot "$target" "$vendor_tip")"
+  local vnew; vnew="$(build_vendor_history "$vendor_tip" "$last" "$target")"
   git update-ref "refs/heads/$VENDOR_BRANCH" "$vnew"
+  if [ "$vnew" = "$vendor_tip" ]; then
+    warn "no gpui-touching upstream commits in range — only deps will be updated"
+  fi
 
   local branch="sync/zed-$(date -u +%Y%m%d)-${target:0:7}"
   git switch -C "$branch" >/dev/null
@@ -329,6 +373,8 @@ cmd_sync() { # [ref]
   local merge_msg="merge: sync zed gpui ${last:0:12}..${target:0:12}
 
 Synced tracked GPUI crates from zed-industries/zed ($ZED_REF).
+The individual upstream commits are preserved in this merge's second-parent
+history (filtered to the tracked crates); conflicts are resolved here.
 Upstream range: $last..$target"
 
   log "merging upstream delta…"
