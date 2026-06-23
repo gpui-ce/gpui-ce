@@ -40,8 +40,11 @@ MODEL="${SYNC_MODEL:-opus}"
 RETRIES="${SYNC_RETRIES:-3}"
 # Per-invocation wall-clock cap in seconds (0 disables; needs `timeout`).
 CLAUDE_TIMEOUT="${SYNC_CLAUDE_TIMEOUT:-1800}"
-# Bound on claude's agentic turns per invocation (0 disables).
-CLAUDE_MAX_TURNS="${SYNC_CLAUDE_MAX_TURNS:-60}"
+# Optional cap on claude's agentic turns per invocation (0 = no cap, the default).
+# Resolving many files in one pass is turn-intensive, so we do not cap by default:
+# the wall-clock CLAUDE_TIMEOUT bounds runaway invocations and hitting it is non-fatal
+# (the loop re-checks progress and retries). Set >0 to impose a turn cap.
+CLAUDE_MAX_TURNS="${SYNC_CLAUDE_MAX_TURNS:-0}"
 # Tools claude may use headlessly. Edits/writes are auto-accepted via
 # --permission-mode acceptEdits; the rest are read-only/build helpers. Git
 # staging/commits are done by THIS script, never by claude, and push is never

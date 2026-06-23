@@ -47,7 +47,11 @@ changes.
    If an upstream change references a crate or module that doesn't exist in gpui-ce, drop that
    reference rather than reintroducing the removed code.
 
-7. **Do not** run `git commit`, `git merge`, `git rebase`, or `git push`. Only edit files to
+7. **Add/delete conflicts are handled for you** — the script settles `modify/delete` cases
+   (files gpui-ce deleted that upstream changed are kept deleted) before calling you, so you
+   only ever see content conflicts. Don't recreate a deleted file.
+
+8. **Do not** run `git commit`, `git merge`, `git rebase`, or `git push`. Only edit files to
    resolve the conflicts — the surrounding script stages and commits. Do not change anything
    unrelated to the conflicts.
 
