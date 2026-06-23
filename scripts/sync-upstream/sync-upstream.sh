@@ -217,9 +217,11 @@ resolve_conflicts_loop() { # <branch> (for the error message)
     run_claude "$(render_prompt resolve "$files")"
     git add -A
     after="$(conflicted_files | grep -c . || true)"
-    [ "$after" -gt 0 ] && [ "$after" -ge "$before" ] && \
+    if [ "$after" -gt 0 ] && [ "$after" -ge "$before" ]; then
       warn "no progress this pass ($before → $after files) — claude may be stuck on these"
+    fi
   done
+  return 0   # never let the while/no-progress status trip `set -e` in the caller
 }
 
 # ── dependency bump ──────────────────────────────────────────────────────────
