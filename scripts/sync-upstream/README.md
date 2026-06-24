@@ -43,9 +43,12 @@ identical paths here. The script uses a **vendor-branch 3-way merge** (a general
      *exactly* what was chosen — auditable in isolation, distinct from git's auto-merge.
    (A conflict-free sync is just one clean merge commit.)
 4. The pinned `zed-industries/zed` git-dep revs in the root `Cargo.toml` are bumped to
-   the synced commit, then `just check` runs; on failure `claude -p`
-   (`fix-build.prompt.md`) is looped up to `--retries` times to make it compile —
-   committed as a **third** commit. **Tests are not run or fixed automatically.**
+   the synced commit, then the **verify-fix loop** runs: the build gate (`just check`,
+   which also treats compile **warnings** as fixable so the branch stays CI-clean), then
+   the test gate (`just test`). Any failure — compile errors, warnings, or test failures —
+   is handed to `claude -p` (`fix-build.prompt.md`), looped up to `--retries` times, and
+   committed as a **third** commit. Disable tests with `SYNC_RUN_TESTS=0`, or warning
+   enforcement with `SYNC_FAIL_ON_WARNINGS=0`.
 
 ### Tracked vs. untracked
 
