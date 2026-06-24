@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn, cast
 
-# ── locate repo ───────────────────────────────────────────────────────────────
+# locate repo
 SCRIPT_DIR: Path = Path(__file__).resolve().parent
 REPO_ROOT: Path = Path(
     subprocess.run(
@@ -50,7 +50,7 @@ REPO_ROOT: Path = Path(
 )
 
 
-# ── static config (env-overridable) ───────────────────────────────────────────
+# static config (env-overridable)
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
@@ -84,14 +84,19 @@ _DEFAULT_ALLOWED_TOOLS: str = (
 )
 CLAUDE_ALLOWED_TOOLS: str = _env("SYNC_CLAUDE_ALLOWED_TOOLS", _DEFAULT_ALLOWED_TOOLS)
 
-# Post-merge compile gate (host-buildable crates only; macOS/Windows changes need their
-# own platform or CI). The build-fix loop runs this.
+# Post-merge gates (host-buildable crates only; macOS/Windows changes need their own
+# platform or CI). The verify-fix loop runs the build gate, then the test gate.
 VERIFY_CMD: str = _env("SYNC_VERIFY_CMD", "just check")
+TEST_CMD: str = _env("SYNC_TEST_CMD", "just test")
+RUN_TESTS: bool = _env("SYNC_RUN_TESTS", "1") == "1"
+# Treat compile warnings as a fixable condition (the synced branch must be warning-clean to
+# pass CI, which denies warnings). Set 0 if pre-existing warnings cause churn.
+FAIL_ON_WARNINGS: bool = _env("SYNC_FAIL_ON_WARNINGS", "1") == "1"
 
 STATE_FILE: Path = REPO_ROOT / "scripts" / "sync-upstream" / "state.json"
 
 
-# ── runtime config (env defaults; overridable by CLI flags / during a run) ────
+# runtime config (env defaults; overridable by CLI flags / during a run)
 @dataclass
 class Runtime:
     zed_ref: str
@@ -111,7 +116,7 @@ RT = Runtime(
 )
 
 
-# ── output ────────────────────────────────────────────────────────────────────
+# output
 _COLOR: bool = sys.stdout.isatty()
 
 
@@ -144,7 +149,7 @@ def die(msg: str) -> NoReturn:
     raise SyncError(msg)
 
 
-# ── git helpers ───────────────────────────────────────────────────────────────
+# git helpers
 def git(
     *args: str,
     check: bool = True,
@@ -190,7 +195,7 @@ def gok(*args: str) -> bool:
     return git(*args, check=False).returncode == 0
 
 
-# ── vendor history (filtered replay of upstream commits) ──────────────────────
+# vendor history (filtered replay of upstream commits)
 def tracked_pathspec() -> list[str]:
     return [f"crates/{crate}" for crate in TRACKED_CRATES]
 
@@ -263,8 +268,8 @@ def build_vendor_history(parent: str, frm: str, to: str) -> str:
     return prev
 
 
-# ── claude invocation ─────────────────────────────────────────────────────────
-def render_prompt(kind: str, files: list[str]) -> str:
+# claude invocation
+def render_prompt(kind: str, files: list[str], issue: str = "") -> str:
     if kind == "resolve":
         head = (
             "You are resolving git merge conflicts from syncing upstream Zed's GPUI crates "
@@ -277,13 +282,14 @@ def render_prompt(kind: str, files: list[str]) -> str:
         body = (SCRIPT_DIR / "resolve-conflicts.prompt.md").read_text()
         return f"{head}\n\nConflicted / unresolved files:\n{listing}\n\n{body}"
     head = (
-        "You are fixing compile errors after merging upstream Zed GPUI changes into "
-        "`gpui-ce`. The merge is already committed; only fix what is needed to compile."
+        f"You are fixing {issue or 'build issues'} that the upstream Zed GPUI merge introduced "
+        "in `gpui-ce`. The merge is already committed; fix only what the merge/sync caused."
     )
+    cmd_used = TEST_CMD if issue == "test failures" else VERIFY_CMD
     tail = "\n".join(RT.build_log.splitlines()[-300:])
     body = (SCRIPT_DIR / "fix-build.prompt.md").read_text()
     block = f"```\n{tail}\n```"
-    return f"{head}\n\nBuild command: `{VERIFY_CMD}`\nRecent build output (tail):\n{block}\n\n{body}"
+    return f"{head}\n\nCommand: `{cmd_used}`\nRecent output (tail):\n{block}\n\n{body}"
 
 
 def run_claude(prompt: str) -> None:
@@ -305,7 +311,7 @@ def run_claude(prompt: str) -> None:
         warn(f"claude hit the {CLAUDE_TIMEOUT}s timeout — re-checking progress, may retry")
 
 
-# ── conflict detection / resolution ───────────────────────────────────────────
+# conflict detection / resolution
 _MARKER_RE = r"^(<{7}|>{7}|\|{7})"
 
 
@@ -371,7 +377,7 @@ def resolve_conflicts_loop(branch: str) -> None:
             warn(f"no progress this pass ({before} → {after} files) — claude may be stuck")
 
 
-# ── dependency bump ────────────────────────────────────────────────────────────
+# dependency bump
 def bump_zed_deps(target: str) -> None:
     log(f"bumping zed-industries/zed git-dep revs → {target[:12]}")
     path = REPO_ROOT / "Cargo.toml"
@@ -387,33 +393,64 @@ def bump_zed_deps(target: str) -> None:
     ok(f"rewrote {bumped} zed dep rev(s) in Cargo.toml")
 
 
-# ── build verification / fixing ────────────────────────────────────────────────
-def run_verify() -> bool:
-    log(f"verifying build: {VERIFY_CMD}")
+# build / test verification + fixing
+# A compile warning line: `warning: ...` or `warning[...]` at the start of a line.
+_WARNING_RE = r"(?m)^warning(:|\[)"
+
+
+def _run_gate(cmd: str) -> tuple[int, str]:
     result = subprocess.run(
-        VERIFY_CMD, cwd=REPO_ROOT, shell=True, text=True,
+        cmd, cwd=REPO_ROOT, shell=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
-    RT.build_log = result.stdout or ""
-    print(RT.build_log, end="")
-    return result.returncode == 0
+    out = result.stdout or ""
+    print(out, end="")
+    return result.returncode, out
 
 
-def build_fix_loop() -> bool:
+def _build_issue() -> str:
+    """Run the compile gate; '' if clean, else a short issue label (errors or warnings)."""
+    log(f"verifying build: {VERIFY_CMD}")
+    rc, out = _run_gate(VERIFY_CMD)
+    RT.build_log = out
+    if rc != 0:
+        return "compile errors"
+    if FAIL_ON_WARNINGS and re.search(_WARNING_RE, out) is not None:
+        return "compile warnings"
+    return ""
+
+
+def _test_issue() -> str:
+    """Run the test gate; '' if it passes, else 'test failures'."""
+    log(f"running tests: {TEST_CMD}")
+    rc, out = _run_gate(TEST_CMD)
+    RT.build_log = out
+    return "test failures" if rc != 0 else ""
+
+
+def verify_fix_loop() -> bool:
+    """Loop the build (compile errors + warnings) and test gates, fixing failures with claude.
+
+    The build gate runs first; only once it's clean do we run tests. Any failing gate's
+    output is handed to claude, bounded by RT.retries total fix passes.
+    """
     attempt = 0
     while True:
-        if run_verify():
-            ok("build passes")
+        issue = _build_issue()
+        if not issue and RUN_TESTS:
+            issue = _test_issue()
+        if not issue:
+            ok("verification passed (build + tests)" if RUN_TESTS else "verification passed (build)")
             return True
         attempt += 1
         if attempt > RT.retries:
-            warn(f"build still failing after {RT.retries} fix attempt(s); leaving branch for manual finishing")
+            warn(f"{issue} remain after {RT.retries} fix attempt(s); leaving branch for manual finishing")
             return False
-        log(f"claude build-fix pass {attempt}/{RT.retries}")
-        run_claude(render_prompt("build", []))
+        log(f"claude fix pass {attempt}/{RT.retries} ({issue})")
+        run_claude(render_prompt("verify", [], issue))
 
 
-# ── state ──────────────────────────────────────────────────────────────────────
+# state
 def state_get(key: str) -> str:
     if not STATE_FILE.exists():
         return ""
@@ -436,7 +473,7 @@ def write_state(last_synced: str, vendor_tip: str) -> None:
     _ = STATE_FILE.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-# ── upstream remote ──────────────────────────────────────────────────────────
+# upstream remote
 def require_clean_tree() -> None:
     if gout("status", "--porcelain"):
         die("working tree is not clean; commit or stash changes first")
@@ -472,7 +509,7 @@ def default_baseline() -> str:
     return ""
 
 
-# ── subcommands ──────────────────────────────────────────────────────────────
+# subcommands
 def cmd_bootstrap(baseline: str | None) -> None:
     require_clean_tree()
     ensure_remote()
@@ -597,17 +634,19 @@ def cmd_sync(ref: str | None) -> None:
     if RT.bump_zed_deps:
         bump_zed_deps(target)
 
-    build_ok = build_fix_loop()
+    verify_ok = verify_fix_loop()
 
     if gout("status", "--porcelain"):
         run_git("add", "-A")
-        run_git("commit", "-m", "chore(sync): post-merge fixes (zed deps bump + build)", check=False)
+        run_git("commit", "-m",
+                "chore(sync): post-merge fixes (zed deps bump + build/test/warning fixes)",
+                check=False)
         ok("committed post-merge fixes")
 
     write_state(target, vnew)
     run_git("add", str(STATE_FILE))
     run_git("commit", "-m", f"chore(sync): advance sync state to {target[:12]}")
-    summary(branch, last, target, build_ok)
+    summary(branch, last, target, verify_ok)
 
 
 def cmd_status() -> None:
@@ -628,21 +667,22 @@ def cmd_status() -> None:
         ok(f"up to date with {RT.zed_ref}")
 
 
-def summary(branch: str, last: str, target: str, build_ok: bool) -> None:
+def summary(branch: str, last: str, target: str, verify_ok: bool) -> None:
+    gates = f"{VERIFY_CMD} + {TEST_CMD}" if RUN_TESTS else VERIFY_CMD
     print()
-    if build_ok:
-        ok("sync complete — build passes")
+    if verify_ok:
+        ok("sync complete — build + tests pass" if RUN_TESTS else "sync complete — build passes")
     else:
-        warn("sync complete — BUILD STILL FAILING, finish manually")
+        warn("sync complete — VERIFICATION FAILED, finish manually")
     print(f"  branch         : {branch}")
     print(f"  upstream range : {last[:12]}..{target[:12]}")
-    print(f"  build ({VERIFY_CMD}) : {'OK' if build_ok else 'FAILED'}")
+    print(f"  verify ({gates}) : {'OK' if verify_ok else 'FAILED'}")
     print(f"\nReview : git log --oneline --stat main..{branch}")
     print(f"Merge  : git switch main && git merge --ff-only {branch}   (or open a PR)")
     print(f"{_D}Nothing was pushed.{_Z}")
 
 
-# ── entrypoint ───────────────────────────────────────────────────────────────
+# entrypoint
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="sync_upstream.py",
