@@ -76,15 +76,14 @@ has more to merge; correctness is unaffected.
 
 | File | Purpose |
 |------|---------|
-| `sync-upstream.sh` | orchestrator (git plumbing + `claude -p` loops) |
-| `config.sh` | tunables — tracked crates, remote, model, retries, verify cmd |
+| `sync_upstream.py` | orchestrator (git plumbing + `claude -p` loops); stdlib-only, fully typed |
 | `resolve-conflicts.prompt.md` | rules for the conflict-resolution `claude -p` pass |
 | `fix-build.prompt.md` | rules for the build-fix `claude -p` pass |
 | `state.json` | committed: last synced upstream sha + vendor tip |
 
 ## Config / env overrides
 
-Every value in `config.sh` is overridable via a `SYNC_*` env var:
+Every default near the top of `sync_upstream.py` is overridable via a `SYNC_*` env var:
 
 ```sh
 SYNC_MODEL=sonnet just sync-upstream          # cheaper model
@@ -98,7 +97,8 @@ just sync-upstream --ref some-tag --no-bump --dry-run
 - The compile gate is host-only (`just check` / `cargo check --workspace`). macOS- and
   Windows-specific changes can't be fully verified on a Linux host — verify those on the
   platform or in CI. The build-fix prompt asks claude to flag such changes.
-- Requires the `claude` CLI on `PATH` and a working `just` + Rust toolchain.
+- Requires Python 3 (stdlib only — no pip installs), the `claude` CLI on `PATH`, and a
+  working `just` + Rust toolchain. The `just` recipes shell out to `sync_upstream.py`.
 - If conflict resolution exhausts its retries, the branch is left mid-merge for you to
   finish. If the build can't be fixed in time, the merge is committed and the branch is
   left with the remaining errors plus a clear report.

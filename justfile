@@ -450,17 +450,17 @@ publish dry="false":
 [doc('Sync upstream Zed GPUI changes into this fork (local-only, never pushes)')]
 [group('sync')]
 sync-upstream *args:
-    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh sync {{ args }}
+    @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py sync {{ args }}
 
 [doc('One-time: record the upstream baseline to sync from (defaults to the pinned zed dep rev)')]
 [group('sync')]
 sync-upstream-bootstrap *args:
-    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh bootstrap {{ args }}
+    @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py bootstrap {{ args }}
 
 [doc('Show how far behind upstream Zed GPUI this fork is')]
 [group('sync')]
 sync-upstream-status:
-    @bash {{ project_root }}/scripts/sync-upstream/sync-upstream.sh status
+    @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py status
 
 
 [doc('Generate project documentation')]
