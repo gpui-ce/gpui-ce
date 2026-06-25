@@ -240,10 +240,13 @@ pub struct StringStorage {
     value: String,
     version: u16,
 }
-impl From<String> for StringStorage {
-    fn from(value: String) -> Self {
+impl<S> From<S> for StringStorage
+where
+    S: Into<String>,
+{
+    fn from(value: S) -> Self {
         Self {
-            value,
+            value: value.into(),
             version: u16::default(),
         }
     }

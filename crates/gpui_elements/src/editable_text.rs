@@ -16,7 +16,6 @@ pub use storage::*;
 - color styling configs
 - text sanitation
 - test IME (char palette only available on macos)
-- unit tests
 */
 
 /* Open questions:
