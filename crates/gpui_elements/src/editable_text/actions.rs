@@ -143,6 +143,7 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
     bindings
 }
 
+/// Declares stubs for all editable-text actions that an element's state entity can implement.
 pub trait EditableTextActionHandler<Context>: Sized {
     fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Context) {}
 
@@ -213,6 +214,7 @@ pub trait EditableTextActionHandler<Context>: Sized {
     }
 }
 
+/// Generic trait to support an element backed by an internal state entity to bind to all editable-text input actions.
 pub(super) trait EditableTextActionElement<State> {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<State>>>;
 

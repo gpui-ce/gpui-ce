@@ -6,10 +6,14 @@ use smallvec::SmallVec;
 /// Default interval for caret blinking.
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Events emitted that the [`Caret`] listens to.
 pub enum CaretNotify {
+    /// The caret should pause blinking in response to a user-action
     PauseBlinking,
 }
 
+/// State of an EditableText caret cursor, which supports features like blinking.
+/// Blinking is disabled by default.
 pub struct Caret {
     /// The frequency at which the caret blinks
     interval: Duration,
@@ -40,16 +44,20 @@ impl Default for Caret {
 }
 
 impl Caret {
+    /// Sets the blinking interval of the caret to the global "default".
+    /// The true default of the caret is "do not blink".
     pub fn blink_interval_default(mut self) -> Self {
         self.interval = DEFAULT_BLINK_INTERVAL;
         self
     }
 
+    /// Sets the blinking interval of the caret.
     pub fn blink_interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
         self
     }
 
+    /// Listens for CaretNotify events on an entity (e.g. [`EditableTextState`]).
     pub fn subscribe_to<E>(&mut self, emitter: &Entity<E>, cx: &mut Context<Self>)
     where
         E: EventEmitter<CaretNotify>,
@@ -66,7 +74,7 @@ impl Caret {
     }
 
     /// Processes updates during prepaint and returns whether the caret is currently visible.
-    pub fn update_focus(&mut self, is_focused: bool, cx: &mut Context<Self>) -> bool {
+    pub(super) fn update_focus(&mut self, is_focused: bool, cx: &mut Context<Self>) -> bool {
         let was_focused = self.was_focused;
         self.was_focused = is_focused;
 
