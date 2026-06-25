@@ -18,11 +18,14 @@ pub struct EditableTextState {
     caret: Entity<Caret>,
 
     /// The utf-8 character range that is currently selected by the user.
-    /// Valid both when start < end and start > end (which dictates the direction of the selection). Empty when start==end.
-    /// The start of this range is always the current position of the caret (input cursor).
+    /// Valid both when start < end and start > end (which dictates the direction of the selection).
+    /// Empty when start==end. The start of this range is always the current position of the caret (input cursor).
+    /// This means it breaks the semantics/expectations of the Range type.
     ///
-    /// NOTE: because each input has its own selection state, its trivial for users to have multiple selections active across multiple inputs at the same time.
-    /// This could be considered undesirable behavior, and could prompt the question of whether there should be a mechanism to clear selection when focus is lost.
+    /// NOTE: because each input has its own selection state, its trivial for users to have
+    /// multiple selections active across multiple inputs at the same time.
+    /// This could be considered undesirable behavior, and could prompt the question of
+    /// whether there should be a mechanism to clear selection when focus is lost.
     selected_range: Range<usize>,
 
     /// The utf-8 character range of `storage` which is being composed by IME
@@ -85,12 +88,24 @@ impl TextLineSegment {
         count.unwrap_or_default() + 1
     }
 
-    pub fn contains_position(&self, pos: usize) -> bool {
+    pub fn contains_position(&self, pos: usize, include_end: bool) -> bool {
         if self.text_range.is_empty() {
-            pos == self.text_range.start
-        } else {
-            pos >= self.text_range.start && pos < self.text_range.end
+            return pos == self.text_range.start;
         }
+
+        // pos must be >= range-start
+        if pos < self.text_range.start {
+            return false;
+        }
+
+        // pos must be <= range-end
+        if pos > self.text_range.end {
+            return false;
+        }
+
+        // pos must be < range-end
+        // or == is permitted if explicitly allowed (varies according to usage needs)
+        pos < self.text_range.end || include_end
     }
 }
 
@@ -483,7 +498,7 @@ impl EditableTextState {
         let line_height = self.layout_data.line_height;
         let mut row_count = 0;
         for segment in &self.layout_data.lines {
-            if !segment.contains_position(character_pos) {
+            if !segment.contains_position(character_pos, false) {
                 row_count += segment.row_count();
                 continue;
             }

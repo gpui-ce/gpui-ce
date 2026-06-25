@@ -688,10 +688,7 @@ impl EditableTextElement {
                 }
             }
 
-            // TODO: doesnt render caret when the caret is at the end of the document.
-            // contains_position doesnt include the last character because then scroll-to-caret is incorrect,
-            // but we still need to account for "caret is at the end of the last line"
-            let is_cursor_in_line = segment.contains_position(caret_pos);
+            let is_cursor_in_line = segment.contains_position(caret_pos, true);
             if is_cursor_in_line && let Some(wrapped) = &segment.wrapped_line {
                 let local_offset = caret_pos.saturating_sub(segment.text_range.start);
                 let caret_px = wrapped
