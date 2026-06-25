@@ -22,6 +22,7 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         init_storage: InitStorage::default(),
         placeholder: None,
         accepts_input: true,
+        colors: EditableTextColors::default(),
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -51,6 +52,33 @@ pub struct EditableTextElement {
     supports_multiline: bool,
     placeholder: Option<SharedString>,
     accepts_input: bool,
+    colors: EditableTextColors,
+}
+
+/// EditableText styling that goes beyond what Style/StyleRefinement supports
+struct EditableTextColors {
+    /// Color of the placeholder text when the storage is empty.
+    /// Could be reconceived as a refinement of text_color when the field is empty
+    placeholder: Hsla,
+    /// Color of the selection box.
+    /// Could be driven by platform-provided styling?
+    selection: Hsla,
+    /// Color of the caret / text cursor
+    caret: Hsla,
+}
+impl Default for EditableTextColors {
+    fn default() -> Self {
+        Self {
+            placeholder: Hsla::white().opacity(0.5),
+            selection: Hsla {
+                h: 0.583,
+                s: 0.519,
+                l: 0.31,
+                a: 0.5,
+            },
+            caret: Hsla::white(),
+        }
+    }
 }
 
 impl EditableTextElement {
@@ -83,6 +111,24 @@ impl EditableTextElement {
     /// Configures whether the element can accept input (effectively is the element currently enabled).
     pub fn accepts_input(mut self, enabled: bool) -> Self {
         self.accepts_input = enabled;
+        self
+    }
+
+    /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
+    pub fn placeholder_color(mut self, color: Hsla) -> Self {
+        self.colors.placeholder = color;
+        self
+    }
+
+    /// Sets the color of the box highlighting selected text.
+    pub fn selection_color(mut self, color: Hsla) -> Self {
+        self.colors.selection = color;
+        self
+    }
+
+    /// Sets the color of the caret / text-cursor.
+    pub fn caret_color(mut self, color: Hsla) -> Self {
+        self.colors.caret = color;
         self
     }
 }
@@ -203,7 +249,7 @@ impl Element for EditableTextElement {
         self.interactivity.track_focus(focus_handle);
 
         let placeholder = self.placeholder.clone();
-        let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
+        let placeholder_color = self.colors.placeholder;
         let supports_multiline = self.supports_multiline;
         let accepts_input = self.accepts_input;
         let layout_id = self.interactivity.request_layout(
@@ -420,9 +466,6 @@ impl Element for EditableTextElement {
             inner_bounds,
         } = prepaint;
 
-        let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
-        let caret_color = Hsla::white(); // TODO: as an element param
-
         let state = request_layout.state.read(cx);
 
         let focus_handle = state.focus_handle(cx);
@@ -477,7 +520,7 @@ impl Element for EditableTextElement {
                             inner_bounds.origin
                                 + point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
                         ),
-                        selection_color,
+                        self.colors.selection,
                     )));
                 } else {
                     let offset_corners = build_quad_over_text(
@@ -490,7 +533,7 @@ impl Element for EditableTextElement {
                     elements.extend(PrepaintElement::build_quads(
                         offset_corners,
                         inner_bounds.origin,
-                        selection_color,
+                        self.colors.selection,
                     ));
                 }
             }
@@ -513,7 +556,7 @@ impl Element for EditableTextElement {
                     elements.extend(PrepaintElement::build_quads(
                         offset_corners,
                         inner_bounds.origin,
-                        selection_color,
+                        self.colors.selection,
                     ));
                 }
             }
@@ -542,7 +585,7 @@ impl Element for EditableTextElement {
                     inner_bounds.origin + carent_point,
                     size(gpui::px(CURSOR_WIDTH), line_height),
                 ),
-                caret_color,
+                self.colors.caret,
             );
             elements.push(PrepaintElement::Quad(quad));
         }

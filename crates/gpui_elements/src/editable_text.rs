@@ -12,7 +12,6 @@ pub use storage::*;
 /* TODO list
 - remove gpuikit based input
 - cursor blinking
-- color styling configs
 - text sanitation
 - add page up/down actions to nav by an entire page or expand selection by an entire page
 - test IME (char palette only available on macos)
