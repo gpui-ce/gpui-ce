@@ -904,10 +904,13 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
             self.replace_text(self.selected_range.clone(), "");
         } else {
+            use NavigationDirection::*;
+            use TextBoundary::*;
+
             // No selection: cut the entire current line (including newline)
             let caret = self.caret_pos();
-            let line_start = self.storage.find_line_start(caret);
-            let line_end = self.storage.find_line_end(caret);
+            let line_start = self.storage.offset_from_caret(caret, Back, Line);
+            let line_end = self.storage.offset_from_caret(caret, Forward, Line);
             let storage_len_utf8 = self.storage.content_utf8().len();
 
             // Include the newline character if there is one after the line
@@ -976,7 +979,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        let character_pos = self.index_for_pixel_point(text_position, window.line_height());
+        let caret_pos = self.index_for_pixel_point(text_position, window.line_height());
 
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
@@ -999,13 +1002,15 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         match self.click_count {
             2 => {
-                let (word_start, word_end) = self.storage.word_range_at(character_pos);
-                self.selected_range = word_start..word_end;
+                self.selected_range = self.storage.word_range_at(caret_pos);
                 cx.notify();
             }
             3 => {
-                let line_start = self.storage.find_line_start(character_pos);
-                let line_end = self.storage.find_line_end(character_pos);
+                use NavigationDirection::*;
+                use TextBoundary::*;
+
+                let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
+                let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
                 let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
                     line_end + 1
                 } else {
@@ -1016,9 +1021,9 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             }
             _ => {
                 if event.modifiers.shift {
-                    self.select_to(character_pos, cx);
+                    self.select_to(caret_pos, cx);
                 } else {
-                    self.move_to(character_pos, cx);
+                    self.move_to(caret_pos, cx);
                 }
             }
         }
@@ -1643,14 +1648,18 @@ mod tests {
         let view = create_test_input(cx, "first\nsecond\nthird", 0..0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                assert_eq!(input.storage().find_line_start(0), 0);
-                assert_eq!(input.storage().find_line_start(3), 0);
-                assert_eq!(input.storage().find_line_start(6), 6);
-                assert_eq!(input.storage().find_line_start(13), 13);
+                use NavigationDirection::*;
+                use TextBoundary::*;
+                let storage = input.storage();
 
-                assert_eq!(input.storage().find_line_end(0), 5);
-                assert_eq!(input.storage().find_line_end(6), 12);
-                assert_eq!(input.storage().find_line_end(13), 18);
+                assert_eq!(storage.offset_from_caret(0, Back, Line), 0);
+                assert_eq!(storage.offset_from_caret(3, Back, Line), 0);
+                assert_eq!(storage.offset_from_caret(6, Back, Line), 6);
+                assert_eq!(storage.offset_from_caret(13, Back, Line), 13);
+
+                assert_eq!(storage.offset_from_caret(0, Forward, Line), 5);
+                assert_eq!(storage.offset_from_caret(6, Forward, Line), 12);
+                assert_eq!(storage.offset_from_caret(13, Forward, Line), 18);
             });
         })
         .unwrap();
@@ -1720,7 +1729,9 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                assert_eq!(input.storage().previous_boundary(0), 0);
+                use NavigationDirection::*;
+                use TextBoundary::*;
+                assert_eq!(input.storage().offset_from_caret(0, Back, Graphmeme), 0);
             });
         })
         .unwrap();
@@ -1731,8 +1742,11 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                assert_eq!(input.storage().next_boundary(5), 5);
-                assert_eq!(input.storage().next_boundary(100), 5);
+                use NavigationDirection::*;
+                use TextBoundary::*;
+                let storage = input.storage();
+                assert_eq!(storage.offset_from_caret(5, Forward, Graphmeme), 5);
+                assert_eq!(storage.offset_from_caret(100, Forward, Graphmeme), 5);
             });
         })
         .unwrap();
@@ -1743,13 +1757,13 @@ mod tests {
         let view = create_test_input(cx, "hello world", 0..0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                let (start, end) = input.storage().word_range_at(5);
-                assert_eq!(start, 0);
-                assert_eq!(end, 5);
+                let range = input.storage().word_range_at(5);
+                assert_eq!(range.start, 0);
+                assert_eq!(range.end, 5);
 
-                let (start, end) = input.storage().word_range_at(8);
-                assert_eq!(start, 6);
-                assert_eq!(end, 11);
+                let range = input.storage().word_range_at(8);
+                assert_eq!(range.start, 6);
+                assert_eq!(range.end, 11);
             });
         })
         .unwrap();

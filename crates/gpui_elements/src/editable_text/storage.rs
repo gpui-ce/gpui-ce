@@ -4,13 +4,13 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// Describes a boundary within a chunk of text.
 pub enum TextBoundary {
-    /// The next utf-8 character in a direction from the caret
+    /// The utf-8 character
     Graphmeme,
-    /// The next word in a direction from the caret
+    /// The current word (using whitespace as delimiters)
     Word,
-    /// The start/end of the current line
+    /// The current line
     Line,
-    /// The rest of the text to the start/end of a document
+    /// The entire document
     Document,
 }
 
@@ -63,8 +63,7 @@ pub trait UnicodeTextStorage {
     /// Replace contents within the provided range with the given str slice.
     fn replace_range(&mut self, range: Range<usize>, text: &str);
 
-    // TODO: Refine the api for these methods
-
+    /// Returns the utf16 position equivalent of the provided utf8 character position.
     fn utf_offset_8to16(&self, pos_uft8: usize) -> usize {
         // Fast path: if offset is 0, return 0
         if pos_uft8 == 0 {
@@ -86,6 +85,7 @@ pub trait UnicodeTextStorage {
         count_utf16
     }
 
+    /// Returns the utf8 position equivalent of the provided utf16 character position.
     fn utf_offset_16to8(&self, pos_utf16: usize) -> usize {
         // Fast path: if offset is 0, return 0
         if pos_utf16 == 0 {
@@ -102,104 +102,20 @@ pub trait UnicodeTextStorage {
         self.content_utf8().len()
     }
 
+    /// Converts a utf8 character range into a utf16 character range.
     fn utf_range_8to16(&self, range_utf8: &Range<usize>) -> Range<usize> {
         self.utf_offset_8to16(range_utf8.start)..self.utf_offset_8to16(range_utf8.end)
     }
 
+    /// Converts a utf16 character range into a utf8 character range.
     fn utf_range_16to8(&self, range_utf16: &Range<usize>) -> Range<usize> {
         self.utf_offset_16to8(range_utf16.start)..self.utf_offset_16to8(range_utf16.end)
     }
 
-    fn previous_boundary(&self, offset: usize) -> usize {
-        if offset == 0 {
-            return 0;
-        }
-
-        let text_before = &self.content_utf8()[..offset.min(self.content_utf8().len())];
-        text_before
-            .grapheme_indices(true)
-            .map(|(i, _)| i)
-            .next_back()
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        let len_utf8 = self.content_utf8().len();
-        if offset >= len_utf8 {
-            return len_utf8;
-        }
-
-        let text_after = &self.content_utf8()[offset..];
-        text_after
-            .grapheme_indices(true)
-            .nth(1)
-            .map(|(i, _)| offset + i)
-            .unwrap_or(len_utf8)
-    }
-
-    fn previous_word_boundary(&self, offset: usize) -> usize {
-        if offset == 0 {
-            return 0;
-        }
-
-        let text_before = &self.content_utf8()[..offset.min(self.content_utf8().len())];
-
-        let mut last_word_start = 0;
-        for (idx, _) in text_before.unicode_word_indices() {
-            if idx < offset {
-                last_word_start = idx;
-            }
-        }
-
-        if last_word_start == 0 && offset > 0 {
-            let trimmed = text_before.trim_end();
-            if trimmed.is_empty() {
-                return 0;
-            }
-            for (idx, _) in trimmed.unicode_word_indices() {
-                last_word_start = idx;
-            }
-        }
-
-        last_word_start
-    }
-
-    fn next_word_boundary(&self, offset: usize) -> usize {
-        let len_utf8 = self.content_utf8().len();
-        if offset >= len_utf8 {
-            return len_utf8;
-        }
-
-        let text_after = &self.content_utf8()[offset..];
-
-        for (idx, word) in text_after.unicode_word_indices() {
-            let word_end = offset + idx + word.len();
-            if word_end > offset {
-                return word_end;
-            }
-        }
-
-        len_utf8
-    }
-
-    /// Returns the utf-8 character position of first character after the first new-line preceeding the character at the provided utf-8 character position.
-    fn find_line_start(&self, position: usize) -> usize {
-        let content = self.content_utf8();
-        content[..position.min(content.len())]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0)
-    }
-
-    /// Returns the utf-8 character position of the character immediately before the first new-line character after the character at the provided utf-8 character position.
-    fn find_line_end(&self, position: usize) -> usize {
-        let content = self.content_utf8();
-        content[position.min(content.len())..]
-            .find('\n')
-            .map(|pos| position + pos)
-            .unwrap_or(content.len())
-    }
-
+    /// Builds a utf8 character range based on a caret position within the storage,
+    /// the direction to traverse, and the boundary to stop at.
+    /// The start of the range will be the earlier position (destination if Back, caret if Forward),
+    /// and the end will be the later position (caret if Back, destination if Forward).
     fn range_from_caret(
         &self,
         caret: usize,
@@ -213,37 +129,109 @@ pub trait UnicodeTextStorage {
         }
     }
 
+    /// Finds the next location from the caret based on the direction to traverse and the boundary to stop at.
     fn offset_from_caret(
         &self,
         caret: usize,
         direction: NavigationDirection,
-        magnitude: TextBoundary,
+        boundary: TextBoundary,
     ) -> usize {
         use NavigationDirection::*;
         use TextBoundary::*;
-        match (direction, magnitude) {
-            (Back, Graphmeme) => self.previous_boundary(caret),
-            (Forward, Graphmeme) => self.next_boundary(caret),
-            (Back, Word) => self.previous_word_boundary(caret),
-            (Forward, Word) => self.next_word_boundary(caret),
-            (Back, Line) => self.find_line_start(caret),
-            (Forward, Line) => self.find_line_end(caret),
+        match (direction, boundary) {
+            (Back, Graphmeme) => {
+                if caret == 0 {
+                    return 0;
+                }
+
+                let str = self.content_utf8();
+                let iter = str[..caret.min(str.len())].grapheme_indices(true);
+                iter.map(|(i, _)| i).next_back().unwrap_or(0)
+            }
+            (Forward, Graphmeme) => {
+                let str = self.content_utf8();
+                let len_utf8 = str.len();
+                if caret >= len_utf8 {
+                    return len_utf8;
+                }
+
+                let mut iter = str[caret..].grapheme_indices(true);
+                iter.nth(1).map(|(i, _)| caret + i).unwrap_or(len_utf8)
+            }
+            (Back, Word) => {
+                if caret == 0 {
+                    return 0;
+                }
+
+                let str = self.content_utf8();
+                let str = &str[..caret.min(str.len())];
+
+                let mut last_word_start = 0;
+                for (idx, _) in str.unicode_word_indices() {
+                    if idx < caret {
+                        last_word_start = idx;
+                    }
+                }
+
+                if last_word_start == 0 && caret > 0 {
+                    let trimmed = str.trim_end();
+                    if trimmed.is_empty() {
+                        return 0;
+                    }
+                    for (idx, _) in trimmed.unicode_word_indices() {
+                        last_word_start = idx;
+                    }
+                }
+
+                last_word_start
+            }
+            (Forward, Word) => {
+                let str = self.content_utf8();
+                let len_utf8 = str.len();
+                if caret >= len_utf8 {
+                    return len_utf8;
+                }
+
+                let str = &str[caret..];
+                for (idx, word) in str.unicode_word_indices() {
+                    let word_end = caret + idx + word.len();
+                    if word_end > caret {
+                        return word_end;
+                    }
+                }
+                len_utf8
+            }
+            // Returns the utf-8 character position of first character after the first new-line
+            // preceding the character at the provided utf-8 character position.
+            (Back, Line) => {
+                let str = self.content_utf8();
+                let iter = str[..caret.min(str.len())].rfind('\n');
+                iter.map(|pos| pos + 1).unwrap_or(0)
+            }
+            // Returns the utf-8 character position of the character immediately before the first
+            // new-line character after the character at the provided utf-8 character position.
+            (Forward, Line) => {
+                let str = self.content_utf8();
+                let iter = str[caret.min(str.len())..].find('\n');
+                iter.map(|pos| caret + pos).unwrap_or(str.len())
+            }
             (Back, Document) => 0,
             (Forward, Document) => self.content_utf8().len(),
         }
     }
 
-    fn word_range_at(&self, offset: usize) -> (usize, usize) {
-        let offset = offset.min(self.content_utf8().len());
+    /// Returns the start and end of the word the position resides within.
+    fn word_range_at(&self, position: usize) -> Range<usize> {
+        let offset = position.min(self.content_utf8().len());
 
         for (idx, word) in self.content_utf8().unicode_word_indices() {
             let word_end = idx + word.len();
             if offset >= idx && offset <= word_end {
-                return (idx, word_end);
+                return idx..word_end;
             }
         }
 
-        (offset, offset)
+        offset..offset
     }
 }
 

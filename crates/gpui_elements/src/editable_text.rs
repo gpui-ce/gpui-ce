@@ -17,6 +17,8 @@
 //! - text sanitation & validation (see no-op implementation of [`EditableTextState::validate_incoming_text`])
 //! - nav & select via PageUp/PageDown
 //! - masking text (e.g. for passwords)
+//! - disabling `insert_tab` if favor of tab being used to change focus between elements (i.e. escaping the field)
+//!
 
 pub mod actions;
 mod caret;
