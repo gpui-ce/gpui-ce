@@ -1,6 +1,7 @@
 use crate::editable_text::{
-    EditableTextState, InitStorage, TextInputLayoutData, TextLineSegment,
+    EditableTextState, InitStorage,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
+    layout::{TextInputLayoutData, TextLineSegment},
 };
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, Display, Element, ElementId, ElementInputHandler,

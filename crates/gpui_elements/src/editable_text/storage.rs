@@ -13,6 +13,8 @@ pub enum TextBoundary {
     Document,
 }
 
+/// Allocated Fn initializer for EditableText storage medium [`UnicodeTextStorage`].
+/// Defaults to empty/none, resulting in [`StringStorage`] when executed.
 #[derive(Clone, Default)]
 pub struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
 
@@ -42,7 +44,10 @@ impl InitStorage {
     }
 }
 
+/// Abstraction around any text medium that can be used as the storage for EditableText elements.
 pub trait UnicodeTextStorage {
+    /// Returns the version/generation of the content, which should be incremented ever time the
+    /// content is changed so that rendering elements can reprocess the contents via the text layout engine.
     fn version(&self) -> u16;
 
     /// Returns a reference to the utf8 string.
@@ -51,6 +56,7 @@ pub trait UnicodeTextStorage {
     /// Returns the UTF-16 length of the content.
     fn len_utf16(&self) -> usize;
 
+    /// Replace contents within the provided range with the given str slice.
     fn replace_range(&mut self, range: Range<usize>, text: &str);
 
     fn utf_offset_8to16(&self, pos_uft8: usize) -> usize {
@@ -235,6 +241,9 @@ pub trait UnicodeTextStorage {
     }
 }
 
+/// [`UnicodeTextStorage`] implementation for std String.
+/// Not going to be the most performant, especially for large document text.
+/// Its a decent default for editable text fields though.
 #[derive(Clone, Default)]
 pub struct StringStorage {
     value: String,

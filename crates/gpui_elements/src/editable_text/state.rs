@@ -3,6 +3,7 @@ use crate::editable_text::{
     actions::EditableTextActionHandler,
     caret::{Caret, CaretNotify},
     history::EditableTextHistory,
+    layout::TextInputLayoutData,
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
@@ -11,10 +12,15 @@ use gpui::{
 };
 use std::{borrow::Cow, ops::Range, sync::Arc};
 
+/// Event emitted via EditableText elements when the internal storage contents have changed
 pub struct TextChanged;
 
+/// Internal state for EditableText elements
 pub struct EditableTextState {
+    /// The storage medium backing this element-state. Hypothetically supports both
+    /// std String and other crates (e.g. long document text).
     storage: Box<dyn UnicodeTextStorage>,
+    /// The caret entity which has internal state for features like blinking
     caret: Entity<Caret>,
 
     /// The utf-8 character range that is currently selected by the user.
@@ -42,71 +48,6 @@ pub struct EditableTextState {
     history: Option<EditableTextHistory>,
 
     pub(super) layout_data: TextInputLayoutData,
-}
-
-#[derive(Default)]
-pub(super) struct TextInputLayoutData {
-    /// Whether the element supports multiple lines of text
-    pub supports_multiline: bool,
-    /// Whether the element is currently accepting inputs
-    pub accepts_input: bool,
-    /// The last seen scroll position and size of the element
-    pub scroll_bounds: Bounds<Pixels>,
-    /// The last known width at which the lines were wrapped.
-    pub wrap_width: Option<Pixels>,
-    /// The last known size of the text, as generated during layout.
-    pub size: Option<Size<Pixels>>,
-    /// The last seen version of `storage` (for tracking when lines need to be reprocessed during layout)
-    pub last_seen_storage_version: u16,
-    /// The `ShapedLine` produced by the painter's `prepaint`.
-    /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
-    pub lines: Vec<TextLineSegment>,
-    pub line_height: Pixels,
-    /// The next position the scroll view should move to.
-    /// Set by the state in response to user actions.
-    pub next_scroll_offset: Option<Point<Pixels>>,
-}
-/// A segment of text that is a single logical/document line but can take up multiple rows due to wrapping.
-pub(super) struct TextLineSegment {
-    /// The utf8 byte range in the content string that this line covers.
-    pub text_range: Range<usize>,
-    /// The shaped and wrapped text for this line, if available.
-    pub wrapped_line: Option<Arc<WrappedLine>>,
-
-    /// The y-coordinate of this segment which can be multiplied by the line_height
-    /// to get its pixel location relative to the bounds of the text area.
-    pub pos_y: usize,
-}
-impl TextLineSegment {
-    /// The number of visual lines this segment encapsulates,
-    /// since it can occupy multiple rows due to wrapping.
-    pub fn row_count(&self) -> usize {
-        let count = self
-            .wrapped_line
-            .as_ref()
-            .map(|line| line.wrap_boundaries().len());
-        count.unwrap_or_default() + 1
-    }
-
-    pub fn contains_position(&self, pos: usize, include_end: bool) -> bool {
-        if self.text_range.is_empty() {
-            return pos == self.text_range.start;
-        }
-
-        // pos must be >= range-start
-        if pos < self.text_range.start {
-            return false;
-        }
-
-        // pos must be <= range-end
-        if pos > self.text_range.end {
-            return false;
-        }
-
-        // pos must be < range-end
-        // or == is permitted if explicitly allowed (varies according to usage needs)
-        pos < self.text_range.end || include_end
-    }
 }
 
 impl EventEmitter<TextChanged> for EditableTextState {}
@@ -185,6 +126,42 @@ impl EditableTextState {
 }
 
 impl EditableTextState {
+    /// Validates/santizes incoming text according to the rules of the field.
+    fn validate_incoming_text<'text>(
+        &self,
+        range: &Range<usize>,
+        mut text_to_insert: &'text str,
+    ) -> &'text str {
+        // TODO: Apply text sanitization
+        // single-line fields should prune \n and \r
+        // fields should be able to provide a max_length or other validations on text-input
+
+        let max_length = None::<usize>;
+
+        // Decide the effective new text up front (honouring `max_length`).
+        // This avoids the "apply, then truncate" path which would leave the caret past the end.
+        if let Some(cap) = max_length {
+            let existing_len = self.storage().content_utf8().len() - (range.end - range.start);
+            let room = cap.saturating_sub(existing_len);
+            text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
+        }
+
+        text_to_insert
+    }
+
+    /// Internal method to record historical changes and perform text replacement in storage.
+    /// Selection is moved to the end of the inserted text and ime marked range is cleared.
+    fn replace_text(&mut self, range: Range<usize>, text_to_insert: &str) {
+        let end_pos = range.start + text_to_insert.len();
+        self.record_history(range.clone(), text_to_insert.len());
+        self.storage.replace_range(range, text_to_insert);
+        self.selected_range = end_pos..end_pos;
+        self.marked_range = None;
+    }
+}
+
+// Screen space (text layout engine output) & String space transformers
+impl EditableTextState {
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();
@@ -217,207 +194,6 @@ impl EditableTextState {
         }
 
         storage_len_utf8
-    }
-
-    fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
-        // Use a series of fallbacks to pick the range to operate on.
-        // Fallback order: IME provided range, active IME marked range, selection
-        let range = range_utf16.map(|range_utf16| self.storage.utf_range_16to8(&range_utf16));
-        let range = range.or_else(|| self.marked_range.clone());
-        let range = range.unwrap_or_else(|| self.selected_range());
-
-        let storage_len_utf8 = self.storage().content_utf8().len();
-        range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
-    }
-
-    pub fn replace_text(&mut self, range: &Range<usize>, new_text: &str) {
-        let storage_len_utf8 = self.storage.content_utf8().len();
-        let start = range.start.min(storage_len_utf8);
-        let end = range.end.max(start).min(storage_len_utf8);
-        self.storage.replace_range(start..end, new_text);
-
-        let new_caret = start + new_text.len();
-        self.selected_range = new_caret..new_caret;
-    }
-
-    pub fn replace_text_in_range_bytes(
-        &mut self,
-        range: Range<usize>,
-        mut text_to_insert: &str,
-        _cx: &mut Context<Self>,
-    ) {
-        // TODO: Apply text sanitization
-        // single-line fields should prune \n and \r
-        // fields should be able to provide a max_length or other validations on text-input
-
-        let max_length = None::<usize>;
-
-        // Decide the effective new text up front (honouring `max_length`).
-        // This avoids the "apply, then truncate" path which would leave the caret past the end.
-        if let Some(cap) = max_length {
-            let existing_len = self.storage().content_utf8().len() - (range.end - range.start);
-            let room = cap.saturating_sub(existing_len);
-            text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
-        }
-
-        let end_pos = range.start + text_to_insert.len();
-
-        self.record_history(range.clone(), text_to_insert.len());
-        self.storage.replace_range(range, text_to_insert);
-        self.selected_range = end_pos..end_pos;
-        self.marked_range = None;
-    }
-
-    fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
-        self.marked_range = match text_len {
-            0 => None,
-            _ => Some(range.start..range.start + text_len),
-        };
-    }
-
-    fn ime_mark_selected_range(
-        &mut self,
-        range_overwritten: &Range<usize>,
-        new_selected_range_utf16: &Option<Range<usize>>,
-        text_len: usize,
-    ) {
-        // NOTE: Differs from yororen-ui
-        // https://github.com/MeowLynxSea/yororen-ui/blob/346502ac654b77fdaff3be2d7444fca8783acfc9/crates/yororen-ui-core/src/headless/text_input_core.rs#L359-L371
-        self.selected_range = {
-            let new_range = new_selected_range_utf16.as_ref();
-            let new_range = new_range.map(|range_utf16| self.storage.utf_range_16to8(range_utf16));
-            let new_range = new_range.map(|new_range| {
-                new_range.start + range_overwritten.start..new_range.end + range_overwritten.start
-            });
-            new_range.unwrap_or_else(|| {
-                range_overwritten.start + text_len..range_overwritten.start + text_len
-            })
-        };
-    }
-}
-
-impl EditableTextState {
-    fn scroll_to_caret(&mut self) {
-        if self.layout_data.scroll_bounds.is_empty() {
-            return;
-        }
-        let Some(content_size) = self.layout_data.size else {
-            return;
-        };
-
-        // point will be relative to content_size, and may or may not be within the current scroll_bounds
-        let point = self.find_point_for_character_position(self.caret_pos());
-
-        // this scroll_offset diverges from the rest of gpui, as it is stored in the
-        // positive real number space (interactivity stores it in the negatives)
-        let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
-
-        if self.layout_data.scroll_bounds.contains(&point) {
-            return;
-        }
-
-        // No existing "shift bounds origin so <point> is contained", but that is effectively what this does
-        if point.x < self.layout_data.scroll_bounds.left() {
-            scroll_offset.to_mut().x = point.x;
-        }
-        if point.y < self.layout_data.scroll_bounds.top() {
-            scroll_offset.to_mut().y = point.y;
-        }
-        let right = self.layout_data.scroll_bounds.right();
-        if point.x > right {
-            scroll_offset.to_mut().x += point.x - right;
-        }
-        let bottom = self.layout_data.scroll_bounds.bottom();
-        let point_bottom = point.y + self.layout_data.line_height;
-        if point_bottom > bottom {
-            let delta = point_bottom - bottom;
-            scroll_offset.to_mut().y += delta;
-        }
-
-        if let Cow::Owned(mut offset) = scroll_offset {
-            offset.x = offset.x.clamp(Pixels::ZERO, content_size.width);
-            offset.y = offset.y.clamp(Pixels::ZERO, content_size.height);
-            println!("shift to {offset:?}");
-            self.layout_data.next_scroll_offset = Some(offset);
-        }
-    }
-
-    pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        cx.emit(CaretNotify::PauseBlinking);
-        let caret_pos = caret_pos.min(self.storage.content_utf8().len());
-        self.selected_range = caret_pos..caret_pos;
-        self.scroll_to_caret();
-        cx.notify();
-    }
-
-    pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        cx.emit(CaretNotify::PauseBlinking);
-        let caret_pos = caret_pos.min(self.storage().content_utf8().len());
-        self.selected_range.start = caret_pos;
-        self.scroll_to_caret();
-        cx.notify();
-    }
-
-    pub fn delete_linear(
-        &mut self,
-        direction: NavigationDirection,
-        boundary: TextBoundary,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.layout_data.accepts_input {
-            return;
-        }
-
-        let range = self.selected_range();
-        let range = match range.is_empty() {
-            false => range,
-            true => self
-                .storage
-                .range_from_caret(self.caret_pos(), direction, boundary),
-        };
-
-        self.record_history(range.clone(), 0);
-
-        self.replace_text(&range, "");
-        self.marked_range = None;
-
-        cx.emit(TextChanged);
-        cx.notify();
-    }
-
-    pub fn nav_linear(
-        &mut self,
-        direction: NavigationDirection,
-        boundary: TextBoundary,
-        cx: &mut Context<Self>,
-    ) {
-        let caret_pos = match self.selected_range.is_empty() {
-            false => match direction {
-                NavigationDirection::Back => self.selected_range.start,
-                NavigationDirection::Forward => self.selected_range.end,
-            },
-            true => self
-                .storage
-                .offset_from_caret(self.caret_pos(), direction, boundary),
-        };
-        self.move_to(caret_pos, cx);
-    }
-
-    pub fn select_document(&mut self, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.storage.content_utf8().len();
-        cx.notify();
-    }
-
-    pub fn select_linear(
-        &mut self,
-        direction: NavigationDirection,
-        boundary: TextBoundary,
-        cx: &mut Context<Self>,
-    ) {
-        let caret_pos = self
-            .storage
-            .offset_from_caret(self.caret_pos(), direction, boundary);
-        self.select_to(caret_pos, cx);
     }
 
     fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
@@ -517,6 +293,133 @@ impl EditableTextState {
     }
 }
 
+// Internal user action / logical processors
+impl EditableTextState {
+    fn scroll_to_caret(&mut self) {
+        if self.layout_data.scroll_bounds.is_empty() {
+            return;
+        }
+        let Some(content_size) = self.layout_data.size else {
+            return;
+        };
+
+        // point will be relative to content_size, and may or may not be within the current scroll_bounds
+        let point = self.find_point_for_character_position(self.caret_pos());
+
+        // this scroll_offset diverges from the rest of gpui, as it is stored in the
+        // positive real number space (interactivity stores it in the negatives)
+        let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
+
+        if self.layout_data.scroll_bounds.contains(&point) {
+            return;
+        }
+
+        // No existing "shift bounds origin so <point> is contained", but that is effectively what this does
+        if point.x < self.layout_data.scroll_bounds.left() {
+            scroll_offset.to_mut().x = point.x;
+        }
+        if point.y < self.layout_data.scroll_bounds.top() {
+            scroll_offset.to_mut().y = point.y;
+        }
+        let right = self.layout_data.scroll_bounds.right();
+        if point.x > right {
+            scroll_offset.to_mut().x += point.x - right;
+        }
+        let bottom = self.layout_data.scroll_bounds.bottom();
+        let point_bottom = point.y + self.layout_data.line_height;
+        if point_bottom > bottom {
+            let delta = point_bottom - bottom;
+            scroll_offset.to_mut().y += delta;
+        }
+
+        if let Cow::Owned(mut offset) = scroll_offset {
+            offset.x = offset.x.clamp(Pixels::ZERO, content_size.width);
+            offset.y = offset.y.clamp(Pixels::ZERO, content_size.height);
+            println!("shift to {offset:?}");
+            self.layout_data.next_scroll_offset = Some(offset);
+        }
+    }
+
+    pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
+        cx.emit(CaretNotify::PauseBlinking);
+        let caret_pos = caret_pos.min(self.storage.content_utf8().len());
+        self.selected_range = caret_pos..caret_pos;
+        self.scroll_to_caret();
+        cx.notify();
+    }
+
+    pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
+        cx.emit(CaretNotify::PauseBlinking);
+        let caret_pos = caret_pos.min(self.storage().content_utf8().len());
+        self.selected_range.start = caret_pos;
+        self.scroll_to_caret();
+        cx.notify();
+    }
+
+    pub fn delete_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.layout_data.accepts_input {
+            return;
+        }
+
+        let range = self.selected_range();
+        let range = match range.is_empty() {
+            false => range,
+            true => self
+                .storage
+                .range_from_caret(self.caret_pos(), direction, boundary),
+        };
+        let storage_len_utf8 = self.storage.content_utf8().len();
+        let start = range.start.min(storage_len_utf8);
+        let end = range.end.max(start).min(storage_len_utf8);
+
+        self.replace_text(start..end, "");
+
+        cx.emit(TextChanged);
+        cx.notify();
+    }
+
+    pub fn nav_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        cx: &mut Context<Self>,
+    ) {
+        let caret_pos = match self.selected_range.is_empty() {
+            false => match direction {
+                NavigationDirection::Back => self.selected_range.start,
+                NavigationDirection::Forward => self.selected_range.end,
+            },
+            true => self
+                .storage
+                .offset_from_caret(self.caret_pos(), direction, boundary),
+        };
+        self.move_to(caret_pos, cx);
+    }
+
+    pub fn select_document(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.storage.content_utf8().len();
+        cx.notify();
+    }
+
+    pub fn select_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        cx: &mut Context<Self>,
+    ) {
+        let caret_pos = self
+            .storage
+            .offset_from_caret(self.caret_pos(), direction, boundary);
+        self.select_to(caret_pos, cx);
+    }
+}
+
+// History management
 impl EditableTextState {
     pub fn history(&self) -> Option<&EditableTextHistory> {
         self.history.as_ref()
@@ -561,6 +464,47 @@ impl EditableTextState {
     }
 }
 
+impl EditableTextState {
+    fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
+        // Use a series of fallbacks to pick the range to operate on.
+        // Fallback order: IME provided range, active IME marked range, selection
+        let range = range_utf16.map(|range_utf16| self.storage.utf_range_16to8(&range_utf16));
+        let range = range.or_else(|| self.marked_range.clone());
+        let range = range.unwrap_or_else(|| self.selected_range());
+
+        let storage_len_utf8 = self.storage().content_utf8().len();
+        range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
+    }
+
+    fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
+        self.marked_range = match text_len {
+            0 => None,
+            _ => Some(range.start..range.start + text_len),
+        };
+    }
+
+    fn ime_mark_selected_range(
+        &mut self,
+        range_overwritten: &Range<usize>,
+        new_selected_range_utf16: &Option<Range<usize>>,
+        text_len: usize,
+    ) {
+        // NOTE: Differs from yororen-ui
+        // https://github.com/MeowLynxSea/yororen-ui/blob/346502ac654b77fdaff3be2d7444fca8783acfc9/crates/yororen-ui-core/src/headless/text_input_core.rs#L359-L371
+        self.selected_range = {
+            let new_range = new_selected_range_utf16.as_ref();
+            let new_range = new_range.map(|range_utf16| self.storage.utf_range_16to8(range_utf16));
+            let new_range = new_range.map(|new_range| {
+                new_range.start + range_overwritten.start..new_range.end + range_overwritten.start
+            });
+            new_range.unwrap_or_else(|| {
+                range_overwritten.start + text_len..range_overwritten.start + text_len
+            })
+        };
+    }
+}
+
+// IME handler
 impl EntityInputHandler for EditableTextState {
     fn text_for_range(
         &mut self,
@@ -612,7 +556,8 @@ impl EntityInputHandler for EditableTextState {
         cx: &mut Context<Self>,
     ) {
         let range_utf8 = self.ime_resolve_range(range_utf16);
-        self.replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
+        let text_to_insert = self.validate_incoming_text(&range_utf8, text_to_insert);
+        self.replace_text(range_utf8, text_to_insert);
         cx.emit(CaretNotify::PauseBlinking);
         cx.emit(TextChanged);
         cx.notify();
@@ -627,7 +572,8 @@ impl EntityInputHandler for EditableTextState {
         cx: &mut Context<Self>,
     ) {
         let range = self.ime_resolve_range(range_utf16);
-        self.replace_text_in_range_bytes(range.clone(), text_to_insert, cx);
+        let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
+        self.replace_text(range.clone(), text_to_insert);
         self.ime_mark_text_in_range(&range, text_to_insert.len());
         self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.len());
         cx.emit(TextChanged);
@@ -700,6 +646,7 @@ impl EntityInputHandler for EditableTextState {
     }
 }
 
+// Input Action handler
 use super::{actions::*, history::HistoryKind};
 impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
@@ -906,7 +853,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             // Cut selected text
             let slice = &self.storage.content_utf8()[self.selected_range.clone()];
             cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
-            self.replace_text_in_range_bytes(self.selected_range.clone(), "", cx);
+            self.replace_text(self.selected_range.clone(), "");
         } else {
             // No selection: cut the entire current line (including newline)
             let caret = self.caret_pos();
@@ -936,7 +883,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             let slice = &self.storage.content_utf8()[self.selected_range.clone()];
             cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
 
-            self.replace_text_in_range_bytes(self.selected_range.clone(), "", cx);
+            self.replace_text(self.selected_range.clone(), "");
         }
         cx.emit(TextChanged);
         cx.notify();
@@ -957,7 +904,10 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        self.replace_text_in_range_bytes(self.ime_resolve_range(None), &text, cx);
+
+        let range = self.ime_resolve_range(None);
+        let text_to_insert = self.validate_incoming_text(&range, &text);
+        self.replace_text(range, text_to_insert);
         cx.emit(TextChanged);
         cx.notify();
     }
