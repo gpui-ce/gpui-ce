@@ -1,5 +1,6 @@
 pub mod actions;
 mod element;
+mod history;
 pub mod notify;
 mod state;
 mod storage;
@@ -13,7 +14,6 @@ pub use storage::*;
 - auto-scroll when cursor moves
 - cursor blinking
 - color styling configs
-- undo/redo
 - text sanitation
 - test IME (char palette only available on macos)
 - unit tests

@@ -1,6 +1,7 @@
 use crate::editable_text::{
     TextBoundary, UnicodeTextStorage,
     actions::EditableTextActionHandler,
+    history::EditableTextHistory,
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
@@ -31,6 +32,7 @@ pub struct EditableTextState {
     click_count: usize,
 
     focus_handle: FocusHandle,
+    history: Option<EditableTextHistory>,
 
     pub(super) layout_data: TextInputLayoutData,
 }
@@ -94,6 +96,8 @@ impl EditableTextState {
             click_count: 0,
 
             focus_handle: cx.focus_handle(),
+            // TODO: what is the best way to give users access to configure this via element
+            history: Some(EditableTextHistory::default()),
 
             layout_data: TextInputLayoutData::default(),
         }
@@ -187,20 +191,11 @@ impl EditableTextState {
         self.selected_range = new_caret..new_caret;
     }
 
-    fn emit_change_for_undo(&self, cx: &mut Context<Self>, range: Range<usize>, length: usize) {
-        cx.emit(TextHistoryPushed::new(
-            range.clone(),
-            length,
-            &*self.storage,
-            self.selected_range.clone(),
-        ));
-    }
-
     pub fn replace_text_in_range_bytes(
         &mut self,
         range: Range<usize>,
         mut text_to_insert: &str,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
         // TODO: Apply text sanitization
         // single-line fields should prune \n and \r
@@ -218,7 +213,7 @@ impl EditableTextState {
 
         let end_pos = range.start + text_to_insert.len();
 
-        self.emit_change_for_undo(cx, range.clone(), text_to_insert.len());
+        self.record_history(range.clone(), text_to_insert.len());
         self.storage.replace_range(range, text_to_insert);
         self.selected_range = end_pos..end_pos;
         self.marked_range = None;
@@ -287,7 +282,7 @@ impl EditableTextState {
                 .range_from_caret(self.caret_pos(), direction, boundary),
         };
 
-        self.emit_change_for_undo(cx, range.clone(), 0);
+        self.record_history(range.clone(), 0);
 
         self.replace_text(&range, "");
         self.marked_range = None;
@@ -405,6 +400,50 @@ impl EditableTextState {
             .storage
             .offset_from_caret(self.caret_pos(), direction, boundary);
         self.select_to(caret_pos, cx);
+    }
+}
+
+impl EditableTextState {
+    pub fn history(&self) -> Option<&EditableTextHistory> {
+        self.history.as_ref()
+    }
+
+    fn record_history(&mut self, range: Range<usize>, new_text_len: usize) {
+        // Don't record during IME composition
+        if self.marked_range.is_some() {
+            return;
+        }
+
+        let Some(history) = &mut self.history else {
+            return;
+        };
+
+        // Capture the text that will be replaced
+        let old_text = &self.storage.content_utf8()[range.clone()];
+        history.record(range, old_text, new_text_len, self.selected_range.clone());
+    }
+
+    fn apply_from_history(&mut self, src: HistoryKind, dst: HistoryKind, cx: &mut Context<Self>) {
+        let Some(history) = &mut self.history else {
+            return;
+        };
+        let Some(entry) = history.take(src) else {
+            return;
+        };
+
+        let range = entry.char_range(self.storage.content_utf8().len());
+        // Snapshot the sub-slice that is being replaced
+        let removed_text = self.storage.content_utf8()[range.clone()].to_string();
+
+        // Replace the slice with the history value
+        self.storage.replace_range(range, &entry.old_text);
+        self.selected_range = entry.selected_range.clone();
+
+        // Push the entry onto the redo stack so the undo can be undone
+        history.push(dst, entry.as_inverted(removed_text));
+
+        self.scroll_to_caret();
+        cx.notify();
     }
 }
 
@@ -547,7 +586,7 @@ impl EntityInputHandler for EditableTextState {
     }
 }
 
-use super::actions::*;
+use super::{actions::*, history::HistoryKind};
 impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
         self.set_selected_range(0..0);
@@ -814,12 +853,12 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         cx.notify();
     }
 
-    fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context<'app, Self>) {
-        // TODO: STUB
+    fn undo(&mut self, _: &Undo, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.apply_from_history(HistoryKind::Undo, HistoryKind::Redo, cx);
     }
 
-    fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context<'app, Self>) {
-        // TODO: STUB
+    fn redo(&mut self, _: &Redo, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.apply_from_history(HistoryKind::Redo, HistoryKind::Undo, cx);
     }
 
     fn on_mouse_down(
