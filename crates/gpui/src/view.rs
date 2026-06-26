@@ -306,7 +306,11 @@ mod any_view {
         cx: &mut App,
     ) -> AnyElement {
         let view = view.clone().downcast::<V>().unwrap();
-        view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+        view.update(cx, |view, cx| {
+            subsecond::HotFn::current(V::render)
+                .call((view, window, cx))
+                .into_any_element()
+        })
     }
 }
 
