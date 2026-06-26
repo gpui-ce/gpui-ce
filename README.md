@@ -46,7 +46,7 @@ gpui = { git = "https://github.com/gpui-ce/gpui-ce" }
 ```
 
 #### Is there a community I could... join?
-For sure! Join the [discord](https://discord.gg/WYEmCKuv)
+For sure! Join the [discord](https://discord.gg/vNdskJSfWd)
 
 <!-- todo: rewrite below... -->
 

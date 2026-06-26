@@ -209,8 +209,13 @@ impl WgpuContext {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) -> wgpu::Instance {
+        #[cfg(not(target_os = "windows"))]
+        let backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+        #[cfg(target_os = "windows")]
+        let backends = wgpu::Backends::DX12;
+
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends,
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
