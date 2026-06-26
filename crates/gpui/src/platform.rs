@@ -703,6 +703,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn show_window_menu(&self, _position: Point<Pixels>) {}
     fn start_window_move(&self) {}
     fn start_window_resize(&self, _edge: ResizeEdge) {}
+    fn set_input_region(&self, _rects: &[Bounds<Pixels>]) {}
+    fn set_exclusive_zone(&self, _zone: Pixels) {}
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
@@ -720,6 +722,17 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+
+    /// Whether this window's GPU device has been lost (the platform renderer
+    /// recovers it on a subsequent draw). `None` when the backend cannot
+    /// know. Safe to call mid-recovery, unlike `gpu_context`. Embedders that
+    /// captured the device from `gpu_context` should stop submitting while
+    /// this is `Some(true)` and re-acquire the device once it reads
+    /// `Some(false)` again.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn gpu_device_lost(&self) -> Option<bool> {
         None
     }
 

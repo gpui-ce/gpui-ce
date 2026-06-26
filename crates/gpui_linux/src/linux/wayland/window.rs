@@ -286,6 +286,14 @@ impl WaylandSurfaceState {
         }
     }
 
+    fn set_exclusive_zone(&self, zone: i32) {
+        if let WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) =
+            self
+        {
+            layer_surface.set_exclusive_zone(zone);
+        }
+    }
+
     fn destroy(&mut self) {
         match self {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState {
@@ -1471,6 +1479,40 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
+        let state = self.borrow();
+        if rects.is_empty() {
+            state.surface.set_input_region(None);
+        } else {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+            rects
+                .iter()
+                .map(|rect| rect.map(|pixels| f32::from(pixels) as i32))
+                .for_each(|rect| {
+                    region.add(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.width,
+                        rect.size.height,
+                    )
+                });
+            state.surface.set_input_region(Some(&region));
+            region.destroy();
+        }
+        state.surface.commit();
+    }
+
+    fn set_exclusive_zone(&self, zone: Pixels) {
+        let state = self.borrow();
+        state
+            .surface_state
+            .set_exclusive_zone(f32::from(zone) as i32);
+        state.surface.commit();
+    }
+
     fn window_decorations(&self) -> Decorations {
         let state = self.borrow();
         match state.decorations {
@@ -1525,6 +1567,12 @@ impl PlatformWindow for WaylandWindow {
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         let (device, queue) = self.borrow().renderer.gpu_context();
         Some(Box::new((device, queue)))
+    }
+
+    fn gpu_device_lost(&self) -> Option<bool> {
+        // Only loads an atomic flag — safe even mid-recovery, when
+        // `gpu_context` would panic on the torn-down resources.
+        Some(self.borrow().renderer.device_lost())
     }
 
     fn play_system_bell(&self) {

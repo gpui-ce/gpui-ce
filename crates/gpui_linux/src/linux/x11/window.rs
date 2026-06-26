@@ -1901,6 +1901,12 @@ impl PlatformWindow for X11Window {
         Some(Box::new((device, queue)))
     }
 
+    fn gpu_device_lost(&self) -> Option<bool> {
+        // Only loads an atomic flag — safe even mid-recovery, when
+        // `gpu_context` would panic on the torn-down resources.
+        Some(self.0.state.borrow().renderer.device_lost())
+    }
+
     fn play_system_bell(&self) {
         // Volume 0% means don't increase or decrease from system volume
         let _ = self.0.xcb.bell(0);

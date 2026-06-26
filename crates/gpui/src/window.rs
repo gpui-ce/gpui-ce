@@ -1965,6 +1965,21 @@ impl Window {
         self.platform_window.request_decorations(decorations);
     }
 
+    /// Set the window's input region to the union of `rects`. Pointer events
+    /// outside the region pass through to whatever is below the window.
+    /// An empty slice resets the input region, so the window will receive all
+    /// pointer events again. (wayland only)
+    pub fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
+        self.platform_window.set_input_region(rects);
+    }
+
+    /// Controls how a surface interacts with surrounding screen space.
+    /// Positive values reserve space, 0 avoids reserved space, and -1 ignores
+    /// reserved space and may extend underneath other surfaces. (wayland only)
+    pub fn set_exclusive_zone(&self, zone: Pixels) {
+        self.platform_window.set_exclusive_zone(zone);
+    }
+
     /// Start a window resize operation (Wayland)
     pub fn start_window_resize(&self, edge: ResizeEdge) {
         self.platform_window.start_window_resize(edge);
@@ -5534,6 +5549,16 @@ impl Window {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context()
+    }
+
+    /// Whether the GPU device backing this window has been lost (recovery
+    /// happens on a subsequent platform draw). `None` when the backend
+    /// cannot know. Embedders that captured the device from
+    /// [`Self::gpu_context`] should stop submitting while this is
+    /// `Some(true)` and re-acquire the device once it reads `Some(false)`.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub fn gpu_device_lost(&self) -> Option<bool> {
+        self.platform_window.gpu_device_lost()
     }
 
     /// Perform titlebar double-click action.

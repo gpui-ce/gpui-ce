@@ -1,7 +1,8 @@
-use std::{rc::Rc, sync::atomic::Ordering};
-
+#[cfg(feature = "wgpu")]
+use crate::window::RawWindow;
 use ::util::ResultExt;
 use anyhow::Context as _;
+use std::{rc::Rc, sync::atomic::Ordering};
 use windows::{
     Win32::{
         Foundation::*,
@@ -209,13 +210,25 @@ impl WindowsWindowInner {
         let new_logical_size = device_size.to_pixels(scale_factor);
 
         self.state.logical_size.set(new_logical_size);
-        if should_resize_renderer
-            && let Err(e) = self.state.renderer.borrow_mut().resize(device_size)
+        #[cfg(not(feature = "wgpu"))]
         {
-            log::error!("Failed to resize renderer, invalidating devices: {}", e);
-            self.state
-                .invalidate_devices
-                .store(true, std::sync::atomic::Ordering::Release);
+            if should_resize_renderer
+                && let Err(e) = self.state.renderer.borrow_mut().resize(device_size)
+            {
+                log::error!("Failed to resize renderer, invalidating devices: {}", e);
+                self.state
+                    .invalidate_devices
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+        #[cfg(feature = "wgpu")]
+        {
+            if should_resize_renderer {
+                self.state
+                    .renderer
+                    .borrow_mut()
+                    .update_drawable_size(device_size)
+            }
         }
         if let Some(mut callback) = self.state.callbacks.resize.take() {
             callback(new_logical_size, scale_factor);
@@ -1193,15 +1206,27 @@ impl WindowsWindowInner {
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
-        let devices = lparam.0 as *const DirectXDevices;
-        let devices = unsafe { &*devices };
-        if let Err(err) = self
-            .state
-            .renderer
-            .borrow_mut()
-            .handle_device_lost(&devices)
+        #[cfg(not(feature = "wgpu"))]
         {
-            panic!("Device lost: {err}");
+            let devices = lparam.0 as *const DirectXDevices;
+            let devices = unsafe { &*devices };
+            if let Err(err) = self
+                .state
+                .renderer
+                .borrow_mut()
+                .handle_device_lost(&devices)
+            {
+                panic!("Device lost: {err}");
+            }
+        }
+        #[cfg(feature = "wgpu")]
+        {
+            _ = lparam;
+            if let Err(err) = self.state.renderer.borrow_mut().recover(&RawWindow {
+                hwnd: self.platform_window_handle,
+            }) {
+                panic!("Device lost: {err}");
+            }
         }
         // Make sure the first `draw_window` after recovery (whether it comes
         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
@@ -1219,7 +1244,6 @@ impl WindowsWindowInner {
     #[inline]
     fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
         let mut request_frame = self.state.callbacks.request_frame.take()?;
-
         self.state.direct_manipulation.update();
 
         let events = self.state.direct_manipulation.drain_events();
@@ -1231,12 +1255,14 @@ impl WindowsWindowInner {
                 self.state.callbacks.input.set(Some(func));
             }
         }
-
         let force_render = force_render || self.state.force_render_after_recovery.take();
-        if force_render {
-            // Re-enable drawing after a device loss recovery. The forced render
-            // will rebuild the scene with fresh atlas textures.
-            self.state.renderer.borrow_mut().mark_drawable();
+        #[cfg(not(feature = "wgpu"))]
+        {
+            if force_render {
+                // Re-enable drawing after a device loss recovery. The forced render
+                // will rebuild the scene with fresh atlas textures.
+                self.state.renderer.borrow_mut().mark_drawable();
+            }
         }
         request_frame(RequestFrameOptions {
             require_presentation: false,
