@@ -514,9 +514,8 @@ pub trait Styled: Sized {
         from: impl Into<LinearColorStop>,
         to: impl Into<LinearColorStop>,
     ) -> Self {
-        self.text_style()
-            .get_or_insert_with(Default::default)
-            .color = Some(crate::text_gradient(angle, from, to));
+        self.text_style().get_or_insert_with(Default::default).color =
+            Some(crate::text_gradient(angle, from, to));
         self
     }
 
@@ -794,6 +793,47 @@ pub trait Styled: Sized {
         text_style.font_fallbacks = fallbacks;
 
         self
+    }
+
+    /// Sets the letter spacing of the text in em units.
+    fn tracking(mut self, spacing: f32) -> Self {
+        self.text_style()
+            .get_or_insert_with(Default::default)
+            .letter_spacing = Some(spacing);
+        self
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-tighter)
+    fn tracking_tighter(self) -> Self {
+        self.tracking(-0.05)
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-tight)
+    fn tracking_tight(self) -> Self {
+        self.tracking(-0.025)
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-normal)
+    fn tracking_normal(mut self) -> Self {
+        self.text_style()
+            .get_or_insert_with(Default::default)
+            .letter_spacing = Some(0.0);
+        self
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-wide)
+    fn tracking_wide(self) -> Self {
+        self.tracking(0.025)
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-wider)
+    fn tracking_wider(self) -> Self {
+        self.tracking(0.05)
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/letter-spacing#tracking-widest)
+    fn tracking_widest(self) -> Self {
+        self.tracking(0.1)
     }
 
     /// Sets the line height of this element and its children.

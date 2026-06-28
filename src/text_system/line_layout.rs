@@ -1,8 +1,9 @@
 use crate::{
-    FontId, FontStyle, FontWeight, GlyphId, Pixels, PlatformTextSystem, Point, SharedString,
-    Size, point, px,
+    FontId, FontStyle, FontWeight, GlyphId, Pixels, PlatformTextSystem, Point, SharedString, Size,
+    point, px,
 };
 use collections::FxHashMap;
+use ordered_float::OrderedFloat;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use smallvec::SmallVec;
 use std::{
@@ -602,6 +603,7 @@ pub struct FontRun {
     pub(crate) font_id: FontId,
     pub(crate) weight: FontWeight,
     pub(crate) style: FontStyle,
+    pub(crate) letter_spacing: Option<OrderedFloat<f32>>,
 }
 
 trait AsCacheKeyRef {

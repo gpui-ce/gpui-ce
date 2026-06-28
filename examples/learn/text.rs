@@ -467,6 +467,65 @@ fn line_height_example(colors: &Colors) -> impl IntoElement {
         )
 }
 
+fn tracking_example(colors: &Colors) -> impl IntoElement {
+    let text = colors.text;
+    let text_muted = colors.text_muted;
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(text_muted)
+                .child("Letter spacing / tracking"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_tighter()
+                        .child("TRACKING TIGHTER"),
+                )
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_tight()
+                        .child("TRACKING TIGHT"),
+                )
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_normal()
+                        .child("TRACKING NORMAL"),
+                )
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_wide()
+                        .child("TRACKING WIDE"),
+                )
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_wider()
+                        .child("TRACKING WIDER"),
+                )
+                .child(
+                    div()
+                        .text_color(text)
+                        .tracking_widest()
+                        .child("TRACKING WIDEST"),
+                )
+                .child(div().text_color(text).tracking(1.0).child("TRACKING 1em")),
+        )
+}
+
 // Main Application View
 
 struct TextExample;
@@ -540,6 +599,11 @@ impl Render for TextExample {
                         &colors,
                         "Character Grid",
                         character_grid_example(&colors),
+                    ))
+                    .child(section(
+                        &colors,
+                        "Letter Spacing",
+                        tracking_example(&colors),
                     )),
             )
     }

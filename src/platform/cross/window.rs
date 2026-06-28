@@ -1,11 +1,11 @@
 use crate::{
-    Bounds, Capslock, Decorations, Modifiers, Pixels, PlatformInputHandler, PlatformWindow, Point,
-    ResizeEdge, Size, WgpuSurfaceHandle, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds,
     platform::cross::{
         atlas::WgpuAtlas, dispatcher::CrossEvent, render_context::WgpuContext,
         renderer::WgpuRenderer, resize_detector::ResizeDetector,
     },
+    Bounds, Capslock, Decorations, Modifiers, Pixels, PlatformInputHandler, PlatformWindow, Point,
+    ResizeEdge, Size, WgpuSurfaceHandle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds,
 };
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -14,8 +14,7 @@ use std::{
 use winit::event_loop::EventLoopProxy;
 
 #[cfg(target_os = "linux")]
-use winit::platform::linux::WindowExtLinux;
-
+// use winit::platform::linux::WindowExtLinux;
 #[cfg(target_os = "windows")]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
 
@@ -280,8 +279,8 @@ impl PlatformWindow for CrossWindow {
 
     fn set_app_id(&mut self, app_id: &str) {
         self.0.state.app_id.borrow_mut().replace(app_id.to_owned());
-        #[cfg(target_os = "linux")]
-        self.window().set_app_id(Some(app_id));
+        // #[cfg(target_os = "linux")]
+        // self.window().set_app_id(Some(app_id));
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {

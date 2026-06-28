@@ -9,6 +9,7 @@ pub use font_features::*;
 pub use line::*;
 pub use line_layout::*;
 pub use line_wrapper::*;
+use ordered_float::OrderedFloat;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -284,7 +285,12 @@ impl TextSystem {
     }
 
     /// Returns a handle to a line wrapper, for the given font and font size.
-    pub fn line_wrapper(self: &Arc<Self>, font: Font, font_size: Pixels) -> LineWrapperHandle {
+    pub fn line_wrapper(
+        self: &Arc<Self>,
+        font: Font,
+        font_size: Pixels,
+        letter_spacing: Option<f32>,
+    ) -> LineWrapperHandle {
         let lock = &mut self.wrapper_pool.lock();
         let font_id = self.resolve_font(&font);
         let wrappers = lock
@@ -296,6 +302,7 @@ impl TextSystem {
                 font_size,
                 font.weight,
                 font.style,
+                letter_spacing,
                 self.platform_text_system.clone(),
             )
         });
@@ -466,6 +473,7 @@ impl WindowTextSystem {
                         font_id,
                         weight: run.font.weight,
                         style: run.font.style,
+                        letter_spacing: run.letter_spacing,
                     });
                 }
 
@@ -582,6 +590,7 @@ impl WindowTextSystem {
                     font_id,
                     weight: run.font.weight,
                     style: run.font.style,
+                    letter_spacing: run.letter_spacing,
                 });
             }
         }
@@ -756,6 +765,8 @@ pub struct TextRun {
     pub underline: Option<UnderlineStyle>,
     /// The strikethrough style (if any)
     pub strikethrough: Option<StrikethroughStyle>,
+    /// Tracking in EM units.
+    pub letter_spacing: Option<OrderedFloat<f32>>,
 }
 
 /// An identifier for a specific glyph, as returned by [`WindowTextSystem::layout_line`].

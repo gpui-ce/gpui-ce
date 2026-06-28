@@ -12,6 +12,7 @@ use crate::{
     black, phi, point, quad, rems, size, solid_text_color, transparent_black, transparent_white,
 };
 use collections::HashSet;
+use ordered_float::OrderedFloat;
 use refineable::Refineable;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -403,6 +404,9 @@ pub struct TextStyle {
 
     /// The number of lines to display before truncating the text
     pub line_clamp: Option<usize>,
+
+    /// Additional letter spacing (tracking) in EM units.
+    pub letter_spacing: Option<f32>,
 }
 
 impl Default for TextStyle {
@@ -424,6 +428,7 @@ impl Default for TextStyle {
             text_overflow: None,
             text_align: TextAlign::default(),
             line_clamp: None,
+            letter_spacing: None,
         }
     }
 }
@@ -493,6 +498,7 @@ impl TextStyle {
             background_color: self.background_color,
             underline: self.underline,
             strikethrough: self.strikethrough,
+            letter_spacing: self.letter_spacing.map(OrderedFloat),
         }
     }
 }

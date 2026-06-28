@@ -2,6 +2,7 @@ use crate::{
     FontId, FontRun, FontStyle, FontWeight, Pixels, PlatformTextSystem, SharedString, TextRun, px,
 };
 use collections::HashMap;
+use ordered_float::OrderedFloat;
 use std::{borrow::Cow, iter, sync::Arc};
 
 /// The GPUI line wrapper, used to wrap lines of text to a given width.
@@ -11,6 +12,7 @@ pub struct LineWrapper {
     pub(crate) font_size: Pixels,
     pub(crate) weight: FontWeight,
     pub(crate) style: FontStyle,
+    pub(crate) letter_spacing: Option<f32>,
     cached_ascii_char_widths: [Option<Pixels>; 128],
     cached_other_char_widths: HashMap<char, Pixels>,
 }
@@ -24,6 +26,7 @@ impl LineWrapper {
         font_size: Pixels,
         weight: FontWeight,
         style: FontStyle,
+        letter_spacing: Option<f32>,
         text_system: Arc<dyn PlatformTextSystem>,
     ) -> Self {
         Self {
@@ -32,6 +35,7 @@ impl LineWrapper {
             font_size,
             weight,
             style,
+            letter_spacing,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
         }
@@ -229,6 +233,7 @@ impl LineWrapper {
                     font_id: self.font_id,
                     weight: self.weight,
                     style: self.style,
+                    letter_spacing: self.letter_spacing.map(OrderedFloat),
                 }],
             )
             .width
@@ -337,6 +342,7 @@ mod tests {
             px(16.),
             FontWeight::NORMAL,
             FontStyle::Normal,
+            None,
             cx.text_system().platform_text_system.clone(),
         )
     }
