@@ -420,6 +420,11 @@ impl CosmicTextSystemState {
                     .stretch(font.stretch)
                     .style(run.style.into())
                     .weight(run.weight.into())
+                    .letter_spacing(
+                        run.letter_spacing
+                            .unwrap_or(ordered_float::OrderedFloat(0.0))
+                            .into(),
+                    )
                     .font_features(loaded_font.features.clone()),
             );
             offs += run.len;

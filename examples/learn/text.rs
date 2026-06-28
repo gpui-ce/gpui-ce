@@ -489,7 +489,7 @@ fn tracking_example(colors: &Colors) -> impl IntoElement {
                 .child(
                     div()
                         .text_color(text)
-                        .tracking(5.0)
+                        .tracking_tighter()
                         .child("TRACKING TIGHTER"),
                 )
                 .child(
@@ -522,27 +522,7 @@ fn tracking_example(colors: &Colors) -> impl IntoElement {
                         .tracking_widest()
                         .child("TRACKING WIDEST"),
                 )
-                .child(
-                    div()
-                        .font_weight(FontWeight::THIN)
-                        .tracking_widest()
-                        .text_color(text)
-                        .child("THIN + WIDEST"),
-                )
-                .child(
-                    div()
-                        .font_weight(FontWeight::BLACK)
-                        .tracking_tighter()
-                        .text_color(text)
-                        .child("BLACK + TIGHTER"),
-                )
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .tracking_wider()
-                        .text_color(text)
-                        .child("BOLD + WIDER"),
-                ),
+                .child(div().text_color(text).tracking(1.0).child("TRACKING 1em")),
         )
 }
 
