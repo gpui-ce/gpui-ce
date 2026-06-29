@@ -43,6 +43,7 @@ use crate::{
     PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation, SharedString,
     SubscriberSet, Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance,
     WindowHandle, WindowId, WindowInvalidator, current_platform, hash, init_app_menus,
+    platform::cross::render_context::WgpuOptions,
 };
 
 mod async_context;
@@ -129,11 +130,17 @@ impl Application {
     /// Builds an app with the given asset source.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
+        Self::with_wgpu_options(WgpuOptions::default())
+    }
+
+    /// Build an app with custom WGPU options, including additional
+    /// features to request when creating the GPU device.
+    pub fn with_wgpu_options(options: WgpuOptions) -> Self {
         #[cfg(any(test, feature = "test-support"))]
         log::info!("GPUI was compiled in test mode");
 
         Self(App::new_app(
-            current_platform(false),
+            current_platform(false, options),
             Arc::new(()),
             Arc::new(NullHttpClient),
         ))
@@ -144,7 +151,7 @@ impl Application {
     /// SSH, where GUI applications are not allowed.
     pub fn headless() -> Self {
         Self(App::new_app(
-            current_platform(true),
+            current_platform(true, WgpuOptions::default()),
             Arc::new(()),
             Arc::new(NullHttpClient),
         ))

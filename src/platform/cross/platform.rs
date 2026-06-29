@@ -7,7 +7,7 @@ use crate::{
     platform::cross::{
         dispatcher::{CrossEvent, Dispatcher},
         keyboard::CrossKeyboardLayout,
-        render_context::WgpuContext,
+        render_context::{WgpuContext, WgpuOptions},
         text_system::CosmicTextSystem,
         window::CrossWindow,
     },
@@ -112,7 +112,7 @@ struct ClickState {
 }
 
 impl CrossPlatform {
-    pub fn new() -> Result<Self> {
+    pub fn new(wgpu_options: WgpuOptions) -> Result<Self> {
         let (main_tx, main_rx) = PriorityQueueReceiver::new();
         let mut event_loop =
             winit::event_loop::EventLoop::<CrossEvent>::with_user_event().build()?;
@@ -127,7 +127,7 @@ impl CrossPlatform {
             background_executor,
             foreground_executor,
             text_system: Arc::new(CosmicTextSystem::new()),
-            wgpu_context: Arc::new(WgpuContext::new()?),
+            wgpu_context: Arc::new(WgpuContext::new(&wgpu_options)?),
             main_rx,
             event_loop: Cell::new(Some(event_loop)),
             event_loop_proxy,

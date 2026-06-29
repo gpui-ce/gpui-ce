@@ -8,6 +8,7 @@ mod test;
 pub(crate) mod cross;
 
 use crate::platform::cross::platform::CrossPlatform;
+use crate::platform::cross::render_context::WgpuOptions;
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Font, FontId, FontMetrics, FontRun,
@@ -54,13 +55,13 @@ pub use test::TestDispatcher;
 
 /// Returns a background executor for the current platform.
 pub fn background_executor() -> BackgroundExecutor {
-    current_platform(true).background_executor()
+    current_platform(true, WgpuOptions::default()).background_executor()
 }
 
-pub(crate) fn current_platform(_headless: bool) -> Rc<dyn Platform> {
+pub(crate) fn current_platform(_headless: bool, wgpu_options: WgpuOptions) -> Rc<dyn Platform> {
     // TODO(mdeand): Support headless
     // TODO(mdeand): Monomorphize Platform and its associated types.
-    Rc::new(CrossPlatform::new().expect("Failed to initialize platform"))
+    Rc::new(CrossPlatform::new(wgpu_options).expect("Failed to initialize platform"))
 }
 
 pub(crate) trait Platform: 'static {

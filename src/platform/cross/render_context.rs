@@ -2,6 +2,22 @@ use std::sync::{Arc, Mutex};
 
 use super::surface_registry::SurfaceRegistry;
 
+/// Options for configuring the WGPU device used by the application.
+#[derive(Clone, Debug)]
+pub struct WgpuOptions {
+    /// Additional WGPU features to request when creating the device.
+    /// These are OR'd with the features WGPUI itself requires.
+    pub additional_features: wgpu::Features,
+}
+
+impl Default for WgpuOptions {
+    fn default() -> Self {
+        Self {
+            additional_features: wgpu::Features::empty(),
+        }
+    }
+}
+
 pub struct WgpuContext {
     pub(super) adapter: wgpu::Adapter,
     pub(super) device: wgpu::Device,
@@ -22,21 +38,22 @@ pub struct WgpuContext {
 }
 
 impl WgpuContext {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(options: &WgpuOptions) -> anyhow::Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        // NOTE: INDIRECT_FIRST_INSTANCE is required for indirect draw commands
-        // that rely on non-zero firstInstance to index per-instance scene data.
-        // Engines embedding WGPUI (e.g. Helio-based viewports) use this path.
-        let required_features = wgpu::Features::TIMESTAMP_QUERY
+        // Features WGPUI itself needs for its rendering pipeline.
+        let wgpui_features = wgpu::Features::TIMESTAMP_QUERY
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
             | wgpu::Features::TEXTURE_BINDING_ARRAY
             | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
             | wgpu::Features::SHADER_PRIMITIVE_INDEX
             | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+
+        // Combine with any additional features requested by the application.
+        let required_features = wgpui_features | options.additional_features;
 
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
 

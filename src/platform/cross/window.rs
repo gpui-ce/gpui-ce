@@ -12,6 +12,8 @@ use std::{
     sync::Arc,
 };
 use winit::event_loop::EventLoopProxy;
+#[cfg(target_os = "windows")]
+use winit::platform::windows::{BackdropType, WindowExtWindows};
 
 #[cfg(target_os = "linux")]
 // use winit::platform::linux::WindowExtLinux;
