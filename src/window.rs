@@ -2,11 +2,11 @@
 use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
+    AsyncWindowContext, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds, BoxShadow,
+    Capslock, Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
-    ExternalWindowHandle, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla,
-    InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+    ExternalWindowHandle, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
+    GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
     MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
@@ -916,7 +916,6 @@ pub struct Window {
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
-    pub(crate) element_blur: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
@@ -1353,7 +1352,6 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
-            element_blur: 0.0,
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2493,6 +2491,11 @@ impl Window {
     fn paint_deferred_draws(&mut self, deferred_draw_indices: &[usize], cx: &mut App) {
         assert_eq!(self.element_id_stack.len(), 0);
 
+        // Deferred draws are overlays (tooltips, popovers, drag images) and must sort above the
+        // whole main scene. Raise the order floor so they do — this also keeps a deferred
+        // backdrop's order from falling inside a content-filter order range left by the main scene.
+        self.next_frame.scene.raise_order_floor();
+
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
         for &deferred_draw_ix in deferred_draw_indices {
             let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
@@ -2776,24 +2779,6 @@ impl Window {
         result
     }
 
-    pub(crate) fn with_element_blur<R>(
-        &mut self,
-        blur_radius: Option<f32>,
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        self.invalidator.debug_assert_paint_or_prepaint();
-
-        let Some(blur_radius) = blur_radius else {
-            return f(self);
-        };
-
-        let previous_blur = self.element_blur;
-        self.element_blur = previous_blur + blur_radius.max(0.0);
-        let result = f(self);
-        self.element_blur = previous_blur;
-        result
-    }
-
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -2891,14 +2876,6 @@ impl Window {
     pub(crate) fn element_opacity(&self) -> f32 {
         self.invalidator.debug_assert_paint_or_prepaint();
         self.element_opacity
-    }
-
-    /// Obtain the current element blur radius. This method should only be called during the
-    /// paint or prepaint phase of element drawing.
-    #[inline]
-    pub(crate) fn element_blur(&self) -> f32 {
-        self.invalidator.debug_assert_paint_or_prepaint();
-        self.element_blur
     }
 
     /// Obtain the current content mask. This method should only be called during element drawing.
@@ -3201,26 +3178,91 @@ impl Window {
         });
     }
 
-    /// Paint a backdrop blur quad into the scene for the next frame at the current z-index.
-    /// This blurs the content behind the element (like CSS backdrop-filter: blur()).
+    /// Paint a backdrop filter into the scene for the next frame at the current z-index. The
+    /// renderer blurs the content already painted behind `bounds` and composites the result
+    /// into the rounded rectangle described by `bounds` and `corner_radii` — the CSS
+    /// `backdrop-filter` effect (frosted glass). Typically the element then paints a translucent
+    /// background quad on top so its color tints the blurred backdrop.
+    ///
+    /// Does nothing when `filters` produce no visible blur.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    pub fn paint_backdrop_blur_quad(&mut self, quad: PaintQuad, blur_radius: Pixels) {
+    pub fn paint_backdrop_filter(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+    ) {
         self.invalidator.debug_assert_paint();
+
+        let radius = Filter::max_blur_radius(filters);
+        if radius <= Pixels::ZERO {
+            return;
+        }
 
         let scale_factor = self.scale_factor();
         let content_mask = self.content_mask();
-        let opacity = self.element_opacity();
-        self.next_frame.scene.insert_primitive(crate::BackdropBlur {
+        self.next_frame.scene.insert_primitive(BackdropFilter {
             order: 0,
-            blur_radius: blur_radius.scale(scale_factor),
-            bounds: quad.bounds.scale(scale_factor),
+            bounds: bounds.scale(scale_factor),
             content_mask: content_mask.scale(scale_factor),
-            corner_radii: quad.corner_radii.scale(scale_factor),
-            background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity),
-            border_widths: quad.border_widths.scale(scale_factor),
+            corner_radii: corner_radii.scale(scale_factor),
+            blur_radius: radius.scale(scale_factor),
+            opacity: self.element_opacity(),
+            _pad: 0,
         });
+    }
+
+    /// Isolate the painting performed by `f` into a content-filter group: the renderer renders
+    /// everything `f` paints into an offscreen target, blurs it as a single layer, and
+    /// composites the result back into the rounded rectangle described by `bounds` and
+    /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
+    ///
+    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
+    /// indirection.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn with_filter_layer<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let radius = Filter::max_blur_radius(filters);
+        if radius <= Pixels::ZERO {
+            return f(self);
+        }
+
+        // Snapshot the (scaled) group parameters once so the start and end markers agree.
+        //
+        // `opacity` is 1.0 — NOT `element_opacity()`. The group's children/bg/border are painted
+        // through the normal paint methods while `element_opacity` is still in effect, so they
+        // already carry the element's opacity (consistent with gpui's per-primitive opacity for
+        // non-filtered elements). Re-applying it at composite time would double it (e.g.
+        // `.blur(r).opacity(0.5)` would render at 0.25 instead of 0.5).
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask();
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds: bounds.scale(scale_factor),
+            content_mask: content_mask.scale(scale_factor),
+            corner_radii: corner_radii.scale(scale_factor),
+            blur_radius: radius.scale(scale_factor),
+            opacity: 1.0,
+            is_start: true,
+        };
+
+        self.next_frame.scene.insert_primitive(boundary);
+        let result = f(self);
+        self.next_frame.scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+
+        result
     }
 
     /// Paint the given `Path` into the scene for the next frame at the current z-index.

@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    AtlasTextureId, AtlasTile, DevicePixels, GpuSpecs, GradientStop, LinearColorStop,
-    MonochromeSprite, Pixels, PlatformAtlas, PrimitiveBatch, Quad, ScaledPixels, Scene,
-    TransformationMatrix, color, geometry,
+    AtlasTextureId, AtlasTile, BackdropFilter, DevicePixels, FilterBoundary, GpuSpecs,
+    GradientStop, LinearColorStop, MonochromeSprite, Pixels, PlatformAtlas, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, TransformationMatrix, color, geometry,
     platform::cross::{
         atlas::WgpuAtlas,
         render_context::{WgpuContext, ensure_buffer_size},
@@ -668,7 +668,7 @@ struct WgpuPipelines {
 
     quads_bind_group_layout: wgpu::BindGroupLayout,
     shadows_bind_group_layout: wgpu::BindGroupLayout,
-    backdrop_blurs_bind_group_layout: wgpu::BindGroupLayout,
+    backdrop_filters_bind_group_layout: wgpu::BindGroupLayout,
     backdrop_texture_bind_group_layout: wgpu::BindGroupLayout,
     underlines_bind_group_layout: wgpu::BindGroupLayout,
     sprites_bind_group_layout: wgpu::BindGroupLayout,
@@ -682,7 +682,7 @@ struct WgpuPipelines {
 
     quads_pipeline: wgpu::RenderPipeline,
     shadows_pipeline: wgpu::RenderPipeline,
-    backdrop_blurs_pipeline: wgpu::RenderPipeline,
+    backdrop_filters_pipeline: wgpu::RenderPipeline,
     underlines_pipeline: wgpu::RenderPipeline,
     mono_sprites_pipeline: wgpu::RenderPipeline,
     poly_sprites_pipeline: wgpu::RenderPipeline,
@@ -710,11 +710,11 @@ impl WgpuPipelines {
                 source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadows.wgsl").into()),
             });
 
-        let backdrop_blur_shader =
+        let backdrop_filter_shader =
             context
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("backdrop_blur_shader"),
+                    label: Some("backdrop_filter_shader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("shaders/backdrop_blur.wgsl").into(),
                     ),
@@ -877,11 +877,11 @@ impl WgpuPipelines {
                     immediate_size: 0,
                 });
 
-        let backdrop_blurs_bind_group_layout =
+        let backdrop_filters_bind_group_layout =
             context
                 .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("backdrop_blurs_bind_group_layout"),
+                    label: Some("backdrop_filters_bind_group_layout"),
                     entries: &[wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -919,14 +919,14 @@ impl WgpuPipelines {
                     ],
                 });
 
-        let backdrop_blurs_pipeline_layout =
+        let backdrop_filters_pipeline_layout =
             context
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("backdrop_blurs_pipeline_layout"),
+                    label: Some("backdrop_filters_pipeline_layout"),
                     bind_group_layouts: &[
                         Some(&globals_bind_group_layout),
-                        Some(&backdrop_blurs_bind_group_layout),
+                        Some(&backdrop_filters_bind_group_layout),
                         Some(&backdrop_texture_bind_group_layout),
                     ],
                     immediate_size: 0,
@@ -1150,7 +1150,7 @@ impl WgpuPipelines {
 
             quads_bind_group_layout,
             shadows_bind_group_layout,
-            backdrop_blurs_bind_group_layout,
+            backdrop_filters_bind_group_layout,
             backdrop_texture_bind_group_layout,
             underlines_bind_group_layout,
             mono_sprites_bind_group_layout,
@@ -1215,13 +1215,13 @@ impl WgpuPipelines {
                 },
             ),
 
-            backdrop_blurs_pipeline: context.device.create_render_pipeline(
+            backdrop_filters_pipeline: context.device.create_render_pipeline(
                 &wgpu::RenderPipelineDescriptor {
-                    label: Some("backdrop_blurs"),
-                    layout: Some(&backdrop_blurs_pipeline_layout),
+                    label: Some("backdrop_filters"),
+                    layout: Some(&backdrop_filters_pipeline_layout),
                     vertex: wgpu::VertexState {
-                        module: &backdrop_blur_shader,
-                        entry_point: Some("vs_backdrop_blur"),
+                        module: &backdrop_filter_shader,
+                        entry_point: Some("vs_backdrop_filter"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         buffers: &[],
                     },
@@ -1232,8 +1232,8 @@ impl WgpuPipelines {
                     depth_stencil: None,
                     multisample: wgpu::MultisampleState::default(),
                     fragment: Some(wgpu::FragmentState {
-                        module: &backdrop_blur_shader,
-                        entry_point: Some("fs_backdrop_blur"),
+                        module: &backdrop_filter_shader,
+                        entry_point: Some("fs_backdrop_filter"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         targets: color_targets,
                     }),
@@ -1427,6 +1427,42 @@ struct SurfaceBoundsEntry {
     layout_version: u64,
 }
 
+/// Maximum nesting depth supported for CSS-style content `filter` groups
+/// (`with_filter_layer`). Groups nested deeper than this are painted inline,
+/// unisolated and unblurred, rather than allocating unbounded offscreen textures.
+const MAX_FILTER_DEPTH: usize = 4;
+
+/// Allocates the pool of full-surface-sized offscreen textures that
+/// content-filter groups render into, one per supported nesting depth.
+fn create_filter_group_textures(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> (Vec<wgpu::Texture>, Vec<wgpu::TextureView>) {
+    (0..MAX_FILTER_DEPTH)
+        .map(|_| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("filter_group_texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        })
+        .unzip()
+}
+
 pub struct WgpuRenderer {
     context: Arc<WgpuContext>,
     surface: ManuallyDrop<wgpu::Surface<'static>>,
@@ -1449,6 +1485,12 @@ pub struct WgpuRenderer {
     backdrop_blur_texture: Option<wgpu::Texture>,
     backdrop_blur_texture_view: Option<wgpu::TextureView>,
     backdrop_blur_sampler: wgpu::Sampler,
+
+    // Pool of offscreen textures that content-filter groups (`with_filter_layer`)
+    // render into so their content can be blurred and composited as a unit.
+    // Indexed by nesting depth, sized to `MAX_FILTER_DEPTH`.
+    group_textures: Vec<wgpu::Texture>,
+    group_views: Vec<wgpu::TextureView>,
 
     // Bounds cache for fast surface blitting without compositor
     surface_bounds_cache: Arc<Mutex<HashMap<SurfaceId, SurfaceBoundsEntry>>>,
@@ -1599,6 +1641,9 @@ impl WgpuRenderer {
         let backdrop_blur_texture_view =
             backdrop_blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let (group_textures, group_views) =
+            create_filter_group_textures(&context.device, width, height, format);
+
         Ok(Self {
             context: context.clone(),
             surface: ManuallyDrop::new(surface),
@@ -1614,6 +1659,8 @@ impl WgpuRenderer {
             persistent_framebuffer_view: Some(persistent_framebuffer_view),
             backdrop_blur_texture: Some(backdrop_blur_texture),
             backdrop_blur_texture_view: Some(backdrop_blur_texture_view),
+            group_textures,
+            group_views,
             surface_bounds_cache: Arc::new(Mutex::new(HashMap::new())),
             layout_version: Arc::new(AtomicU64::new(0)),
         })
@@ -1710,17 +1757,17 @@ impl WgpuRenderer {
                 .queue
                 .write_buffer(&self.context.shadows_buffer.lock().unwrap(), 0, data);
         }
-        if !scene.backdrop_blurs.is_empty() {
-            let data = unsafe { as_bytes(&scene.backdrop_blurs) };
+        if !scene.backdrop_filters.is_empty() {
+            let data = unsafe { as_bytes(&scene.backdrop_filters) };
             ensure_buffer_size(
                 &self.context.device,
-                &self.context.backdrop_blurs_buffer,
+                &self.context.backdrop_filters_buffer,
                 data.len() as u64,
-                "Backdrop Blurs Buffer",
+                "Backdrop Filters Buffer",
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             );
             self.context.queue.write_buffer(
-                &self.context.backdrop_blurs_buffer.lock().unwrap(),
+                &self.context.backdrop_filters_buffer.lock().unwrap(),
                 0,
                 data,
             );
@@ -1855,7 +1902,7 @@ impl WgpuRenderer {
         // Borrow buffers for bind group creation - these borrows must live until bind groups are done
         let quads_buffer_ref = self.context.quads_buffer.lock().unwrap();
         let shadows_buffer_ref = self.context.shadows_buffer.lock().unwrap();
-        let backdrop_blurs_buffer_ref = self.context.backdrop_blurs_buffer.lock().unwrap();
+        let backdrop_filters_buffer_ref = self.context.backdrop_filters_buffer.lock().unwrap();
         let underlines_buffer_ref = self.context.underlines_buffer.lock().unwrap();
         let mono_sprites_buffer_ref = self.context.mono_sprites_buffer.lock().unwrap();
         let poly_sprites_buffer_ref = self.context.poly_sprites_buffer.lock().unwrap();
@@ -1893,16 +1940,16 @@ impl WgpuRenderer {
                     }],
                 });
 
-        let backdrop_blurs_bind_group =
+        let backdrop_filters_bind_group =
             self.context
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("backdrop_blurs_bind_group"),
-                    layout: &self.pipelines.backdrop_blurs_bind_group_layout,
+                    label: Some("backdrop_filters_bind_group"),
+                    layout: &self.pipelines.backdrop_filters_bind_group_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &backdrop_blurs_buffer_ref,
+                            buffer: &backdrop_filters_buffer_ref,
                             offset: 0,
                             size: None,
                         }),
@@ -2016,11 +2063,17 @@ impl WgpuRenderer {
 
             let mut quads_first_instance: u32 = 0;
             let mut shadows_first_instance: u32 = 0;
-            let mut backdrop_blurs_first_instance: u32 = 0;
+            let mut backdrop_filters_first_instance: u32 = 0;
             let mut underlines_first_instance: u32 = 0;
             let mut mono_sprites_first_instance: u32 = 0;
             let mut poly_sprites_first_instance: u32 = 0;
             let mut paths_vertex_offset: u32 = 0;
+
+            // Stack of active content-filter groups. Each entry pairs the group's
+            // `FilterBoundary` start marker with the `group_textures`/`group_views`
+            // slot its content is being rendered into (`None` if the group exceeded
+            // `MAX_FILTER_DEPTH` and is being painted inline, unisolated).
+            let mut filter_stack: Vec<(FilterBoundary, Option<usize>)> = Vec::new();
 
             for batch in scene.batches() {
                 match batch {
@@ -2120,8 +2173,8 @@ impl WgpuRenderer {
                         pass.draw(0..4, shadows_first_instance..shadows_first_instance + count);
                         shadows_first_instance += count;
                     }
-                    PrimitiveBatch::BackdropBlurs(backdrop_blurs) => {
-                        let count = backdrop_blurs.len() as u32;
+                    PrimitiveBatch::BackdropFilters(backdrop_filters) => {
+                        let count = backdrop_filters.len() as u32;
 
                         // End the current render pass to copy texture
                         drop(pass);
@@ -2164,15 +2217,148 @@ impl WgpuRenderer {
                         });
 
                         // Now render the backdrop blur quads
-                        pass.set_pipeline(&self.pipelines.backdrop_blurs_pipeline);
+                        pass.set_pipeline(&self.pipelines.backdrop_filters_pipeline);
                         pass.set_bind_group(0, &self.pipelines.globals_bind_group, &[]);
-                        pass.set_bind_group(1, &backdrop_blurs_bind_group, &[]);
+                        pass.set_bind_group(1, &backdrop_filters_bind_group, &[]);
                         pass.set_bind_group(2, &backdrop_texture_bind_group, &[]);
                         pass.draw(
                             0..4,
-                            backdrop_blurs_first_instance..backdrop_blurs_first_instance + count,
+                            backdrop_filters_first_instance..backdrop_filters_first_instance + count,
                         );
-                        backdrop_blurs_first_instance += count;
+                        backdrop_filters_first_instance += count;
+                    }
+                    PrimitiveBatch::FilterBoundary(index) => {
+                        let boundary = scene.filter_boundaries[index];
+
+                        if boundary.is_start {
+                            let depth = filter_stack.len();
+                            if depth >= self.group_textures.len() {
+                                // Exceeded the supported nesting depth: paint the group's
+                                // content inline (unisolated/unblurred) rather than dropping it.
+                                filter_stack.push((boundary, None));
+                            } else {
+                                drop(pass);
+
+                                pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("filter_group"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &self.group_views[depth],
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                        resolve_target: None,
+                                        depth_slice: None,
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                    multiview_mask: None,
+                                });
+
+                                filter_stack.push((boundary, Some(depth)));
+                            }
+                        } else {
+                            let Some((start_boundary, depth)) = filter_stack.pop() else {
+                                continue;
+                            };
+
+                            let Some(depth) = depth else {
+                                // The group was painted inline; nothing to composite.
+                                continue;
+                            };
+
+                            // End the group's pass: its content is now baked into
+                            // `group_textures[depth]`.
+                            drop(pass);
+
+                            let surface_view = surface_texture
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
+                            let parent_view: &wgpu::TextureView = match filter_stack.last() {
+                                Some((_, Some(parent_depth))) => &self.group_views[*parent_depth],
+                                _ => &surface_view,
+                            };
+
+                            pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("filter_group_resumed"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: parent_view,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+
+                            // Composite the blurred group content back over the parent using
+                            // the same backdrop-filter pipeline, sampling from the group's
+                            // offscreen texture instead of a surface snapshot.
+                            let composite = BackdropFilter {
+                                order: 0,
+                                bounds: start_boundary.bounds,
+                                content_mask: start_boundary.content_mask,
+                                corner_radii: start_boundary.corner_radii,
+                                blur_radius: start_boundary.blur_radius,
+                                opacity: start_boundary.opacity,
+                                _pad: 0,
+                            };
+                            let composite_buffer = self.context.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("filter_group_composite_buffer"),
+                                    contents: unsafe { as_bytes(std::slice::from_ref(&composite)) },
+                                    usage: wgpu::BufferUsages::STORAGE,
+                                },
+                            );
+                            let composite_bind_group = self.context.device.create_bind_group(
+                                &wgpu::BindGroupDescriptor {
+                                    label: Some("filter_group_composite_bind_group"),
+                                    layout: &self.pipelines.backdrop_filters_bind_group_layout,
+                                    entries: &[wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::Buffer(
+                                            wgpu::BufferBinding {
+                                                buffer: &composite_buffer,
+                                                offset: 0,
+                                                size: None,
+                                            },
+                                        ),
+                                    }],
+                                },
+                            );
+                            let composite_texture_bind_group = self.context.device.create_bind_group(
+                                &wgpu::BindGroupDescriptor {
+                                    label: Some("filter_group_texture_bind_group"),
+                                    layout: &self.pipelines.backdrop_texture_bind_group_layout,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &self.group_views[depth],
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: wgpu::BindingResource::Sampler(
+                                                &self.backdrop_blur_sampler,
+                                            ),
+                                        },
+                                    ],
+                                },
+                            );
+
+                            pass.set_pipeline(&self.pipelines.backdrop_filters_pipeline);
+                            pass.set_bind_group(0, &self.pipelines.globals_bind_group, &[]);
+                            pass.set_bind_group(1, &composite_bind_group, &[]);
+                            pass.set_bind_group(2, &composite_texture_bind_group, &[]);
+                            pass.draw(0..4, 0..1);
+                        }
                     }
                     PrimitiveBatch::Underlines(underlines) => {
                         let count = underlines.len() as u32;
@@ -2605,6 +2791,18 @@ impl WgpuRenderer {
             backdrop_blur_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.backdrop_blur_texture = Some(backdrop_blur_texture);
         self.backdrop_blur_texture_view = Some(backdrop_blur_texture_view);
+
+        // Recreate the content-filter group textures at the new size so they stay
+        // pixel-aligned with the surface (group composites sample using
+        // `pixel_position / globals.viewport_size` UVs, just like backdrop blur).
+        let (group_textures, group_views) = create_filter_group_textures(
+            &self.context.device,
+            self.surface_configuration.width,
+            self.surface_configuration.height,
+            self.surface_configuration.format,
+        );
+        self.group_textures = group_textures;
+        self.group_views = group_views;
 
         // Invalidate bounds cache - all surface bounds are now stale
         self.layout_version.fetch_add(1, Ordering::Release);

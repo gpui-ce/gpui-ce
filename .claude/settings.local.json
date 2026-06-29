@@ -15,7 +15,9 @@
       "Bash(taskkill:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(curl -sL \"https://patch-diff.githubusercontent.com/raw/gpui-ce/gpui-ce/pull/40.patch\" -o /tmp/pr40.patch)",
+      "Read(//tmp/**)"
     ]
   }
 }

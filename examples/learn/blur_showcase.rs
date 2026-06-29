@@ -9,11 +9,122 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Application, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Render, ScrollHandle, Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px,
+    rgb, rgba, size,
 };
 
-struct BlurShowcase;
+const SCROLLBAR_THUMB_WIDTH: Pixels = px(6.);
+
+struct BlurShowcase {
+    scroll_handle: ScrollHandle,
+    /// The pointer's offset from the thumb's top edge when a drag starts, so dragging doesn't
+    /// snap the thumb to the pointer position.
+    scrollbar_drag_offset: Option<Pixels>,
+}
+
+impl BlurShowcase {
+    /// A thin draggable overlay scrollbar for `self.scroll_handle`'s vertical axis: a thumb
+    /// sized from the viewport/content ratio and positioned from the current scroll offset.
+    /// Mirrors the `canvas` + `window.on_mouse_event` pattern other examples (e.g.
+    /// `bench/data_table`) use to drag scrollbar thumbs, since dragging needs to keep tracking
+    /// the pointer even once it leaves the thumb's own hitbox.
+    fn render_scrollbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scroll_handle = self.scroll_handle.clone();
+        let bounds = scroll_handle.bounds();
+        let max_offset = scroll_handle.max_offset();
+        let viewport_height = bounds.size.height;
+        let content_height = viewport_height + max_offset.height;
+
+        if max_offset.height <= px(0.) || content_height <= px(0.) {
+            return div().id("blur-showcase-scrollbar").into_any_element();
+        }
+
+        let viewport_fraction = (viewport_height / content_height).clamp(0.0, 1.0);
+        let scrolled_fraction =
+            (scroll_handle.offset().y.abs() / max_offset.height).clamp(0.0, 1.0);
+
+        let thumb_height = (viewport_height * viewport_fraction).max(px(24.));
+        let track_room = viewport_height - thumb_height;
+        let thumb_top = track_room * scrolled_fraction;
+
+        let entity = cx.entity();
+
+        div()
+            .id("blur-showcase-scrollbar")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_1()
+            .w(SCROLLBAR_THUMB_WIDTH)
+            .child(
+                div()
+                    .absolute()
+                    .top(thumb_top)
+                    .right_0()
+                    .w(SCROLLBAR_THUMB_WIDTH)
+                    .h(thumb_height)
+                    .rounded_full()
+                    .bg(rgba(0xffffff55))
+                    .hover(|this| this.bg(rgba(0xffffff88)))
+                    .child(
+                        canvas(
+                            |_, _, _| (),
+                            move |thumb_bounds, _, window, _| {
+                                window.on_mouse_event({
+                                    let entity = entity.clone();
+                                    move |ev: &MouseDownEvent, _, _, cx| {
+                                        if !thumb_bounds.contains(&ev.position) {
+                                            return;
+                                        }
+
+                                        let drag_offset = ev.position.y - thumb_bounds.origin.y;
+                                        entity.update(cx, |this, _| {
+                                            this.scrollbar_drag_offset = Some(drag_offset);
+                                        })
+                                    }
+                                });
+                                window.on_mouse_event({
+                                    let entity = entity.clone();
+                                    move |_: &MouseUpEvent, _, _, cx| {
+                                        entity.update(cx, |this, _| {
+                                            this.scrollbar_drag_offset = None;
+                                        })
+                                    }
+                                });
+
+                                let scroll_handle = scroll_handle.clone();
+                                window.on_mouse_event(move |ev: &MouseMoveEvent, _, _, cx| {
+                                    if !ev.dragging() {
+                                        return;
+                                    }
+
+                                    let Some(drag_offset) =
+                                        entity.read(cx).scrollbar_drag_offset
+                                    else {
+                                        return;
+                                    };
+
+                                    let thumb_top = (ev.position.y - bounds.origin.y
+                                        - drag_offset)
+                                        .clamp(px(0.), track_room);
+                                    let scrolled_fraction = if track_room > px(0.) {
+                                        thumb_top / track_room
+                                    } else {
+                                        0.
+                                    };
+                                    let offset_y = max_offset.height * scrolled_fraction;
+                                    scroll_handle.set_offset(point(px(0.), -offset_y));
+                                    cx.notify(entity.entity_id());
+                                })
+                            },
+                        )
+                        .size_full(),
+                    ),
+            )
+            .into_any_element()
+    }
+}
 
 fn color_strip() -> impl IntoElement {
     div()
@@ -54,6 +165,43 @@ fn blur_card(
                 .child(title),
         )
         .child(div().text_xs().text_color(rgb(0x999999)).child(subtitle))
+}
+
+/// A frosted-glass card with no background tint at all — fully transparent, so only the
+/// blurred backdrop (and its rounded-rect mask/border) is visible. This isolates the
+/// `backdrop-filter` effect from any `bg(...)` compositing.
+fn glass_card(
+    id: &'static str,
+    title: &'static str,
+    subtitle: &'static str,
+    blur_radius: f32,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_4()
+        .rounded_lg()
+        .bg(rgba(0x00000000))
+        .backdrop_blur(blur_radius)
+        .border_1()
+        .border_color(rgb(0xffffff))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(title),
+        )
+        .child(div().text_xs().text_color(rgb(0xdddddd)).child(subtitle))
+}
+
+fn section_heading(text: &'static str) -> impl IntoElement {
+    div()
+        .pt_2()
+        .text_base()
+        .font_weight(gpui::FontWeight::BOLD)
+        .child(text)
 }
 
 fn radial_background_1() -> impl IntoElement {
@@ -114,6 +262,185 @@ fn demo_row(
         )
 }
 
+/// A row showing a fully transparent `glass_card` (no `bg`/tint) over the color strip, so the
+/// blur is the only thing distinguishing the card from its background.
+fn glass_demo_row(id: &'static str, heading: &'static str, blur_radius: f32) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().text_xs().text_color(rgb(0x999999)).child(heading))
+        .child(
+            div().relative().child(color_strip()).child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p_4()
+                    .child(glass_card(
+                        "glass-card",
+                        "No Background",
+                        "backdrop_blur with transparent bg",
+                        blur_radius,
+                    ))
+                    .w_full(),
+            ),
+        )
+}
+
+/// A row contrasting a sharp color strip with a copy of itself blurred as a single group via
+/// `.blur(radius)` — CSS `filter: blur(...)`. Unlike `backdrop_blur`, this filters the
+/// element's *own* rendered content (and its children), not whatever is behind it.
+fn content_blur_demo_row(
+    id: &'static str,
+    heading: &'static str,
+    blur_radius: f32,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(div().text_xs().text_color(rgb(0x999999)).child(heading))
+        .child(
+            div()
+                .flex()
+                .gap_4()
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_xs().text_color(rgb(0x666666)).child("Sharp"))
+                        .child(color_strip()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x666666))
+                                .child(format!("blur({blur_radius})")),
+                        )
+                        .child(div().blur(px(blur_radius)).child(color_strip())),
+                ),
+        )
+}
+
+/// Nested content-filter groups: an outer card uses `.blur(...)` to filter itself *and* its
+/// children — including an inner card that *also* applies its own `.blur(...)`. The renderer
+/// must isolate each group into its own offscreen target and composite them in order.
+fn nested_blur_demo() -> impl IntoElement {
+    div()
+        .id("nested-blur")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0x999999))
+                .child("Nested filter groups: outer blur(4) wraps an inner blur(10)"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap_4()
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_xs().text_color(rgb(0x666666)).child("Unblurred"))
+                        .child(
+                            div()
+                                .h(px(112.))
+                                .rounded_lg()
+                                .overflow_hidden()
+                                .bg(rgb(0x333355))
+                                .relative()
+                                .child(color_strip())
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            div()
+                                                .p_3()
+                                                .rounded_md()
+                                                .bg(rgb(0xff5d73))
+                                                .text_sm()
+                                                .text_color(rgb(0xffffff))
+                                                .child("inner"),
+                                        ),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x666666))
+                                .child("blur(4) ∘ blur(10)"),
+                        )
+                        .child(
+                            div()
+                                .blur(px(4.0))
+                                .h(px(112.))
+                                .rounded_lg()
+                                .overflow_hidden()
+                                .bg(rgb(0x333355))
+                                .relative()
+                                .child(color_strip())
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            div()
+                                                .blur(px(10.0))
+                                                .p_3()
+                                                .rounded_md()
+                                                .bg(rgb(0xff5d73))
+                                                .text_sm()
+                                                .text_color(rgb(0xffffff))
+                                                .child("inner"),
+                                        ),
+                                ),
+                        ),
+                ),
+        )
+}
+
 fn radial_demo_row(
     id: &'static str,
     heading: &'static str,
@@ -152,14 +479,24 @@ fn radial_demo_row(
 }
 
 impl Render for BlurShowcase {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scroll_handle = self.scroll_handle.clone();
+        let scrollbar = self.render_scrollbar(window, cx);
+
         div()
             .size_full()
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_5()
+            .relative()
             .bg(rgb(0x1e1e1e))
+            .child(
+                div()
+                    .id("blur-showcase-scroll")
+                    .track_scroll(&scroll_handle)
+                    .overflow_y_scroll()
+                    .size_full()
+                    .p_6()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
             .child(div().text_lg().font_weight(gpui::FontWeight::BOLD).child("Backdrop Blur Showcase"))
             .child(
                 div()
@@ -167,6 +504,7 @@ impl Render for BlurShowcase {
                     .text_color(rgb(0x999999))
                     .child("Compare rows: backdrop blur radius increases while opacity stays semi-transparent."),
             )
+            .child(section_heading("backdrop_blur — tinted background"))
             .child(demo_row(
                 "row-none",
                 "backdrop_blur(0.0), opacity(0.82)",
@@ -191,6 +529,7 @@ impl Render for BlurShowcase {
                 18.0,
                 0.82,
             ))
+            .child(section_heading("backdrop_blur — radial gradient backgrounds"))
             .child(radial_demo_row(
                 "radial-1",
                 "Radial Gradient #1",
@@ -205,6 +544,26 @@ impl Render for BlurShowcase {
                 0.82,
                 radial_background_2(),
             ))
+            .child(section_heading(
+                "backdrop_blur — fully transparent background (no tint)",
+            ))
+            .child(glass_demo_row(
+                "glass-soft",
+                "bg(transparent), backdrop_blur(8.0)",
+                8.0,
+            ))
+            .child(glass_demo_row(
+                "glass-strong",
+                "bg(transparent), backdrop_blur(20.0)",
+                20.0,
+            ))
+            .child(section_heading("filter: blur — blurring an element's own content"))
+            .child(content_blur_demo_row("content-soft", "blur(4.0)", 4.0))
+            .child(content_blur_demo_row("content-strong", "blur(12.0)", 12.0))
+            .child(section_heading("filter: blur — nested filter groups"))
+            .child(nested_blur_demo()),
+            )
+            .child(scrollbar)
     }
 }
 
@@ -218,7 +577,12 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| BlurShowcase),
+            |_, cx| {
+                cx.new(|_| BlurShowcase {
+                    scroll_handle: ScrollHandle::new(),
+                    scrollbar_drag_offset: None,
+                })
+            },
         )
         .expect("open window");
     });

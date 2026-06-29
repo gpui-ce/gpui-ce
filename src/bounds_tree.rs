@@ -13,6 +13,10 @@ where
     root: Option<usize>,
     nodes: Vec<Node<U>>,
     stack: Vec<usize>,
+    /// Minimum ordering assigned to any subsequent insert. Raised before painting deferred
+    /// draws so overlays always sort above the main scene (and their orders can't fall inside a
+    /// content-filter order range from the main scene). 0 means no floor.
+    order_floor: u32,
 }
 
 impl<U> BoundsTree<U>
@@ -30,14 +34,37 @@ where
         self.root = None;
         self.nodes.clear();
         self.stack.clear();
+        self.order_floor = 0;
+    }
+
+    /// Raise the minimum ordering for subsequent inserts to `floor`. Relative ordering above the
+    /// floor is preserved (overlapping inserts still step above one another).
+    pub fn set_order_floor(&mut self, floor: u32) {
+        self.order_floor = self.order_floor.max(floor);
+    }
+
+    /// The highest ordering assigned to any bounds so far (0 if empty).
+    pub fn max_order(&self) -> u32 {
+        self.root.map_or(0, |index| self.nodes[index].max_ordering())
+    }
+
+    /// Inserts bounds with an ordering strictly greater than *every* existing bounds (not just
+    /// intersecting ones), and returns that ordering. Used for content-filter group boundaries
+    /// (which must sort after all previously-painted content so their order range can't collide
+    /// with unrelated non-overlapping content that reuses low orderings) and to raise the order
+    /// floor before painting deferred draws (so overlays always sort above the main scene).
+    pub fn insert_above_all(&mut self, new_bounds: Bounds<U>) -> u32 {
+        let ordering = self.max_order() + 1;
+        self.insert_at_order(new_bounds, ordering)
     }
 
     pub fn insert(&mut self, new_bounds: Bounds<U>) -> u32 {
         // If the tree is empty, make the root the new leaf.
         let Some(mut index) = self.root else {
-            let new_node = self.push_leaf(new_bounds, 1);
+            let ordering = 1u32.max(self.order_floor);
+            let new_node = self.push_leaf(new_bounds, ordering);
             self.root = Some(new_node);
-            return 1;
+            return ordering;
         };
 
         // Search for the best place to add the new leaf based on heuristics.
@@ -90,8 +117,51 @@ where
             max_intersecting_ordering = cmp::max(max_intersecting_ordering, *sibling_ordering);
         }
 
-        let ordering = max_intersecting_ordering + 1;
-        let new_node = self.push_leaf(new_bounds, ordering);
+        let ordering = (max_intersecting_ordering + 1).max(self.order_floor);
+        self.attach_leaf(sibling, new_bounds, ordering)
+    }
+
+    /// Inserts `new_bounds` as a leaf at exactly `ordering`, ignoring intersections (the caller
+    /// guarantees `ordering` is already greater than any ordering it could collide with). Used by
+    /// [`Self::insert_above_all`], which only needs to find an attachment point in the tree.
+    fn insert_at_order(&mut self, new_bounds: Bounds<U>, ordering: u32) -> u32 {
+        let Some(mut index) = self.root else {
+            let new_node = self.push_leaf(new_bounds, ordering);
+            self.root = Some(new_node);
+            return ordering;
+        };
+
+        while let Node::Internal {
+            left,
+            right,
+            bounds: node_bounds,
+            ..
+        } = &mut self.nodes[index]
+        {
+            let left = *left;
+            let right = *right;
+            *node_bounds = node_bounds.union(&new_bounds);
+            self.stack.push(index);
+
+            let left_cost = new_bounds.union(self.nodes[left].bounds()).half_perimeter();
+            let right_cost = new_bounds
+                .union(self.nodes[right].bounds())
+                .half_perimeter();
+            if left_cost < right_cost {
+                index = left;
+            } else {
+                index = right;
+            }
+        }
+
+        let sibling = index;
+        self.attach_leaf(sibling, new_bounds, ordering)
+    }
+
+    /// Attaches a new leaf with `bounds`/`ordering` as a sibling of the leaf at `sibling`,
+    /// rewiring the parent chain (tracked in `self.stack`) and propagating `max_order` upward.
+    fn attach_leaf(&mut self, sibling: usize, bounds: Bounds<U>, ordering: u32) -> u32 {
+        let new_node = self.push_leaf(bounds, ordering);
         let new_parent = self.push_internal(sibling, new_node);
 
         // If there was an old parent, we need to update its children indices.
@@ -190,6 +260,7 @@ where
             root: None,
             nodes: Vec::new(),
             stack: Vec::new(),
+            order_floor: 0,
         }
     }
 }
