@@ -1522,13 +1522,13 @@ impl WgpuRenderer {
 
         let surface_capabilities = surface.get_capabilities(&context.adapter);
 
-        // NOTE(mdeand): The shaders (hsla_to_rgba) output sRGB values directly, so we need a
-        // NOTE(mdeand): non-sRGB surface format to avoid a double linear-to-sRGB conversion.
-        // NOTE(mdeand): Prefer a non-sRGB format; fall back to whatever is available.
+        // NOTE(mdeand): The shaders output linear sRGB, so we need an sRGB surface format
+        // NOTE(mdeand): to let the GPU hardware perform the linear→sRGB conversion.
+        // NOTE(mdeand): Prefer an sRGB format; fall back to whatever is available.
         let format = surface_capabilities
             .formats
             .iter()
-            .find(|f| !f.is_srgb())
+            .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_capabilities.formats[0]);
 

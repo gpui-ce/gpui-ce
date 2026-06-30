@@ -48,17 +48,8 @@ fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
 }
 
 // `t_surface` is sampled from an sRGB-format texture, so `textureSample` below
-// auto-decodes sRGB -> linear. The main swapchain target this shader writes to
-// is intentionally non-sRGB (see renderer.rs), so there is no encode-on-write.
-// Re-encode back to sRGB manually so the composited surface matches the pixel
-// values stored in its source texture.
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let cutoff = vec3<f32>(0.0031308);
-    let higher = vec3<f32>(1.055) * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
-    let lower = c * vec3<f32>(12.92);
-    return select(higher, lower, c <= cutoff);
-}
-
+// auto-decodes sRGB -> linear. The swapchain is sRGB, so writing linear values
+// lets the GPU hardware perform the linear->sRGB encoding automatically.
 @fragment
 fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
     if (any(input.clip_distances < vec4<f32>(0.0))) {
@@ -68,6 +59,5 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
     let color = textureSample(t_surface, s_surface, input.tex_coord);
     let alpha = color.a;
     let multiplier = select(1.0, alpha, globals.premultiplied_alpha != 0u);
-    let encoded = linear_to_srgb(color.rgb);
-    return vec4<f32>(encoded * multiplier, alpha);
+    return vec4<f32>(color.rgb * multiplier, alpha);
 }
