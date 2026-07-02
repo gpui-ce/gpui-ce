@@ -33,7 +33,7 @@
 
 use crate::{
     App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
-    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
+    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, SharedString, Size, Style, Window,
     util::FluentBuilder, with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
@@ -474,6 +474,62 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
+
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                if let (Some(inspector_id), Some(global_id)) =
+                    (inspector_id.as_ref(), global_id.as_ref())
+                {
+                    let element_type = crate::inspector_type_name::<E>();
+                    let depth = global_id.0.len();
+                    let source_file = SharedString::from(inspector_id.path.source_location.file());
+                    let source_line = inspector_id.path.source_location.line();
+                    let event_listeners = window
+                        .next_frame
+                        .inspector_event_listeners
+                        .get(&inspector_id.path.global_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let element_states = window
+                        .next_frame
+                        .inspector_element_states
+                        .get(&inspector_id.path.global_id)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let display_label = {
+                        let ids: Vec<&str> = global_id
+                            .0
+                            .iter()
+                            .filter_map(|id| match id {
+                                crate::ElementId::Name(name) => match name.as_ref() {
+                                    "" => None,
+                                    n => Some(format!("#{}", n)),
+                                },
+                                _ => None,
+                            })
+                            .collect();
+                        if ids.is_empty() {
+                            SharedString::default()
+                        } else {
+                            SharedString::from(ids.join(" "))
+                        }
+                    };
+
+                    window.next_frame.inspector_element_infos.push(
+                        crate::InspectorElementInfo {
+                            inspector_id: inspector_id.clone(),
+                            global_id: global_id.clone(),
+                            element_type,
+                            bounds,
+                            depth,
+                            source_file,
+                            source_line,
+                            event_listeners,
+                            element_states,
+                            display_label,
+                        },
+                    );
+                }
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();

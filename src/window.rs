@@ -756,6 +756,13 @@ pub(crate) struct Frame {
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_element_infos: Vec<crate::InspectorElementInfo>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_event_listeners:
+        FxHashMap<crate::GlobalElementId, Vec<crate::InspectorEventListener>>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_element_states: FxHashMap<crate::GlobalElementId, Vec<SharedString>>,
     pub(crate) tab_stops: TabStopMap,
 }
 
@@ -805,6 +812,16 @@ impl Frame {
 
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_hitboxes: FxHashMap::default(),
+
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_element_infos: Vec::new(),
+
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_event_listeners: FxHashMap::default(),
+
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_element_states: FxHashMap::default(),
+
             tab_stops: TabStopMap::default(),
         }
     }
@@ -828,6 +845,9 @@ impl Frame {
         {
             self.next_inspector_instance_ids.clear();
             self.inspector_hitboxes.clear();
+            self.inspector_element_infos.clear();
+            self.inspector_event_listeners.clear();
+            self.inspector_element_states.clear();
         }
     }
 
@@ -2177,6 +2197,17 @@ impl Window {
         }
         if !cx.mode.skip_drawing() {
             self.draw_roots(cx);
+
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            {
+                let element_infos =
+                    std::mem::take(&mut self.next_frame.inspector_element_infos);
+                if let Some(inspector) = &self.inspector {
+                    inspector.update(cx, |inspector, _cx| {
+                        inspector.set_element_infos(element_infos);
+                    });
+                }
+            }
         }
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
@@ -2285,22 +2316,29 @@ impl Window {
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
 
-        let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
-        let root_size = {
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            {
-                if self.inspector.is_some() {
-                    let mut size = self.viewport_size;
-                    size.width = (size.width - _inspector_width).max(px(0.0));
-                    size
+        let viewport_width = self.viewport_size.width;
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        let inspector_width = {
+            if let Some(inspector) = &self.inspector {
+                let width = inspector.read(cx).panel_width();
+                if width.0 <= 0.0 {
+                    rems(30.0).to_pixels(self.rem_size())
                 } else {
-                    self.viewport_size
+                    width
                 }
+            } else {
+                px(0.0)
             }
-            #[cfg(not(any(feature = "inspector", debug_assertions)))]
-            {
-                self.viewport_size
+        };
+        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+        let inspector_width = px(0.0);
+
+        let root_size = {
+            let mut size = self.viewport_size;
+            if inspector_width > px(0.0) {
+                size.width = (size.width - inspector_width).max(px(0.0));
             }
+            size
         };
 
         // Layout all root elements.
@@ -2308,7 +2346,7 @@ impl Window {
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
-        let inspector_element = self.prepaint_inspector(_inspector_width, cx);
+        let inspector_element = self.prepaint_inspector(inspector_width, cx);
 
         let mut sorted_deferred_draws =
             (0..self.next_frame.deferred_draws.len()).collect::<SmallVec<[_; 8]>>();
@@ -4161,10 +4199,31 @@ impl Window {
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
-        if self.is_inspector_picking(cx) {
-            self.handle_inspector_mouse_event(event, cx);
-            // When inspector is picking, all other mouse handling is skipped.
-            return;
+        {
+            // Handle inspector resize dragging
+            if let Some(inspector) = &self.inspector {
+                let is_resizing = inspector.read(cx).is_resizing();
+                if is_resizing {
+                    let viewport_width = self.viewport_size.width;
+                    let handled = inspector.update(cx, |inspector, _cx| {
+                        crate::handle_inspector_resize(
+                            inspector,
+                            event,
+                            viewport_width,
+                        )
+                    });
+                    if handled {
+                        self.refresh();
+                        return;
+                    }
+                }
+            }
+
+            if self.is_inspector_picking(cx) {
+                self.handle_inspector_mouse_event(event, cx);
+                // When inspector is picking, all other mouse handling is skipped.
+                return;
+            }
         }
 
         let mut mouse_listeners = mem::take(&mut self.rendered_frame.mouse_listeners);
@@ -4957,7 +5016,14 @@ impl Window {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn toggle_inspector(&mut self, cx: &mut App) {
         self.inspector = match self.inspector {
-            None => Some(cx.new(|_| Inspector::new())),
+            None => {
+                let rem_size = self.rem_size();
+                let inspector = cx.new(|_| Inspector::new());
+                inspector.update(cx, |inspector, _cx| {
+                    inspector.init_panel_width(rem_size);
+                });
+                Some(inspector)
+            }
             Some(_) => None,
         };
         self.refresh();
@@ -5055,6 +5121,40 @@ impl Window {
                 .inspector_hitboxes
                 .insert(hitbox_id, inspector_id.clone());
         }
+    }
+
+    /// Register an event listener for an element in the inspector.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn register_inspector_event_listener(
+        &mut self,
+        global_id: &crate::GlobalElementId,
+        event_type: SharedString,
+        location: SharedString,
+    ) {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        self.next_frame
+            .inspector_event_listeners
+            .entry(global_id.clone())
+            .or_default()
+            .push(crate::InspectorEventListener {
+                event_type,
+                location,
+            });
+    }
+
+    /// Register an element state for the inspector display.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn register_inspector_element_state(
+        &mut self,
+        global_id: &crate::GlobalElementId,
+        state: SharedString,
+    ) {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        self.next_frame
+            .inspector_element_states
+            .entry(global_id.clone())
+            .or_default()
+            .push(state);
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
