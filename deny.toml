@@ -11,10 +11,7 @@ feature-depth = 1
 # (quick-xml NsReader memory exhaustion) both require quick-xml >= 0.41.0.
 # wayland-scanner 0.31.x and zbus_xml 5.1.x (both at latest) still use ^0.39;
 # no upstream fix is available yet. Remove once those crates release a patch.
-ignore = [
-  { id = "RUSTSEC-2026-0194" },
-  { id = "RUSTSEC-2026-0195" },
-]
+ignore = [{ id = "RUSTSEC-2026-0194" }, { id = "RUSTSEC-2026-0195" }]
 unmaintained = "none"
 unsound = "none"
 
