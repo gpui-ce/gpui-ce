@@ -99,6 +99,15 @@ jobs:
       - uses: uncenter/setup-taplo@v1
       - run: taplo fmt --check
 
+  # Lockfile freshness
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Check Cargo.lock is up to date
+        run: cargo update && git diff --exit-code Cargo.lock
+
   # Unused dependencies
   machete:
     runs-on: ubuntu-latest
@@ -237,6 +246,7 @@ jobs:
       - clippy
       - typos
       - taplo
+      - lockfile
       - machete
       - msrv
       - check-wasm
@@ -257,6 +267,7 @@ jobs:
           check_result clippy         ${{ needs.clippy.result }}
           check_result typos          ${{ needs.typos.result }}
           check_result taplo          ${{ needs.taplo.result }}
+          check_result lockfile       ${{ needs.lockfile.result }}
           check_result machete        ${{ needs.machete.result }}
           check_result msrv           ${{ needs.msrv.result }}
           check_result check-wasm     ${{ needs.check-wasm.result }}
