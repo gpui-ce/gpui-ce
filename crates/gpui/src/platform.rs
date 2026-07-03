@@ -712,6 +712,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn map_window(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
+    fn set_visible(&self, _visible: bool) {}
     fn window_controls(&self) -> WindowControls {
         WindowControls::default()
     }
