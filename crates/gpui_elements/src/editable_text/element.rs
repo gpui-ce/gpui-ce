@@ -14,6 +14,8 @@ use gpui::{
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
+const CARET_RENDER_WIDTH: f32 = 2.0;
+
 /// Creates a text input element.
 /// See [`EditableTextElement`] for usage.
 ///
@@ -727,11 +729,10 @@ impl PrepaintElements {
         }
 
         if *caret_visible && let Some(carent_point) = caret_point {
-            const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
                     inner_bounds.origin + carent_point,
-                    size(gpui::px(CURSOR_WIDTH), line_height),
+                    size(gpui::px(CARET_RENDER_WIDTH), line_height),
                 ),
                 colors.caret,
             );

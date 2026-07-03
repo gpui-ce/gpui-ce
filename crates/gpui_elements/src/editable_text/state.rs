@@ -11,6 +11,8 @@ use gpui::{
 };
 use std::{borrow::Cow, ops::Range};
 
+const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
+
 /// The utf-8 character range that is currently selected by the user.
 /// Valid both when start < end and start > end (which dictates the direction of the selection).
 /// Empty when start==end. The start of this range is always the current position of the caret (input cursor).
@@ -582,6 +584,45 @@ impl EditableTextState {
             .offset_from_caret(self.caret_pos(), direction, boundary);
         self.select_to(caret_pos, cx);
     }
+
+    /// Updates the mouse-click tracker so we can detect when a mouse click results in different actions.
+    fn apply_click(&mut self, click_count: usize, text_position: Point<Pixels>) {
+        let should_continue_click =
+            click_count > 1 && self.is_position_nearly_at_previous_click(text_position);
+        self.click_count = if should_continue_click {
+            click_count
+        } else {
+            1
+        };
+        self.last_click_position = Some(text_position);
+    }
+
+    fn is_position_nearly_at_previous_click(&self, point: Point<Pixels>) -> bool {
+        match self.last_click_position {
+            None => false,
+            Some(previous_pos) => point.is_nearly_eq(&previous_pos, CARET_PIXELS_EPSILON),
+        }
+    }
+
+    fn select_word_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
+        self.selected_range = self.storage.word_range_at(caret_pos).into();
+        cx.notify();
+    }
+
+    fn select_line_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
+        use NavigationDirection::*;
+        use TextBoundary::*;
+
+        let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
+        let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
+        let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+        self.selected_range = (line_start, line_end_with_newline).into();
+        cx.notify();
+    }
 }
 
 // History management
@@ -767,7 +808,7 @@ impl EntityInputHandler for EditableTextState {
                 if range.start == line.text_range.start {
                     return Some(Bounds::from_corners(
                         line_origin,
-                        line_origin + point(gpui::px(4.), line_height),
+                        line_origin + point(CARET_PIXELS_EPSILON, line_height),
                     ));
                 }
             } else if line.text_range.contains(&range.start)
@@ -1020,45 +1061,45 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             return;
         }
 
-        if !self.selected_range.is_empty() {
-            // Cut selected text
-            let slice = &self.storage.content_utf8()[self.selected_range.range()];
-            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
-            self.replace_text(self.selected_range.range(), "");
-        } else {
-            use NavigationDirection::*;
-            use TextBoundary::*;
-
+        let range_to_cut = match self.selected_range.is_empty() {
+            // selection is more than a caret, use that range of text
+            false => self.selected_range.range(),
             // No selection: cut the entire current line (including newline)
-            let caret = self.caret_pos();
-            let line_start = self.storage.offset_from_caret(caret, Back, Line);
-            let line_end = self.storage.offset_from_caret(caret, Forward, Line);
-            let storage_len_utf8 = self.storage.content_utf8().len();
+            true => {
+                use NavigationDirection::*;
+                use TextBoundary::*;
 
-            // Include the newline character if there is one after the line
-            let cut_end = if line_end < storage_len_utf8 {
-                line_end + 1 // Include the newline
-            } else if line_start > 0 {
-                // Last line with no trailing newline - include preceding newline instead
-                line_end
-            } else {
-                line_end
-            };
+                let caret = self.caret_pos();
+                let line_start = self.storage.offset_from_caret(caret, Back, Line);
+                let line_end = self.storage.offset_from_caret(caret, Forward, Line);
+                let storage_len_utf8 = self.as_str().len();
 
-            // For last line, also remove the preceding newline if it exists
-            let cut_start = if line_end >= storage_len_utf8 && line_start > 0 {
-                line_start - 1 // Include preceding newline for last line
-            } else {
-                line_start
-            };
+                // Include the newline character if there is one after the line
+                let cut_end = if line_end < storage_len_utf8 {
+                    line_end + 1 // Include the newline
+                } else if line_start > 0 {
+                    // Last line with no trailing newline - include preceding newline instead
+                    line_end
+                } else {
+                    line_end
+                };
 
-            self.selected_range = (cut_start, cut_end).into();
+                // For last line, also remove the preceding newline if it exists
+                let cut_start = if line_end >= storage_len_utf8 && line_start > 0 {
+                    line_start - 1 // Include preceding newline for last line
+                } else {
+                    line_start
+                };
 
-            let slice = &self.storage.content_utf8()[self.selected_range.range()];
-            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+                cut_start..cut_end
+            }
+        };
 
-            self.replace_text(self.selected_range.range(), "");
-        }
+        // Cut selected text
+        let slice = &self.storage.content_utf8()[range_to_cut.clone()];
+        cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+        self.replace_text(range_to_cut, "");
+
         self.emit_text_changed(cx);
         cx.notify();
     }
@@ -1097,56 +1138,23 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     fn on_mouse_down(
         &mut self,
         event: &gpui::MouseDownEvent,
-        text_position: gpui::Point<gpui::Pixels>,
+        text_position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
+        const DOUBLE_CLICK: usize = 2;
+        const TRIPLE_CLICK: usize = 3;
+
         let caret_pos = self.index_for_pixel_point(text_position, window.line_height());
 
         self.is_selecting = true;
-
-        let is_same_position = self
-            .last_click_position
-            .map(|last| {
-                let threshold = gpui::px(4.);
-                (text_position.x - last.x).abs() < threshold
-                    && (text_position.y - last.y).abs() < threshold
-            })
-            .unwrap_or(false);
-
-        if is_same_position && event.click_count > 1 {
-            self.click_count = event.click_count;
-        } else {
-            self.click_count = 1;
-        }
-        self.last_click_position = Some(text_position);
+        self.apply_click(event.click_count, text_position);
 
         match self.click_count {
-            2 => {
-                self.selected_range = self.storage.word_range_at(caret_pos).into();
-                cx.notify();
-            }
-            3 => {
-                use NavigationDirection::*;
-                use TextBoundary::*;
-
-                let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
-                let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
-                let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
-                    line_end + 1
-                } else {
-                    line_end
-                };
-                self.selected_range = (line_start, line_end_with_newline).into();
-                cx.notify();
-            }
-            _ => {
-                if event.modifiers.shift {
-                    self.select_to(caret_pos, cx);
-                } else {
-                    self.move_to(caret_pos, cx);
-                }
-            }
+            DOUBLE_CLICK => self.select_word_at(caret_pos, cx),
+            TRIPLE_CLICK => self.select_line_at(caret_pos, cx),
+            _ if event.modifiers.shift => self.select_to(caret_pos, cx),
+            _ => self.move_to(caret_pos, cx),
         }
     }
 
