@@ -1,13 +1,13 @@
 use crate::editable_text::{
     EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
-    layout::{TextInputLayoutData, TextLineSegment},
+    layout::{EditableTextLayoutResult, EditableTextLayoutState, TextLineSegment},
 };
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, Display, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
-    Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
+    Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
     StyleRefinement, Styled, TextAlign, TextLayout, WeakEntity, Window, WrappedLine, fill, point,
     px, size,
 };
@@ -202,6 +202,22 @@ impl EditableTextActionElement<EditableTextState> for EditableTextElement {
     }
 }
 
+struct PrelayoutState {
+    state: Entity<EditableTextState>,
+    prev_layout_state: EditableTextLayoutState,
+    storage_version: u16,
+    show_placeholder: bool,
+    text: Option<SharedString>,
+    placeholder_color: Hsla,
+    supports_multiline: bool,
+    accepts_input: bool,
+}
+
+#[doc(hidden)]
+pub struct LayoutState {
+    state: Entity<EditableTextState>,
+}
+
 struct InteractivityPrepaint {
     hitbox: Option<Hitbox>,
     scroll_offset: Point<Pixels>,
@@ -218,7 +234,7 @@ pub struct PrepaintState {
 }
 
 impl Element for EditableTextElement {
-    type RequestLayoutState = Entity<EditableTextState>;
+    type RequestLayoutState = LayoutState;
     type PrepaintState = PrepaintState;
 
     fn id(&self) -> Option<ElementId> {
@@ -236,192 +252,57 @@ impl Element for EditableTextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        // Fetches or initializes the internal state of the field
-        let state = self.state_entity.borrow().upgrade();
-        let state = match state {
-            Some(entity) => entity,
-            None => match &self.interactivity.element_id {
-                None => unimplemented!("all input elements must be assigned an id"),
-                Some(element_id) => {
-                    let state = EditableTextState::use_keyed(element_id.clone(), window, cx);
-                    // store a reference to the entity owned by the element for access in action handlers
-                    *self.state_entity_rc().borrow_mut() = state.downgrade();
-                    state
-                }
-            },
-        };
+        let entity = self.find_or_create_state(window, cx);
 
         // Read new state information from the underlying entity.
         // Block-wrapped so that the state being read is dropped before continuing.
-        let (show_placeholder, storage_version, next_scroll_offset) = {
-            let state = state.read(cx);
+        let (prelayout, next_scroll_offset) = {
+            let state = entity.read(cx);
             let show_placeholder = state.as_str().is_empty();
-            (
+            let text = match show_placeholder {
+                false => Some(SharedString::from(state.as_str())),
+                true => self.placeholder.clone(),
+            };
+
+            let prelayout = PrelayoutState {
+                state: entity.clone(),
+                prev_layout_state: state.layout_data.state,
                 show_placeholder,
-                state.version(),
-                state.layout_data.next_scroll_offset,
-            )
+                storage_version: state.version(),
+                text,
+                placeholder_color: self.colors.placeholder,
+                supports_multiline: self.supports_multiline,
+                accepts_input: self.accepts_input,
+            };
+            (prelayout, state.layout_data.next_scroll_offset)
         };
 
         // Update the scroll offset of the element when the user's caret goes out of scope.
         if let Some(scroll_offset) = next_scroll_offset {
             self.interactivity
                 .set_scroll_offset(global_id, window, -scroll_offset);
+
+            // Clear scroll_layout here in the very likely event that we wont need to
+            // recompute layout, in which case the layout result isnt rebuilt during `perform_text_layout`.
+            entity.update(cx, |state, _cx| {
+                state.layout_data.next_scroll_offset = None;
+            });
         }
 
-        let placeholder = self.placeholder.clone();
-        let placeholder_color = self.colors.placeholder;
-        let supports_multiline = self.supports_multiline;
-        let accepts_input = self.accepts_input;
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
             window,
             cx,
             |style, window, cx| {
-                let state = state.clone();
                 window.with_text_style(style.text_style().cloned(), move |window| {
-                    // NOTE: Loosely mirrors TextLayout::layout
-                    let text_layout_id = window.request_measured_layout(Default::default(), {
-                        let text_style = window.text_style();
-                        let font_size = text_style.font_size.to_pixels(window.rem_size());
-                        let line_height = window.pixel_snap(
-                            text_style
-                                .line_height
-                                .to_pixels(font_size.into(), window.rem_size()),
-                        );
-                        move |known_dimensions, available_space, window, cx| {
-                            let (
-                                text,
-                                color,
-                                prev_wrap_width,
-                                prev_size,
-                                last_seen_storage_version,
-                            ) = {
-                                let state = state.read(cx);
-                                let (text, color) = match show_placeholder {
-                                    false => (SharedString::from(state.as_str()), text_style.color),
-                                    true => {
-                                        (placeholder.clone().unwrap_or_default(), placeholder_color)
-                                    }
-                                };
-                                (
-                                    text,
-                                    color,
-                                    state.layout_data.wrap_width,
-                                    state.layout_data.size,
-                                    state.layout_data.last_seen_storage_version,
-                                )
-                            };
-
-                            let runs = vec![gpui::TextRun {
-                                len: text.len(),
-                                font: text_style.font(),
-                                color,
-                                background_color: None,
-                                underline: None,
-                                strikethrough: None,
-                            }];
-
-                            let wrap_width = TextLayout::evaluate_wrap_width(
-                                &text_style.white_space,
-                                known_dimensions,
-                                available_space,
-                            );
-
-                            let truncation = TextLayout::evaluate_overflow(
-                                &text_style,
-                                known_dimensions,
-                                available_space,
-                            );
-
-                            if let Some(size) = prev_size
-                                && (wrap_width.is_none() || wrap_width == prev_wrap_width)
-                                && truncation.width.is_none()
-                                && storage_version == last_seen_storage_version
-                            {
-                                return size;
-                            }
-
-                            let (text, runs) = TextLayout::apply_truncation(
-                                text,
-                                &text_style,
-                                font_size,
-                                wrap_width,
-                                &truncation,
-                                &runs,
-                                cx,
-                            );
-                            let text_len = text.len();
-
-                            let wrapped_lines = window
-                                .text_system()
-                                .shape_text(
-                                    text,
-                                    font_size,
-                                    &runs,
-                                    wrap_width,
-                                    text_style.line_clamp,
-                                )
-                                .unwrap_or_default();
-
-                            // Build the size of the text and convert the wrapped_lines into
-                            // lines that will be cached in state and painted.
-                            let mut size: Size<Pixels> = Size::default();
-                            let mut pos_y = 0;
-                            let mut line_start = 0;
-                            let mut lines = Vec::with_capacity(wrapped_lines.len());
-                            for line in wrapped_lines {
-                                let line_size = line.size(line_height);
-                                size.height += line_size.height;
-                                size.width = size.width.max(line_size.width).ceil();
-
-                                let mut line_len = line.len();
-                                if line_len < text_len {
-                                    // to offset for new-line characters that are
-                                    // omitted from WrappedLine range
-                                    line_len += 1;
-                                }
-
-                                let segment = TextLineSegment {
-                                    text_range: line_start..line_start + line_len,
-                                    wrapped_line: Some(Arc::new(line)),
-                                    pos_y,
-                                };
-                                line_start += line_len;
-                                pos_y += segment.row_count();
-                                lines.push(segment);
-                            }
-
-                            let layout_data = TextInputLayoutData {
-                                supports_multiline,
-                                accepts_input,
-                                scroll_bounds: Bounds::default(),
-                                wrap_width,
-                                size: Some(size),
-                                last_seen_storage_version,
-                                lines,
-                                line_height,
-                                next_scroll_offset: None,
-                            };
-
-                            // Update the state for use in prepaint, paint, and action handlers.
-                            // request_measured_layout caches this scope for processing later
-                            // between layout and prepaint, so we cant just copy/move these values to the outer scope.
-                            state.update(cx, move |state, _cx| {
-                                state.layout_data = layout_data;
-                            });
-
-                            size
-                        }
-                    });
-
+                    let text_layout_id = prelayout.perform_text_layout(window);
                     window.request_layout(style.clone(), Some(text_layout_id), cx)
                 })
             },
         );
 
-        (layout_id, state)
+        (layout_id, LayoutState { state: entity })
     }
 
     fn prepaint(
@@ -435,20 +316,18 @@ impl Element for EditableTextElement {
     ) -> Self::PrepaintState {
         // should reflect the text content layout size of the stored text,
         // so that scrolling can take it into account during prepaint.
-        let content_size;
-        let caret;
-        let focus_handle;
-        {
-            let state = request_layout.read(cx);
-            content_size = state.layout_data.size.unwrap_or_else(|| bounds.size);
-            caret = state.caret_entity().clone();
-            focus_handle = state.focus_handle(cx);
-        }
+        let (content_size, caret_entity, focus_handle) = {
+            let state = request_layout.state.read(cx);
+            let content_size = state.layout_data.state.size.unwrap_or_else(|| bounds.size);
+            let caret = state.caret_entity().clone();
+            let focus_handle = state.focus_handle(cx);
+            (content_size, caret, focus_handle)
+        };
 
         let is_focused = focus_handle.is_focused(window);
-        let caret_visible = caret.update(cx, |caret, cx| caret.update_focus(is_focused, cx));
-
+        let caret_visible = caret_entity.update(cx, |caret, cx| caret.update_focus(is_focused, cx));
         window.set_focus_handle(&focus_handle, cx);
+
         let prepaint = self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -470,7 +349,7 @@ impl Element for EditableTextElement {
                     bounds.size.height -= padding.top + padding.bottom;
                     bounds
                 };
-                request_layout.update(cx, |state, _cx| {
+                request_layout.state.update(cx, |state, _cx| {
                     // while gpui tracks scroll_offset with negative values,
                     // this is converted into positive for usage with bounds
                     state.layout_data.scroll_bounds =
@@ -485,7 +364,7 @@ impl Element for EditableTextElement {
             },
         );
 
-        let state = request_layout.read(cx);
+        let state = request_layout.state.read(cx);
         let elements = PrepaintElements::build_elements(state, &prepaint, &self.colors, window);
 
         PrepaintState {
@@ -510,69 +389,18 @@ impl Element for EditableTextElement {
         }
 
         let accepts_input = self.accepts_input;
-        let inner_bounds = prepaint.interactivity.inner_bounds;
-        let to_local_position = -(bounds.origin + prepaint.interactivity.scroll_offset);
+        let hitbox = prepaint.interactivity.hitbox.clone();
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
             }
 
+            // Register event listeners to the window for the next frame
             if accepts_input {
-                let ime_handler = ElementInputHandler::new(inner_bounds, request_layout.clone());
-                window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+                Self::process_frame_events(prepaint, bounds, &request_layout.state, window, cx);
             }
 
-            window.on_mouse_event({
-                let focus_handle = prepaint.focus_handle.clone();
-                let state = request_layout.clone();
-                move |event: &MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    if !bounds.contains(&event.position) {
-                        return;
-                    }
-                    if event.button != MouseButton::Left {
-                        return;
-                    }
-
-                    window.focus(&focus_handle, cx);
-
-                    let text_position = event.position + to_local_position;
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_down(event, text_position, window, cx);
-                    });
-                }
-            });
-            window.on_mouse_event({
-                let state = request_layout.clone();
-                move |event: &MouseUpEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    if event.button != MouseButton::Left {
-                        return;
-                    }
-
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_up(event, window, cx);
-                    });
-                }
-            });
-            window.on_mouse_event({
-                let state = request_layout.clone();
-                move |event: &MouseMoveEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-
-                    let text_position = event.position + to_local_position;
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_move(event, text_position, window, cx);
-                    });
-                }
-            });
-
+            // Actually draw the elements we constructed during prepaint
             let line_h = window.line_height();
             for PrepaintLine { line, point, align } in prepaint.elements.lines.drain(..) {
                 let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
@@ -587,15 +415,218 @@ impl Element for EditableTextElement {
                 window.paint_quad(quad);
             }
         };
-        self.interactivity().paint(
+
+        self.interactivity.paint(
             global_id,
             inspector_id,
             bounds,
-            prepaint.interactivity.hitbox.as_ref(),
+            hitbox.as_ref(),
             window,
             cx,
             perform_paint,
         );
+    }
+}
+
+impl EditableTextElement {
+    fn find_or_create_state(&self, window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
+        if let Some(entity) = self.state_entity.borrow().upgrade() {
+            return entity;
+        }
+        let Some(element_id) = self.interactivity.element_id.clone() else {
+            unimplemented!("all input elements must be assigned an id")
+        };
+
+        let state = EditableTextState::use_keyed(element_id.clone(), window, cx);
+        // store a reference to the entity owned by the element for access in action handlers
+        *self.state_entity_rc().borrow_mut() = state.downgrade();
+        state
+    }
+
+    fn process_frame_events(
+        prepaint: &PrepaintState,
+        bounds: Bounds<Pixels>,
+        entity: &Entity<EditableTextState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let inner_bounds = prepaint.interactivity.inner_bounds;
+        let to_local_position = -(bounds.origin + prepaint.interactivity.scroll_offset);
+
+        let ime_handler = ElementInputHandler::new(inner_bounds, entity.clone());
+        window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+
+        window.on_mouse_event({
+            let focus_handle = prepaint.focus_handle.clone();
+            let state = entity.clone();
+            move |event: &MouseDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if !bounds.contains(&event.position) {
+                    return;
+                }
+                if event.button != MouseButton::Left {
+                    return;
+                }
+
+                window.focus(&focus_handle, cx);
+
+                let text_position = event.position + to_local_position;
+                state.update(cx, |state, cx| {
+                    state.on_mouse_down(event, text_position, window, cx);
+                });
+            }
+        });
+        window.on_mouse_event({
+            let state = entity.clone();
+            move |event: &MouseUpEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if event.button != MouseButton::Left {
+                    return;
+                }
+
+                state.update(cx, |state, cx| {
+                    state.on_mouse_up(event, window, cx);
+                });
+            }
+        });
+        window.on_mouse_event({
+            let state = entity.clone();
+            move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+
+                let text_position = event.position + to_local_position;
+                state.update(cx, |state, cx| {
+                    state.on_mouse_move(event, text_position, window, cx);
+                });
+            }
+        });
+    }
+}
+
+impl PrelayoutState {
+    fn perform_text_layout(self, window: &mut Window) -> LayoutId {
+        // NOTE: Loosely mirrors TextLayout::layout
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let line_height = window.pixel_snap(
+            text_style
+                .line_height
+                .to_pixels(font_size.into(), window.rem_size()),
+        );
+
+        let color = match self.show_placeholder {
+            false => text_style.color,
+            true => self.placeholder_color,
+        };
+
+        let text = self.text.unwrap_or_default();
+
+        window.request_measured_layout(
+            Default::default(),
+            // This is invoked sometime in the near future (before prepaint but not immediately),
+            // so we avoid doing any pre-emptive work until the layout engine is ready.
+            move |known_dimensions, available_space, window, cx| {
+                let runs = vec![gpui::TextRun {
+                    len: text.len(),
+                    font: text_style.font(),
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }];
+
+                let wrap_width = TextLayout::evaluate_wrap_width(
+                    &text_style.white_space,
+                    known_dimensions,
+                    available_space,
+                );
+
+                let truncation =
+                    TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+
+                if let Some(size) = self.prev_layout_state.size
+                    && (wrap_width.is_none() || wrap_width == self.prev_layout_state.wrap_width)
+                    && truncation.width.is_none()
+                    && self.storage_version == self.prev_layout_state.last_seen_storage_version
+                {
+                    return size;
+                }
+
+                let (text, runs) = TextLayout::apply_truncation(
+                    text.clone(),
+                    &text_style,
+                    font_size,
+                    wrap_width,
+                    &truncation,
+                    &runs,
+                    cx,
+                );
+                let text_len = text.len();
+
+                let wrapped_lines = window
+                    .text_system()
+                    .shape_text(text, font_size, &runs, wrap_width, text_style.line_clamp)
+                    .unwrap_or_default();
+
+                // Build the size of the text and convert the wrapped_lines into
+                // lines that will be cached in state and painted.
+                let mut size: Size<Pixels> = Size::default();
+                let mut pos_y = 0;
+                let mut line_start = 0;
+                let mut lines = Vec::with_capacity(wrapped_lines.len());
+                for line in wrapped_lines {
+                    let line_size = line.size(line_height);
+                    size.height += line_size.height;
+                    size.width = size.width.max(line_size.width).ceil();
+
+                    let mut line_len = line.len();
+                    if line_len < text_len {
+                        // to offset for new-line characters that are
+                        // omitted from WrappedLine range
+                        line_len += 1;
+                    }
+
+                    let segment = TextLineSegment {
+                        text_range: line_start..line_start + line_len,
+                        wrapped_line: Some(Arc::new(line)),
+                        pos_y,
+                    };
+                    line_start += line_len;
+                    pos_y += segment.row_count();
+                    lines.push(segment);
+                }
+
+                let layout_data = EditableTextLayoutResult {
+                    supports_multiline: self.supports_multiline,
+                    accepts_input: self.accepts_input,
+                    // updated during prepaint
+                    scroll_bounds: Bounds::default(),
+                    state: EditableTextLayoutState {
+                        wrap_width,
+                        size: Some(size),
+                        last_seen_storage_version: self.storage_version,
+                    },
+                    lines,
+                    line_height,
+                    next_scroll_offset: None,
+                };
+
+                // Update the state for use in prepaint, paint, and action handlers.
+                // request_measured_layout caches this scope for processing later
+                // between layout and prepaint, so we cant just copy/move these values to the outer scope.
+                self.state.update(cx, move |state, _cx| {
+                    state.layout_data = layout_data;
+                });
+
+                size
+            },
+        )
     }
 }
 

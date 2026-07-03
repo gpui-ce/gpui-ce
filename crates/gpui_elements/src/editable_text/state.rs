@@ -3,7 +3,7 @@ use crate::editable_text::{
     actions::EditableTextActionHandler,
     caret::{Caret, CaretNotify},
     history::EditableTextHistory,
-    layout::TextInputLayoutData,
+    layout::EditableTextLayoutResult,
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter,
@@ -90,7 +90,7 @@ pub struct EditableTextState {
     focus_handle: FocusHandle,
     history: Option<EditableTextHistory>,
 
-    pub(super) layout_data: TextInputLayoutData,
+    pub(super) layout_data: EditableTextLayoutResult,
 }
 
 impl EventEmitter<CaretNotify> for EditableTextState {}
@@ -187,7 +187,7 @@ impl EditableTextState {
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
 
-            layout_data: TextInputLayoutData::default(),
+            layout_data: EditableTextLayoutResult::default(),
         }
     }
 
@@ -428,7 +428,7 @@ impl EditableTextState {
         if self.layout_data.scroll_bounds.is_empty() {
             return;
         }
-        let Some(content_size) = self.layout_data.size else {
+        let Some(content_size) = self.layout_data.state.size else {
             return;
         };
 
