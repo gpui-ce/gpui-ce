@@ -26,7 +26,9 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+          # quick-xml < 0.41.0: no upstream fix in wayland-scanner 0.31.x,
+          # zbus_xml 5.1.x, or xcb 1.7.0 (via zed-scap). Remove once patched.
+          ignore: RUSTSEC-2026-0194 RUSTSEC-2026-0195
 
   # cargo-deny: license compliance + advisory + duplicate detection
   cargo-deny:
