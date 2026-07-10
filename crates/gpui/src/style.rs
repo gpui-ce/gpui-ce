@@ -1449,7 +1449,7 @@ mod tests {
         );
     }
 
-    #[perf]
+    #[test]
     fn test_combine_highlights() {
         assert_eq!(
             combine_highlights(
@@ -1538,7 +1538,7 @@ mod tests {
         );
     }
 
-    #[perf]
+    #[test]
     fn test_text_style_refinement() {
         let mut style = Style::default();
         style.refine(&StyleRefinement::default().text_size(px(20.0)));

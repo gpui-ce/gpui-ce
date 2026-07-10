@@ -308,7 +308,6 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::*;
-    use crate::path;
 
     #[cfg(unix)]
     fn exit_status(code: i32) -> ExitStatus {
@@ -327,8 +326,8 @@ mod tests {
     #[test]
     fn parse_env_output_accepts_valid_env_when_shell_exits_nonzero() {
         let env_json = serde_json::json!({
-            "PATH": path!("/usr/bin"),
-            "SHELL": path!("/bin/zsh"),
+            "PATH": "/usr/bin",
+            "SHELL": "/bin/zsh",
         });
         let env_output = format!("shell startup noise\n{env_json}\nshell shutdown noise");
 
@@ -339,13 +338,7 @@ mod tests {
             || panic!("failed capture error should not be evaluated for valid environment output"),
         )
         .expect("valid environment output should be returned despite non-zero shell exit");
-        assert_eq!(
-            env_map.get("PATH").map(String::as_str),
-            Some(path!("/usr/bin"))
-        );
-        assert_eq!(
-            env_map.get("SHELL").map(String::as_str),
-            Some(path!("/bin/zsh"))
-        );
+        assert_eq!(env_map.get("PATH").map(String::as_str), Some("/usr/bin"));
+        assert_eq!(env_map.get("SHELL").map(String::as_str), Some("/bin/zsh"));
     }
 }

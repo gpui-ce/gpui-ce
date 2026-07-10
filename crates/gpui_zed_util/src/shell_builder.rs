@@ -58,7 +58,7 @@ impl ShellBuilder {
                 | ShellKind::Rc
                 | ShellKind::Xonsh
                 | ShellKind::Elvish => {
-                    let interactivity = self.interactive.then_some("-i ").unwrap_or_default();
+                    let interactivity = if self.interactive { "-i " } else { "" };
                     format!(
                         "{PROGRAM} {interactivity}-c '{command_to_use_in_label}'",
                         PROGRAM = self.program
@@ -115,7 +115,7 @@ impl ShellBuilder {
                     }
                     ShellKind::PowerShell | ShellKind::Pwsh => {
                         combined_command.insert_str(0, "$null | & {");
-                        combined_command.push_str("}");
+                        combined_command.push('}');
                     }
                     ShellKind::Cmd => {
                         combined_command.push_str("< NUL");
@@ -161,7 +161,7 @@ impl ShellBuilder {
                     }
                     ShellKind::PowerShell | ShellKind::Pwsh => {
                         combined_command.insert_str(0, "$null | & {");
-                        combined_command.push_str("}");
+                        combined_command.push('}');
                     }
                     ShellKind::Cmd => {
                         combined_command.push_str("< NUL");
@@ -202,7 +202,7 @@ impl ShellBuilder {
         if task_args.is_empty() {
             task_command = task_command
                 .as_ref()
-                .map(|cmd| self.kind.try_quote_prefix_aware(&cmd).map(Cow::into_owned))
+                .map(|cmd| self.kind.try_quote_prefix_aware(cmd).map(Cow::into_owned))
                 .unwrap_or(task_command);
         }
         let (program, args) = self.build(task_command, task_args);

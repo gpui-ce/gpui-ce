@@ -38,6 +38,12 @@ impl TestClock {
     }
 }
 
+impl Default for TestClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clock for TestClock {
     fn utc_now(&self) -> DateTime<Utc> {
         self.0.lock().utc_now

@@ -33,8 +33,6 @@ use unicase::UniCase;
 pub use gpui_util::*;
 
 pub use take_until::*;
-#[cfg(any(test, feature = "test-support"))]
-pub use util_macros::{line_endings, path, uri};
 
 pub use self::shell::{
     get_default_system_shell, get_default_system_shell_preferring_bash, get_system_shell,
@@ -190,7 +188,7 @@ where
     F: Fn(&T, &T) -> Ordering,
 {
     if limit == 0 {
-        items.truncate(0);
+        items.clear();
     }
     if items.len() <= limit {
         items.sort_by(compare);

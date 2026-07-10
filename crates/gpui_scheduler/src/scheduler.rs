@@ -122,17 +122,7 @@ pub trait Scheduler: Send + Sync {
     /// [`LocalExecutor::spawn_dedicated`] and
     /// [`BackgroundExecutor::spawn_dedicated`], which compose this method
     /// with [`Task::downcast`] to recover the closure's concrete return type.
-    fn spawn_dedicated(
-        self: Arc<Self>,
-        f: Box<
-            dyn FnOnce(
-                    LocalExecutor,
-                )
-                    -> Pin<Box<dyn Future<Output = Box<dyn Any + Send + Sync>> + 'static>>
-                + Send
-                + 'static,
-        >,
-    ) -> Task<Box<dyn Any + Send + Sync>>;
+    fn spawn_dedicated(self: Arc<Self>, f: DedicatedFn) -> Task<Box<dyn Any + Send + Sync>>;
 
     fn as_test(&self) -> Option<&TestScheduler> {
         None

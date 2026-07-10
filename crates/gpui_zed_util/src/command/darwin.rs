@@ -196,16 +196,16 @@ impl Command {
             None
         };
 
-        spawn_posix_spawn(
-            &self.program,
-            &self.args,
+        spawn_posix_spawn(SpawnOptions {
+            program: &self.program,
+            args: &self.args,
             current_dir,
-            envs.as_deref(),
-            self.stdin_cfg.unwrap_or_default(),
-            self.stdout_cfg.unwrap_or_default(),
-            self.stderr_cfg.unwrap_or_default(),
-            self.kill_on_drop,
-        )
+            envs: envs.as_deref(),
+            stdin_cfg: self.stdin_cfg.unwrap_or_default(),
+            stdout_cfg: self.stdout_cfg.unwrap_or_default(),
+            stderr_cfg: self.stderr_cfg.unwrap_or_default(),
+            kill_on_drop: self.kill_on_drop,
+        })
     }
 
     pub async fn output(&mut self) -> io::Result<Output> {
@@ -339,16 +339,28 @@ impl Child {
     }
 }
 
-fn spawn_posix_spawn(
-    program: &OsStr,
-    args: &[OsString],
-    current_dir: &Path,
-    envs: Option<&[(OsString, OsString)]>,
+struct SpawnOptions<'a> {
+    program: &'a OsStr,
+    args: &'a [OsString],
+    current_dir: &'a Path,
+    envs: Option<&'a [(OsString, OsString)]>,
     stdin_cfg: Stdio,
     stdout_cfg: Stdio,
     stderr_cfg: Stdio,
     kill_on_drop: bool,
-) -> io::Result<Child> {
+}
+
+fn spawn_posix_spawn(options: SpawnOptions<'_>) -> io::Result<Child> {
+    let SpawnOptions {
+        program,
+        args,
+        current_dir,
+        envs,
+        stdin_cfg,
+        stdout_cfg,
+        stderr_cfg,
+        kill_on_drop,
+    } = options;
     let program_cstr = CString::new(program.as_bytes()).map_err(|_| invalid_input_error())?;
 
     let current_dir_cstr =

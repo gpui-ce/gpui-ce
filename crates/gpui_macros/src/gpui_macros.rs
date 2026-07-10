@@ -193,7 +193,7 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
 ///
 /// A property test, much like a standard GPUI randomized test, allows testing
 /// claims of the form "for any possible X, Y should hold". For example:
-/// ```
+/// ```ignore
 /// #[gpui::property_test]
 /// fn test_arithmetic(x: i32, y: i32) {
 ///     assert!(x == y || x < y || x > y);
@@ -236,7 +236,7 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
 /// `Arbitrary`. Parameters to a `#[gpui::property_test]`, by default, use a
 /// type's `Arbitrary` implementation. If you'd like to provide a custom
 /// strategy, you can use `#[strategy = ...]` on the argument:
-/// ```
+/// ```ignore
 /// #[gpui::property_test]
 /// fn int_test(#[strategy = 1..10] x: i32, #[strategy = "[a-zA-Z0-9]{20}"] s: String) {
 ///   assert!(s.len() > (x as usize));

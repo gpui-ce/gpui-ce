@@ -24,6 +24,8 @@ extend-ignore-re = [
 check-filename = true
 
 [default.extend-words]
+# Test key prefix used in sum_tree tests (keys starting with "ba")
+ba = "ba"
 # Screen capture library (zed-scap)
 scap = "scap"
 # Win32 FORMATETC struct field: Pointer to DVTARGETDEVICE

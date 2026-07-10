@@ -14,6 +14,15 @@ use std::{
     time::Duration,
 };
 
+/// Type-erased closure shape expected by [`Scheduler::spawn_dedicated`]:
+/// runs on a [`LocalExecutor`], returns a boxed future whose output is itself
+/// boxed as `Box<dyn Any + Send + Sync>`.
+pub type DedicatedFn = Box<
+    dyn FnOnce(LocalExecutor) -> Pin<Box<dyn Future<Output = Box<dyn Any + Send + Sync>> + 'static>>
+        + Send
+        + 'static,
+>;
+
 /// A `!Send` executor pinned to a single session. Tasks spawned on it run in
 /// order on whichever thread drains the dispatch destination supplied at
 /// construction time — typically the main thread for the default session, or
@@ -155,13 +164,7 @@ impl LocalExecutor {
 /// expected by [`Scheduler::spawn_dedicated`]. The user's `Fut::Output` is
 /// boxed as `Box<dyn Any + Send + Sync>` on the dedicated side and downcast
 /// back to `Fut::Output` by [`Task::downcast`] in the wrapper.
-fn box_dedicated<F, Fut>(
-    f: F,
-) -> Box<
-    dyn FnOnce(LocalExecutor) -> Pin<Box<dyn Future<Output = Box<dyn Any + Send + Sync>> + 'static>>
-        + Send
-        + 'static,
->
+fn box_dedicated<F, Fut>(f: F) -> DedicatedFn
 where
     F: FnOnce(LocalExecutor) -> Fut + Send + 'static,
     Fut: Future + 'static,

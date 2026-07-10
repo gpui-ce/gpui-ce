@@ -281,7 +281,7 @@ fn test_block() {
     let (tx, rx) = oneshot::channel();
 
     // Spawn background task to send value
-    let _ = scheduler
+    scheduler
         .background()
         .spawn(async move {
             tx.send(42).unwrap();
@@ -317,7 +317,7 @@ fn test_block_with_parking() {
     let (tx, rx) = oneshot::channel();
 
     // Spawn background task to send value
-    let _ = scheduler
+    scheduler
         .background()
         .spawn(async move {
             tx.send(42).unwrap();
