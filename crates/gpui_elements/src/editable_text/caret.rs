@@ -73,7 +73,7 @@ impl Caret {
     {
         let handle = cx.subscribe(emitter, |state, _emitter, event, cx| match event {
             CaretNotify::PauseBlinking => {
-                if state.interval.is_zero() {
+                if state.interval.is_zero() || !state.has_focus {
                     return;
                 }
 
@@ -100,9 +100,9 @@ impl Caret {
             return is_focused;
         }
 
-        match (is_focused, was_focused) {
+        match (was_focused, is_focused) {
             // Caret has a blinking interval, and gained focused.
-            (true, false) => {
+            (false, true) => {
                 self.has_focus = true;
                 self.paused = false;
 
@@ -112,7 +112,7 @@ impl Caret {
                 true
             }
             // Caret has a blinking interval and lost focus
-            (false, true) => {
+            (true, false) => {
                 self.has_focus = false;
                 self.visible = false;
                 self.paused = false;

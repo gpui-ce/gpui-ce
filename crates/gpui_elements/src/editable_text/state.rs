@@ -1138,8 +1138,8 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        let character_pos = self.index_for_pixel_point(text_position, window.line_height());
         if self.is_selecting && self.click_count == 1 {
+            let character_pos = self.index_for_pixel_point(text_position, window.line_height());
             self.select_to(character_pos, cx);
         }
     }
