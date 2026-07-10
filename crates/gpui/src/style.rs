@@ -1364,9 +1364,7 @@ mod tests {
 
     use super::*;
 
-    use util_macros::perf;
-
-    #[perf]
+    #[test]
     fn test_basic_highlight_style_combination() {
         let style_a = HighlightStyle::default();
         let style_b = HighlightStyle::default();

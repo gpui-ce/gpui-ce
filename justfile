@@ -403,12 +403,33 @@ publish dry="false":
         error make {msg: "CARGO_REGISTRY_TOKEN is not set"}
     }
 
+    # Topological publish order. Vendored support crates first, then core,
+    # then renderers/platform leaves, with gpui_platform LAST (it has
+    # target-conditional deps on every platform crate).
     let crates = [
+        "crates/gpui_ce_util/Cargo.toml"
+        "crates/gpui_collections/Cargo.toml"
+        "crates/gpui_derive_refineable/Cargo.toml"
+        "crates/gpui_refineable/Cargo.toml"
+        "crates/gpui_sum_tree/Cargo.toml"
+        "crates/gpui_scheduler/Cargo.toml"
+        "crates/gpui_media/Cargo.toml"
+        "crates/gpui_zed_util/Cargo.toml"
+
+        # core
         "crates/gpui_shared_string/Cargo.toml"
         "crates/gpui_macros/Cargo.toml"
         "crates/gpui/Cargo.toml"
+
+        # renderers / platform leaves
         "crates/gpui_wgpu/Cargo.toml"
         "crates/gpui_tokio/Cargo.toml"
+        "crates/gpui_macos/Cargo.toml"
+        "crates/gpui_linux/Cargo.toml"
+        "crates/gpui_windows/Cargo.toml"
+        "crates/gpui_web/Cargo.toml"
+        "crates/gpui_elements/Cargo.toml"
+
         "crates/gpui_platform/Cargo.toml"
     ]
 

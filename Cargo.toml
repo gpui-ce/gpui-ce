@@ -11,6 +11,14 @@ members = [
   "./crates/gpui_platform/",
   "./crates/gpui_shared_string/",
   "./crates/gpui_elements/",
+  "./crates/gpui_collections/",
+  "./crates/gpui_refineable/",
+  "./crates/gpui_derive_refineable/",
+  "./crates/gpui_scheduler/",
+  "./crates/gpui_sum_tree/",
+  "./crates/gpui_media/",
+  "./crates/gpui_zed_util/",
+  "./crates/gpui_ce_util/",
   "./tooling/perf/",
 ]
 default-members = ["./crates/gpui/"]
@@ -33,7 +41,7 @@ accesskit_windows = "0.32.1"
 anyhow = "1.0.86"
 backtrace = "0.3"
 bitflags = "2.6.0"
-collections = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9", version = "0.1.0" }
+collections = { path = "crates/gpui_collections", version = "0.2.2", package = "gpui_collections" }
 ctor = "1.0.6"
 derive_more = { version = "2.1.1", features = [
   "add",
@@ -55,16 +63,13 @@ itertools = "0.14.0"
 log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
 parking_lot = "0.12.1"
 postage = { version = "0.5", features = ["futures-traits"] }
-proptest = { git = "https://github.com/proptest-rs/proptest", rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b", features = [
-  "attr-macro",
-] }
+proptest = { version = "1.10", features = ["attr-macro"] }
 chrono = { version = "0.4", features = ["serde"] }
 profiling = "1"
 rand = "0.9.4"
 regex = "1.5"
-refineable = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
-scheduler = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
-util_macros = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+refineable = { path = "crates/gpui_refineable", version = "0.2.2", package = "gpui_refineable" }
+scheduler = { path = "crates/gpui_scheduler", version = "0.2.2", package = "gpui_scheduler" }
 schemars = { version = "1.0", features = ["indexmap2"] }
 serde = { version = "1.0.221", features = ["derive", "rc"] }
 serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
@@ -73,7 +78,7 @@ smallvec = { version = "1.6", features = ["union", "const_new"] }
 async-channel = "2.5.0"
 stacksafe = "1.0"
 strum = { version = "0.27.2", features = ["derive"] }
-sum_tree = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+sum_tree = { path = "crates/gpui_sum_tree", version = "0.2.2", package = "gpui_sum_tree" }
 thiserror = "2.0.12"
 hdrhistogram = "7"
 pollster = "0.4.0"
@@ -85,11 +90,11 @@ cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
 core-video = { version = "0.5.2", features = ["metal"] }
-media = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+media = { path = "crates/gpui_media", version = "0.2.2", package = "gpui_media" }
 objc = "0.2"
 mach2 = "0.5"
 metal = "0.33"
-scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed" }
+scap = { version = "0.0.8-zed", package = "zed-scap", default-features = false }
 env_logger = "0.11"
 unicode-segmentation = "1.10"
 
@@ -108,8 +113,8 @@ ashpd = { version = "0.13", default-features = false, features = [
 ] }
 libc = "0.2"
 smol = "2.0"
-util = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
-wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
+util = { path = "crates/gpui_zed_util", version = "0.2.2", package = "gpui_zed_util" }
+wgpu = "29.0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSGraphics",
@@ -117,20 +122,20 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 semver = { version = "1.0", features = ["serde"] }
 windows-core = "0.61"
 tokio = { version = "1" }
-gpui_util = { git = "https://github.com/zed-industries/zed", rev = "876ec5a8a074ba83cce2129ed4d76b59c05a37e9" }
+gpui_util = { path = "crates/gpui_ce_util", version = "0.2.2", package = "gpui_ce_util" }
 
-gpui = { path = "./crates/gpui/" }
-gpui_platform = { path = "./crates/gpui_platform/" }
-gpui_linux = { path = "./crates/gpui_linux/" }
-gpui_macos = { path = "./crates/gpui_macos/" }
-gpui_windows = { path = "./crates/gpui_windows/" }
-gpui_web = { path = "./crates/gpui_web/" }
+gpui = { path = "./crates/gpui/", version = "0.2.2" }
+gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0" }
+gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0" }
+gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0" }
+gpui_windows = { path = "./crates/gpui_windows/", version = "0.1.0" }
+gpui_web = { path = "./crates/gpui_web/", version = "0.1.0" }
 
-gpui_wgpu = { path = "./crates/gpui_wgpu/" }
+gpui_wgpu = { path = "./crates/gpui_wgpu/", version = "0.1.0" }
 
-gpui_macros = { path = "./crates/gpui_macros/" }
-gpui_shared_string = { path = "./crates/gpui_shared_string/" }
-gpui_tokio = { path = "./crates/gpui_tokio/" }
+gpui_macros = { path = "./crates/gpui_macros/", version = "0.1.0" }
+gpui_shared_string = { path = "./crates/gpui_shared_string/", version = "0.1.0" }
+gpui_tokio = { path = "./crates/gpui_tokio/", version = "0.1.0" }
 
 [workspace.dependencies.windows]
 version = "0.61"
