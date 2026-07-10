@@ -43,6 +43,12 @@ impl<V: Render> From<Entity<V>> for AnyView {
     }
 }
 
+impl AsRef<AnyEntity> for AnyView {
+    fn as_ref(&self) -> &AnyEntity {
+        &self.entity
+    }
+}
+
 impl AnyView {
     /// Indicate that this view should be cached when using it as an element.
     /// When using this method, the view's previous layout and paint will be recycled from the previous frame if [Context::notify] has not been called since it was rendered.
@@ -280,6 +286,12 @@ impl<V: 'static + Render> From<WeakEntity<V>> for AnyWeakView {
             entity: view.into(),
             render: any_view::render::<V>,
         }
+    }
+}
+
+impl AsRef<AnyWeakEntity> for AnyWeakView {
+    fn as_ref(&self) -> &AnyWeakEntity {
+        &self.entity
     }
 }
 
