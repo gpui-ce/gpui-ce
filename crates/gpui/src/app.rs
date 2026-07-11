@@ -961,6 +961,24 @@ impl App {
         self.pending_updates -= 1;
     }
 
+    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
+    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
+    pub fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        let event = self
+            .event_arena
+            .alloc(|| event)
+            .map(|it| it as &mut dyn Any);
+        self.pending_effects.push_back(Effect::Emit {
+            emitter: entity.entity_id(),
+            event_type: TypeId::of::<EventType>(),
+            event,
+        });
+    }
+
     /// Arrange a callback to be invoked when the given entity calls `notify` on its respective context.
     pub fn observe<W>(
         &mut self,
