@@ -956,6 +956,16 @@ impl PlatformWindow for WindowsWindow {
         self.state.is_fullscreen()
     }
 
+    fn start_window_move(&self) {
+        log::warn!(
+            "start_window_move not supported, see https://github.com/gpui-ce/gpui-ce/issues/95"
+        );
+    }
+
+    fn start_window_resize(&self, _edge: ResizeEdge) {
+        log::warn!("start_window_resize not supported");
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.state.callbacks.request_frame.set(Some(callback));
     }
