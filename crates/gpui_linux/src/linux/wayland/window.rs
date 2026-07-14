@@ -34,8 +34,8 @@ use gpui::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
-    WindowDecorations, WindowKind, WindowParams, layer_shell::LayerShellNotSupportedError, px,
-    size,
+    WindowDecorations, WindowKind, WindowParams, layer_shell::LayerShellNotSupportedError,
+    layer_shell::LayerShellOptions, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -124,6 +124,7 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     accesskit_adapter: Option<accesskit_unix::Adapter>,
+    layer_shell: Option<LayerShellState>,
 }
 
 pub enum WaylandSurfaceState {
@@ -182,7 +183,7 @@ impl WaylandSurfaceState {
             }
 
             return Ok(WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
-                layer_surface,
+                layer_surface: Some(layer_surface),
             }));
         }
 
@@ -243,7 +244,13 @@ pub struct WaylandXdgSurfaceState {
 }
 
 pub struct WaylandLayerSurfaceState {
-    layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+}
+
+struct LayerShellState {
+    hidden: bool,
+    target_output: Option<wl_output::WlOutput>,
+    options: LayerShellOptions,
 }
 
 impl WaylandSurfaceState {
@@ -253,7 +260,9 @@ impl WaylandSurfaceState {
                 xdg_surface.ack_configure(serial);
             }
             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
-                layer_surface.ack_configure(serial);
+                if let Some(layer_surface) = layer_surface {
+                    layer_surface.ack_configure(serial);
+                }
             }
         }
     }
@@ -281,7 +290,9 @@ impl WaylandSurfaceState {
             }
             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
                 // cannot set window position of a layer surface
-                layer_surface.set_size(width as u32, height as u32);
+                if let Some(layer_surface) = layer_surface {
+                    layer_surface.set_size(width as u32, height as u32);
+                }
             }
         }
     }
@@ -290,7 +301,9 @@ impl WaylandSurfaceState {
         if let WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) =
             self
         {
-            layer_surface.set_exclusive_zone(zone);
+            if let Some(layer_surface) = layer_surface {
+                layer_surface.set_exclusive_zone(zone);
+            }
         }
     }
 
@@ -313,7 +326,9 @@ impl WaylandSurfaceState {
                 xdg_surface.destroy();
             }
             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface }) => {
-                layer_surface.destroy();
+                if let Some(layer_surface) = layer_surface {
+                    layer_surface.destroy();
+                }
             }
         }
     }
@@ -339,6 +354,7 @@ impl WaylandWindowState {
         gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
+        target_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<Self> {
         let renderer = {
             let raw_window = RawWindow {
@@ -380,6 +396,15 @@ impl WaylandWindowState {
                 .set_max_size(max_texture_size, max_texture_size);
         }
 
+        let layer_shell = match &options.kind {
+            WindowKind::LayerShell(options) => Some(LayerShellState {
+                hidden: false,
+                target_output,
+                options: options.clone(),
+            }),
+            _ => None,
+        };
+
         Ok(Self {
             surface_state,
             acknowledged_first_configure: false,
@@ -415,12 +440,91 @@ impl WaylandWindowState {
             window_controls: WindowControls::default(),
             client_inset: None,
             accesskit_adapter: None,
+            layer_shell,
         })
     }
 
     pub fn is_transparent(&self) -> bool {
         self.decorations == WindowDecorations::Client
             || self.background_appearance != WindowBackgroundAppearance::Opaque
+    }
+
+    fn unmap_layer_surface(&mut self) {
+        let Some(ls) = self.layer_shell.as_mut() else {
+            return;
+        };
+        ls.hidden = true;
+        self.force_render_after_recovery = false;
+
+        if let WaylandSurfaceState::LayerShell(layer_state) = &mut self.surface_state {
+            if let Some(layer_surface) = layer_state.layer_surface.take() {
+                layer_surface.destroy();
+            }
+        }
+
+        self.surface.attach(None, 0, 0);
+        self.surface.commit();
+
+        self.renderer_presented = false;
+    }
+
+    fn remap_layer_surface(&mut self) -> anyhow::Result<()> {
+        let ls = self
+            .layer_shell
+            .as_ref()
+            .expect("remap_layer_surface called on non-layer-shell window");
+        let options = ls.options.clone();
+        let target_output = ls.target_output.clone();
+
+        let Some(layer_shell_global) = self.globals.layer_shell.as_ref() else {
+            anyhow::bail!("compositor lost the zwlr_layer_shell_v1 global");
+        };
+
+        let layer_surface = layer_shell_global.get_layer_surface(
+            &self.surface,
+            target_output.as_ref(),
+            super::layer_shell::wayland_layer(options.layer),
+            options.namespace.clone(),
+            &self.globals.qh,
+            self.surface.id(),
+        );
+
+        let width = f32::from(self.bounds.size.width);
+        let height = f32::from(self.bounds.size.height);
+        layer_surface.set_size(width as u32, height as u32);
+        layer_surface.set_anchor(super::layer_shell::wayland_anchor(options.anchor));
+        layer_surface.set_keyboard_interactivity(
+            super::layer_shell::wayland_keyboard_interactivity(options.keyboard_interactivity),
+        );
+        if let Some(margin) = options.margin {
+            layer_surface.set_margin(
+                f32::from(margin.0) as i32,
+                f32::from(margin.1) as i32,
+                f32::from(margin.2) as i32,
+                f32::from(margin.3) as i32,
+            );
+        }
+        if let Some(exclusive_zone) = options.exclusive_zone {
+            layer_surface.set_exclusive_zone(f32::from(exclusive_zone) as i32);
+        }
+        if let Some(exclusive_edge) = options.exclusive_edge {
+            layer_surface.set_exclusive_edge(super::layer_shell::wayland_anchor(exclusive_edge));
+        }
+
+        if let WaylandSurfaceState::LayerShell(layer_state) = &mut self.surface_state {
+            layer_state.layer_surface = Some(layer_surface);
+        }
+
+        self.layer_shell
+            .as_mut()
+            .expect("remap_layer_surface called on non-layer-shell window")
+            .hidden = false;
+        self.acknowledged_first_configure = false;
+        self.force_render_after_recovery = true;
+
+        self.surface.commit();
+
+        Ok(())
     }
 
     fn update_subpixel_layout(&mut self) {
@@ -537,8 +641,13 @@ impl WaylandWindow {
         target_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
-        let surface_state =
-            WaylandSurfaceState::new(&surface, &globals, &params, parent.clone(), target_output)?;
+        let surface_state = WaylandSurfaceState::new(
+            &surface,
+            &globals,
+            &params,
+            parent.clone(),
+            target_output.clone(),
+        )?;
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
@@ -563,6 +672,7 @@ impl WaylandWindow {
                 gpu_requirements,
                 params,
                 parent,
+                target_output,
             )?)),
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
         });
@@ -1329,6 +1439,23 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    fn set_visible(&self, visible: bool) {
+        let mut state = self.borrow_mut();
+        let hidden = match state.layer_shell.as_ref() {
+            Some(ls) => ls.hidden,
+            None => return,
+        };
+        if visible {
+            if hidden {
+                if let Err(err) = state.remap_layer_surface() {
+                    log::warn!("failed to show layer-shell window: {err}");
+                }
+            }
+        } else if !hidden {
+            state.unmap_layer_surface();
+        }
+    }
+
     fn zoom(&self) {
         let state = self.borrow();
         if let Some(toplevel) = state.surface_state.toplevel() {
@@ -1401,6 +1528,10 @@ impl PlatformWindow for WaylandWindow {
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
 
+        if state.layer_shell.as_ref().map_or(false, |ls| ls.hidden) {
+            return;
+        }
+
         if state.renderer.device_lost() {
             let raw_window = RawWindow {
                 window: state.surface.id().as_ptr().cast::<std::ffi::c_void>(),
@@ -1432,6 +1563,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn completed_frame(&self) {
         let mut state = self.borrow_mut();
+
+        if state.layer_shell.as_ref().map_or(false, |ls| ls.hidden) {
+            return;
+        }
 
         // Work around a bug in old versions of wlroots where committing without a buffer attached
         // can cause invalid synchronization that leads to graphical corruption.
@@ -1506,10 +1641,12 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn set_exclusive_zone(&self, zone: Pixels) {
-        let state = self.borrow();
-        state
-            .surface_state
-            .set_exclusive_zone(f32::from(zone) as i32);
+        let mut state = self.borrow_mut();
+        let zone_i = f32::from(zone) as i32;
+        state.surface_state.set_exclusive_zone(zone_i);
+        if let Some(ls) = state.layer_shell.as_mut() {
+            ls.options.exclusive_zone = Some(zone);
+        }
         state.surface.commit();
     }
 
