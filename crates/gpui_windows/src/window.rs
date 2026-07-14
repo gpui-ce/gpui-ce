@@ -147,6 +147,7 @@ impl WindowsWindowState {
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             },
             None,
+            None,
         )
         .context("Creating Wgpu renderer")?;
         #[cfg(not(feature = "wgpu"))]
