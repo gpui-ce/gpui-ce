@@ -1046,7 +1046,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let text = "aa bbb cccc ddddd eeee".into();
+            let text = SharedString::from("aa bbb cccc ddddd eeee");
             let lines = text_system
                 .shape_text(
                     text,
