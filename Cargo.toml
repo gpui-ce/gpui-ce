@@ -37,7 +37,7 @@ readme = "README.md"
 accesskit = "0.24.0"
 accesskit_macos = "0.26.0"
 accesskit_unix = "0.22.0"
-accesskit_windows = "0.32.1"
+accesskit_windows = "0.33.1"
 anyhow = "1.0.86"
 backtrace = "0.3"
 bitflags = "2.6.0"
@@ -120,7 +120,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSGraphics",
 ] }
 semver = { version = "1.0", features = ["serde"] }
-windows-core = "0.61"
+windows-core = "0.62.2"
 tokio = { version = "1" }
 gpui_util = { path = "crates/gpui_ce_util", version = "0.2.2", package = "gpui_ce_util" }
 
@@ -138,7 +138,7 @@ gpui_shared_string = { path = "./crates/gpui_shared_string/", version = "0.1.0" 
 gpui_tokio = { path = "./crates/gpui_tokio/", version = "0.1.0" }
 
 [workspace.dependencies.windows]
-version = "0.61"
+version = "0.62.2"
 features = [
   "Foundation_Numerics",
   "Globalization_DateTimeFormatting",
