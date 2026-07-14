@@ -1,7 +1,7 @@
 use crate::{
     BoolExt, MacDispatcher, MacDisplay, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
-    events::key_to_native, ns_string, pasteboard::Pasteboard, renderer,
-    set_active_window_cursor_style,
+    events::key_to_native, haptic_feedback::MacHaptics, ns_string, pasteboard::Pasteboard,
+    renderer, set_active_window_cursor_style,
 };
 use anyhow::{Context as _, anyhow};
 use block::ConcreteBlock;
@@ -184,6 +184,8 @@ pub(crate) struct MacPlatformState {
     keyboard_mapper: Rc<MacKeyboardMapper>,
     /// Mirrors `[NSCursor setHiddenUntilMouseMoves:]` state, which AppKit doesn't expose.
     cursor_visible: Arc<AtomicBool>,
+    /// Haptic feedback engine (macOS only, lazy-initialized on first use).
+    haptics: MacHaptics,
 }
 
 impl MacPlatform {
@@ -221,6 +223,7 @@ impl MacPlatform {
             menus: None,
             keyboard_mapper,
             cursor_visible: Arc::new(AtomicBool::new(true)),
+            haptics: MacHaptics::new(headless),
         }))
     }
 
@@ -1149,6 +1152,14 @@ impl Platform for MacPlatform {
             }
             Ok(())
         })
+    }
+
+    fn supports_haptic_feedback(&self) -> bool {
+        self.0.lock().haptics.supported()
+    }
+
+    fn play_haptic_feedback(&self, style: gpui::HapticFeedbackStyle) {
+        self.0.lock().haptics.play(style)
     }
 }
 

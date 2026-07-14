@@ -205,6 +205,10 @@ name = "transition"
 path = "examples/learn/transition.rs"
 
 [[example]]
+name = "haptic_feedback"
+path = "examples/learn/haptic_feedback.rs"
+
+[[example]]
 name = "blur"
 path = "examples/learn/blur.rs"
 

@@ -252,6 +252,16 @@ pub trait Platform: 'static {
     /// Sets the label applied to credentials stored in the system keyring.
     /// Only Linux/FreeBSD use this label.
     fn set_keyring_label(&self, _label: SharedString) {}
+
+    /// Whether the current platform supports haptic feedback.
+    fn supports_haptic_feedback(&self) -> bool {
+        false
+    }
+
+    /// Play a haptic feedback of the given style.
+    ///
+    /// No-op on platforms that don't support haptic feedback.
+    fn play_haptic_feedback(&self, _style: HapticFeedbackStyle) {}
 }
 
 /// A handle to a platform's display, e.g. a monitor or laptop screen.
@@ -296,6 +306,21 @@ pub enum ThermalState {
     Serious,
     /// System is critically constrained, minimize all resource usage
     Critical,
+}
+
+/// Styles of haptic feedback that can be played via the platform.
+///
+/// These correspond directly to [`NSHapticFeedbackPattern`](https://developer.apple.com/documentation/appkit/nshapticfeedbackmanager/feedbackpattern)
+/// values on macOS. On other platforms, all styles are no-ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HapticFeedbackStyle {
+    /// A generic haptic tap — suitable for most interactions.
+    Generic,
+    /// A sharp snap — for alignment guides, detents, and snapping.
+    Alignment,
+    /// A distinct level-change click — for slider steps, toggles, and
+    /// discrete state changes.
+    LevelChange,
 }
 
 /// Metadata for a given [ScreenCaptureSource]
