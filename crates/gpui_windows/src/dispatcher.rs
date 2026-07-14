@@ -52,9 +52,18 @@ impl WindowsDispatcher {
 
     fn dispatch_on_threadpool(&self, priority: WorkItemPriority, runnable: RunnableVariant) {
         let handler = {
-            let mut task_wrapper = Some(runnable);
+            let single_run_task = std::sync::Arc::new(std::sync::Mutex::new(Some(runnable)));
             WorkItemHandler::new(move |_| {
-                let runnable = task_wrapper.take().unwrap();
+                let runnable = {
+                    let mut lock = single_run_task.lock().expect("runnable lock poisoned");
+                    lock.take()
+                };
+                let runnable = runnable.ok_or_else(|| {
+                    windows_core::Error::new(
+                        windows::Win32::Foundation::ERROR_NOT_FOUND.to_hresult(),
+                        "executed async_task runnable multiple times",
+                    )
+                })?;
                 Self::execute_runnable(runnable);
                 Ok(())
             })
@@ -65,9 +74,18 @@ impl WindowsDispatcher {
 
     fn dispatch_on_threadpool_after(&self, runnable: RunnableVariant, duration: Duration) {
         let handler = {
-            let mut task_wrapper = Some(runnable);
+            let single_run_task = std::sync::Arc::new(std::sync::Mutex::new(Some(runnable)));
             TimerElapsedHandler::new(move |_| {
-                let runnable = task_wrapper.take().unwrap();
+                let runnable = {
+                    let mut lock = single_run_task.lock().expect("runnable lock poisoned");
+                    lock.take()
+                };
+                let runnable = runnable.ok_or_else(|| {
+                    windows_core::Error::new(
+                        windows::Win32::Foundation::ERROR_NOT_FOUND.to_hresult(),
+                        "executed async_task runnable multiple times",
+                    )
+                })?;
                 Self::execute_runnable(runnable);
                 Ok(())
             })
