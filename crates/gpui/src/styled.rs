@@ -207,6 +207,13 @@ pub trait Styled: Sized {
         self.overflow_hidden()
     }
 
+    /// Sets the flex direction of the element.
+    /// [Docs](https://tailwindcss.com/docs/flex-direction)
+    fn flex_direction(mut self, direction: FlexDirection) -> Self {
+        self.style().flex_direction = Some(direction);
+        self
+    }
+
     /// Sets the flex direction of the element to `column`.
     /// [Docs](https://tailwindcss.com/docs/flex-direction#column)
     fn flex_col(mut self) -> Self {
