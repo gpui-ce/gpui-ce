@@ -750,6 +750,22 @@ impl Interactivity {
     fn has_pinch_listeners(&self) -> bool {
         !self.pinch_listeners.is_empty()
     }
+
+    /// Bind the given callback to be called during prepaint of the element.
+    /// The imperative API equivalent to [`StatefulInteractiveElement::on_prepaint`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_prepaint(
+        &mut self,
+        listener: impl Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.prepaint_listeners
+            .push(Box::new(move |payload, window, cx| {
+                listener(payload, window, cx)
+            }));
+    }
 }
 
 /// A trait for elements that want to use the standard GPUI event handlers that don't
@@ -1673,7 +1689,33 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self.interactivity().tooltip_show_delay(delay);
         self
     }
+
+    /// Bind the given callback to execute before the element's prepaint.
+    /// The fluent API equivalent to [`Interactivity::on_prepaint`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_prepaint(
+        mut self,
+        listener: impl Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_prepaint(listener);
+        self
+    }
 }
+
+/// Describes the known state of an Interactivity element before prepaint begins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InteractivityPrepaint {
+    /// The bounds of the element
+    pub bounds: Bounds<Pixels>,
+    /// The size of the contents of the element
+    pub content_size: Size<Pixels>,
+}
+pub(crate) type PrepaintListener =
+    Box<dyn Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static>;
 
 pub(crate) type MouseDownListener =
     Box<dyn Fn(&MouseDownEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
@@ -2094,6 +2136,7 @@ pub struct Interactivity {
         Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> StyleRefinement>,
     )>,
     pub(crate) group_drag_over_styles: Vec<(TypeId, GroupStyle)>,
+    pub(crate) prepaint_listeners: Vec<PrepaintListener>,
     pub(crate) mouse_down_listeners: Vec<MouseDownListener>,
     pub(crate) mouse_up_listeners: Vec<MouseUpListener>,
     pub(crate) mouse_pressure_listeners: Vec<MousePressureListener>,
@@ -2268,6 +2311,16 @@ impl Interactivity {
         f: impl FnOnce(&Style, Point<Pixels>, Option<Hitbox>, &mut Window, &mut App) -> R,
     ) -> R {
         self.content_size = content_size;
+
+        if !self.prepaint_listeners.is_empty() {
+            let payload = InteractivityPrepaint {
+                bounds,
+                content_size,
+            };
+            for listener in self.prepaint_listeners.drain(..) {
+                listener(&payload, window, cx);
+            }
+        }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         window.with_inspector_state(
