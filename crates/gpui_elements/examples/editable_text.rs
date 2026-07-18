@@ -1,5 +1,5 @@
 use gpui::{
-    App, Bounds, Context, Hsla, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_elements::editable_text::{
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
@@ -24,7 +24,7 @@ impl Render for Example {
                     .placeholder("some placeholder text")
                     .border_1()
                     .rounded_lg()
-                    .border_color(Hsla::white()) // has a border
+                    .border_color(gpui::white()) // has a border
                     .p_2() // padding between the text and border
                     .min_w_10()
                     .max_w_128()
@@ -37,7 +37,7 @@ impl Render for Example {
                     .placeholder("empty text")
                     .border_1()
                     .rounded_lg()
-                    .border_color(Hsla::white()) // has a border
+                    .border_color(gpui::white()) // has a border
                     .p_2() // padding between the text and border
                     .w_full()
                     .min_h_24()

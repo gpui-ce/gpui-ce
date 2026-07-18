@@ -1,8 +1,8 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent, Length,
-    Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
+    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
     TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
@@ -10,6 +10,7 @@ pub use gpui_macros::{
     overflow_style_methods, padding_style_methods, position_style_methods,
     visibility_style_methods,
 };
+use palette::{Hsla, IntoColor};
 const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
@@ -570,8 +571,8 @@ pub trait Styled: Sized {
     /// Sets the text color of this element.
     ///
     /// This value cascades to its child elements.
-    fn text_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.text_style().color = Some(color.into());
+    fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
+        self.text_style().color = Some(color.into_color());
         self
     }
 
@@ -586,8 +587,8 @@ pub trait Styled: Sized {
     /// Sets the background color of this element.
     ///
     /// This value cascades to its child elements.
-    fn text_bg(mut self, bg: impl Into<Hsla>) -> Self {
-        self.text_style().background_color = Some(bg.into());
+    fn text_bg(mut self, bg: impl IntoColor<Hsla>) -> Self {
+        self.text_style().background_color = Some(bg.into_color());
         self
     }
 
@@ -693,10 +694,10 @@ pub trait Styled: Sized {
     }
 
     /// Sets the color for the underline on this element
-    fn text_decoration_color(mut self, color: impl Into<Hsla>) -> Self {
+    fn text_decoration_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
-        underline.color = Some(color.into());
+        underline.color = Some(color.into_color());
         self
     }
 

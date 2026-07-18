@@ -1,9 +1,10 @@
 use crate::{
-    App, Bounds, DevicePixels, Half, Hsla, LineLayout, Pixels, Point, RenderGlyphParams, Result,
+    App, Bounds, DevicePixels, Half, LineLayout, Pixels, Point, RenderGlyphParams, Result,
     ShapedGlyph, ShapedRun, SharedString, StrikethroughStyle, TextAlign, UnderlineStyle, Window,
     WrapBoundary, WrappedLineLayout, black, fill, point, px, size,
 };
 use derive_more::{Deref, DerefMut};
+use palette::Hsla;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
@@ -941,24 +942,9 @@ mod tests {
     fn test_split_at_decorations() {
         // Three decoration runs: red [0..2), green [2..5), blue [5..6).
         // Split at byte 3 — red goes entirely left, green straddles, blue goes entirely right.
-        let red = Hsla {
-            h: 0.0,
-            s: 1.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let green = Hsla {
-            h: 0.3,
-            s: 1.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let blue = Hsla {
-            h: 0.6,
-            s: 1.0,
-            l: 0.5,
-            a: 1.0,
-        };
+        let red = Hsla::new(0., 1., 0.5, 1.);
+        let green = Hsla::new(0.3, 1., 0.5, 1.);
+        let blue = Hsla::new(0.6, 1., 0.5, 1.);
 
         let line = make_shaped_line(
             "abcdef",

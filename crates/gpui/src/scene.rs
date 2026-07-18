@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledFilter, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Pixels, Point,
+    Radians, ScaledFilter, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use smallvec::SmallVec;
 use std::{
@@ -248,6 +248,35 @@ impl Scene {
             backdrop_filters_iter: self.backdrop_filters.iter().peekable(),
             filter_boundaries_start: 0,
             filter_boundaries_iter: self.filter_boundaries.iter().peekable(),
+        }
+    }
+}
+
+/// Internal representation of [`palette::Hsla`] which is layout sensitive, as its provided to the renderer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct SceneHsla {
+    /// Hue, in a range from 0 to 1
+    pub(crate) h: f32,
+    /// Saturation, in a range from 0 to 1
+    pub(crate) s: f32,
+    /// Lightness, in a range from 0 to 1
+    pub(crate) l: f32,
+    /// Alpha, in a range from 0 to 1
+    pub(crate) a: f32,
+}
+impl Into<palette::Hsla> for SceneHsla {
+    fn into(self) -> palette::Hsla {
+        palette::Hsla::new(self.h * 360.0, self.s, self.l, self.a)
+    }
+}
+impl From<palette::Hsla> for SceneHsla {
+    fn from(hsla: palette::Hsla) -> Self {
+        Self {
+            h: hsla.hue.into_positive_degrees() / 360.0,
+            s: hsla.saturation,
+            l: hsla.lightness,
+            a: hsla.alpha,
         }
     }
 }
@@ -661,7 +690,7 @@ pub struct Quad {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: Hsla,
+    pub border_color: SceneHsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
 }
@@ -680,7 +709,7 @@ pub struct Underline {
     pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub color: SceneHsla,
     pub thickness: ScaledPixels,
     pub wavy: PaddedBool32,
 }
@@ -700,7 +729,7 @@ pub struct Shadow {
     pub bounds: Bounds<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub color: SceneHsla,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
@@ -889,7 +918,7 @@ pub struct MonochromeSprite {
     pub pad: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub color: SceneHsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }
@@ -908,7 +937,7 @@ pub struct SubpixelSprite {
     pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub color: SceneHsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }

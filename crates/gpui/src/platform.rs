@@ -37,7 +37,7 @@ pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBu
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
-    FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
+    FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap,
     LineLayout, Pixels, PlatformGestures, PlatformInput, Point, Priority, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString,
     Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea, hash, point, px, size,
@@ -1131,7 +1131,7 @@ pub trait PlatformTextSystem: Send + Sync {
     fn recommended_rendering_mode(&self, _font_id: FontId, _font_size: Pixels)
     -> TextRenderingMode;
     /// Returns the dilation level to use for a glyph painted in the given color.
-    fn glyph_dilation_for_color(&self, _color: Hsla) -> u8 {
+    fn glyph_dilation_for_color(&self, _color: palette::Hsla) -> u8 {
         0
     }
 }

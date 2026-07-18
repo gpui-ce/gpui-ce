@@ -82,29 +82,15 @@ struct EditableTextColors {
 }
 impl Default for EditableTextColors {
     fn default() -> Self {
-        const WHITE_50PC: Hsla = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 1.0,
-            a: 0.5,
-        };
-        const WHITE_70PC: Hsla = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 1.0,
-            a: 0.7,
-        };
+        use palette::RgbHue;
+        const WHITE_50PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.5);
+        const WHITE_70PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.7);
         // approx rgb(38 79 120) or oklch(41.9% 0.0829 250.4)
-        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla {
-            h: 0.583,
-            s: 0.519,
-            l: 0.31,
-            a: 0.5,
-        };
+        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla::new_const(RgbHue::new(0.583), 0.519, 0.31, 0.5);
         Self {
             placeholder: WHITE_50PC,
             selection: LIGHT_NAVY_BLUE_50PC,
-            caret: Hsla::white(),
+            caret: gpui::white(),
             ime_underline: WHITE_70PC,
         }
     }

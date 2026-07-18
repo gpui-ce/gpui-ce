@@ -976,12 +976,7 @@ impl DirectWriteState {
 
                     let run_color = {
                         let run_color = color_run.Base.runColor;
-                        Rgba {
-                            r: run_color.r,
-                            g: run_color.g,
-                            b: run_color.b,
-                            a: run_color.a,
-                        }
+                        Rgba::new(run_color.r, run_color.g, run_color.b, run_color.a)
                     };
                     let bounds = bounds(point(color_bounds.left, color_bounds.top), color_size);
                     glyph_layers.push(GlyphLayerTexture::new(

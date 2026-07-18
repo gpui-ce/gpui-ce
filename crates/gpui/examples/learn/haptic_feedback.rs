@@ -14,11 +14,12 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Bounds, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, Hsla, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
+    App, Bounds, ColorExt, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, Hsla,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
     StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, colors::Colors, div,
     prelude::*, px, relative, rgb, size,
 };
+use palette::IntoColor;
 
 const SLIDER_MIN: f32 = 0.0;
 const SLIDER_MAX: f32 = 100.0;
@@ -56,11 +57,12 @@ impl HapticFeedbackExample {
         id: &'static str,
         label: &'static str,
         style: HapticFeedbackStyle,
-        color: Hsla,
+        color: impl IntoColor<Hsla>,
         colors: &Colors,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let _ = cx;
+        let color = color.into_color();
 
         div()
             .id(id)
@@ -80,7 +82,7 @@ impl HapticFeedbackExample {
                 div()
                     .text_base()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(colors.selected_text))
+                    .text_color(colors.selected_text)
                     .child(label),
             )
             .on_hover(move |hovered, _, cx| {
@@ -131,7 +133,7 @@ impl Render for HapticFeedbackExample {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
         let slider_percentage = Self::value_to_percentage(self.slider_value);
-        let slider_color = Hsla::from(rgb(0x3b82f6));
+        let slider_color = rgb(0x3b82f6);
 
         div()
             .flex()
@@ -167,10 +169,11 @@ impl Render for HapticFeedbackExample {
                     .py_2()
                     .rounded_md()
                     .bg(if self.supported {
-                        Hsla::from(rgb(0x22c55e)).opacity(0.1)
+                        rgb(0x22c55e)
                     } else {
-                        Hsla::from(rgb(0xf59e0b)).opacity(0.1)
-                    })
+                        rgb(0xf59e0b)
+                    }
+                    .opacity(0.1))
                     .child({
                         let dot = if self.supported {
                             rgb(0x22c55e)
@@ -205,7 +208,7 @@ impl Render for HapticFeedbackExample {
                         "btn-generic",
                         "Generic",
                         HapticFeedbackStyle::Generic,
-                        Hsla::from(rgb(0x3b82f6)),
+                        rgb(0x3b82f6),
                         &colors,
                         cx,
                     ))
@@ -213,7 +216,7 @@ impl Render for HapticFeedbackExample {
                         "btn-alignment",
                         "Alignment",
                         HapticFeedbackStyle::Alignment,
-                        Hsla::from(rgb(0x10b981)),
+                        rgb(0x10b981),
                         &colors,
                         cx,
                     ))
@@ -221,7 +224,7 @@ impl Render for HapticFeedbackExample {
                         "btn-levelchange",
                         "LevelChange",
                         HapticFeedbackStyle::LevelChange,
-                        Hsla::from(rgb(0x8b5cf6)),
+                        rgb(0x8b5cf6),
                         &colors,
                         cx,
                     )),
@@ -278,7 +281,7 @@ impl Render for HapticFeedbackExample {
                                     .w_full()
                                     .h_1p5()
                                     .rounded_full()
-                                    .bg(Hsla::from(colors.text).opacity(0.12))
+                                    .bg(colors.text.opacity(0.12))
                                     .flex()
                                     .items_center()
                                     .justify_between()

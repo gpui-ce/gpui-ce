@@ -108,12 +108,7 @@ impl Render for WindowShadow {
                                     gpui::BoxShadow::new(
                                         px(0.),
                                         px(0.),
-                                        Hsla {
-                                            h: 0.,
-                                            s: 0.,
-                                            l: 0.,
-                                            a: 0.4,
-                                        },
+                                        Hsla::new(0., 0., 0., 0.4),
                                     )
                                     .blur_radius(shadow_size / 2.),
                                 ])
@@ -150,12 +145,7 @@ impl Render for WindowShadow {
                                             gpui::BoxShadow::new(
                                                 px(0.),
                                                 px(0.),
-                                                Hsla {
-                                                    h: 0.,
-                                                    s: 0.,
-                                                    l: 0.,
-                                                    a: 1.0,
-                                                },
+                                                Hsla::new(0., 0., 0., 1.),
                                             )
                                             .blur_radius(px(20.0)),
                                         ])

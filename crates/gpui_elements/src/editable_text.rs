@@ -44,7 +44,7 @@
 //! use gpui_elements::editable_text::text_input;
 //! text_input("my_input")
 //!     .placeholder("empty text")
-//!     .border_1().rounded_lg().border_color(Hsla::white()) // has a border
+//!     .border_1().rounded_lg().border_color(gpui::white()) // has a border
 //!     .p_2() // padding between the text and border
 //!     .min_w_10().max_w_128()
 //!     .min_h_auto()
@@ -60,7 +60,7 @@
 //! use gpui_elements::editable_text::text_area;
 //! text_area("message")
 //!     .placeholder("empty text")
-//!     .border_1().rounded_lg().border_color(Hsla::white()) // has a border
+//!     .border_1().rounded_lg().border_color(gpui::white()) // has a border
 //!     .p_2() // padding between the text and border
 //!     .min_w_10().max_w_128()
 //!     .min_h_24().max_h_128()

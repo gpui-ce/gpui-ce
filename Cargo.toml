@@ -73,6 +73,7 @@ image = "0.25.1"
 inventory = "0.3.19"
 itertools = "0.14.0"
 log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
+palette = { version = "0.7.6", features = ["serializing"] }
 parking_lot = "0.12.1"
 postage = { version = "0.5", features = ["futures-traits"] }
 proptest = { version = "1.10", features = ["attr-macro"] }
