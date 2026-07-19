@@ -1,6 +1,6 @@
 use crate::{
-    AnyElement, App, Bounds, Element, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    Pixels, Window,
+    AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Window,
 };
 
 /// Builds a `Deferred` element, which delays the layout and paint of its child.
@@ -8,6 +8,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
     Deferred {
         child: Some(child.into_any_element()),
         priority: 0,
+        content_mask: None,
     }
 }
 
@@ -16,6 +17,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 pub struct Deferred {
     child: Option<AnyElement>,
     priority: usize,
+    content_mask: Option<ContentMask<Pixels>>,
 }
 
 impl Element for Deferred {
@@ -52,7 +54,7 @@ impl Element for Deferred {
     ) {
         let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
-        window.defer_draw(child, element_offset, self.priority, None)
+        window.defer_draw(child, element_offset, self.priority, self.content_mask)
     }
 
     fn paint(
@@ -77,6 +79,13 @@ impl IntoElement for Deferred {
 }
 
 impl Deferred {
+    /// When a content mask is provided, the deferred element will be clipped to that region during
+    /// both prepaint and paint.
+    pub fn content_mask(mut self, mask: ContentMask<Pixels>) -> Self {
+        self.content_mask = Some(mask);
+        self
+    }
+
     /// Sets a priority for the element. A higher priority conceptually means painting the element
     /// on top of deferred draws with a lower priority (i.e. closer to the viewer).
     pub fn priority(mut self, priority: usize) -> Self {
