@@ -50,30 +50,38 @@ identical paths here. The script uses a **vendor-branch 3-way merge** (a general
    committed as a **third** commit. Disable tests with `SYNC_RUN_TESTS=0`, or warning
    enforcement with `SYNC_FAIL_ON_WARNINGS=0`.
 
-### Tracked vs. untracked
+### Tracked crates (fork dir ← upstream dir)
 
-Synced 1:1: `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
+Synced 1:1 (same path): `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
 `gpui_shared_string`, `gpui_tokio`, `gpui_web`, `gpui_wgpu`, `gpui_windows`.
 
-Left untouched: `gpui_util` (consumed here as a git dep, not vendored),
-`crates/gpui_elements` (fork-only stub), `tooling/perf` (fork-only).
+Synced with **path remapping** — vendored + renamed by the fork (PR #91 removed the git sources):
+`gpui_collections`←`collections`, `gpui_sum_tree`←`sum_tree`, `gpui_refineable`←`refineable`,
+`gpui_derive_refineable`←`refineable/derive_refineable`, `gpui_scheduler`←`scheduler`,
+`gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_ce_util`←`gpui_util`. The merge preserves each
+crate's gpui-ce adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
+conflict resolution while taking upstream's real changes — so upstream API additions land through the
+merge instead of being hand-ported during the build-fix pass.
+
+Left untouched: `crates/gpui_elements` (fork-only stub), `tooling/perf` (fork-only); `util_macros`
+is no longer used by the fork. The mapping lives in `TRACKED_CRATES` in `sync_upstream.py`.
 
 ## One-time bootstrap
 
-The script needs to know which upstream commit this fork currently corresponds to, to
-use as the merge base. `just sync-upstream-bootstrap` defaults to the
-`zed-industries/zed` rev already pinned in `Cargo.toml` (currently `876ec5a8…`), which
-is the best automatic guess. If you know a more accurate baseline (e.g. the commit of
-the last "re-re-fork"), pass it:
+The script needs to know which upstream commit this fork currently corresponds to, to use as the
+merge base. Historically this was auto-read from the `zed-industries/zed` rev pinned in `Cargo.toml`,
+but PR #91 removed those git sources, so there is no longer a pinned rev to default to — **pass the
+baseline explicitly**:
 
 ```sh
-just sync-upstream-bootstrap <upstream-sha>
+just sync-upstream-bootstrap <upstream-sha>   # e.g. 876ec5a8a074 (the last rev pinned before #91)
 ```
 
-Bootstrap adds the `zed` remote, builds the baseline vendor snapshot, records it in the
-current branch's history with a **no-op** `-s ours` merge (no files change), and writes
-`state.json`. Run it once on `main`. A too-old baseline just means the first real sync
-has more to merge; correctness is unaffected.
+Bootstrap adds the `zed` remote, builds the baseline vendor snapshot (all tracked crates remapped to
+their fork paths at that rev), records it in the current branch's history with a **no-op** `-s ours`
+merge (no files change), and writes `state.json`. Run it once. A too-old baseline just means the
+first real sync has more to merge; correctness is unaffected. After the first successful sync the
+recorded baseline advances automatically, so bootstrap is not needed again.
 
 ## Files
 
