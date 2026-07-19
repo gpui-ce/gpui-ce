@@ -59,12 +59,35 @@ def _env(name: str, default: str) -> str:
 ZED_REMOTE_NAME: str = _env("SYNC_ZED_REMOTE_NAME", "zed")
 ZED_REMOTE_URL: str = _env("SYNC_ZED_REMOTE_URL", "https://github.com/zed-industries/zed.git")
 
-# Crates synced 1:1 at the same relative path. Left untouched: gpui_util (external git
-# dep, not vendored), gpui_elements (fork-only stub), tooling/perf (fork-only).
-TRACKED_CRATES: list[str] = [
-    "gpui", "gpui_linux", "gpui_macos", "gpui_macros", "gpui_platform",
-    "gpui_shared_string", "gpui_tokio", "gpui_web", "gpui_wgpu", "gpui_windows",
-]
+# Fork crate dir (under crates/) -> upstream crate path (under crates/). The in-tree gpui*
+# crates map to themselves; the rest were vendored + renamed from the Zed monorepo by PR #91
+# ("removed all of the git sources") and are tracked via path remapping. Their gpui-ce
+# adaptations (package rename, path deps, ztracing->tracing, zlog removal, etc.) are
+# preserved through the 3-way merge's conflict resolution — never re-applied by hand.
+# Left untouched: gpui_elements (fork-only stub), tooling/perf (fork-only). util_macros is
+# no longer used by the fork.
+TRACKED_CRATES: dict[str, str] = {
+    # in-tree gpui crates (identity mapping)
+    "gpui": "gpui",
+    "gpui_linux": "gpui_linux",
+    "gpui_macos": "gpui_macos",
+    "gpui_macros": "gpui_macros",
+    "gpui_platform": "gpui_platform",
+    "gpui_shared_string": "gpui_shared_string",
+    "gpui_tokio": "gpui_tokio",
+    "gpui_web": "gpui_web",
+    "gpui_wgpu": "gpui_wgpu",
+    "gpui_windows": "gpui_windows",
+    # vendored + renamed from upstream (fork dir -> upstream path)
+    "gpui_collections": "collections",
+    "gpui_sum_tree": "sum_tree",
+    "gpui_refineable": "refineable",
+    "gpui_derive_refineable": "refineable/derive_refineable",  # nested upstream
+    "gpui_scheduler": "scheduler",
+    "gpui_media": "media",
+    "gpui_zed_util": "util",
+    "gpui_ce_util": "gpui_util",
+}
 
 VENDOR_BRANCH: str = _env("SYNC_VENDOR_BRANCH", "vendor/zed-gpui")
 
@@ -197,11 +220,13 @@ def gok(*args: str) -> bool:
 
 # vendor history (filtered replay of upstream commits)
 def tracked_pathspec() -> list[str]:
-    return [f"crates/{crate}" for crate in TRACKED_CRATES]
+    """Upstream pathspecs for the tracked crates (used to filter upstream rev-lists)."""
+    return [f"crates/{up}" for up in TRACKED_CRATES.values()]
 
 
 def filtered_tree(sha: str) -> str | None:
-    """Tree object holding ONLY the tracked crates from <sha>. None if none are present.
+    """Tree object holding ONLY the tracked crates from <sha>, each placed at its FORK path
+    (remapping upstream dirs -> gpui-ce's renamed dirs). None if none are present.
 
     Uses a throwaway index, so there's no working-tree churn.
     """
@@ -210,12 +235,21 @@ def filtered_tree(sha: str) -> str | None:
     try:
         run_git("read-tree", "--empty", env=env)
         added = 0
-        for crate in TRACKED_CRATES:
-            if gok("cat-file", "-e", f"{sha}:crates/{crate}"):
-                run_git("read-tree", f"--prefix=crates/{crate}/", f"{sha}:crates/{crate}", env=env)
+        for fork_path, up_path in TRACKED_CRATES.items():
+            if gok("cat-file", "-e", f"{sha}:crates/{up_path}"):
+                run_git("read-tree", f"--prefix=crates/{fork_path}/", f"{sha}:crates/{up_path}", env=env)
                 added += 1
         if added == 0:
             return None
+        # A tracked upstream path can nest inside another (refineable/derive_refineable lives
+        # under refineable). The parent read pulled the nested subtree into the parent's fork
+        # prefix; drop it so each crate holds only its own files.
+        for fork_path, up_path in TRACKED_CRATES.items():
+            for other_up in TRACKED_CRATES.values():
+                if other_up != up_path and other_up.startswith(up_path + "/"):
+                    rel = other_up[len(up_path) + 1:]
+                    run_git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
+                            f"crates/{fork_path}/{rel}", env=env, check=False)
         return gout("write-tree", env=env)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
