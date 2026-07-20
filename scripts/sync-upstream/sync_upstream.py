@@ -405,7 +405,10 @@ def resolve_conflicts_loop(branch: str) -> None:
         for path in files:
             print(f"    {_D}conflict:{_Z} {path}")
         run_claude(render_prompt("resolve", files))
-        run_git("add", "-A")
+        # Stage only tracked updates (resolves the conflicted files). NOT `-A`: conflict
+        # resolution edits existing files, so any new untracked file is claude's scratch
+        # (e.g. saved base/upstream copies for diffing) and must not be swept into the commit.
+        run_git("add", "-u")
         after = len(conflicted_files())
         if after > 0 and after >= before:
             warn(f"no progress this pass ({before} → {after} files) — claude may be stuck")
