@@ -55,6 +55,8 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
 struct SurfaceParams {
     bounds: PodBounds,
     content_mask: PodBounds,
+    sampler_type: u32,
+    pad: u32,
 }
 
 /// Uniform passed to the blur pipelines. The same struct drives the downsample, separable
@@ -166,7 +168,8 @@ struct WgpuResources {
     pipelines: WgpuPipelines,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
-    surface_sampler: wgpu::Sampler,
+    surface_sampler_linear: wgpu::Sampler,
+    surface_sampler_nearest: wgpu::Sampler,
     #[allow(dead_code)]
     surface_uniform_buffer: wgpu::Buffer,
     /// One reused uniform buffer holding [`BlurParams`] for every blur pass in a frame, each at a
@@ -478,10 +481,17 @@ impl WgpuRenderer {
             ..Default::default()
         });
 
-        let surface_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("surface_sampler"),
+        let surface_sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("surface_sampler_linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let surface_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("surface_sampler_nearest"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -587,7 +597,8 @@ impl WgpuRenderer {
             pipelines,
             bind_group_layouts,
             atlas_sampler,
-            surface_sampler,
+            surface_sampler_linear,
+            surface_sampler_nearest,
             surface_uniform_buffer,
             blur_params_buffer,
             globals_buffer,
@@ -738,6 +749,12 @@ impl WgpuRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -1863,6 +1880,8 @@ impl WgpuRenderer {
             let params = SurfaceParams {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
+                sampler_type: surface.sampler_type as u32,
+                pad: 0,
             };
 
             resources.queue.write_buffer(
@@ -1887,7 +1906,15 @@ impl WgpuRenderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&resources.surface_sampler),
+                            resource: wgpu::BindingResource::Sampler(
+                                &resources.surface_sampler_linear,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(
+                                &resources.surface_sampler_nearest,
+                            ),
                         },
                     ],
                 });
@@ -1943,7 +1970,7 @@ impl WgpuRenderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&resources.surface_sampler),
+                        resource: wgpu::BindingResource::Sampler(&resources.surface_sampler_linear),
                     },
                 ],
             })

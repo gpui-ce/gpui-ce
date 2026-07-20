@@ -889,6 +889,14 @@ impl From<PolychromeSprite> for Primitive {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Default, Debug)]
+pub enum SamplerType {
+    #[default]
+    Linear = 0,
+    Nearest = 1,
+}
+
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct PaintSurface {
@@ -901,6 +909,8 @@ pub struct PaintSurface {
     pub texture: std::sync::Arc<dyn std::any::Any + Send + Sync>,
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub texture_size: Size<crate::DevicePixels>,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub sampler_type: SamplerType,
 }
 
 impl From<PaintSurface> for Primitive {
