@@ -73,4 +73,8 @@ edits land as a **separate, reviewable resolution commit** diffed against that r
    resolve the conflicts — the surrounding script stages and commits. Do not change anything
    unrelated to the conflicts.
 
+9. **No scratch files in the repo.** If you need to save a base/upstream/fork copy of a file to
+   diff it, write it under `/tmp`, never inside the working tree (a stray `.merge_tmp/` or similar
+   would be committed). Resolve strictly by editing the conflicted files in place.
+
 When finished, briefly summarize what you resolved and any decisions worth a human's attention.

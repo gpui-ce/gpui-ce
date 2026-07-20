@@ -34,7 +34,9 @@ or a test failure (see the output above). Fix it so the gate passes.
 
 5. **Do not** edit `tooling/perf` or `crates/gpui_elements` unless one of them is the actual source
    of an issue. Do not run `git commit`, `git merge`, or `git push` (the surrounding script commits
-   and re-runs the gate). You may run `cargo check` / `cargo build` / `cargo test` to verify.
+   and re-runs the gate). You may run `cargo check` / `cargo build` / `cargo test` to verify. If you
+   need scratch space, use `/tmp` — never write scratch files into the working tree (they would be
+   committed).
 
 6. If an issue stems from the **root `Cargo.toml`** (a workspace dependency that must be added or
    updated to match upstream's new requirements), fix it there using gpui-ce's sourcing convention
