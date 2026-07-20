@@ -167,6 +167,10 @@ struct TransformationMatrix {
     translation: vec2<f32>,
 }
 
+alias SamplerType = u32;
+const LINEAR_SAMPLER = 0;
+const NEAREST_SAMPLER = 1;
+
 fn to_device_position_impl(position: vec2<f32>) -> vec4<f32> {
     let device_position = position / globals.viewport_size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
     return vec4<f32>(device_position, 0.0, 1.0);
@@ -1317,11 +1321,14 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
 struct SurfaceParams {
     bounds: Bounds,
     content_mask: Bounds,
+    sampler_type: SamplerType,
 }
 
 @group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
 @group(1) @binding(1) var t_surface: texture_2d<f32>;
-@group(1) @binding(2) var s_surface: sampler;
+@group(1) @binding(2) var s_surface_linear: sampler;
+@group(1) @binding(3) var s_surface_nearest: sampler;
+
 
 struct SurfaceVarying {
     @builtin(position) position: vec4<f32>,
@@ -1346,7 +1353,13 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    return textureSampleLevel(t_surface, s_surface, input.texture_position, 0.0);
+    if (surface_locals.sampler_type == LINEAR_SAMPLER) {
+        return textureSampleLevel(t_surface, s_surface_linear, input.texture_position, 0.0);
+    }
+    else {
+        return textureSampleLevel(t_surface, s_surface_nearest, input.texture_position, 0.0);
+    }
+
 }
 
 // --- blur --- //

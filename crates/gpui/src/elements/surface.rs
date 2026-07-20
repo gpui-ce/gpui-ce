@@ -1,6 +1,6 @@
 use crate::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    ObjectFit, Pixels, Style, StyleRefinement, Styled, Window,
+    ObjectFit, Pixels, SamplerType, Style, StyleRefinement, Styled, Window,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::{DevicePixels, Size};
@@ -65,6 +65,7 @@ pub struct Surface {
     source: SurfaceSource,
     object_fit: ObjectFit,
     style: StyleRefinement,
+    sampler_type: Option<SamplerType>,
 }
 
 /// Create a new surface element.
@@ -73,6 +74,7 @@ pub fn surface(source: impl Into<SurfaceSource>) -> Surface {
         source: source.into(),
         object_fit: ObjectFit::Contain,
         style: Default::default(),
+        sampler_type: None,
     }
 }
 
@@ -80,6 +82,11 @@ impl Surface {
     /// Set the object fit for the image.
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.object_fit = object_fit;
+        self
+    }
+
+    pub fn sampler_type(mut self, sampler_type: SamplerType) -> Self {
+        self.sampler_type = Some(sampler_type);
         self
     }
 }
@@ -144,7 +151,7 @@ impl Element for Surface {
                 ref size,
             } => {
                 let new_bounds = self.object_fit.get_bounds(_bounds, *size);
-                _window.paint_surface(new_bounds, Arc::clone(texture), *size);
+                _window.paint_surface(new_bounds, Arc::clone(texture), *size, self.sampler_type);
             }
         }
     }
