@@ -39,8 +39,11 @@ or a test failure (see the output above). Fix it so the gate passes.
    committed).
 
 6. If an issue stems from the **root `Cargo.toml`** (a workspace dependency that must be added or
-   updated to match upstream's new requirements), fix it there using gpui-ce's sourcing convention
-   (git deps from `zed-industries/zed` for the crates listed above; crates.io versions otherwise).
+   updated to match upstream's new requirements — the sync merges crate trees but not the root
+   manifest, so new `[workspace.dependencies]` entries upstream added often need adding here), fix it
+   there using gpui-ce's sourcing convention: **path deps** (`{ path = "crates/gpui_*", package =
+   "gpui_*" }`) for the vendored crates, `zed-font-kit` for font-kit, and crates.io versions
+   otherwise. There are no longer any `zed-industries/zed` git deps.
 
 When finished, briefly summarize the fixes and anything a human should double-check (especially
 changes to macOS/Windows-only code that this host can't fully compile, and any tests you judged to
