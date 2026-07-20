@@ -56,6 +56,7 @@ struct SurfaceParams {
     bounds: PodBounds,
     content_mask: PodBounds,
     sampler_type: u32,
+    pad: u32,
 }
 
 /// Uniform passed to the blur pipelines. The same struct drives the downsample, separable
@@ -730,9 +731,9 @@ impl WgpuRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
+                        min_binding_size: dbg!(NonZeroU64::new(
                             std::mem::size_of::<SurfaceParams>() as u64
-                        ),
+                        )),
                     },
                     count: None,
                 },
@@ -1880,6 +1881,7 @@ impl WgpuRenderer {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
                 sampler_type: surface.sampler_type as u32,
+                pad: 0,
             };
 
             resources.queue.write_buffer(
