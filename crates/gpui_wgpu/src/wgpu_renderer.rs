@@ -731,9 +731,9 @@ impl WgpuRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: dbg!(NonZeroU64::new(
+                        min_binding_size: NonZeroU64::new(
                             std::mem::size_of::<SurfaceParams>() as u64
-                        )),
+                        ),
                     },
                     count: None,
                 },
