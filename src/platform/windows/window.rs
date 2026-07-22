@@ -884,6 +884,11 @@ impl PlatformWindow for WindowsWindow {
         self.state.renderer.borrow_mut().draw(scene).log_err();
     }
 
+    #[cfg(feature = "renderer-capture")]
+    fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+        self.state.renderer.borrow_mut().render_to_image(scene)
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.state.renderer.borrow().sprite_atlas()
     }
