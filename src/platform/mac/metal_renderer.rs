@@ -380,8 +380,12 @@ impl MetalRenderer {
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
-            let command_buffer =
-                self.draw_primitives(scene, &mut instance_buffer, drawable, viewport_size);
+            let command_buffer = self.draw_primitives(
+                scene,
+                &mut instance_buffer,
+                drawable.texture(),
+                viewport_size,
+            );
 
             match command_buffer {
                 Ok(command_buffer) => {
@@ -426,11 +430,92 @@ impl MetalRenderer {
         }
     }
 
+    /// Re-renders a GPUI scene into an offscreen Metal texture and reads it as RGBA pixels.
+    #[cfg(feature = "renderer-capture")]
+    pub fn render_to_image(&mut self, scene: &Scene) -> Result<image::RgbaImage> {
+        let drawable_size = self.layer.drawable_size();
+        let viewport_size: Size<DevicePixels> = size(
+            (drawable_size.width.ceil() as i32).into(),
+            (drawable_size.height.ceil() as i32).into(),
+        );
+        if viewport_size.width.0 <= 0 || viewport_size.height.0 <= 0 {
+            anyhow::bail!("cannot capture a zero-sized GPUI window");
+        }
+
+        self.update_path_intermediate_textures(viewport_size);
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(viewport_size.width.0 as u64);
+        descriptor.set_height(viewport_size.height.0 as u64);
+        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Managed);
+        let target_texture = self.device.new_texture(&descriptor);
+
+        loop {
+            let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+            match self.draw_primitives(scene, &mut instance_buffer, &target_texture, viewport_size)
+            {
+                Ok(command_buffer) => {
+                    let instance_buffer_pool = self.instance_buffer_pool.clone();
+                    let instance_buffer = Cell::new(Some(instance_buffer));
+                    let block = ConcreteBlock::new(move |_| {
+                        if let Some(instance_buffer) = instance_buffer.take() {
+                            instance_buffer_pool.lock().release(instance_buffer);
+                        }
+                    })
+                    .copy();
+                    command_buffer.add_completed_handler(&block);
+
+                    if !self.device.has_unified_memory() {
+                        let blit = command_buffer.new_blit_command_encoder();
+                        blit.synchronize_resource(&target_texture);
+                        blit.end_encoding();
+                    }
+                    command_buffer.commit();
+                    command_buffer.wait_until_completed();
+
+                    let width = viewport_size.width.0 as u32;
+                    let height = viewport_size.height.0 as u32;
+                    let bytes_per_row = width as usize * 4;
+                    let mut pixels = vec![0; height as usize * bytes_per_row];
+                    target_texture.get_bytes(
+                        pixels.as_mut_ptr().cast(),
+                        bytes_per_row as u64,
+                        metal::MTLRegion {
+                            origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                            size: metal::MTLSize {
+                                width: width as u64,
+                                height: height as u64,
+                                depth: 1,
+                            },
+                        },
+                        0,
+                    );
+
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                    }
+                    return image::RgbaImage::from_raw(width, height, pixels)
+                        .ok_or_else(|| anyhow::anyhow!("failed to construct captured GPUI image"));
+                }
+                Err(error) => {
+                    let mut pool = self.instance_buffer_pool.lock();
+                    if pool.buffer_size >= 256 * 1024 * 1024 {
+                        return Err(error);
+                    }
+                    let next_size = pool.buffer_size * 2;
+                    pool.reset(next_size);
+                }
+            }
+        }
+    }
+
     fn draw_primitives(
         &mut self,
         scene: &Scene,
         instance_buffer: &mut InstanceBuffer,
-        drawable: &metal::MetalDrawableRef,
+        target_texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
         let command_queue = self.command_queue.clone();
@@ -440,7 +525,7 @@ impl MetalRenderer {
 
         let mut command_encoder = new_command_encoder(
             command_buffer,
-            drawable,
+            target_texture,
             viewport_size,
             |color_attachment| {
                 color_attachment.set_load_action(metal::MTLLoadAction::Clear);
@@ -477,7 +562,7 @@ impl MetalRenderer {
 
                     command_encoder = new_command_encoder(
                         command_buffer,
-                        drawable,
+                        target_texture,
                         viewport_size,
                         |color_attachment| {
                             color_attachment.set_load_action(metal::MTLLoadAction::Load);
@@ -1168,7 +1253,7 @@ impl MetalRenderer {
 
 fn new_command_encoder<'a>(
     command_buffer: &'a metal::CommandBufferRef,
-    drawable: &'a metal::MetalDrawableRef,
+    target_texture: &'a metal::TextureRef,
     viewport_size: Size<DevicePixels>,
     configure_color_attachment: impl Fn(&RenderPassColorAttachmentDescriptorRef),
 ) -> &'a metal::RenderCommandEncoderRef {
@@ -1177,7 +1262,7 @@ fn new_command_encoder<'a>(
         .color_attachments()
         .object_at(0)
         .unwrap();
-    color_attachment.set_texture(Some(drawable.texture()));
+    color_attachment.set_texture(Some(target_texture));
     color_attachment.set_store_action(metal::MTLStoreAction::Store);
     configure_color_attachment(color_attachment);
 

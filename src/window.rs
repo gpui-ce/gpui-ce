@@ -1764,6 +1764,16 @@ impl Window {
         self.platform_window.bounds()
     }
 
+    /// Renders the current GPUI scene to an offscreen target and returns its RGBA pixels.
+    ///
+    /// Unlike a compositor screenshot, this captures only content rendered by GPUI and does not
+    /// require the window to be visible or grant operating-system screen-recording permission.
+    #[cfg(feature = "renderer-capture")]
+    pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
+        self.platform_window
+            .render_to_image(&self.rendered_frame.scene)
+    }
+
     /// Set the content size of the window.
     pub fn resize(&mut self, size: Size<Pixels>) {
         self.platform_window.resize(size);

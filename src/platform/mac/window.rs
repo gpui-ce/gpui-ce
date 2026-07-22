@@ -1474,6 +1474,12 @@ impl PlatformWindow for MacWindow {
         this.renderer.draw(scene);
     }
 
+    #[cfg(feature = "renderer-capture")]
+    fn render_to_image(&self, scene: &crate::Scene) -> anyhow::Result<image::RgbaImage> {
+        let mut this = self.0.lock();
+        this.renderer.render_to_image(scene)
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
     }
