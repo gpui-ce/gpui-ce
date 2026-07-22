@@ -305,6 +305,11 @@ impl DirectXRenderer {
             // and so likely do not have the textures anymore that are required for drawing
             return Ok(());
         }
+        self.draw_scene(scene)?;
+        self.present()
+    }
+
+    fn draw_scene(&mut self, scene: &Scene) -> Result<()> {
         self.pre_draw()?;
         for batch in scene.batches() {
             match batch {
@@ -337,7 +342,80 @@ impl DirectXRenderer {
                 scene.surfaces.len(),
             ))?;
         }
-        self.present()
+        Ok(())
+    }
+
+    #[cfg(feature = "renderer-capture")]
+    pub(crate) fn render_to_image(&mut self, scene: &Scene) -> Result<image::RgbaImage> {
+        if self.skip_draws {
+            anyhow::bail!("cannot capture while the Direct3D renderer is recovering");
+        }
+        if self.width == 0 || self.height == 0 {
+            anyhow::bail!("cannot capture a zero-sized GPUI window");
+        }
+
+        self.draw_scene(scene)?;
+
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let source = resources
+            .render_target
+            .as_ref()
+            .context("render target missing")?;
+
+        let mut staging = None;
+        let descriptor = D3D11_TEXTURE2D_DESC {
+            Width: self.width,
+            Height: self.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: RENDER_TARGET_FORMAT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+        unsafe {
+            devices
+                .device
+                .CreateTexture2D(&descriptor, None, Some(&mut staging))?;
+        }
+        let staging = staging.context("failed to create Direct3D capture staging texture")?;
+        unsafe {
+            devices.device_context.CopyResource(&staging, source);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            devices
+                .device_context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+        }
+
+        let bytes_per_row = self.width as usize * 4;
+        let mut pixels = vec![0; bytes_per_row * self.height as usize];
+        for row in 0..self.height as usize {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (mapped.pData as *const u8).add(mapped.RowPitch as usize * row),
+                    pixels.as_mut_ptr().add(bytes_per_row * row),
+                    bytes_per_row,
+                );
+            }
+        }
+        unsafe {
+            devices.device_context.Unmap(&staging, 0);
+        }
+
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        image::RgbaImage::from_raw(self.width, self.height, pixels)
+            .ok_or_else(|| anyhow::anyhow!("failed to construct captured GPUI image"))
     }
 
     pub(crate) fn resize(&mut self, new_size: Size<DevicePixels>) -> Result<()> {

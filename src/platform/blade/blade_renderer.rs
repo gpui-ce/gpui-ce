@@ -352,7 +352,7 @@ impl BladeRenderer {
     ) -> anyhow::Result<Self> {
         let surface_config = gpu::SurfaceConfig {
             size: config.size,
-            usage: gpu::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
             display_sync: gpu::DisplaySync::Recent,
             color_space: gpu::ColorSpace::Srgb,
             allow_exclusive_full_screen: false,
@@ -642,6 +642,18 @@ impl BladeRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        if let Err(error) = self.render(scene, false) {
+            log::error!("failed to render GPUI scene: {error:#}");
+        }
+    }
+
+    #[cfg(feature = "renderer-capture")]
+    pub fn render_to_image(&mut self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+        self.render(scene, true)?
+            .ok_or_else(|| anyhow::anyhow!("renderer capture did not produce an image"))
+    }
+
+    fn render(&mut self, scene: &Scene, capture: bool) -> anyhow::Result<Option<image::RgbaImage>> {
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 
@@ -907,15 +919,74 @@ impl BladeRenderer {
         }
         drop(pass);
 
-        self.command_encoder.present(frame);
+        let readback = if capture {
+            let format = self.surface.info().format;
+            match format {
+                gpu::TextureFormat::Rgba8Unorm
+                | gpu::TextureFormat::Rgba8UnormSrgb
+                | gpu::TextureFormat::Bgra8Unorm
+                | gpu::TextureFormat::Bgra8UnormSrgb => {}
+                _ => anyhow::bail!("unsupported Blade capture texture format: {format:?}"),
+            }
+
+            let size = self.surface_config.size;
+            if size.width == 0 || size.height == 0 {
+                anyhow::bail!("cannot capture a zero-sized GPUI window");
+            }
+            let bytes_per_row = size.width * 4;
+            let buffer = self.gpu.create_buffer(gpu::BufferDesc {
+                name: "GPUI renderer capture readback",
+                size: u64::from(bytes_per_row) * u64::from(size.height),
+                memory: gpu::Memory::Shared,
+            });
+            {
+                let mut transfer = self.command_encoder.transfer("GPUI renderer capture");
+                transfer.copy_texture_to_buffer(
+                    frame.texture().into(),
+                    buffer.into(),
+                    bytes_per_row,
+                    size,
+                );
+            }
+            Some((buffer, format, bytes_per_row))
+        } else {
+            self.command_encoder.present(frame);
+            None
+        };
+
         let sync_point = self.gpu.submit(&mut self.command_encoder);
 
         profiling::scope!("finish");
         self.instance_belt.flush(&sync_point);
         self.atlas.after_frame(&sync_point);
 
-        self.wait_for_gpu();
-        self.last_sync_point = Some(sync_point);
+        if let Some((buffer, format, bytes_per_row)) = readback {
+            while !self.gpu.wait_for(&sync_point, MAX_FRAME_TIME_MS) {}
+            self.gpu.sync_buffer(buffer);
+
+            let size = self.surface_config.size;
+            let byte_len = bytes_per_row as usize * size.height as usize;
+            let mut pixels =
+                unsafe { std::slice::from_raw_parts(buffer.data(), byte_len) }.to_vec();
+            self.gpu.destroy_buffer(buffer);
+
+            if matches!(
+                format,
+                gpu::TextureFormat::Bgra8Unorm | gpu::TextureFormat::Bgra8UnormSrgb
+            ) {
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+            }
+
+            image::RgbaImage::from_raw(size.width, size.height, pixels)
+                .map(Some)
+                .ok_or_else(|| anyhow::anyhow!("failed to construct captured GPUI image"))
+        } else {
+            self.wait_for_gpu();
+            self.last_sync_point = Some(sync_point);
+            Ok(None)
+        }
     }
 }
 
