@@ -243,6 +243,12 @@ features = [
   "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Media",
+  "Data",
+  "Data_Xml",
+  "Data_Xml_Dom",
+  "Win32_Storage_Packaging",
+  "Win32_Storage_Packaging_Appx",
+  "UI_Notifications",
 ]
 
 [workspace.lints.rust]
