@@ -45,6 +45,19 @@ or a test failure (see the output above). Fix it so the gate passes.
    "gpui_*" }`) for the vendored crates, `zed-font-kit` for font-kit, and crates.io versions
    otherwise. There are no longer any `zed-industries/zed` git deps.
 
+7. **Newly vendored crates need fork packaging applied.** When upstream adds a crate that this tool
+   tracks, it arrives as a *clean add* — no conflict, so no resolution pass adapted it, and it still
+   carries upstream's packaging verbatim. If a tracked crate directory is new in this merge, bring it
+   in line with its siblings before anything else: set `name` to the fork's `gpui_*` name (keeping
+   `[lib] name` as the upstream crate name so `use` sites are unchanged), match the siblings'
+   `version`/`edition`/`publish`/`description`/`repository`, convert workspace/git deps to gpui-ce's
+   sourcing convention (rule 6), add the crate to the root `Cargo.toml` members, and **set
+   `license = "Apache-2.0"`** — gpui-ce is Apache-only, and an upstream manifest may declare another
+   license (or contradict its own bundled license file). Also copy a sibling's `LICENSE-APACHE` file
+   into the new crate dir; upstream ships that as a symlink to a root file gpui-ce doesn't have, so
+   the link would dangle. Call out in your summary anything whose license looks non-Apache, and do
+   NOT silently vendor code that genuinely is — flag it for a human instead.
+
 When finished, briefly summarize the fixes and anything a human should double-check (especially
 changes to macOS/Windows-only code that this host can't fully compile, and any tests you judged to
 be failing for environmental rather than correctness reasons).
