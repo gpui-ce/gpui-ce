@@ -58,13 +58,34 @@ Synced 1:1 (same path): `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui
 Synced with **path remapping** — vendored + renamed by the fork (PR #91 removed the git sources):
 `gpui_collections`←`collections`, `gpui_sum_tree`←`sum_tree`, `gpui_refineable`←`refineable`,
 `gpui_derive_refineable`←`refineable/derive_refineable`, `gpui_scheduler`←`scheduler`,
-`gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_ce_util`←`gpui_util`. The merge preserves each
+`gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_ce_util`←`gpui_util`, `gpui_path`←`path`.
+The merge preserves each
 crate's gpui-ce adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
 conflict resolution while taking upstream's real changes — so upstream API additions land through the
 merge instead of being hand-ported during the build-fix pass.
 
 Left untouched: `crates/gpui_elements` (fork-only stub), `tooling/perf` (fork-only); `util_macros`
 is no longer used by the fork. The mapping lives in `TRACKED_CRATES` in `sync_upstream.py`.
+
+### Cross-crate file moves
+
+Upstream relocates code between crates (e.g. #61029 split `util/src/rel_path.rs` out into the new
+`crates/path`). Naively that reads as "upstream deleted a file the fork had modified", and the
+delete/modify policy would resurrect a stale duplicate of code that now lives elsewhere.
+
+Because **both sides of a vendor-history diff are already remapped to fork paths**, git's rename
+detection reports such a move directly in gpui-ce terms — `detect_moves()` runs
+`git diff -M<similarity> --diff-filter=R <prev vendor tip> <new tip>` and keeps the cross-directory
+hits (`crates/gpui_zed_util/src/rel_path.rs` → `crates/gpui_path/src/rel_path.rs`, detected at 61%
+similarity for #61029). Those moves then:
+
+- settle the resulting `UD` conflict as **accept the deletion** (the content arrived at the new path
+  in the same merge) instead of keeping the fork's now-orphaned copy, and
+- get handed to the resolution prompt (rule 8), which re-applies the fork's adaptations at the **new**
+  location and repoints `use`/`mod` references.
+
+Tune with `SYNC_MOVE_SIMILARITY` (default `40%`). A move that falls below the threshold simply
+degrades to the old behaviour — the fork's copy is kept and flagged for review, never lost.
 
 ## One-time bootstrap
 

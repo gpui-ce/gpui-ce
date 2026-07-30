@@ -11,7 +11,8 @@ monorepo (`zed-industries/zed`). Two groups:
 deps but now vendored in-tree by the fork:
 `collections`→`gpui_collections`, `sum_tree`→`gpui_sum_tree`, `refineable`→`gpui_refineable`,
 `refineable/derive_refineable`→`gpui_derive_refineable`, `scheduler`→`gpui_scheduler`,
-`media`→`gpui_media`, `util`→`gpui_zed_util`, `gpui_util`→`gpui_ce_util`. The sync remaps upstream's
+`media`→`gpui_media`, `util`→`gpui_zed_util`, `gpui_util`→`gpui_ce_util`, `path`→`gpui_path`.
+The sync remaps upstream's
 content into these fork dirs, so a conflict here is upstream's version of the crate vs. the fork's
 vendored+adapted version. Preserve the fork's adaptations (see rule 4) while taking upstream's real
 changes. (`util_macros` is no longer used by the fork; `gpui_elements` and `tooling/perf` are
@@ -69,11 +70,19 @@ edits land as a **separate, reviewable resolution commit** diffed against that r
    (files gpui-ce deleted that upstream changed are kept deleted) before calling you, so you
    only ever see content conflicts. Don't recreate a deleted file.
 
-8. **Do not** run `git commit`, `git merge`, `git rebase`, or `git push`. Only edit files to
+8. **Relocated files.** When upstream MOVES a file to another crate, the prompt lists it above as
+   `old path → new path`. The script has already deleted the old path and the merge has already
+   brought in the new one, so the code is not lost — but any **gpui-ce adaptation that lived in the
+   old file is**. For each listed move: diff what the fork had at the old path against what arrived
+   at the new one, re-apply the fork's adaptations (rule 4) at the NEW location, and update every
+   `use`/`mod`/path reference to point there. Never leave the old copy behind alongside the new one —
+   a duplicated type is worse than either version alone. Do **not** re-create the old file.
+
+9. **Do not** run `git commit`, `git merge`, `git rebase`, or `git push`. Only edit files to
    resolve the conflicts — the surrounding script stages and commits. Do not change anything
    unrelated to the conflicts.
 
-9. **No scratch files in the repo.** If you need to save a base/upstream/fork copy of a file to
+10. **No scratch files in the repo.** If you need to save a base/upstream/fork copy of a file to
    diff it, write it under `/tmp`, never inside the working tree (a stray `.merge_tmp/` or similar
    would be committed). Resolve strictly by editing the conflicted files in place.
 

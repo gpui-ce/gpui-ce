@@ -87,6 +87,10 @@ TRACKED_CRATES: dict[str, str] = {
     "gpui_media": "media",
     "gpui_zed_util": "util",
     "gpui_ce_util": "gpui_util",
+    # Created mid-range by upstream's "Split out `RelPath` into a separate crate" (#61029),
+    # which MOVED crates/util/src/rel_path.rs into it. Tracked so the split arrives through the
+    # merge (see MOVE detection below) instead of leaving a stale duplicate in gpui_zed_util.
+    "gpui_path": "path",
 }
 
 VENDOR_BRANCH: str = _env("SYNC_VENDOR_BRANCH", "vendor/zed-gpui")
@@ -302,8 +306,39 @@ def build_vendor_history(parent: str, frm: str, to: str) -> str:
     return prev
 
 
+# cross-crate file moves
+# Upstream regularly relocates code between crates (e.g. #61029 split crates/util/src/rel_path.rs
+# out into the new crates/path). Because BOTH sides of a vendor-history diff are already remapped
+# to this fork's paths, git's rename detection reports such a move in fork terms
+# (crates/gpui_zed_util/src/rel_path.rs -> crates/gpui_path/src/rel_path.rs) — which is exactly
+# what's needed to settle the resulting delete/modify conflict correctly.
+MOVE_SIMILARITY: str = _env("SYNC_MOVE_SIMILARITY", "40%")
+
+
+def detect_moves(base: str, tip: str) -> dict[str, str]:
+    """Map old fork path -> new fork path for files upstream relocated across tracked crates.
+
+    Only cross-directory moves are reported; a pure in-place rewrite isn't a move.
+    """
+    out = gout("diff", f"-M{MOVE_SIMILARITY}", "--name-status", "--diff-filter=R", base, tip)
+    moves: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        _, old, new = parts
+        if os.path.dirname(old) != os.path.dirname(new):
+            moves[old] = new
+    for old, new in moves.items():
+        log(f"  upstream moved {old} → {new}")
+    if moves:
+        ok(f"detected {len(moves)} cross-crate file move(s) in this range")
+    return moves
+
+
 # claude invocation
-def render_prompt(kind: str, files: list[str], issue: str = "") -> str:
+def render_prompt(kind: str, files: list[str], issue: str = "",
+                  moves: dict[str, str] | None = None) -> str:
     if kind == "resolve":
         head = (
             "You are resolving git merge conflicts from syncing upstream Zed's GPUI crates "
@@ -313,8 +348,17 @@ def render_prompt(kind: str, files: list[str], issue: str = "") -> str:
             "isolation, so resolve faithfully."
         )
         listing = "\n".join(f"  - {f}" for f in files)
+        moves_block = ""
+        if moves:
+            relocated = "\n".join(f"  - {old} → {new}" for old, new in moves.items())
+            moves_block = (
+                "\n\nUpstream RELOCATED these files across crates in this range (the old path has\n"
+                "already been removed for you; the new one arrived via the merge). Carry any gpui-ce\n"
+                "adaptation that lived in the old file over to the new location, and make sure nothing\n"
+                "still refers to the old path:\n" + relocated
+            )
         body = (SCRIPT_DIR / "resolve-conflicts.prompt.md").read_text()
-        return f"{head}\n\nConflicted / unresolved files:\n{listing}\n\n{body}"
+        return f"{head}\n\nConflicted / unresolved files:\n{listing}{moves_block}\n\n{body}"
     head = (
         f"You are fixing {issue or 'build issues'} that the upstream Zed GPUI merge introduced "
         "in `gpui-ce`. The merge is already committed; fix only what the merge/sync caused."
@@ -368,11 +412,15 @@ def has_unresolved() -> bool:
     return bool(_unmerged()) or bool(_marker_files())
 
 
-def auto_resolve_add_delete() -> None:
+def auto_resolve_add_delete(moves: dict[str, str] | None = None) -> None:
     """Settle add/delete conflicts claude can't express via edits:
     DU = deleted by us (gpui-ce), modified by them -> keep gpui-ce's deletion;
-    UD = modified by us, deleted by them            -> keep gpui-ce's version (flag).
+    UD = modified by us, deleted by them            -> keep gpui-ce's version (flag),
+         UNLESS upstream merely RELOCATED the file to another tracked crate, in which case
+         the deletion is accepted (the content arrived at the new path via this same merge)
+         and claude is told to carry the fork's adaptations across.
     """
+    moves = moves or {}
     handled = False
     for line in gout("status", "--porcelain").splitlines():
         if len(line) < 4:
@@ -383,14 +431,19 @@ def auto_resolve_add_delete() -> None:
             run_git("rm", "-q", "--force", "--", path, check=False)
             handled = True
         elif code == "UD":
-            warn(f"  delete/modify — upstream deleted {path}; keeping gpui-ce's version (review)")
-            run_git("add", "--", path, check=False)
+            dest = moves.get(path)
+            if dest and (REPO_ROOT / dest).exists():
+                log(f"  delete/modify — upstream MOVED {path} → {dest}; accepting the deletion")
+                run_git("rm", "-q", "--force", "--", path, check=False)
+            else:
+                warn(f"  delete/modify — upstream deleted {path}; keeping gpui-ce's version (review)")
+                run_git("add", "--", path, check=False)
             handled = True
     if handled:
         ok("auto-resolved add/delete conflicts")
 
 
-def resolve_conflicts_loop(branch: str) -> None:
+def resolve_conflicts_loop(branch: str, moves: dict[str, str] | None = None) -> None:
     attempt = 0
     while has_unresolved():
         attempt += 1
@@ -404,7 +457,7 @@ def resolve_conflicts_loop(branch: str) -> None:
         log(f"claude conflict-resolution pass {attempt}/{RT.retries} ({before} file(s) remaining)")
         for path in files:
             print(f"    {_D}conflict:{_Z} {path}")
-        run_claude(render_prompt("resolve", files))
+        run_claude(render_prompt("resolve", files, moves=moves))
         # Stage only tracked updates (resolves the conflicted files). NOT `-A`: conflict
         # resolution edits existing files, so any new untracked file is claude's scratch
         # (e.g. saved base/upstream copies for diffing) and must not be swept into the commit.
@@ -615,6 +668,10 @@ def cmd_sync(ref: str | None) -> None:
     if vnew == vendor_tip:
         warn("no gpui-touching upstream commits in range — only deps will be updated")
 
+    # Both sides are already remapped to fork paths, so this reports upstream's cross-crate
+    # relocations in gpui-ce terms — used to settle delete/modify conflicts as moves.
+    moves = detect_moves(vendor_tip, vnew)
+
     branch = f"sync/zed-{datetime.now(timezone.utc):%Y%m%d}-{target[:7]}"
     run_git("switch", "-C", branch, capture=False)
     ok(f"working on branch '{branch}'")
@@ -653,7 +710,7 @@ def cmd_sync(ref: str | None) -> None:
         if not gok("rev-parse", "-q", "--verify", "MERGE_HEAD"):
             die("git merge failed without conflicts to resolve; aborting")
         # Settle deterministic add/delete conflicts (kept out of the LLM step).
-        auto_resolve_add_delete()
+        auto_resolve_add_delete(moves)
         nconf = len(conflicted_files())
         # Commit 1: the RAW merge — auto-merges applied, conflict markers committed in.
         run_git("add", "-A")
@@ -662,7 +719,7 @@ def cmd_sync(ref: str | None) -> None:
         if nconf > 0:
             # Commit 2: claude's resolution of the markers — reviewable as an isolated diff.
             warn("resolving conflict markers with claude…")
-            resolve_conflicts_loop(branch)
+            resolve_conflicts_loop(branch, moves)
             run_git("commit", "-m", resolution_msg)
             ok("committed conflict resolution (separate, reviewable commit)")
         else:
