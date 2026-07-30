@@ -299,7 +299,6 @@ struct SpawnOptions<'a> {
     stdout_cfg: Stdio,
     stderr_cfg: Stdio,
     kill_on_drop: bool,
-<<<<<<< HEAD
 }
 
 fn spawn_posix_spawn(options: SpawnOptions<'_>) -> io::Result<Child> {
@@ -313,9 +312,6 @@ fn spawn_posix_spawn(options: SpawnOptions<'_>) -> io::Result<Child> {
         stderr_cfg,
         kill_on_drop,
     } = options;
-    let program_cstr = CString::new(program.as_bytes()).map_err(|_| invalid_input_error())?;
-=======
-) -> io::Result<Child> {
     // posix_spawnp resolves programs against the parent's cwd/PATH, not the child's.
     let resolved_program = if program.as_bytes().contains(&b'/') {
         std::path::absolute(current_dir.join(program)).map_or_else(
@@ -335,7 +331,6 @@ fn spawn_posix_spawn(options: SpawnOptions<'_>) -> io::Result<Child> {
     };
     let program_cstr = CString::new(resolved_program).map_err(|_| invalid_input_error())?;
     let argv0_cstr = CString::new(program.as_bytes()).map_err(|_| invalid_input_error())?;
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
     let current_dir_cstr =
         CString::new(current_dir.as_os_str().as_bytes()).map_err(|_| invalid_input_error())?;

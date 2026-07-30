@@ -435,7 +435,6 @@ impl DirectXRenderer {
 
         self.upload_scene_buffers(scene)?;
 
-<<<<<<< HEAD
         // Only route through the offscreen scene texture when the scene contains blur filters;
         // otherwise render straight to the swapchain exactly as before.
         let use_offscreen =
@@ -486,13 +485,11 @@ impl DirectXRenderer {
             bool,
         )> = Vec::new();
 
-=======
         let annotation = self
             .devices
             .as_ref()
             .and_then(|devices| devices.annotation.clone())
             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
         for batch in scene.batches() {
             let _annotation = annotation
                 .as_ref()

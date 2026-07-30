@@ -145,65 +145,6 @@ impl Render for ImageShowcase {
 
 actions!(image, [Quit]);
 
-<<<<<<< HEAD:crates/gpui/examples/legacy/image/image.rs
-=======
-fn run_example() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    #[cfg(not(target_family = "wasm"))]
-    let app = gpui_platform::application();
-    #[cfg(target_family = "wasm")]
-    let app = gpui_platform::application();
-    app.with_assets(Assets {
-        base: manifest_dir.join("examples"),
-    })
-    .run(move |cx: &mut App| {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let http_client = ReqwestClient::user_agent("gpui example").unwrap();
-            cx.set_http_client(Arc::new(http_client));
-        }
-
-        cx.activate(true);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus(vec![Menu {
-            name: "Image".into(),
-            items: vec![MenuItem::action("Quit", Quit)],
-            disabled: false,
-        }]);
-
-        let window_options = WindowOptions {
-            titlebar: Some(TitlebarOptions {
-                title: Some(SharedString::from("Image Example")),
-                appears_transparent: false,
-                ..Default::default()
-            }),
-
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                size: size(px(1100.), px(600.)),
-                origin: Point::new(px(200.), px(200.)),
-            })),
-
-            ..Default::default()
-        };
-
-        cx.open_window(window_options, |_, cx| {
-            cx.new(|_| ImageShowcase {
-                // Relative path to your root project path
-                local_resource: manifest_dir
-                    .join("examples/image/exif-orientation-rotate-180.jpg")
-                    .into(),
-                remote_resource: "https://picsum.photos/800/400".into(),
-                asset_resource: "image/color.svg".into(),
-            })
-        })
-        .unwrap();
-    });
-}
-
-#[cfg(not(target_family = "wasm"))]
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592:crates/gpui/examples/image/image.rs
 fn main() {
     env_logger::init();
 

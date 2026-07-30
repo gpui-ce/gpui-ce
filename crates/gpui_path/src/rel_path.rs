@@ -185,11 +185,6 @@ impl RelPath {
     }
 
     pub fn ends_with(&self, other: &Self) -> bool {
-<<<<<<< HEAD:crates/gpui_zed_util/src/rel_path.rs
-        self.0
-            .strip_suffix(&other.0)
-            .is_some_and(|suffix| suffix.ends_with('/') || suffix.is_empty())
-=======
         if other.is_empty() {
             return true;
         }
@@ -201,7 +196,6 @@ impl RelPath {
             }
         }
         false
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592:crates/gpui_path/src/rel_path.rs
     }
 
     pub fn strip_prefix<'a>(&'a self, other: &Self) -> Result<&'a Self, StripPrefixError> {
@@ -405,15 +399,9 @@ impl PartialOrd for RelPathBuf {
     }
 }
 
-<<<<<<< HEAD:crates/gpui_zed_util/src/rel_path.rs
-impl From<RelPathBuf> for Arc<RelPath> {
-    fn from(value: RelPathBuf) -> Self {
-        Arc::from(value.as_rel_path())
-=======
 impl Ord for RelPathBuf {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_rel_path().cmp(other.as_rel_path())
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592:crates/gpui_path/src/rel_path.rs
     }
 }
 
@@ -762,13 +750,6 @@ mod tests {
     #[test]
     fn test_rel_path_partial_ord_is_compatible_with_std() {
         let test_cases = ["a/b/c", "relative/path/with/dot.", "relative/path/with.dot"];
-<<<<<<< HEAD:crates/gpui_zed_util/src/rel_path.rs
-        for [lhs, rhs] in test_cases.iter().array_combinations::<2>() {
-            assert_eq!(
-                Path::new(lhs).cmp(Path::new(rhs)),
-                RelPath::unix(lhs).unwrap().cmp(RelPath::unix(rhs).unwrap())
-            );
-=======
         for (i, lhs) in test_cases.iter().enumerate() {
             for rhs in &test_cases[i + 1..] {
                 assert_eq!(
@@ -781,7 +762,6 @@ mod tests {
                     rhs,
                 );
             }
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592:crates/gpui_path/src/rel_path.rs
         }
     }
 

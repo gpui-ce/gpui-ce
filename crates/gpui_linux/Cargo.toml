@@ -19,7 +19,6 @@ wayland = [
   "gpui_wgpu",
   "ashpd/wayland",
 
-<<<<<<< HEAD
   "calloop-wayland-source",
   "wayland-backend",
   "wayland-client",
@@ -28,50 +27,22 @@ wayland = [
   "wayland-protocols-plasma",
   "wayland-protocols-wlr",
   "filedescriptor",
-  "xkbcommon",
+  "xkbcommon/wayland",
   "open",
   "gpui/wayland",
-=======
-    "calloop-wayland-source",
-    "wayland-backend",
-    "wayland-client",
-    "wayland-cursor",
-    "wayland-protocols",
-    "wayland-protocols-plasma",
-    "wayland-protocols-wlr",
-    "filedescriptor",
-    "xkbcommon/wayland",
-    "open",
-    "gpui/wayland",
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 ]
 x11 = [
   "gpui_wgpu",
   "ashpd",
 
-<<<<<<< HEAD
   "as-raw-xcb-connection",
   "x11rb",
-  "xkbcommon",
+  "xkbcommon/x11",
   "xim",
   "x11-clipboard",
   "filedescriptor",
   "open",
   "scap?/x11",
-=======
-    "as-raw-xcb-connection",
-    "x11rb",
-    "xkbcommon/x11",
-    "xim",
-    "x11-clipboard",
-    "filedescriptor",
-    "open",
-    "scap?/x11",
-]
-screen-capture = [
-    "gpui/screen-capture",
-    "scap",
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 ]
 screen-capture = ["gpui/screen-capture", "scap"]
 
@@ -115,29 +86,16 @@ swash.workspace = true
 bitflags = { workspace = true, optional = true }
 filedescriptor = { version = "0.8.2", optional = true }
 open = { version = "5.2.0", optional = true }
-<<<<<<< HEAD
-xkbcommon = { version = "0.8.0", features = [
-  "wayland",
-  "x11",
-], optional = true }
-=======
 xkbcommon = { version = "0.8.0", default-features = false, optional = true }
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
 # Screen capture
 scap = { workspace = true, optional = true }
 
 # Wayland
 calloop-wayland-source = { version = "0.4.1", optional = true }
-<<<<<<< HEAD
-wayland-backend = { version = "0.3.3", features = [
+wayland-backend = { version = "0.3.15", features = [
   "client_system",
   "dlopen",
-=======
-wayland-backend = { version = "0.3.15", features = [
-    "client_system",
-    "dlopen",
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 ], optional = true }
 wayland-client = { version = "0.31.11", optional = true }
 wayland-cursor = { version = "0.31.11", optional = true }

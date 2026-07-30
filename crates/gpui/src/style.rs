@@ -8,13 +8,8 @@ use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-<<<<<<< HEAD
     PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
-    Window, black, phi, point, quad, rems, size,
-=======
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
-    point, px, quad, rems, size,
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
+    Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -370,7 +365,39 @@ pub struct BoxShadow {
     pub inset: bool,
 }
 
-<<<<<<< HEAD
+impl BoxShadow {
+    /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
+    /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
+    /// spread radius, and inset.
+    pub fn new(offset_x: Pixels, offset_y: Pixels, color: Hsla) -> Self {
+        Self {
+            color,
+            offset: point(offset_x, offset_y),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: false,
+        }
+    }
+
+    /// Sets the shadow blur radius.
+    pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
+        self.blur_radius = blur_radius;
+        self
+    }
+
+    /// Sets the shadow spread radius.
+    pub fn spread_radius(mut self, spread_radius: Pixels) -> Self {
+        self.spread_radius = spread_radius;
+        self
+    }
+
+    /// Marks the shadow as inset (drawn inside the element's bounds).
+    pub fn inset(mut self) -> Self {
+        self.inset = true;
+        self
+    }
+}
+
 /// A graphical filter that can be applied either to an element's own content
 /// (via [`Styled::filter`], like CSS `filter`) or to the content rendered behind
 /// it (via [`Styled::backdrop_filter`], like CSS `backdrop-filter`).
@@ -415,41 +442,6 @@ pub enum ScaledFilter {
     Blur(ScaledPixels),
 }
 
-=======
-impl BoxShadow {
-    /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
-    /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
-    /// spread radius, and inset.
-    pub fn new(offset_x: Pixels, offset_y: Pixels, color: Hsla) -> Self {
-        Self {
-            color,
-            offset: point(offset_x, offset_y),
-            blur_radius: px(0.),
-            spread_radius: px(0.),
-            inset: false,
-        }
-    }
-
-    /// Sets the shadow blur radius.
-    pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
-        self.blur_radius = blur_radius;
-        self
-    }
-
-    /// Sets the shadow spread radius.
-    pub fn spread_radius(mut self, spread_radius: Pixels) -> Self {
-        self.spread_radius = spread_radius;
-        self
-    }
-
-    /// Marks the shadow as inset (drawn inside the element's bounds).
-    pub fn inset(mut self) -> Self {
-        self.inset = true;
-        self
-    }
-}
-
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 /// How to handle whitespace in text
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum WhiteSpace {

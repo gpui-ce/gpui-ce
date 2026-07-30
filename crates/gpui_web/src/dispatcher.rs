@@ -161,7 +161,7 @@ pub struct WebDispatcher {
 }
 
 impl WebDispatcher {
-    pub fn new(browser_window: web_sys::Window, _allow_threads: bool) -> Self {
+    pub fn new(browser_window: web_sys::Window, allow_threads: bool) -> Self {
         #[cfg(feature = "multithreaded")]
         let (background_sender, background_receiver) = PriorityQueueReceiver::new();
         #[cfg(not(feature = "multithreaded"))]
@@ -169,17 +169,10 @@ impl WebDispatcher {
 
         let main_thread_mailbox = Arc::new(MainThreadMailbox::new());
 
-<<<<<<< HEAD
-        #[cfg(feature = "multithreaded")]
-        let supports_threads = _allow_threads && shared_memory_supported();
-        #[cfg(not(feature = "multithreaded"))]
-        let supports_threads = false;
-=======
         let supports_threads = cfg!(feature = "multithreaded")
             && allow_threads
             && shared_memory_supported()
             && wait_async_supported();
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
         if supports_threads {
             main_thread_mailbox.run_waker_loop(browser_window.clone());

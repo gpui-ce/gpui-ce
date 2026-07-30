@@ -608,9 +608,11 @@ impl PrelayoutState {
                     text.clone(),
                     &text_style,
                     font_size,
+                    line_height,
                     wrap_width,
                     &truncation,
                     &runs,
+                    window,
                     cx,
                 );
                 let text_len = text.len();

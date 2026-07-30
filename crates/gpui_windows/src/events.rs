@@ -1,15 +1,9 @@
-<<<<<<< HEAD
 #[cfg(feature = "wgpu")]
 use crate::window::RawWindow;
-use ::util::ResultExt;
-use anyhow::Context as _;
-use std::{rc::Rc, sync::atomic::Ordering};
-=======
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
 use anyhow::Context as _;
 use gpui_util::ResultExt;
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 use windows::{
     Win32::{
         Foundation::*,
@@ -1342,8 +1336,8 @@ impl WindowsWindowInner {
                 self.state.callbacks.input.set(Some(func));
             }
         }
-<<<<<<< HEAD
-        let force_render = force_render || self.state.force_render_after_recovery.take();
+
+        let force_render = force_render || self.state.force_render_pending.take();
         #[cfg(not(feature = "wgpu"))]
         {
             if force_render {
@@ -1351,14 +1345,6 @@ impl WindowsWindowInner {
                 // will rebuild the scene with fresh atlas textures.
                 self.state.renderer.borrow_mut().mark_drawable();
             }
-=======
-
-        let force_render = force_render || self.state.force_render_pending.take();
-        if force_render {
-            // Re-enable drawing after a device loss recovery. The forced render
-            // will rebuild the scene with fresh atlas textures.
-            self.state.renderer.borrow_mut().mark_drawable();
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
         }
         request_frame(RequestFrameOptions {
             require_presentation: false,

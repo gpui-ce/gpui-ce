@@ -903,15 +903,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn start_window_resize(&self, _edge: ResizeEdge) {}
-<<<<<<< HEAD
-    fn set_input_region(&self, _rects: &[Bounds<Pixels>]) {}
-    fn set_exclusive_zone(&self, _zone: Pixels) {}
-=======
     fn set_exclusive_zone(&self, _zone: Pixels) {}
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     fn set_exclusive_edge(&self, _edge: layer_shell::Anchor) {}
     fn set_input_region(&self, _region: Option<&[Bounds<Pixels>]>) {}
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
@@ -2735,7 +2730,7 @@ mod image_tests {
     fn test_image_to_image_data_applies_exif_orientation() {
         let image = Image::from_bytes(
             ImageFormat::Jpeg,
-            include_bytes!("../examples/image/exif-orientation-rotate-180.jpg").to_vec(),
+            include_bytes!("../examples/legacy/image/exif-orientation-rotate-180.jpg").to_vec(),
         );
 
         let render_image = image.to_image_data(SvgRenderer::new(Arc::new(()))).unwrap();

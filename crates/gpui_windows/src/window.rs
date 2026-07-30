@@ -125,14 +125,9 @@ impl WindowsWindowState {
         display: WindowsDisplay,
         min_size: Option<Size<Pixels>>,
         appearance: WindowAppearance,
-<<<<<<< HEAD
         #[cfg(not(feature = "wgpu"))] disable_direct_composition: bool,
         #[cfg(not(feature = "wgpu"))] invalidate_devices: Arc<AtomicBool>,
-=======
-        disable_direct_composition: bool,
-        invalidate_devices: Arc<AtomicBool>,
         draw_coordinator: Rc<DrawCoordinator>,
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
     ) -> Result<Self> {
         let scale_factor = {
             let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
@@ -1119,7 +1114,7 @@ impl PlatformWindow for WindowsWindow {
                     }
                 }
 
-                self.state.force_render_after_recovery.set(true);
+                self.state.force_render_pending.set(true);
                 return;
             }
             if !renderer.draw(scene) {
@@ -1127,7 +1122,7 @@ impl PlatformWindow for WindowsWindow {
             }
 
             if renderer.needs_redraw() {
-                self.state.force_render_after_recovery.set(true);
+                self.state.force_render_pending.set(true);
             }
         }
     }

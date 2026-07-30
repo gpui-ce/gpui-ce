@@ -72,13 +72,10 @@ pub(crate) struct WindowsPlatformState {
     pub(crate) current_cursor: Cell<Option<HCURSOR>>,
     /// Shared with each window so `WM_SETCURSOR` can read it directly.
     pub(crate) cursor_visible: Arc<AtomicBool>,
-<<<<<<< HEAD
-    #[cfg(not(feature = "wgpu"))]
-=======
     /// Shared with each window to coordinate draws across windows on the UI
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: RefCell<Option<DirectXDevices>>,
 }
 
@@ -105,11 +102,8 @@ impl WindowsPlatformState {
             jump_list: RefCell::new(jump_list),
             current_cursor: Cell::new(current_cursor),
             cursor_visible: Arc::new(AtomicBool::new(true)),
-<<<<<<< HEAD
-            #[cfg(not(feature = "wgpu"))]
-=======
             draw_coordinator: Rc::new(DrawCoordinator::new()),
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
+            #[cfg(not(feature = "wgpu"))]
             directx_devices: RefCell::new(directx_devices),
             menus: RefCell::new(Vec::new()),
         }
@@ -1130,9 +1124,6 @@ impl WindowsPlatformInner {
         Some(0)
     }
 
-<<<<<<< HEAD
-    #[cfg(not(feature = "wgpu"))]
-=======
     fn handle_power_broadcast(&self, wparam: WPARAM) -> Option<isize> {
         if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
             self.with_callback(|callbacks| &callbacks.system_wake, |callback| callback());
@@ -1140,7 +1131,7 @@ impl WindowsPlatformInner {
         Some(1)
     }
 
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
+    #[cfg(not(feature = "wgpu"))]
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };

@@ -15,7 +15,6 @@ doctest = false
 test-support = []
 
 [dependencies]
-<<<<<<< HEAD
 async-task = "4.7"
 backtrace = "0.3.76"
 chrono = { version = "0.4.42", features = ["serde"] }
@@ -24,13 +23,3 @@ futures = "0.3.32"
 parking_lot = "0.12.5"
 rand = "0.9.4"
 web-time = "1.1.0"
-=======
-async-task.workspace = true
-backtrace.workspace = true
-chrono.workspace = true
-flume.workspace = true
-futures.workspace = true
-parking_lot.workspace = true
-rand.workspace = true
-web-time.workspace = true
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592

@@ -498,14 +498,6 @@ impl WaylandSurfaceState {
         }
     }
 
-    fn set_exclusive_zone(&self, zone: i32) {
-        if let WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) =
-            self
-        {
-            layer_surface.set_exclusive_zone(zone);
-        }
-    }
-
     fn destroy(&mut self) {
         match self {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState {
@@ -1802,22 +1794,6 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
-<<<<<<< HEAD
-    fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
-        let state = self.borrow();
-        if rects.is_empty() {
-            state.surface.set_input_region(None);
-        } else {
-            let region = state
-                .globals
-                .compositor
-                .create_region(&state.globals.qh, ());
-            rects
-                .iter()
-                .map(|rect| rect.map(|pixels| f32::from(pixels) as i32))
-                .for_each(|rect| {
-                    region.add(
-=======
     fn set_exclusive_zone(&self, zone: Pixels) {
         let state = self.borrow();
         if state
@@ -1854,26 +1830,10 @@ impl PlatformWindow for WaylandWindow {
                 for rect in rects {
                     let rect = rect.map(|pixels| f32::from(pixels) as i32);
                     wl_region.add(
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
                         rect.origin.x,
                         rect.origin.y,
                         rect.size.width,
                         rect.size.height,
-<<<<<<< HEAD
-                    )
-                });
-            state.surface.set_input_region(Some(&region));
-            region.destroy();
-        }
-        state.surface.commit();
-    }
-
-    fn set_exclusive_zone(&self, zone: Pixels) {
-        let state = self.borrow();
-        state
-            .surface_state
-            .set_exclusive_zone(f32::from(zone) as i32);
-=======
                     );
                 }
                 state.surface.set_input_region(Some(&wl_region));
@@ -1884,7 +1844,6 @@ impl PlatformWindow for WaylandWindow {
         // Commit so the new input region applies immediately. Otherwise it
         // waits for the next frame, which could be the very click we want to
         // allow passing through.
->>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
         state.surface.commit();
     }
 

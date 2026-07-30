@@ -19,6 +19,7 @@ members = [
   "./crates/gpui_media/",
   "./crates/gpui_zed_util/",
   "./crates/gpui_ce_util/",
+  "./crates/gpui_path/",
   "./tooling/perf/",
 ]
 default-members = ["./crates/gpui/"]
@@ -34,14 +35,25 @@ homepage = "https://gpui-ce.github.io/"
 readme = "README.md"
 
 [workspace.dependencies]
-accesskit = "0.24.0"
+accesskit = { version = "0.24.0", features = ["enumn"] }
 accesskit_macos = "0.26.0"
 accesskit_unix = "0.22.0"
 accesskit_windows = "0.32.1"
 anyhow = "1.0.86"
+async-task = "4.7"
 backtrace = "0.3"
 bitflags = "2.6.0"
 collections = { path = "crates/gpui_collections", version = "0.2.2", package = "gpui_collections" }
+dunce = "1.0"
+etagere = "0.2"
+heapless = "0.9.2"
+pathfinder_geometry = "0.5"
+raw-window-handle = "0.6"
+swash = "0.2.6"
+tempfile = "3.20.0"
+unicode-bidi = { version = "0.3.18", default-features = false, features = [
+  "hardcoded-data",
+] }
 ctor = "1.0.6"
 derive_more = { version = "2.1.1", features = [
   "add",
@@ -85,13 +97,47 @@ pollster = "0.4.0"
 url = "2.2"
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
 web-time = "1.1.0"
+block = "0.1"
+block2 = "0.6"
+cbindgen = { version = "0.28.0", default-features = false }
 cocoa = "=0.26.0"
 cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
+core-graphics = "0.24"
+core-text = "21"
 core-video = { version = "0.5.2", features = ["metal"] }
+foreign-types = "0.5"
 media = { path = "crates/gpui_media", version = "0.2.2", package = "gpui_media" }
 objc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+  "NSArray",
+  "NSAttributedString",
+  "NSBundle",
+  "NSCoder",
+  "NSData",
+  "NSDate",
+  "NSDictionary",
+  "NSEnumerator",
+  "NSError",
+  "NSGeometry",
+  "NSNotification",
+  "NSNull",
+  "NSObjCRuntime",
+  "NSObject",
+  "NSProcessInfo",
+  "NSRange",
+  "NSRunLoop",
+  "NSSet",
+  "NSString",
+  "NSURL",
+  "NSUndoManager",
+  "NSValue",
+  "objc2-core-foundation",
+  "std",
+] }
+objc2-user-notifications = "0.3"
 mach2 = "0.5"
 metal = "0.33"
 scap = { version = "0.0.8-zed", package = "zed-scap", default-features = false }
@@ -99,6 +145,10 @@ env_logger = "0.11"
 unicode-segmentation = "1.10"
 
 wasm-bindgen = "0.2.120"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1.7"
+notify-rust = "4"
 heck = "0.5"
 proc-macro2 = "1.0.93"
 syn = { version = "2.0.101", features = ["full", "extra-traits", "visit-mut"] }
