@@ -16,5 +16,11 @@ doctest = false
 test-support = []
 
 [dependencies]
+<<<<<<< HEAD
 indexmap = { version = "2", features = ["serde"] }
 rustc-hash = "2"
+=======
+indexmap.workspace = true
+rustc-hash.workspace = true
+gpui_util.workspace = true
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592

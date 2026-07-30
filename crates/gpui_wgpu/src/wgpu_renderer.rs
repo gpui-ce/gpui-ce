@@ -1189,7 +1189,10 @@ impl WgpuRenderer {
             self.surface_config.height = clamped_height.max(1);
             let surface_config = self.surface_config.clone();
 
+<<<<<<< HEAD
             // GPU resources may not exist yet, skip rather than panicking
+=======
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
             let Some(resources) = self.resources.as_mut() else {
                 return;
             };
@@ -1312,7 +1315,9 @@ impl WgpuRenderer {
             let surface_config = self.surface_config.clone();
             let path_sample_count = self.rendering_params.path_sample_count;
             let dual_source_blending = self.dual_source_blending;
-            let resources = self.resources_mut();
+            let Some(resources) = self.resources.as_mut() else {
+                return;
+            };
             resources
                 .surface
                 .configure(&resources.device, &surface_config);

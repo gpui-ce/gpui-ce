@@ -15,12 +15,21 @@ doctest = false
 anyhow = "1.0.86"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+<<<<<<< HEAD
 core-foundation = "=0.10.0"
 ctor = "1.0.6"
 foreign-types = "0.5"
 metal = "0.33"
 core-video = { version = "0.5.2", features = ["metal"] }
 objc = "0.2"
+=======
+core-foundation.workspace = true
+ctor.workspace = true
+foreign-types.workspace = true
+metal.workspace = true
+core-video.workspace = true
+objc.workspace = true
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
 [build-dependencies]
 bindgen = "0.71"

@@ -12,6 +12,7 @@ name = "util"
 path = "src/util.rs"
 doctest = true
 
+<<<<<<< HEAD
 [dependencies]
 anyhow = "1.0.86"
 async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
@@ -45,6 +46,44 @@ which = "6.0.0"
 async-fs = "2.1"
 walkdir = "2.5"
 dirs = "6.0"
+=======
+[features]
+test-support = ["rand", "util_macros", "path/test-support"]
+
+[dependencies]
+anyhow.workspace = true
+async_zip.workspace = true
+collections.workspace = true
+dunce.workspace = true
+futures-lite.workspace = true
+futures.workspace = true
+globset.workspace = true
+itertools.workspace = true
+log.workspace = true
+rand = { workspace = true, optional = true }
+regex.workspace = true
+rust-embed.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_json_lenient.workspace = true
+shlex.workspace = true
+take-until.workspace = true
+tempfile.workspace = true
+unicase.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
+util_macros = { workspace = true, optional = true }
+gpui_util.workspace = true
+path = { workspace = true, features = ["serde"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+smol.workspace = true
+which.workspace = true
+async-fs.workspace = true
+walkdir.workspace = true
+dirs.workspace = true
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
 [target.'cfg(unix)'.dependencies]
 command-fds = "0.3.1"
@@ -56,8 +95,10 @@ mach2 = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 tendril = "0.4.3"
+windows.workspace = true
 
 [dev-dependencies]
+<<<<<<< HEAD
 pretty_assertions = { version = "1.3.0", features = ["unstable"] }
 git2 = { version = "0.21", default-features = false, features = [
   "vendored-libgit2",
@@ -66,3 +107,9 @@ rand = "0.9"
 
 [features]
 test-support = []
+=======
+rand.workspace = true
+util_macros.workspace = true
+pretty_assertions.workspace = true
+path = { workspace = true, features = ["test-support"] }
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592

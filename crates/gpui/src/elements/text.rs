@@ -618,6 +618,7 @@ struct TextLayoutInner {
     lines: SmallVec<[WrappedLine; 1]>,
     line_height: Pixels,
     wrap_width: Option<Pixels>,
+    truncate_width: Option<Pixels>,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
 }
@@ -767,22 +768,52 @@ impl TextLayout {
                     available_space,
                 );
 
+<<<<<<< HEAD
                 let truncation =
                     Self::evaluate_overflow(&text_style, known_dimensions, available_space);
+=======
+                let (truncate_width, truncation_affix, truncate_from) =
+                    if let Some(text_overflow) = text_style.text_overflow.clone() {
+                        let width = known_dimensions.width.or(match available_space.width {
+                            crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
+                                Some(max_lines) => Some(x * max_lines),
+                                None => Some(x),
+                            },
+                            _ => None,
+                        });
+
+                        match text_overflow {
+                            TextOverflow::Truncate(s) => (width, s, TruncateFrom::End),
+                            TextOverflow::TruncateStart(s) => (width, s, TruncateFrom::Start),
+                            TextOverflow::TruncateMiddle(s) => (width, s, TruncateFrom::Middle),
+                        }
+                    } else {
+                        (None, "".into(), TruncateFrom::End)
+                    };
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
 
                 // Only use cached layout if:
                 // 1. We have a cached size
                 // 2. wrap_width matches (or both are None)
                 // 3. truncate_width is None (if truncate_width is Some, we need to re-layout
                 //    because the previous layout may have been computed without truncation)
+                // 4. the cached layout was not truncated (a truncated layout answers an
+                //    unconstrained probe with the truncated size, which poisons intrinsic
+                //    sizing with whatever width some earlier measure pass happened to use)
                 if let Some(text_layout) = element_state.0.borrow().as_ref()
                     && let Some(size) = text_layout.size
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
+<<<<<<< HEAD
                     && truncation.width.is_none()
+=======
+                    && truncate_width.is_none()
+                    && text_layout.truncate_width.is_none()
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
                 {
                     return size;
                 }
 
+<<<<<<< HEAD
                 let (text, runs) = Self::apply_truncation(
                     text.clone(),
                     &text_style,
@@ -792,6 +823,48 @@ impl TextLayout {
                     &runs,
                     cx,
                 );
+=======
+                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+                let (text, runs) = if let Some(truncate_width) = truncate_width {
+                    if let Some(max_lines) = text_style.line_clamp
+                        && let Some(wrap_width) = wrap_width
+                    {
+                        line_wrapper.truncate_wrapped_line(
+                            text.clone(),
+                            wrap_width,
+                            max_lines,
+                            &truncation_affix,
+                            &runs,
+                            truncate_from,
+                        )
+                    } else if let Some(unclipped) = window
+                        .text_system()
+                        .shape_text(text.clone(), font_size, &runs, None, None)
+                        .log_err()
+                        && unclipped
+                            .iter()
+                            .all(|line| line.size(line_height).width <= truncate_width)
+                    {
+                        // The truncation decision below sums per-character advances,
+                        // which overestimates the shaped width (no kerning), truncating
+                        // text that fits exactly in its measured width. Skip truncation
+                        // whenever the honestly-shaped text fits; the shaping result
+                        // comes from the line layout cache when the same text was
+                        // already measured untruncated this frame.
+                        (text.clone(), Cow::Borrowed(&*runs))
+                    } else {
+                        line_wrapper.truncate_line(
+                            text.clone(),
+                            truncate_width,
+                            &truncation_affix,
+                            &runs,
+                            truncate_from,
+                        )
+                    }
+                } else {
+                    (text.clone(), Cow::Borrowed(&*runs))
+                };
+>>>>>>> 044e6c73740902b1b6776ce74b6d9fc8c0b2c592
                 let len = text.len();
 
                 let Some(lines) = window
@@ -810,6 +883,7 @@ impl TextLayout {
                         len: 0,
                         line_height,
                         wrap_width,
+                        truncate_width,
                         size: Some(Size::default()),
                         bounds: None,
                     });
@@ -828,6 +902,7 @@ impl TextLayout {
                     len,
                     line_height,
                     wrap_width,
+                    truncate_width,
                     size: Some(size),
                     bounds: None,
                 });
@@ -954,12 +1029,6 @@ impl TextLayout {
         let element_state = element_state
             .as_ref()
             .expect("measurement has not been performed");
-        let bounds = element_state
-            .bounds
-            .expect("prepaint has not been performed");
-        let line_height = element_state.line_height;
-
-        let mut line_origin = bounds.origin;
         let mut line_start_ix = 0;
 
         for line in &element_state.lines {
@@ -967,7 +1036,6 @@ impl TextLayout {
             if index < line_start_ix {
                 break;
             } else if index > line_end_ix {
-                line_origin.y += line.size(line_height).height;
                 line_start_ix = line_end_ix + 1;
                 continue;
             } else {
@@ -976,6 +1044,18 @@ impl TextLayout {
         }
 
         None
+    }
+
+    /// Retrieve all line layouts in source order.
+    pub fn line_layouts(&self) -> SmallVec<[Arc<WrappedLineLayout>; 1]> {
+        self.0
+            .borrow()
+            .as_ref()
+            .expect("measurement has not been performed")
+            .lines
+            .iter()
+            .map(|line| line.layout.clone())
+            .collect()
     }
 
     /// The bounds of this layout.
@@ -1307,6 +1387,7 @@ impl Element for InteractiveText {
                         build_tooltip,
                         check_is_hovered,
                         check_is_hovered_during_prepaint,
+                        None,
                         window,
                     );
                 }
