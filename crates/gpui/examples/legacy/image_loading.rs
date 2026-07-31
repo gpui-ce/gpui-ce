@@ -28,7 +28,7 @@ impl AssetSource for Assets {
     }
 }
 
-const IMAGE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/image/app-icon.png");
+const IMAGE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/legacy/image/app-icon.png");
 
 #[derive(Copy, Clone, Hash)]
 struct LoadImageParameters {
