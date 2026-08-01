@@ -81,6 +81,7 @@ pub struct WindowsWindowState {
     /// Shared with [`WindowsPlatformState::cursor_visible`].
     pub cursor_visible: Arc<AtomicBool>,
     pub nc_button_pressed: Cell<Option<u32>>,
+    pub dragging: Cell<bool>,
 
     pub display: Cell<WindowsDisplay>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
@@ -147,6 +148,7 @@ impl WindowsWindowState {
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             },
             None,
+            None,
         )
         .context("Creating Wgpu renderer")?;
         #[cfg(not(feature = "wgpu"))]
@@ -189,6 +191,7 @@ impl WindowsWindowState {
             current_cursor: Cell::new(current_cursor),
             cursor_visible,
             nc_button_pressed: Cell::new(nc_button_pressed),
+            dragging: Cell::new(false),
             display: Cell::new(display),
             fullscreen: Cell::new(fullscreen),
             initial_placement: Cell::new(initial_placement),
@@ -954,6 +957,33 @@ impl PlatformWindow for WindowsWindow {
 
     fn is_fullscreen(&self) -> bool {
         self.state.is_fullscreen()
+    }
+
+    fn start_window_move(&self) {
+        // winit does this by tracking whether the user is mouse-dragging
+        //     https://github.com/rust-windowing/winit/blob/9674d8ceef6976326fe9583a81f2e684daac05d6/winit-win32/src/window.rs#L241-L269
+        //     https://github.com/rust-windowing/winit/blob/9674d8ceef6976326fe9583a81f2e684daac05d6/winit-win32/src/event_loop.rs#L1234-L1243
+        self.state.dragging.set(true);
+
+        let cursor_pos = {
+            let mut pos = unsafe { std::mem::zeroed() };
+            let _ = unsafe { GetCursorPos(&mut pos) };
+            pos
+        };
+        let points = POINTS {
+            x: cursor_pos.x as i16,
+            y: cursor_pos.y as i16,
+        };
+
+        let _ = unsafe { ReleaseCapture() };
+        let _ = unsafe {
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_NCLBUTTONDOWN,
+                WPARAM(HTCAPTION as usize),
+                LPARAM(&points as *const _ as isize),
+            )
+        };
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {

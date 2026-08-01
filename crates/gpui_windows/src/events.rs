@@ -255,6 +255,13 @@ impl WindowsWindowInner {
     }
 
     fn handle_size_move_loop_exit(&self, handle: HWND) -> Option<isize> {
+        // emulating winit to support dragging a window
+        // https://github.com/rust-windowing/winit/blob/9674d8ceef6976326fe9583a81f2e684daac05d6/winit-win32/src/event_loop.rs#L1234-L1243
+        if self.state.dragging.get() {
+            self.state.dragging.set(false);
+            let _ = unsafe { PostMessageW(Some(handle), WM_LBUTTONUP, WPARAM(0), LPARAM(0)) };
+        }
+
         unsafe {
             KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
         }
