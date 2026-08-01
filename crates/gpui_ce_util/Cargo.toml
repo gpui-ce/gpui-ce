@@ -13,4 +13,4 @@ path = "src/lib.rs"
 
 [dependencies]
 log = { version = "0.4.33", features = ["kv_unstable_serde", "serde"] }
-anyhow = "1.0.104"
+anyhow = "1"

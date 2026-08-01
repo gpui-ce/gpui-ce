@@ -12,11 +12,11 @@ path = "src/media.rs"
 doctest = false
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "=0.10.1"
-ctor = "1.0.10"
+ctor = "1"
 foreign-types = "0.5"
 metal = "0.33"
 core-video = { version = "0.6.1", features = ["metal"] }

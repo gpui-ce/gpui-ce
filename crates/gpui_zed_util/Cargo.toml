@@ -13,10 +13,10 @@ path = "src/util.rs"
 doctest = true
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1"
 async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
 collections = { package = "gpui_collections", version = "0.2.2", path = "../gpui_collections" }
-dunce = "1.0"
+dunce = "1"
 futures-lite = "2.6"
 futures = "0.3.33"
 globset = "0.4"
