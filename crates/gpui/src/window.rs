@@ -1852,6 +1852,11 @@ impl Window {
         self.removed = true;
     }
 
+    /// Show or hide this window at the platform level without closing it.
+    pub fn set_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
+    }
+
     /// Obtain the currently focused [`FocusHandle`]. If no elements are focused, returns `None`.
     pub fn focused(&self, cx: &App) -> Option<FocusHandle> {
         self.focus
