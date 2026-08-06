@@ -1,4 +1,3 @@
-use smallvec::SmallVec;
 use std::{
     ops::Range,
     time::{Duration, Instant},
@@ -15,16 +14,16 @@ pub struct EditableTextHistory {
     /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
     grouping_interval: Duration,
     /// Stack of previous states for undo.
-    undo_stack: SmallVec<[HistoryEntry; MAX_HISTORY_LEN]>,
+    undo_stack: Vec<HistoryEntry>,
     /// Stack of undone states for redo.
-    redo_stack: SmallVec<[HistoryEntry; MAX_HISTORY_LEN]>,
+    redo_stack: Vec<HistoryEntry>,
 }
 impl Default for EditableTextHistory {
     fn default() -> Self {
         Self {
             grouping_interval: DEFAULT_GROUP_INTERVAL,
-            undo_stack: Default::default(),
-            redo_stack: Default::default(),
+            undo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
+            redo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
         }
     }
 }
@@ -97,7 +96,7 @@ impl EditableTextHistory {
         self.redo_stack.clear();
     }
 
-    fn stack(&self, kind: HistoryKind) -> &SmallVec<[HistoryEntry; MAX_HISTORY_LEN]> {
+    fn stack(&self, kind: HistoryKind) -> &Vec<HistoryEntry> {
         // NOTE: Could be an internal map
         match kind {
             HistoryKind::Undo => &self.undo_stack,
@@ -105,7 +104,7 @@ impl EditableTextHistory {
         }
     }
 
-    fn stack_mut(&mut self, kind: HistoryKind) -> &mut SmallVec<[HistoryEntry; MAX_HISTORY_LEN]> {
+    fn stack_mut(&mut self, kind: HistoryKind) -> &mut Vec<HistoryEntry> {
         match kind {
             HistoryKind::Undo => &mut self.undo_stack,
             HistoryKind::Redo => &mut self.redo_stack,
