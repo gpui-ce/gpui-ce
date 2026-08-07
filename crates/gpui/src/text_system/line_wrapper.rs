@@ -16,6 +16,7 @@ pub struct LineWrapper {
     text_system: Arc<TextSystem>,
     pub(crate) font_id: FontId,
     pub(crate) font_size: Pixels,
+    letter_spacing: Option<Pixels>,
     cached_ascii_char_widths: [Option<Pixels>; 128],
     cached_other_char_widths: HashMap<char, Pixels>,
 }
@@ -29,9 +30,14 @@ impl LineWrapper {
             text_system,
             font_id,
             font_size,
+            letter_spacing: None,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
         }
+    }
+
+    pub(crate) fn set_letter_spacing(&mut self, letter_spacing: Option<Pixels>) {
+        self.letter_spacing = letter_spacing;
     }
 
     /// Wrap a line of text to the given width with this wrapper's font and font size.
@@ -48,6 +54,7 @@ impl LineWrapper {
         let mut last_wrap_ix = 0;
         let mut prev_c = '\0';
         let mut index = 0;
+        let mut previous_text_character = false;
         let mut candidates = fragments
             .iter()
             .flat_map(move |fragment| fragment.wrap_boundary_candidates())
@@ -57,9 +64,11 @@ impl LineWrapper {
                 let ix = index;
                 index += candidate.len_utf8();
                 let mut new_prev_c = prev_c;
+                let mut item_had_spacing = false;
                 let item_width = match candidate {
                     WrapBoundaryCandidate::Char { character: c } => {
                         if c == '\n' {
+                            previous_text_character = false;
                             continue;
                         }
 
@@ -82,7 +91,15 @@ impl LineWrapper {
 
                         new_prev_c = c;
 
-                        self.width_for_char(c)
+                        let width = self.width_for_char(c);
+                        let spacing = if previous_text_character {
+                            self.letter_spacing.unwrap_or_default()
+                        } else {
+                            px(0.)
+                        };
+                        item_had_spacing = previous_text_character;
+                        previous_text_character = true;
+                        width + spacing
                     }
                     WrapBoundaryCandidate::Element {
                         width: element_width,
@@ -113,10 +130,15 @@ impl LineWrapper {
                     if last_candidate_ix > 0 {
                         last_wrap_ix = last_candidate_ix;
                         width -= last_candidate_width;
+                        width -= self.letter_spacing.unwrap_or_default();
                         last_candidate_ix = 0;
                     } else {
                         last_wrap_ix = ix;
-                        width = item_width;
+                        width = if item_had_spacing {
+                            item_width - self.letter_spacing.unwrap_or_default()
+                        } else {
+                            item_width
+                        };
                     }
 
                     if let Some(indent) = indent {
@@ -144,20 +166,24 @@ impl LineWrapper {
         truncate_from: TruncateFrom,
     ) -> Option<usize> {
         let mut width = px(0.);
-        let suffix_width = truncation_affix
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .fold(px(0.0), |a, x| a + x);
+        let suffix_width = self.width_for_text(truncation_affix)
+            + if truncation_affix.is_empty() {
+                px(0.)
+            } else {
+                self.letter_spacing.unwrap_or_default()
+            };
         let mut truncate_ix = 0;
 
         match truncate_from {
             TruncateFrom::Start => {
+                let mut previous_text_character = false;
                 for (ix, c) in line.char_indices().rev() {
                     if width + suffix_width < truncate_width {
                         truncate_ix = ix;
                     }
 
-                    let char_width = self.width_for_char(c);
+                    let char_width =
+                        self.width_for_char_with_spacing(c, &mut previous_text_character);
                     width += char_width;
 
                     if width.floor() > truncate_width {
@@ -166,12 +192,14 @@ impl LineWrapper {
                 }
             }
             TruncateFrom::End => {
+                let mut previous_text_character = false;
                 for (ix, c) in line.char_indices() {
                     if width + suffix_width < truncate_width {
                         truncate_ix = ix;
                     }
 
-                    let char_width = self.width_for_char(c);
+                    let char_width =
+                        self.width_for_char_with_spacing(c, &mut previous_text_character);
                     width += char_width;
 
                     if width.floor() > truncate_width {
@@ -243,10 +271,12 @@ impl LineWrapper {
             );
         }
 
-        let affix_width: Pixels = truncation_affix
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .sum();
+        let affix_width = self.width_for_text(truncation_affix)
+            + if truncation_affix.is_empty() {
+                px(0.)
+            } else {
+                self.letter_spacing.unwrap_or_default()
+            };
 
         let mut width = px(0.);
         let mut line = 0usize;
@@ -257,6 +287,7 @@ impl LineWrapper {
         let mut prev_c = '\0';
         let mut indent: Option<u32> = None;
         let mut truncate_ix = 0usize;
+        let mut previous_text_character = false;
 
         for (ix, c) in text.char_indices() {
             if c == '\n' {
@@ -286,10 +317,11 @@ impl LineWrapper {
                 prev_c = '\0';
                 indent = None;
                 truncate_ix = ix + 1;
+                previous_text_character = false;
                 continue;
             }
 
-            let char_width = self.width_for_char(c);
+            let char_width = self.width_for_char_with_spacing(c, &mut previous_text_character);
 
             if Self::is_word_char(c) {
                 if prev_c == ' ' && first_non_whitespace_ix.is_some() {
@@ -317,10 +349,11 @@ impl LineWrapper {
                     if last_candidate_ix > last_wrap_ix {
                         last_wrap_ix = last_candidate_ix;
                         width -= last_candidate_width;
+                        width -= self.letter_spacing.unwrap_or_default();
                         last_candidate_ix = 0;
                     } else {
                         last_wrap_ix = ix;
-                        width = char_width;
+                        width = self.width_for_char(c);
                     }
 
                     if let Some(ind) = indent {
@@ -415,6 +448,30 @@ impl LineWrapper {
             self.cached_other_char_widths.insert(c, width);
             width
         }
+    }
+
+    fn width_for_char_with_spacing(
+        &mut self,
+        c: char,
+        previous_text_character: &mut bool,
+    ) -> Pixels {
+        let width = self.width_for_char(c);
+        let spacing = if *previous_text_character {
+            self.letter_spacing.unwrap_or_default()
+        } else {
+            px(0.)
+        };
+        *previous_text_character = true;
+        width + spacing
+    }
+
+    fn width_for_text(&mut self, text: &str) -> Pixels {
+        let mut previous_text_character = false;
+        text.chars()
+            .map(|character| {
+                self.width_for_char_with_spacing(character, &mut previous_text_character)
+            })
+            .sum()
     }
 }
 
@@ -528,9 +585,12 @@ impl Boundary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Font, FontFeatures, FontStyle, FontWeight, TestAppContext, TestDispatcher, font};
+    use crate::{
+        Font, FontFeatures, FontRun, FontStyle, FontWeight, Hsla, TestAppContext, TestDispatcher,
+        TextRun, font,
+    };
     #[cfg(target_os = "macos")]
-    use crate::{TextRun, WindowTextSystem, WrapBoundary};
+    use crate::{WindowTextSystem, WrapBoundary};
 
     fn build_wrapper() -> LineWrapper {
         let dispatcher = TestDispatcher::new(0);
@@ -554,6 +614,63 @@ mod tests {
                 ..Default::default()
             })
             .collect()
+    }
+
+    #[test]
+    fn test_tracking_changes_measured_width() {
+        let dispatcher = TestDispatcher::new(1);
+        let cx = TestAppContext::build(dispatcher, None);
+        let base = TextRun {
+            len: 4,
+            font: font(".ZedMono"),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+            ..Default::default()
+        };
+        let font_id = cx.text_system().resolve_font(&base.font);
+        let platform = cx.text_system().platform_text_system_for_tests();
+        let no_tracking = platform.layout_line(
+            "TEST",
+            px(16.),
+            &[FontRun {
+                len: 4,
+                font_id,
+                letter_spacing: None,
+            }],
+        );
+        let wide = platform.layout_line(
+            "TEST",
+            px(16.),
+            &[FontRun {
+                len: 4,
+                font_id,
+                letter_spacing: Some(px(2.0)),
+            }],
+        );
+        let tight = platform.layout_line(
+            "TEST",
+            px(16.),
+            &[FontRun {
+                len: 4,
+                font_id,
+                letter_spacing: Some(px(-0.5)),
+            }],
+        );
+
+        assert!(wide.width > no_tracking.width);
+        assert!(tight.width <= no_tracking.width);
+    }
+
+    #[test]
+    fn test_tracking_changes_truncation_width() {
+        let mut wrapper = build_wrapper();
+        let no_tracking = wrapper.width_for_text("TEST…");
+        wrapper.set_letter_spacing(Some(px(2.0)));
+        let wide = wrapper.width_for_text("TEST…");
+
+        assert!(wide > no_tracking);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
+    TextRun, TextStyle, TextTransform, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
     WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
@@ -17,6 +17,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 /// An [`Element`] that renders text.
 ///
@@ -622,6 +623,134 @@ struct TextLayoutInner {
     bounds: Option<Bounds<Pixels>>,
 }
 
+fn apply_text_transform_preserving_byte_len(
+    text: SharedString,
+    transform: Option<TextTransform>,
+) -> SharedString {
+    let Some(transform) = transform else {
+        return text;
+    };
+    if matches!(transform, TextTransform::None) {
+        return text;
+    }
+
+    let mut output = String::with_capacity(text.len());
+    match transform {
+        TextTransform::Uppercase => {
+            for character in text.as_ref().chars() {
+                push_case_mapped_character(&mut output, character, CaseMapKind::Upper);
+            }
+        }
+        TextTransform::Lowercase => {
+            for character in text.as_ref().chars() {
+                push_case_mapped_character(&mut output, character, CaseMapKind::Lower);
+            }
+        }
+        TextTransform::Capitalize => {
+            for piece in text.as_ref().split_word_bounds() {
+                let mut seen_first_letter = false;
+                for character in piece.chars() {
+                    if !seen_first_letter && character.is_alphabetic() {
+                        push_case_mapped_character(&mut output, character, CaseMapKind::Upper);
+                        seen_first_letter = true;
+                    } else {
+                        output.push(character);
+                    }
+                }
+            }
+        }
+        TextTransform::None => return text,
+    }
+
+    SharedString::from(output)
+}
+
+#[derive(Copy, Clone)]
+enum CaseMapKind {
+    Upper,
+    Lower,
+}
+
+fn push_case_mapped_character(output: &mut String, character: char, kind: CaseMapKind) {
+    let mapped = match kind {
+        CaseMapKind::Upper => character.to_uppercase().collect::<String>(),
+        CaseMapKind::Lower => character.to_lowercase().collect::<String>(),
+    };
+
+    if mapped.len() == character.len_utf8() && mapped.chars().count() == 1 {
+        output.push_str(&mapped);
+    } else {
+        output.push(character);
+    }
+}
+
+#[cfg(test)]
+mod text_transform_tests {
+    use super::apply_text_transform_preserving_byte_len;
+    use crate::{SharedString, TextTransform};
+
+    #[test]
+    fn text_transforms_preserve_bytes_and_spacing() {
+        let input = SharedString::from("hello   WORLD\tfoo-bar 123baz déjà vu");
+        let uppercase =
+            apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Uppercase));
+        let lowercase =
+            apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Lowercase));
+        let capitalize = apply_text_transform_preserving_byte_len(
+            input.clone(),
+            Some(TextTransform::Capitalize),
+        );
+
+        assert_eq!(uppercase.as_ref(), "HELLO   WORLD\tFOO-BAR 123BAZ DÉJÀ VU");
+        assert_eq!(lowercase.as_ref(), "hello   world\tfoo-bar 123baz déjà vu");
+        assert_eq!(capitalize.as_ref(), "Hello   WORLD\tFoo-Bar 123Baz Déjà Vu");
+        assert_eq!(input.len(), uppercase.len());
+        assert_eq!(input.len(), lowercase.len());
+        assert_eq!(input.len(), capitalize.len());
+    }
+
+    #[test]
+    fn text_transforms_skip_expanding_unicode_mappings() {
+        let input = SharedString::from("straße İSTANBUL");
+        let uppercase =
+            apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Uppercase));
+        let lowercase =
+            apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Lowercase));
+
+        assert_eq!(uppercase.as_ref(), "STRAßE İSTANBUL");
+        assert_eq!(lowercase.as_ref(), "straße İstanbul");
+        assert_eq!(input.len(), uppercase.len());
+        assert_eq!(input.len(), lowercase.len());
+    }
+
+    #[test]
+    fn capitalize_preserves_letters_after_digit_prefix() {
+        let input = SharedString::from("123BAZ");
+        let output = apply_text_transform_preserving_byte_len(
+            input.clone(),
+            Some(TextTransform::Capitalize),
+        );
+        assert_eq!(output.as_ref(), "123BAZ");
+        assert_eq!(input.len(), output.len());
+    }
+
+    #[test]
+    fn capitalize_does_not_fold_remaining_letters() {
+        let input = SharedString::from("foo2BAR");
+        let output =
+            apply_text_transform_preserving_byte_len(input, Some(TextTransform::Capitalize));
+        assert_eq!(output.as_ref(), "Foo2BAR");
+    }
+
+    #[test]
+    fn capitalize_handles_apostrophe_contractions() {
+        let input = SharedString::from("don't panic");
+        let output =
+            apply_text_transform_preserving_byte_len(input, Some(TextTransform::Capitalize));
+        assert_eq!(output.as_ref(), "Don't Panic");
+    }
+}
+
 /// Metadata about how text should be truncated. Generated during text layout via `TextLayout::evaluate_overflow`.
 pub struct TextLayoutTruncation {
     /// The width that the text can occupy before it is truncated.
@@ -711,6 +840,7 @@ impl TextLayout {
         cx: &mut App,
     ) -> (SharedString, Cow<'runs, [TextRun]>) {
         let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+        line_wrapper.set_letter_spacing(text_style.letter_spacing);
         if truncation.width.is_some() {
             if let Some(max_lines) = text_style.line_clamp
                 && let Some(wrap_width) = wrap_width
@@ -745,6 +875,7 @@ impl TextLayout {
         _: &mut App,
     ) -> LayoutId {
         let text_style = window.text_style();
+        let text = apply_text_transform_preserving_byte_len(text, text_style.text_transform);
         let font_size = text_style.font_size.to_pixels(window.rem_size());
         let line_height = window.pixel_snap(
             text_style
