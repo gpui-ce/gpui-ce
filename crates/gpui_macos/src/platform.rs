@@ -499,7 +499,7 @@ impl Platform for MacPlatform {
             pool.drain();
 
             (*app).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
-            (*NSWindow::delegate(app)).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
+            (*app_delegate).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
         }
     }
 

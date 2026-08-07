@@ -483,26 +483,36 @@ impl CosmicTextSystemState {
             let primary_weight = face.weight;
             let primary_features = loaded_font.features.clone();
             let fallback_chain = Arc::clone(&loaded_font.user_fallback_chain);
+            let letter_spacing = run
+                .letter_spacing
+                .map(|spacing| spacing.as_f32() / font_size.as_f32());
 
             // build one `Attrs` per slot up front. each clone of span attrs
             // would otherwise re-allocate the `font_features` Vec.
-            let primary_attrs = Attrs::new()
+            let mut primary_attrs = Attrs::new()
                 .metadata(run.font_id.0)
                 .family(Family::Name(&primary_family_name))
                 .stretch(primary_stretch)
                 .style(primary_style)
                 .weight(primary_weight)
                 .font_features(primary_features.clone());
+            if let Some(letter_spacing) = letter_spacing {
+                primary_attrs = primary_attrs.letter_spacing(letter_spacing);
+            }
             let fallback_attrs: SmallVec<[Attrs<'_>; 4]> = fallback_chain
                 .iter()
                 .map(|(fb_id, fb_name)| {
-                    Attrs::new()
+                    let mut attrs = Attrs::new()
                         .metadata(fb_id.0)
                         .family(Family::Name(fb_name))
                         .stretch(primary_stretch)
                         .style(primary_style)
                         .weight(primary_weight)
-                        .font_features(primary_features.clone())
+                        .font_features(primary_features.clone());
+                    if let Some(letter_spacing) = letter_spacing {
+                        attrs = attrs.letter_spacing(letter_spacing);
+                    }
+                    attrs
                 })
                 .collect();
 

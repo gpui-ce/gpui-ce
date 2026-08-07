@@ -59,10 +59,12 @@ fn bench_layout_line(c: &mut Criterion) {
     let runs_no_fallback = vec![FontRun {
         len: text.len(),
         font_id: font_id_no_fallback,
+        letter_spacing: None,
     }];
     let runs_with_fallback = vec![FontRun {
         len: text.len(),
         font_id: font_id_with_fallback,
+        letter_spacing: None,
     }];
 
     let mut group = c.benchmark_group("layout_line");
