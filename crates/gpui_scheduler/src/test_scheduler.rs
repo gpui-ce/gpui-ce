@@ -58,7 +58,7 @@ impl TestScheduler {
             .map(|seed| seed.parse().unwrap())
             .unwrap_or(0);
 
-        let interactive = !std::env::var("SCHEDULER_NONINTERACTIVE").is_ok();
+        let interactive = std::env::var("SCHEDULER_NONINTERACTIVE").is_err();
 
         (seed..seed + num_iterations as u64)
             .map(|seed| {
