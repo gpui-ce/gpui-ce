@@ -585,6 +585,7 @@ impl PrelayoutState {
                     background_color: None,
                     underline: None,
                     strikethrough: None,
+                    letter_spacing: None,
                 }];
 
                 let wrap_width = TextLayout::evaluate_wrap_width(

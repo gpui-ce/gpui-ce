@@ -3,7 +3,7 @@ use crate::{
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, Hsla, JustifyContent, Length, Pixels, SharedString,
     StrikethroughStyle, StyleRefinement, TemplateColumnMinSize, TextAlign, TextOverflow,
-    TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
+    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -171,6 +171,18 @@ pub trait Styled: Sized {
     /// Sets the text alignment to right
     fn text_right(mut self) -> Self {
         self.text_align(TextAlign::Right)
+    }
+
+    /// Sets the letter spacing for text in this element and its children.
+    fn letter_spacing(mut self, spacing: impl Into<Pixels>) -> Self {
+        self.text_style().letter_spacing = Some(spacing.into());
+        self
+    }
+
+    /// Sets the case transformation for text in this element and its children.
+    fn text_transform(mut self, transform: TextTransform) -> Self {
+        self.text_style().text_transform = Some(transform);
+        self
     }
 
     /// Sets the truncate to prevent text from wrapping and truncate overflowing text with an ellipsis (…) if needed.

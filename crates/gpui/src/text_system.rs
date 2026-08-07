@@ -215,6 +215,7 @@ impl TextSystem {
                 &[FontRun {
                     len: buffer.len(),
                     font_id,
+                    letter_spacing: None,
                 }],
             )
             .width
@@ -356,6 +357,14 @@ impl TextSystem {
     ) -> TextRenderingMode {
         self.platform_text_system
             .recommended_rendering_mode(font_id, font_size)
+    }
+}
+
+#[cfg(test)]
+impl TextSystem {
+    /// Reach the platform shaper from crate tests (e.g. `line_wrapper`) without a [`WindowTextSystem`].
+    pub(crate) fn platform_text_system_for_tests(&self) -> Arc<dyn PlatformTextSystem> {
+        self.platform_text_system.clone()
     }
 }
 
@@ -563,8 +572,10 @@ impl WindowTextSystem {
                 };
 
                 let font_id = self.resolve_font(&run.font);
+                let letter_spacing = run.letter_spacing;
                 if let Some(font_run) = font_runs.last_mut()
                     && font_id == font_run.font_id
+                    && font_run.letter_spacing == letter_spacing
                     && !decoration_changed
                 {
                     font_run.len += run_len_within_line;
@@ -572,6 +583,7 @@ impl WindowTextSystem {
                     font_runs.push(FontRun {
                         len: run_len_within_line,
                         font_id,
+                        letter_spacing,
                     });
                 }
 
@@ -677,8 +689,10 @@ impl WindowTextSystem {
             };
 
             let font_id = self.resolve_font(&run.font);
+            let letter_spacing = run.letter_spacing;
             if let Some(font_run) = font_runs.last_mut()
                 && font_id == font_run.font_id
+                && font_run.letter_spacing == letter_spacing
                 && !decoration_changed
             {
                 font_run.len += run.len;
@@ -686,6 +700,7 @@ impl WindowTextSystem {
                 font_runs.push(FontRun {
                     len: run.len,
                     font_id,
+                    letter_spacing,
                 });
             }
         }
@@ -713,6 +728,7 @@ impl WindowTextSystem {
                 &[FontRun {
                     len: buffer.len(),
                     font_id,
+                    letter_spacing: None,
                 }],
                 None,
             )
@@ -759,8 +775,10 @@ impl WindowTextSystem {
             };
 
             let font_id = self.resolve_font(&run.font);
+            let letter_spacing = run.letter_spacing;
             if let Some(font_run) = font_runs.last_mut()
                 && font_id == font_run.font_id
+                && font_run.letter_spacing == letter_spacing
                 && !decoration_changed
             {
                 font_run.len += run.len;
@@ -768,6 +786,7 @@ impl WindowTextSystem {
                 font_runs.push(FontRun {
                     len: run.len,
                     font_id,
+                    letter_spacing,
                 });
             }
         }
@@ -821,8 +840,10 @@ impl WindowTextSystem {
             };
 
             let font_id = self.resolve_font(&run.font);
+            let letter_spacing = run.letter_spacing;
             if let Some(font_run) = font_runs.last_mut()
                 && font_id == font_run.font_id
+                && font_run.letter_spacing == letter_spacing
                 && !decoration_changed
             {
                 font_run.len += run.len;
@@ -830,6 +851,7 @@ impl WindowTextSystem {
                 font_runs.push(FontRun {
                     len: run.len,
                     font_id,
+                    letter_spacing,
                 });
             }
         }
@@ -864,7 +886,8 @@ pub struct LineWrapperHandle {
 impl Drop for LineWrapperHandle {
     fn drop(&mut self) {
         let mut state = self.text_system.wrapper_pool.lock();
-        let wrapper = self.wrapper.take().unwrap();
+        let mut wrapper = self.wrapper.take().unwrap();
+        wrapper.set_letter_spacing(None);
         state
             .get_mut(&FontIdWithSize {
                 font_id: wrapper.font_id,
@@ -1006,6 +1029,8 @@ pub struct TextRun {
     pub underline: Option<UnderlineStyle>,
     /// The strikethrough style (if any)
     pub strikethrough: Option<StrikethroughStyle>,
+    /// Letter spacing applied between glyphs, in pixels.
+    pub letter_spacing: Option<Pixels>,
 }
 
 #[cfg(all(target_os = "macos", test))]
