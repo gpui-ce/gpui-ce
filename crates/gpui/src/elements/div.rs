@@ -3930,12 +3930,7 @@ where
     }
 }
 
-impl<E> StatefulInteractiveElement for Stateful<E>
-where
-    E: Element,
-    Self: InteractiveElement,
-{
-}
+impl<E> StatefulInteractiveElement for Stateful<E> where Self: InteractiveElement {}
 
 impl<E> InteractiveElement for Stateful<E>
 where
@@ -4022,14 +4017,11 @@ where
     }
 }
 
-impl<E> IntoElement for Stateful<E>
-where
-    E: Element,
-{
-    type Element = Self;
+impl<E: IntoElement> IntoElement for Stateful<E> {
+    type Element = E::Element;
 
     fn into_element(self) -> Self::Element {
-        self
+        self.element.into_element()
     }
 }
 
