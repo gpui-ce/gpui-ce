@@ -16,6 +16,14 @@ mod actions;
 pub use actions::{ActionStatistics, ActionTiming, take_action_stats};
 pub(crate) use actions::{save_action_timing, update_running_action};
 
+/// Hints that the calling branch is unlikely to be taken.
+///
+/// Stands in for `std::hint::cold_path`, which is still unstable on our MSRV
+/// (rust-lang/rust#136873); calling a `#[cold]` function is the equivalent hint.
+#[cold]
+#[inline(always)]
+pub(super) fn cold_path() {}
+
 use serde::{Deserialize, Serialize};
 
 use crate::{SharedString, TasksIncluded, WindowId};
@@ -461,7 +469,7 @@ impl TaskStatistics {
     fn add_yield_timing(&mut self, task: TaskTiming) {
         let yielded_after = task.poll_duration();
         if yielded_after >= self.poll_time_to_beat {
-            std::hint::cold_path(); // most tasks are not the worst, optimize for that
+            cold_path(); // most tasks are not the worst, optimize for that
             let to_replace = self
                 .longest_poll_times
                 .iter()
@@ -482,7 +490,7 @@ impl TaskStatistics {
     fn add_runtime(&mut self, task: TaskTiming) {
         let runtime = task.since_spawn();
         if runtime >= self.runtime_to_beat {
-            std::hint::cold_path(); // most tasks are not the worst, optimize for that
+            cold_path(); // most tasks are not the worst, optimize for that
             let to_replace = self
                 .longest_runtimes
                 .iter()
@@ -602,7 +610,7 @@ impl ThreadTimings {
         self.stats.add_runtime(timing);
 
         if trace_enabled() {
-            std::hint::cold_path(); // optimize for when the profiling is off
+            cold_path(); // optimize for when the profiling is off
             if self.timings.len() >= MAX_TASK_TIMINGS {
                 self.timings.pop_front();
             }
@@ -780,7 +788,7 @@ pub fn record_frame_timing(timing: FrameTiming) {
     if !frame_trace_enabled() {
         return;
     }
-    std::hint::cold_path(); // optimize for when profiling is off
+    cold_path(); // optimize for when profiling is off
 
     let mut frames = FRAME_TIMINGS.lock();
     if frames.timings.len() >= MAX_FRAME_TIMINGS {
