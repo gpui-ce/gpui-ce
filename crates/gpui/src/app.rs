@@ -46,8 +46,8 @@ use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
     ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
     DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle, FocusMap,
-    ForegroundExecutor, Global, KeyBinding, KeyContext, Keymap, Keystroke, LayoutId, Menu,
-    MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform, PlatformDisplay,
+    ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap, Keystroke,
+    LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform, PlatformDisplay,
     PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton,
     PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation,
     ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer,
@@ -1384,6 +1384,21 @@ impl App {
     /// the system. On other platforms this is a no-op.
     pub fn set_window_appearance(&self, appearance: Option<WindowAppearance>) {
         self.platform.set_window_appearance(appearance);
+    }
+
+    /// Whether the current platform supports haptic feedback.
+    pub fn supports_haptic_feedback(&self) -> bool {
+        self.platform.supports_haptic_feedback()
+    }
+
+    /// Play a haptic feedback of the given style.
+    ///
+    /// Must be called from the main thread. This is a no-op on platforms that
+    /// do not support haptic feedback. Styles correspond to
+    /// [`NSHapticFeedbackPattern`](https://developer.apple.com/documentation/appkit/nshapticfeedbackmanager/feedbackpattern)
+    /// values on macOS.
+    pub fn play_haptic_feedback(&self, style: HapticFeedbackStyle) {
+        self.platform.play_haptic_feedback(style)
     }
 
     /// Returns the window button layout configuration when supported.

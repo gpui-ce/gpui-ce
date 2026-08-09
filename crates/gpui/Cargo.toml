@@ -93,6 +93,7 @@ sum_tree.workspace = true
 taffy = "=0.12.2"
 thiserror.workspace = true
 gpui_util.workspace = true
+unicode-segmentation.workspace = true
 hdrhistogram = { workspace = true, optional = true }
 waker-fn = "1.2.0"
 lyon = "1.0"
@@ -150,7 +151,6 @@ gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }
 rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
-unicode-segmentation = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 proptest = { workspace = true }
@@ -206,6 +206,10 @@ path = "examples/learn/text.rs"
 [[example]]
 name = "transition"
 path = "examples/learn/transition.rs"
+
+[[example]]
+name = "haptic_feedback"
+path = "examples/learn/haptic_feedback.rs"
 
 [[example]]
 name = "blur"

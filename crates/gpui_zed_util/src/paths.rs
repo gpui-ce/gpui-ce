@@ -2625,7 +2625,6 @@ mod tests {
         assert_eq!(path.extension_or_hidden_file_name(), Some("eslintrc.js"));
     }
 
-    #[test]
     // fn edge_of_glob() {
 
 // fn edge_of_glob() {

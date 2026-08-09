@@ -1,7 +1,7 @@
 use crate::{
     BoolExt, MacDispatcher, MacDisplay, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
-    events::key_to_native, ns_string, pasteboard::Pasteboard, renderer,
-    set_active_window_cursor_style,
+    events::key_to_native, haptic_feedback::MacHaptics, ns_string, pasteboard::Pasteboard,
+    renderer, set_active_window_cursor_style,
 };
 use anyhow::{Context as _, anyhow};
 use block::ConcreteBlock;
@@ -191,6 +191,8 @@ pub(crate) struct MacPlatformState {
     /// Mirrors `[NSCursor setHiddenUntilMouseMoves:]` state, which AppKit doesn't expose.
     cursor_visible: Arc<AtomicBool>,
     system_notifications: crate::system_notifications::SystemNotificationState,
+    /// Haptic feedback engine (macOS only, lazy-initialized on first use).
+    haptics: MacHaptics,
 }
 
 impl MacPlatform {
@@ -238,6 +240,7 @@ impl MacPlatform {
             keyboard_mapper,
             cursor_visible: Arc::new(AtomicBool::new(true)),
             system_notifications: crate::system_notifications::SystemNotificationState::new(),
+            haptics: MacHaptics::new(headless),
         }))
     }
 
@@ -513,7 +516,7 @@ impl Platform for MacPlatform {
             pool.drain();
 
             (*app).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
-            (*NSWindow::delegate(app)).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
+            (*app_delegate).set_ivar(MAC_PLATFORM_IVAR, null_mut::<c_void>());
         }
     }
 
@@ -1236,6 +1239,14 @@ impl Platform for MacPlatform {
             }
             Ok(())
         })
+    }
+
+    fn supports_haptic_feedback(&self) -> bool {
+        self.0.lock().haptics.supported()
+    }
+
+    fn play_haptic_feedback(&self, style: gpui::HapticFeedbackStyle) {
+        self.0.lock().haptics.play(style)
     }
 }
 

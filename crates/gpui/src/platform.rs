@@ -336,6 +336,16 @@ pub trait Platform: 'static {
     /// Sets the label applied to credentials stored in the system keyring.
     /// Only Linux/FreeBSD use this label.
     fn set_keyring_label(&self, _label: SharedString) {}
+
+    /// Whether the current platform supports haptic feedback.
+    fn supports_haptic_feedback(&self) -> bool {
+        false
+    }
+
+    /// Play a haptic feedback of the given style.
+    ///
+    /// No-op on platforms that don't support haptic feedback.
+    fn play_haptic_feedback(&self, _style: HapticFeedbackStyle) {}
 }
 
 /// A handle to a platform's display, e.g. a monitor or laptop screen.
@@ -417,6 +427,21 @@ pub enum ThermalState {
     Serious,
     /// System is critically constrained, minimize all resource usage
     Critical,
+}
+
+/// Styles of haptic feedback that can be played via the platform.
+///
+/// These correspond directly to [`NSHapticFeedbackPattern`](https://developer.apple.com/documentation/appkit/nshapticfeedbackmanager/feedbackpattern)
+/// values on macOS. On other platforms, all styles are no-ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HapticFeedbackStyle {
+    /// A generic haptic tap — suitable for most interactions.
+    Generic,
+    /// A sharp snap — for alignment guides, detents, and snapping.
+    Alignment,
+    /// A distinct level-change click — for slider steps, toggles, and
+    /// discrete state changes.
+    LevelChange,
 }
 
 /// Metadata for a given [ScreenCaptureSource]
@@ -1185,7 +1210,7 @@ impl PlatformTextSystem for NoopTextSystem {
         Ok((raster_bounds.size, Vec::new()))
     }
 
-    fn layout_line(&self, text: &str, font_size: Pixels, _runs: &[FontRun]) -> LineLayout {
+    fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         let mut position = px(0.);
         let metrics = self.font_metrics(FontId(0));
         let em_width = font_size
@@ -1212,9 +1237,9 @@ impl PlatformTextSystem for NoopTextSystem {
                 position += em_width
             }
         }
-        let mut runs = Vec::default();
+        let mut shaped_runs = Vec::default();
         if !glyphs.is_empty() {
-            runs.push(ShapedRun {
+            shaped_runs.push(ShapedRun {
                 font_id: FontId(0),
                 glyphs,
             });
@@ -1222,12 +1247,26 @@ impl PlatformTextSystem for NoopTextSystem {
             position = px(0.);
         }
 
+        let mut tracking = px(0.);
+        let mut byte_offset = 0usize;
+        for run in font_runs {
+            let end = byte_offset.saturating_add(run.len).min(text.len());
+            let slice = text.get(byte_offset..end).unwrap_or("");
+            let n = slice.chars().count();
+            if n > 1 {
+                if let Some(spacing) = run.letter_spacing {
+                    tracking += spacing * (n - 1) as f32;
+                }
+            }
+            byte_offset = byte_offset.saturating_add(run.len);
+        }
+
         LineLayout {
             font_size,
-            width: position,
+            width: position + tracking,
             ascent: font_size * (metrics.ascent / metrics.units_per_em as f32),
             descent: font_size * (metrics.descent / metrics.units_per_em as f32),
-            runs,
+            runs: shaped_runs,
             len: text.len(),
         }
     }

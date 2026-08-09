@@ -583,26 +583,36 @@ impl CosmicTextSystemState {
             let primary_weight = face.weight;
             let primary_features = loaded_font.features.clone();
             let fallback_chain = Arc::clone(&loaded_font.user_fallback_chain);
+            let letter_spacing = run
+                .letter_spacing
+                .map(|spacing| spacing.as_f32() / font_size.as_f32());
 
             // build one `Attrs` per slot up front. each clone of span attrs
             // would otherwise re-allocate the `font_features` Vec.
-            let primary_attrs = Attrs::new()
+            let mut primary_attrs = Attrs::new()
                 .metadata(run.font_id.0)
                 .family(Family::Name(&primary_family_name))
                 .stretch(primary_stretch)
                 .style(primary_style)
                 .weight(primary_weight)
                 .font_features(primary_features.clone());
+            if let Some(letter_spacing) = letter_spacing {
+                primary_attrs = primary_attrs.letter_spacing(letter_spacing);
+            }
             let fallback_attrs: SmallVec<[Attrs<'_>; 4]> = fallback_chain
                 .iter()
                 .map(|(fb_id, fb_name)| {
-                    Attrs::new()
+                    let mut attrs = Attrs::new()
                         .metadata(fb_id.0)
                         .family(Family::Name(fb_name))
                         .stretch(primary_stretch)
                         .style(primary_style)
                         .weight(primary_weight)
-                        .font_features(primary_features.clone())
+                        .font_features(primary_features.clone());
+                    if let Some(letter_spacing) = letter_spacing {
+                        attrs = attrs.letter_spacing(letter_spacing);
+                    }
+                    attrs
                 })
                 .collect();
 
@@ -753,6 +763,7 @@ fn clip_font_runs(font_runs: &[FontRun], range: Range<usize>) -> SmallVec<[FontR
             clipped.push(FontRun {
                 len: end - start,
                 font_id: run.font_id,
+                letter_spacing: run.letter_spacing,
             });
         }
     }
@@ -1045,6 +1056,7 @@ mod tests {
         let runs = [FontRun {
             len: text.len(),
             font_id,
+            letter_spacing: None,
         }];
         Ok(text_system.layout_line(text, gpui::px(14.0), &runs))
     }
@@ -1154,10 +1166,12 @@ mod tests {
             FontRun {
                 len: "ab\u{001c}\u{05d0}".len(),
                 font_id,
+                letter_spacing: None,
             },
             FontRun {
                 len: "\u{05d1}".len(),
                 font_id,
+                letter_spacing: None,
             },
         ];
         let layout = text_system.layout_line(text, gpui::px(14.0), &runs);
@@ -1211,10 +1225,12 @@ mod tests {
             FontRun {
                 len: 3,
                 font_id: fid(1),
+                letter_spacing: None,
             },
             FontRun {
                 len: 4,
                 font_id: fid(2),
+                letter_spacing: None,
             },
         ];
 
@@ -1224,11 +1240,13 @@ mod tests {
             &[
                 FontRun {
                     len: 1,
-                    font_id: fid(1)
+                    font_id: fid(1),
+                    letter_spacing: None,
                 },
                 FontRun {
                     len: 2,
-                    font_id: fid(2)
+                    font_id: fid(2),
+                    letter_spacing: None,
                 },
             ]
         );
@@ -1236,7 +1254,8 @@ mod tests {
             clip_font_runs(&runs, 3..7).as_slice(),
             &[FontRun {
                 len: 4,
-                font_id: fid(2)
+                font_id: fid(2),
+                letter_spacing: None,
             }]
         );
         assert!(clip_font_runs(&runs, 5..5).is_empty());
