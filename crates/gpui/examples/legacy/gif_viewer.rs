@@ -1,4 +1,4 @@
-use gpui::{div, img, prelude::*, App, Context, Render, Window, WindowOptions};
+use gpui::{App, Context, Render, Window, WindowOptions, div, img, prelude::*};
 use std::path::PathBuf;
 
 struct GifViewer {

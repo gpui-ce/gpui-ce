@@ -2627,8 +2627,8 @@ mod tests {
 
     // fn edge_of_glob() {
 
-// fn edge_of_glob() {
-//     let path = Path::new("/work/node_modules");
+    // fn edge_of_glob() {
+    //     let path = Path::new("/work/node_modules");
     //     let path_matcher =
     //         PathMatcher::new(&["**/node_modules/**".to_owned()], PathStyle::Unix).unwrap();
     //     assert!(
