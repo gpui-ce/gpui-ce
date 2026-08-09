@@ -188,12 +188,10 @@ impl RelPath {
         if other.is_empty() {
             return true;
         }
-        if let Some(suffix) = self.0.strip_suffix(&other.0) {
-            if suffix.ends_with('/') {
-                return true;
-            } else if suffix.is_empty() {
-                return true;
-            }
+        if let Some(suffix) = self.0.strip_suffix(&other.0)
+            && (suffix.ends_with('/') || suffix.is_empty())
+        {
+            return true;
         }
         false
     }
