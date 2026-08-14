@@ -734,6 +734,10 @@ pub struct App {
     // the tokio runtime. As any task attempting to spawn a blocking tokio task,
     // might panic.
     pub(crate) globals_by_type: TypeIdHashMap<Box<dyn Any>>,
+    // Entities which are retained until explicitly removed from the app or dropped at end of life-cycle.
+    // This is an alternative way to define "global" data which uses entities.
+    // There can be multiple entities of a given type & each `Entity<T>` is stored as `Box<dyn Any>`.
+    global_entities: Vec<AnyEntity>,
 
     // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
@@ -819,6 +823,7 @@ impl App {
                 asset_source,
                 http_client,
                 globals_by_type: Default::default(),
+                global_entities: Default::default(),
                 entities,
                 new_entity_observers: SubscriberSet::new(),
                 windows: SlotMap::with_key(),
@@ -2081,6 +2086,28 @@ impl App {
 
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.globals_by_type.insert(global_type, lease.global);
+    }
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
+    pub fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        let any = entity.into_any();
+        if !self.global_entities.contains(&any) {
+            self.global_entities.push(any);
+        }
+    }
+
+    /// Removes the entity from global storage. If no other entities are holding reference to it,
+    /// it will be dropped in the very near future.
+    pub fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.global_entities
+            .retain(|any| any.entity_id() != entity.entity_id());
+    }
+
+    /// Returns an iterator of all globally-stored entities which match the provided type.
+    pub fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let mut iter = self.global_entities.iter();
+        iter.filter_map(|any| any.clone().downcast::<T>().ok())
     }
 
     pub(crate) fn new_entity_observer(
