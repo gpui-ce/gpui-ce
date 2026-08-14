@@ -19,7 +19,7 @@ core-foundation = "=0.10.1"
 ctor = "1"
 foreign-types = "0.5"
 metal = "0.33"
-core-video = { version = "0.6.1", features = ["metal"] }
+core-video = { version = "0.6", features = ["metal"] }
 objc = "0.2"
 
 [build-dependencies]

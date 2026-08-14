@@ -3,8 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ::util::ResultExt;
 use anyhow::{Context, Result};
+use gpui_util::ResultExt;
 use windows::Win32::{
     Foundation::HWND,
     Graphics::Dwm::{DWM_TIMING_INFO, DwmFlush, DwmGetCompositionTimingInfo},

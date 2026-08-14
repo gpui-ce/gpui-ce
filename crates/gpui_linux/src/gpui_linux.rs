@@ -2,6 +2,6 @@
 mod linux;
 
 pub(crate) use gpui::collections;
-pub(crate) use util;
+pub(crate) use gpui_util as util;
 
 pub use linux::current_platform;

@@ -6,7 +6,8 @@ authors = ["Riey <creeper844@gmail.com>"]
 repository = "https://github.com/Riey/xim-rs"
 edition.workspace = true
 publish = false
-license.workspace = true
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 encoding_rs.workspace = true

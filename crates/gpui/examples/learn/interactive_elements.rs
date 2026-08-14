@@ -13,10 +13,12 @@ mod common;
 use common::init_example;
 use gpui::colors::Colors;
 use gpui::{
-    App, Bounds, ClickEvent, Context, Entity, Half, Hsla, IntoElement, MouseButton, MouseMoveEvent,
-    Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, ClickEvent, ColorExt, Context, Entity, Half, Hsla, IntoElement, MouseButton,
+    MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, size,
 };
 use gpui_platform;
+use palette::IntoColor;
 
 // ============================================================================
 // Click Events Demo
@@ -424,7 +426,7 @@ impl Render for DragDropDemo {
                     .flex()
                     .gap_2()
                     .children(item_colors.into_iter().enumerate().map(|(index, color)| {
-                        let drag_data = DragData::new(index, color.into());
+                        let drag_data = DragData::new(index, color.into_color());
 
                         div()
                             .id(("drag-item", index))
@@ -437,7 +439,7 @@ impl Render for DragDropDemo {
                             .text_xs()
                             .cursor_grab()
                             .hover(move |style| {
-                                let c: Hsla = color.into();
+                                let c: Hsla = color.into_color();
                                 style.bg(c.opacity(0.1))
                             })
                             .child(format!("Item {}", index + 1))
@@ -458,7 +460,7 @@ impl Render for DragDropDemo {
                     .border_color(
                         self.dropped_item
                             .map(|d| d.color)
-                            .unwrap_or_else(|| colors.border.into()),
+                            .unwrap_or_else(|| colors.border.into_color()),
                     )
                     .when_some(self.dropped_item, |el, data| el.bg(data.color.opacity(0.2)))
                     .flex()

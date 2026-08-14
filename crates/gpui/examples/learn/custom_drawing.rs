@@ -9,11 +9,12 @@
 
 use gpui::colors::Colors;
 use gpui::{
-    App, Bounds, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Path,
-    PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds, WindowOptions, canvas, div,
-    fill, point, prelude::*, px, rgb, size,
+    App, Bounds, ColorExt, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
+    WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use gpui_platform;
+use palette::IntoColor;
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -433,7 +434,7 @@ fn section(
     content: impl IntoElement,
     height: Pixels,
 ) -> impl IntoElement {
-    let surface: Hsla = colors.container.into();
+    let surface: Hsla = colors.container.into_color();
 
     div()
         .flex()

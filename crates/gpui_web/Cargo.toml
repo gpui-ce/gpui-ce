@@ -24,7 +24,6 @@ http.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 log.workspace = true
-smallvec.workspace = true
 uuid.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
@@ -32,9 +31,13 @@ web-time.workspace = true
 console_error_panic_hook.workspace = true
 js-sys.workspace = true
 raw-window-handle.workspace = true
+# Forked because upstream is unmaintained and its worker bootstrap still calls
+# the wasm-bindgen init function with the positional arguments deprecated in 0.2.93.
 wasm_thread = { workspace = true, features = ["es_modules"], optional = true }
 web-sys = { workspace = true, features = [
     "console",
+    "Clipboard",
+    "ClipboardEvent",
     "CompositionEvent",
     "CssStyleDeclaration",
     "DataTransfer",
@@ -48,6 +51,8 @@ web-sys = { workspace = true, features = [
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
+    "IdleDeadline",
+    "IdleRequestOptions",
     "KeyboardEvent",
     "MediaQueryList",
     "MediaQueryListEvent",
@@ -64,6 +69,7 @@ web-sys = { workspace = true, features = [
     "VisualViewport",
     "Headers",
     "Request",
+    "RequestCredentials",
     "RequestInit",
     "RequestRedirect",
     "Response",

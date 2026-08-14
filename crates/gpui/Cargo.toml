@@ -25,14 +25,14 @@ test-support = [
   "x11",
   "proptest",
 ]
+bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
-wayland = [
-    "bitflags",
-]
+wayland = []
 x11 = []
 windows-manifest = ["dep:embed-resource"]
 input-latency-histogram = ["dep:hdrhistogram"]
+profiler = []
 
 [lib]
 path = "src/gpui.rs"
@@ -43,9 +43,10 @@ accesskit.workspace = true
 anyhow.workspace = true
 async-task.workspace = true
 backtrace = { workspace = true, optional = true }
-bitflags = { workspace = true, optional = true }
+bitflags.workspace = true
 
 collections.workspace = true
+criterion = { workspace = true, optional = true }
 ctor.workspace = true
 derive_more.workspace = true
 etagere.workspace = true
@@ -61,6 +62,7 @@ log.workspace = true
 num_cpus.workspace = true
 parking.workspace = true
 parking_lot.workspace = true
+palette.workspace = true
 postage.workspace = true
 proptest = { workspace = true, optional = true }
 chrono.workspace = true
@@ -91,6 +93,7 @@ sum_tree.workspace = true
 taffy.workspace = true
 thiserror.workspace = true
 gpui_util.workspace = true
+unicode-segmentation.workspace = true
 hdrhistogram = { workspace = true, optional = true }
 waker-fn.workspace = true
 lyon.workspace = true
@@ -100,6 +103,7 @@ pollster.workspace = true
 url.workspace = true
 uuid.workspace = true
 web-time.workspace = true
+heapless.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
@@ -144,8 +148,9 @@ lyon = { workspace = true, features = ["extra"] }
 proptest = { workspace = true }
 rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
-unicode-segmentation = { workspace = true }
 
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+proptest = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
@@ -198,6 +203,10 @@ path = "examples/learn/text.rs"
 [[example]]
 name = "transition"
 path = "examples/learn/transition.rs"
+
+[[example]]
+name = "haptic_feedback"
+path = "examples/learn/haptic_feedback.rs"
 
 [[example]]
 name = "blur"

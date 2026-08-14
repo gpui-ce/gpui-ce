@@ -21,7 +21,7 @@ pub use conditional::*;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod conditional {
     use super::*;
-    use crate::collections::FxHashMap;
+    use crate::collections::{FxHashMap, TypeIdHashMap};
     use crate::{AnyElement, App, Context, Empty, IntoElement, Render, Window};
     use std::any::{Any, TypeId};
 
@@ -64,14 +64,14 @@ mod conditional {
 
     struct InspectedElement {
         id: InspectorElementId,
-        states: FxHashMap<TypeId, Box<dyn Any>>,
+        states: TypeIdHashMap<Box<dyn Any>>,
     }
 
     impl InspectedElement {
         fn new(id: InspectorElementId) -> Self {
             InspectedElement {
                 id,
-                states: FxHashMap::default(),
+                states: Default::default(),
             }
         }
     }

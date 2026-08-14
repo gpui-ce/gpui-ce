@@ -170,7 +170,7 @@ impl HeadlessAppContext {
         app.update_window(window, |_, window, cx| {
             if let Some(arena_clear_needed) = window.redraw_if_rendered_frame_atlas_is_stale(cx) {
                 let image = window.render_to_image();
-                arena_clear_needed.clear();
+                arena_clear_needed.clear(cx);
                 image
             } else {
                 window.render_to_image()
@@ -421,6 +421,10 @@ mod tests {
             ))
         }
 
+        fn render_scene(&mut self, scene: &Scene, size: Size<DevicePixels>) -> Result<()> {
+            self.render_scene_to_image(scene, size).map(|_| ())
+        }
+
         fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
             self.atlas.clone()
         }
@@ -500,7 +504,7 @@ mod tests {
         })?;
 
         cx.update_window(window.into(), |_, window, cx| {
-            window.draw(cx).clear();
+            window.draw(cx).clear(cx);
             window.render_to_image()
         })??;
 
@@ -510,7 +514,7 @@ mod tests {
             window.invalidator.set_dirty(true);
             let arena_clear_needed = window.draw(cx);
             let image = window.render_to_image();
-            arena_clear_needed.clear();
+            arena_clear_needed.clear(cx);
             image
         })??;
 

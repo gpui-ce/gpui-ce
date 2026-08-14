@@ -1,7 +1,7 @@
 [package]
-name = "zed-xim"
-description = "XIM protocol parser, handler"
-version = "0.4.0-zed"
+name = "gpui_xim"
+description = "XIM protocol parser and handler, vendored for gpui-ce (fork of the `xim` crate by Riey)"
+version = "0.4.0-gpui"
 authors = ["Riey <creeper844@gmail.com>"]
 repository = "https://github.com/Riey/xim-rs"
 documentation = "https://docs.rs/xim"
@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["x11", "xim", "x11rb", "no-std"]
 edition.workspace = true
 publish = false
-license.workspace = true
+license = "MIT"
 
 [features]
 default = ["std"]

@@ -141,7 +141,7 @@ impl EditableTextState {
         init: F,
     ) -> Entity<Self>
     where
-        F: 'static + Fn(&mut Window, &mut Context<'_, EditableTextState>) -> StorageType,
+        F: 'static + FnOnce(&mut Window, &mut Context<'_, EditableTextState>) -> StorageType,
         StorageType: 'static + UnicodeTextStorage,
     {
         window.use_keyed_state(key, cx, |window, cx| Self::new(init(window, cx), cx))

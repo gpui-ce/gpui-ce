@@ -10,17 +10,10 @@ members = [
     "./crates/gpui_windows/",
     "./crates/gpui_platform/",
     "./crates/gpui_shared_string/",
-    "./crates/collections/",
-    "./crates/scheduler/",
-    "./crates/sum_tree/",
-    "./crates/gpui_util/",
-    "./crates/refineable/",
-    "./crates/derive_refineable/",
+    "./crates/gpui_wasm_thread/",
     "./crates/xim/",
     "./crates/xim_parser/",
     "./crates/xim_ctext/",
-    "./crates/util/",
-    "./crates/media/",
     "./crates/gpui_elements/",
     "./crates/gpui_collections/",
     "./crates/gpui_refineable/",
@@ -30,6 +23,7 @@ members = [
     "./crates/gpui_media/",
     "./crates/gpui_zed_util/",
     "./crates/gpui_ce_util/",
+    "./crates/gpui_path/",
     "./tooling/perf/",
 ]
 default-members = ["./crates/gpui/"]
@@ -46,16 +40,19 @@ readme = "README.md"
 rust-version = "1.97"
 
 [workspace.dependencies]
-accesskit = "0.24.1"
-accesskit_macos = "0.26.3"
-accesskit_unix = "0.22.1"
-accesskit_windows = "0.34.0"
-anyhow = "1.0.104"
+accesskit = { version = "0.24", features = ["enumn"] }
+accesskit_macos = "0.26"
+accesskit_unix = "0.22"
+accesskit_windows = "0.34"
+anyhow = "1"
 backtrace = "0.3"
-bitflags = { version = "2.13.1", default-features = false }
-collections = { path = "./crates/collections/" }
-ctor = "1.0.12"
-derive_more = { version = "2.1.1", features = [
+bitflags = { version = "2", default-features = false }
+collections = { path = "./crates/gpui_collections/", version = "0.2.2", package = "gpui_collections" }
+ctor = "1.0"
+unicode-bidi = { version = "0.3", default-features = false, features = [
+    "hardcoded-data",
+] }
+derive_more = { version = "2.1", features = [
   "add",
   "add_assign",
   "deref",
@@ -67,56 +64,84 @@ derive_more = { version = "2.1.1", features = [
   "not",
 ] }
 dunce = "1.0"
-futures = "0.3.33"
-futures-concurrency = "7.7.1"
-futures-lite = "2.6"
+futures = "0.3"
+futures-concurrency = "7.7"
 http = "1"
-image = "0.25.10"
-inventory = "0.3.24"
-itertools = "0.15.0"
-log = { version = "0.4.33", features = ["serde"] }
-parking_lot = "0.12.5"
+image = "0.25"
+inventory = "0.3"
+itertools = "0.15"
+log = { version = "0.4", features = ["serde"] }
+palette = { version = "0.7", features = ["serializing"] }
+parking_lot = "0.12"
 postage = { version = "0.5", features = ["futures-traits"] }
 proptest = { version = "1.11", features = ["attr-macro"] }
 chrono = { version = "0.4", features = ["serde"] }
 profiling = "1"
-rand = "0.10.2"
-regex = "1.13"
-refineable = { path = "./crates/refineable/" }
-scheduler = { path = "./crates/scheduler/" }
-schemars = { version = "1.2.2", features = ["indexmap2"] }
-serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.151", features = ["raw_value"] }
-slotmap = "1.1.1"
-smallvec = { version = "1.15", features = ["union", "const_new"] }
-async-channel = "2.5.0"
-stacksafe = "1.0.3"
-strum = { version = "0.28.0", features = ["derive"] }
-sum_tree = { path = "./crates/sum_tree/" }
-thiserror = "2.0.19"
+rand = "0.10"
+regex = "1"
+refineable = { path = "./crates/gpui_refineable/", version = "0.2.2", package = "gpui_refineable" }
+scheduler = { path = "./crates/gpui_scheduler/", version = "0.2.2", package = "gpui_scheduler" }
+schemars = { version = "1.2", features = ["indexmap2"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
+slotmap = "1.1"
+smallvec = { version = "1", features = ["union", "const_new"] }
+async-channel = "2.5"
+stacksafe = "1.0"
+strum = { version = "0.28", features = ["derive"] }
+sum_tree = { path = "./crates/gpui_sum_tree/", version = "0.2.2", package = "gpui_sum_tree" }
+thiserror = "2"
 hdrhistogram = "7"
 pollster = "1"
-url = "2.5"
-uuid = { version = "1.24.0", features = ["v4", "v5", "serde"] }
-web-time = "1.1.0"
+url = "2"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+web-time = "1.1"
 cocoa = "=0.26.1"
 cocoa-foundation = "=0.2.1"
 core-foundation = "0.10"
-core-foundation-sys = "0.8.7"
-core-video = { version = "0.6.1", features = ["metal"] }
-media = { path = "./crates/media/" }
+core-foundation-sys = "0.8"
+core-video = { version = "0.6", features = ["metal"] }
+media = { path = "./crates/gpui_media/", version = "0.2.2", package = "gpui_media" }
 objc = "0.2"
+block2 = "0.6"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSAttributedString",
+    "NSBundle",
+    "NSCoder",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSGeometry",
+    "NSNotification",
+    "NSNull",
+    "NSObjCRuntime",
+    "NSObject",
+    "NSProcessInfo",
+    "NSRange",
+    "NSRunLoop",
+    "NSSet",
+    "NSString",
+    "NSURL",
+    "NSUndoManager",
+    "NSValue",
+    "objc2-core-foundation",
+    "std",
+] }
+objc2-user-notifications = "0.3"
 mach2 = "0.6"
-metal = "0.33.0"
-env_logger = "0.11.11"
-unicode-segmentation = "1.13.3"
-wasm-bindgen = "0.2.126"
-scap = { version = "0.0.8-zed", package = "zed-scap", default-features = false }
+metal = "0.33"
+env_logger = "0.11"
+unicode-segmentation = "1.13"
+wasm-bindgen = "0.2"
+notify-rust = "4"
 heck = "0.5"
-proc-macro2 = "1.0.107"
-syn = { version = "3.0.3", features = ["full", "extra-traits", "visit-mut"] }
-quote = "1.0.47"
-ashpd = { version = "0.13.13", default-features = false, features = [
+proc-macro2 = "1"
+syn = { version = "3", features = ["full", "extra-traits", "visit-mut"] }
+quote = "1"
+ashpd = { version = "0.13", default-features = false, features = [
     "async-io",
     "notification",
     "open_uri",
@@ -125,48 +150,46 @@ ashpd = { version = "0.13.13", default-features = false, features = [
     "trash"
 ] }
 libc = "0.2"
-smol = "2.0.2"
-util = { path = "./crates/util/" }
-wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
-criterion = { version = "0.8.2", features = ["html_reports"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = [ "NSGraphics" ] }
-semver = { version = "1.0", features = ["serde"] }
-windows-core = "0.62.2"
+smol = "2"
+wgpu = "29.0.4"
+criterion = { version = "0.8", features = ["html_reports"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSButton",
+    "NSControl",
+    "NSGraphics",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+semver = { version = "1", features = ["serde"] }
+windows-core = "0.62"
 tokio = { version = "1" }
-gpui_util = { path = "./crates/gpui_util/" }
-xim = { path = "./crates/xim/", package = "zed-xim" }
+gpui_util = { path = "./crates/gpui_ce_util/", version = "0.2.2", package = "gpui_ce_util" }
+xim = { path = "./crates/xim/", package = "gpui_xim" }
 
 ahash = { version = "0.8", default-features = false }
-annotate-snippets = "0.12.16"
 as-raw-xcb-connection = "1"
 async-task = "4.7"
 bindgen = "0.72"
 block = "0.1"
 bytemuck = "1"
-calloop = "0.14.4"
-calloop-wayland-source = "0.4.1"
-cargo_metadata = "0.23.1"
-cargo_toml = "1"
-cbindgen = { version = "0.29.4", default-features = false }
-clap = { version = "4", features = ["derive"] }
-console_error_panic_hook = "0.1.7"
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+cbindgen = { version = "0.29", default-features = false }
+console_error_panic_hook = "0.1"
 core-graphics = "0.25"
 core-text = "22"
-cosmic-text = "0.19.0"
-dispatch2 = "0.3.1"
+cosmic-text = "0.19"
+dispatch2 = "0.3"
 embed-resource = "3"
-encoding_rs = "0.8.35"
+encoding_rs = "0.8"
 etagere = "0.3"
-filedescriptor = "0.8.3"
-flume = "0.12"
+filedescriptor = "0.8"
 font-kit = { git = "https://github.com/Havunen/font-kit", rev = "cc6f86949e40ef3a5e9b2063f8127cdcb72d7ac4", package = "font-kit", version = "0.14.3-1" }
 foreign-types = "0.5"
-getrandom = "0.4.3"
-gh-workflow = "0.9.0"
-hashbrown = { version = "0.17.1", default-features = false }
-heapless = "0.9.3"
-indexmap = "2.14.0"
-indoc = "2"
+getrandom = "0.4"
+hashbrown = { version = "0.17", default-features = false }
+heapless = "0.9"
 js-sys = "0.3"
 lyon = "1"
 num_cpus = "1"
@@ -178,36 +201,34 @@ parking = "2"
 pathfinder_geometry = "0.5"
 pin-project = "1"
 raw-window-handle = "0.6"
-rayon = "1"
-resvg = { version = "0.47.0", default-features = false }
-rustc-hash = "2"
+resvg = { version = "0.48", default-features = false }
 seahash = "4"
-serde_yaml = "0.9"
 smol_str = "0.3"
 spin = "0.12"
 swash = "0.2"
 taffy = { version = "=0.12.2", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc", "content_size", "detailed_layout_info"] }
-toml = "1"
-toml_edit = "0.25"
 ttf-parser = "0.25"
-usvg = { version = "0.47.0", default-features = false }
-waker-fn = "1.2.0"
+usvg = { version = "0.48", default-features = false }
+waker-fn = "1.2"
 wasm-bindgen-futures = "0.4"
-wasm_thread = "0.3"
-wayland-backend = "0.3.16"
-wayland-client = "0.31.15"
-wayland-cursor = "0.31.14"
-wayland-protocols = "0.32.13"
-wayland-protocols-plasma = "0.3.12"
-wayland-protocols-wlr = "0.3.12"
+# Vendored: upstream is unmaintained and its published worker bootstrap still
+# calls the wasm-bindgen init function with the positional arguments deprecated
+# in 0.2.93. See crates/gpui_wasm_thread/README.md for the local patch.
+wasm_thread = { path = "./crates/gpui_wasm_thread/", package = "gpui_wasm_thread" }
+wayland-backend = "0.3"
+wayland-client = "0.31"
+wayland-cursor = "0.31"
+wayland-protocols = "0.32"
+wayland-protocols-plasma = "0.3"
+wayland-protocols-wlr = "0.3"
 web-sys = "0.3"
-windows-numerics = "0.3.1"
-windows-registry = "0.6.1"
-x11 = "2.21.0"
-x11-clipboard = "0.9.3"
-x11-dl = "2.21.0"
-x11rb = "0.14.0"
-xkbcommon = "0.9.0"
+windows-numerics = "0.3"
+windows-registry = "0.6"
+x11 = "2.21"
+x11-clipboard = "0.9"
+x11-dl = "2.21"
+x11rb = "0.14"
+xkbcommon = "0.9"
 
 gpui = { path = "./crates/gpui/", version = "0.2.2" }
 gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0" }
@@ -261,6 +282,7 @@ features = [
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Performance",
+  "Win32_System_Power",
   "Win32_System_Pipes",
   "Win32_System_RestartManager",
   "Win32_System_SystemInformation",
@@ -278,6 +300,13 @@ features = [
   "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Media",
+  "Data",
+  "Data_Xml",
+  "Data_Xml_Dom",
+  "Win32_Storage_Packaging",
+  "Win32_Storage_Packaging_Appx",
+  "Win32_System_JobObjects",
+  "UI_Notifications",
 ]
 
 [workspace.lints.rust]

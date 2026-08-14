@@ -1,6 +1,5 @@
 use std::sync::OnceLock;
 
-use ::util::ResultExt;
 use ::windows::{
     UI::{
         Color,
@@ -13,6 +12,7 @@ use ::windows::{
 use ::windows::{Win32::System::LibraryLoader::LoadLibraryA, core::PCSTR};
 #[cfg(not(feature = "wgpu"))]
 use anyhow::Context;
+use gpui_util::ResultExt;
 
 use super::SafeCursor;
 use gpui::*;

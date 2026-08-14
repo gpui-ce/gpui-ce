@@ -41,7 +41,7 @@ mod macos_build {
             "Size".into(),
             "Pixels".into(),
             "PointF".into(),
-            "Hsla".into(),
+            "SceneHsla".into(),
             "ContentMask".into(),
             "Uniforms".into(),
             "AtlasTile".into(),
@@ -65,6 +65,10 @@ mod macos_build {
         ]);
         config.no_includes = true;
         config.enumeration.prefix_with_name = true;
+        config
+            .export
+            .rename
+            .insert("SceneHsla".into(), "Hsla".into());
 
         let mut builder = cbindgen::Builder::new();
 

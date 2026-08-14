@@ -348,6 +348,34 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_deallocates_tile_space_for_reuse() {
+        let Some(atlas) = create_atlas() else {
+            return;
+        };
+
+        let small = Size {
+            width: DevicePixels(64),
+            height: DevicePixels(64),
+        };
+        let big = Size {
+            width: DevicePixels(700),
+            height: DevicePixels(700),
+        };
+
+        let keeper_key = make_image_key(1, 0);
+        let big_key_a = make_image_key(2, 0);
+        let big_key_b = make_image_key(3, 0);
+
+        let keeper_tile = insert_tile(&atlas, &keeper_key, small);
+        let tile_a = insert_tile(&atlas, &big_key_a, big);
+        assert_eq!(keeper_tile.texture_id, tile_a.texture_id);
+
+        atlas.remove(&big_key_a);
+        let tile_b = insert_tile(&atlas, &big_key_b, big);
+        assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
+    }
+
+    #[test]
     fn test_remove_nonexistent_key_is_noop() {
         let Some(atlas) = create_atlas() else {
             return;

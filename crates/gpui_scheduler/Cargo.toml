@@ -16,10 +16,10 @@ test-support = []
 
 [dependencies]
 async-task = "4.7"
-backtrace = "0.3.76"
-chrono = { version = "0.4.45", features = ["serde"] }
+backtrace = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
 flume = "0.12"
-futures = "0.3.33"
-parking_lot = "0.12.5"
-rand = "0.10.2"
-web-time = "1.1.0"
+futures = "0.3"
+parking_lot = "0.12"
+rand = "0.10"
+web-time = "1.1"

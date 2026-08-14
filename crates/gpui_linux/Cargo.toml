@@ -27,7 +27,7 @@ wayland = [
   "wayland-protocols-plasma",
   "wayland-protocols-wlr",
   "filedescriptor",
-  "xkbcommon",
+  "xkbcommon/wayland",
   "open",
   "gpui/wayland",
 ]
@@ -53,6 +53,7 @@ collections.workspace = true
 image.workspace = true
 futures.workspace = true
 gpui.workspace = true
+gpui_util.workspace = true
 gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
 itertools.workspace = true
 libc.workspace = true
@@ -65,7 +66,6 @@ smallvec.workspace = true
 smol.workspace = true
 strum.workspace = true
 url.workspace = true
-util.workspace = true
 uuid.workspace = true
 
 # Always used
@@ -74,6 +74,7 @@ oo7 = { workspace = true, default-features = false, features = [
     "native_crypto",
 ] }
 calloop.workspace = true
+notify-rust.workspace = true
 raw-window-handle.workspace = true
 
 # Used in both windowing options

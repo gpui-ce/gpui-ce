@@ -815,11 +815,29 @@ fn apply_force_width_to_layout(layout: &mut LineLayout, force_width: Pixels) {
 }
 
 /// A run of text with a single font.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[expect(missing_docs)]
 pub struct FontRun {
     pub len: usize,
     pub font_id: FontId,
+    pub letter_spacing: Option<Pixels>,
+}
+
+impl Hash for FontRun {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.len.hash(state);
+        self.font_id.hash(state);
+        self.letter_spacing
+            .map(Pixels::as_f32)
+            .map(|value| {
+                if value == 0.0 {
+                    0.0f32.to_bits()
+                } else {
+                    value.to_bits()
+                }
+            })
+            .hash(state);
+    }
 }
 
 trait AsCacheKeyRef {
@@ -1003,6 +1021,7 @@ mod tests {
         let runs = [FontRun {
             len: text_len,
             font_id: FontId(0),
+            letter_spacing: None,
         }];
 
         for ix in 0..LINE_COUNT {

@@ -18,36 +18,39 @@ async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
 collections = { package = "gpui_collections", version = "0.2.2", path = "../gpui_collections" }
 dunce = "1"
 futures-lite = "2.6"
-futures = "0.3.33"
+futures = "0.3"
 globset = "0.4"
-itertools = "0.15.0"
-log = { version = "0.4.33", features = ["kv_unstable_serde", "serde"] }
-regex = "1.13"
+itertools = "0.15"
+log = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
+regex = "1"
 rust-embed = { version = "8.12", features = ["include-exclude"] }
 schemars = { version = "1.2", features = ["indexmap2"] }
-serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.151", features = ["preserve_order", "raw_value"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
 serde_json_lenient = { version = "0.2", features = [
   "preserve_order",
   "raw_value",
 ] }
-shlex = "2.0.1"
-take-until = "0.2.0"
-tempfile = "3.27.0"
+shlex = "2.0"
+take-until = "0.2"
+tempfile = "3.27"
 unicase = "2.9"
-url = "2.5"
-percent-encoding = "2.3.2"
+url = "2"
+percent-encoding = "2.3"
 gpui_util = { package = "gpui_ce_util", version = "0.2.2", path = "../gpui_ce_util" }
+path = { package = "gpui_path", version = "0.2.2", path = "../gpui_path", features = [
+  "serde",
+] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-smol = "2.0"
-which = "8.0.5"
+smol = "2"
+which = "8.0"
 async-fs = "2.2"
 walkdir = "2.5"
 dirs = "6.0"
 
 [target.'cfg(unix)'.dependencies]
-command-fds = "0.3.3"
+command-fds = "0.3"
 libc = "0.2"
 nix = { version = "0.31", features = ["user"] }
 
@@ -55,14 +58,15 @@ nix = { version = "0.31", features = ["user"] }
 mach2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-tendril = "0.5.1"
+tendril = "0.5"
+windows.workspace = true
 
 [dev-dependencies]
-pretty_assertions = { version = "1.4.1", features = ["unstable"] }
-git2 = { version = "0.21", default-features = false, features = [
-  "vendored-libgit2",
-] }
+pretty_assertions = { version = "1.4", features = ["unstable"] }
 rand = "0.10"
+path = { package = "gpui_path", version = "0.2.2", path = "../gpui_path", features = [
+  "test-support",
+] }
 
 [features]
-test-support = []
+test-support = ["path/test-support"]

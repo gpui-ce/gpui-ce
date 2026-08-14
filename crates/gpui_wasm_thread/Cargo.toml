@@ -1,0 +1,34 @@
+[package]
+name = "gpui_wasm_thread"
+version = "0.3.3"
+authors = ["Jurgis Balciunas <chemicstry@gmail.com>"]
+edition = "2018"
+description = "An std thread replacement for wasm32 target (vendored fork of `wasm_thread` 0.3.3 for gpui-ce)"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/chemicstry/wasm_thread"
+publish = false
+
+[lib]
+name = "wasm_thread"
+path = "src/lib.rs"
+
+[features]
+default = ["es_modules"]
+es_modules = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = [
+    "Blob",
+    "DedicatedWorkerGlobalScope",
+    "MessageEvent",
+    "Url",
+    "Worker",
+    "WorkerType",
+    "WorkerOptions",
+    "Window",
+    "Navigator",
+    "WorkerNavigator",
+] }
+js-sys.workspace = true
+futures.workspace = true
