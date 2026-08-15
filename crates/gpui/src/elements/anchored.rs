@@ -320,7 +320,7 @@ mod tests {
                                         .h(px(300.)),
                                 ),
                         )
-                        .with_priority(1),
+                        .priority(1),
                     ),
             )
         }
