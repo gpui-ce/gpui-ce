@@ -46,6 +46,7 @@ use refineable::Refineable;
 use scheduler::Instant;
 use slotmap::SlotMap;
 use smallvec::SmallVec;
+use std::collections::HashMap;
 use std::{
     any::{Any, TypeId},
     borrow::Cow,
@@ -732,10 +733,102 @@ pub(crate) struct CursorStyleRequest {
     pub(crate) style: CursorStyle,
 }
 
+/// Contains information about an occlusion test through hitboxes at a mouse position.
 #[derive(Default, Eq, PartialEq)]
-pub(crate) struct HitTest {
-    pub(crate) ids: SmallVec<[HitboxId; 8]>,
-    pub(crate) hover_hitbox_count: usize,
+pub struct HitTest {
+    // HitboxIds which were included in the test's click path (the last of which will be the box that caused occlusion)
+    ordered_ids: SmallVec<[HitboxId; 8]>,
+    // metadata about all hitboxes, even those outside the test's path
+    entries: HashMap<HitboxId, HitTestEntry>,
+    // the number of hitbox ids in `ordered_ids` which support mouse. anything after this amount only support scroll.
+    hover_hitbox_count: usize,
+}
+
+impl HitTest {
+    /// Creates a new hit-test by iterating the provided hitboxes to find all those which are not occluded.
+    fn new<'a>(hitboxes: impl Iterator<Item = &'a Hitbox>, position: Point<Pixels>) -> Self {
+        let mut num_until_mouse_blocked = None::<usize>;
+        let mut ids_until_occlusion = SmallVec::default();
+        let mut entries = HashMap::default();
+        let mut found_hit_occlusion = false;
+        // index is 0=closest to viewer, n=farthest from viewer
+        for (index, hitbox) in hitboxes.enumerate() {
+            entries.insert(
+                hitbox.id,
+                HitTestEntry {
+                    depth: index,
+                    tags: hitbox.tags.clone(),
+                },
+            );
+
+            if found_hit_occlusion {
+                continue;
+            }
+
+            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+            if !bounds.contains(&position) {
+                continue;
+            }
+
+            ids_until_occlusion.push(hitbox.id);
+
+            // Identify the threshold at which mouse is blocked in any way (BlockMouseExceptScroll or BlockMouse)
+            if num_until_mouse_blocked.is_none() && hitbox.behavior.blocks_mouse() {
+                num_until_mouse_blocked = Some(ids_until_occlusion.len());
+            }
+
+            // Found a hitbox that fully occludes boxes behind it. Can now stop iterating.
+            if hitbox.behavior.occludes() {
+                found_hit_occlusion = true;
+            }
+        }
+        Self {
+            hover_hitbox_count: num_until_mouse_blocked.unwrap_or(ids_until_occlusion.len()),
+            ordered_ids: ids_until_occlusion,
+            entries,
+        }
+    }
+
+    /// Returns an iterator over all HitboxIds that were not occluded/blocked.
+    /// The last element in the list will be the element which blocked the mouse from hitboxes behind it.
+    pub fn iter_hovered(&self) -> impl Iterator<Item = &HitboxId> {
+        self.ordered_ids.iter().take(self.hover_hitbox_count)
+    }
+
+    /// Returns an iterator over all HitboxIds that were not blocking scroll (not `HitboxBehavior::BlockMouse`).
+    /// The last element in the list will be the element which blocked the mouse from hitboxes behind it.
+    pub fn iter_scrollable(&self) -> impl Iterator<Item = &HitboxId> {
+        self.ordered_ids.iter()
+    }
+
+    /// Returns metadata about a hitbox included in this hit-test.
+    pub fn entry(&self, id: &HitboxId) -> Option<&HitTestEntry> {
+        self.entries.get(id)
+    }
+}
+
+/// An entry in a [`HitTest`] which represents a [`Hitbox`]. Contains some metadata about the
+/// hitbox in the frame the HitTest was evaluated on.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HitTestEntry {
+    /// The depth of the hitbox in the ordered list from the Frame.
+    /// A smaller number is closer to the viewer, and a larger number is farther from the viewer.
+    depth: usize,
+    tags: Vec<SharedString>,
+}
+
+impl HitTestEntry {
+    /// Returns the depth of the [`Hitbox`] in the frame.
+    /// A smaller value (closer to 0) represents closer to the viewer.
+    /// A larger value represents a hitbox farther from the viewer.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Returns any tags assigned to the [`Hitbox`] in the frame.
+    pub fn tags(&self) -> &Vec<SharedString> {
+        &self.tags
+    }
 }
 
 /// A type of window control area that corresponds to the platform window.
@@ -797,13 +890,7 @@ impl HitboxId {
     }
 
     fn hit_test(self, window: &Window) -> bool {
-        let hit_test = &window.mouse_hit_test;
-        for id in hit_test.ids.iter().take(hit_test.hover_hitbox_count) {
-            if self == *id {
-                return true;
-            }
-        }
-        false
+        window.mouse_hit_test().iter_hovered().contains(&self)
     }
 
     /// Checks if the hitbox with this ID contains the mouse and should handle scroll events.
@@ -811,7 +898,7 @@ impl HitboxId {
     /// `is_hovered` should be used. See the documentation of `Hitbox::is_hovered` for details about
     /// this distinction.
     pub fn should_handle_scroll(self, window: &Window) -> bool {
-        window.mouse_hit_test.ids.contains(&self)
+        window.mouse_hit_test().iter_scrollable().contains(&self)
     }
 
     fn next(mut self) -> HitboxId {
@@ -832,6 +919,8 @@ pub struct Hitbox {
     pub content_mask: ContentMask<Pixels>,
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
+    /// Additional user-provided tags to extend behavior of the hitbox
+    pub tags: Vec<SharedString>,
 }
 
 impl Hitbox {
@@ -923,6 +1012,18 @@ pub enum HitboxBehavior {
     /// inconsistent UI where clicks and moves interact with elements that are not considered to
     /// be hovered.
     BlockMouseExceptScroll,
+}
+
+impl HitboxBehavior {
+    /// Returns true if this behavior should prevent hit-tests from marking hitboxes behind it as hovered (aka this is the last element that can be hovered).
+    pub fn blocks_mouse(&self) -> bool {
+        matches!(self, Self::BlockMouse | Self::BlockMouseExceptScroll)
+    }
+
+    /// Returns true if this behavior shops all hit-test behavior (both mouse and scroll).
+    pub fn occludes(&self) -> bool {
+        matches!(self, Self::BlockMouse)
+    }
 }
 
 /// An identifier for a tooltip.
@@ -1083,27 +1184,7 @@ impl Frame {
     }
 
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
-        let mut set_hover_hitbox_count = false;
-        let mut hit_test = HitTest::default();
-        for hitbox in self.hitboxes.iter().rev() {
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if bounds.contains(&position) {
-                hit_test.ids.push(hitbox.id);
-                if !set_hover_hitbox_count
-                    && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
-                {
-                    hit_test.hover_hitbox_count = hit_test.ids.len();
-                    set_hover_hitbox_count = true;
-                }
-                if hitbox.behavior == HitboxBehavior::BlockMouse {
-                    break;
-                }
-            }
-        }
-        if !set_hover_hitbox_count {
-            hit_test.hover_hitbox_count = hit_test.ids.len();
-        }
-        hit_test
+        HitTest::new(self.hitboxes.iter().rev(), position)
     }
 
     pub(crate) fn focus_path(&self) -> SmallVec<[FocusId; 8]> {
@@ -1770,7 +1851,8 @@ impl Window {
                 handle
                     .update(&mut cx, |_, window, _cx| {
                         for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
-                            if window.mouse_hit_test.ids.contains(&hitbox.id) {
+                            let mut scrollable_ids = window.mouse_hit_test().iter_scrollable();
+                            if scrollable_ids.contains(&hitbox.id) {
                                 return Some(*area);
                             }
                         }
@@ -4945,12 +5027,25 @@ impl Window {
         bounds
     }
 
-    /// This method should be called during `prepaint`. You can use
-    /// the returned [Hitbox] during `paint` or in an event handler
-    /// to determine whether the inserted hitbox was the topmost.
+    /// This method should be called during `prepaint`. You can use the returned [Hitbox]
+    /// during `paint` or in an event handler to determine whether the inserted hitbox was the topmost.
     ///
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn insert_hitbox(&mut self, bounds: Bounds<Pixels>, behavior: HitboxBehavior) -> Hitbox {
+        self.insert_hitbox_mut(bounds, behavior).clone()
+    }
+
+    /// This method should be called during `prepaint`. You can use the returned [Hitbox]
+    /// during `paint` or in an event handler to determine whether the inserted hitbox was the topmost.
+    ///
+    /// Returns a mutable reference to the hitbox inserted for the next frame.
+    ///
+    /// This method should only be called as part of the prepaint phase of element drawing.
+    pub fn insert_hitbox_mut(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        behavior: HitboxBehavior,
+    ) -> &mut Hitbox {
         self.invalidator.debug_assert_prepaint();
 
         let content_mask = self.content_mask();
@@ -4961,9 +5056,9 @@ impl Window {
             bounds,
             content_mask,
             behavior,
+            tags: Vec::default(),
         };
-        self.next_frame.hitboxes.push(hitbox.clone());
-        hitbox
+        self.next_frame.hitboxes.push_mut(hitbox)
     }
 
     /// Set a hitbox which will act as a control area of the platform window.
@@ -5583,6 +5678,11 @@ impl Window {
                 window.schedule_touch_momentum_tick();
             }
         });
+    }
+
+    /// Returns the hit-test that was most recently cached from a mouse event on the rendered frame.
+    pub fn mouse_hit_test(&self) -> &HitTest {
+        &self.mouse_hit_test
     }
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
@@ -6772,7 +6872,7 @@ impl Window {
                 inspector.update(cx, |inspector, _cx| {
                     if let Some(depth) = inspector.pick_depth.as_mut() {
                         *depth += f32::from(delta_y) / SCROLL_PIXELS_PER_LAYER;
-                        let max_depth = self.mouse_hit_test.ids.len() as f32 - 0.5;
+                        let max_depth = self.mouse_hit_test.entries.len() as f32 - 0.5;
                         if *depth < 0.0 {
                             *depth = 0.0;
                         } else if *depth > max_depth {
@@ -6797,9 +6897,9 @@ impl Window {
     ) -> Option<(HitboxId, crate::InspectorElementId)> {
         if let Some(pick_depth) = inspector.pick_depth {
             let depth = (pick_depth as i64).try_into().unwrap_or(0);
-            let max_skipped = self.mouse_hit_test.ids.len().saturating_sub(1);
+            let max_skipped = self.mouse_hit_test.entries.len().saturating_sub(1);
             let skip_count = (depth as usize).min(max_skipped);
-            for hitbox_id in self.mouse_hit_test.ids.iter().skip(skip_count) {
+            for hitbox_id in self.mouse_hit_test.ordered_ids.iter().skip(skip_count) {
                 if let Some(inspector_id) = frame.inspector_hitboxes.get(hitbox_id) {
                     return Some((*hitbox_id, inspector_id.clone()));
                 }
