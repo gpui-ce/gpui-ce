@@ -36,7 +36,9 @@ pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
 pub const fn hsla(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     Hsla {
         color: palette::Hsl::new_const(
-            RgbHue::new(h.clamp(0., 1.)),
+            // `RgbHue` stores degrees, so the 0..1 fraction of the circle needs
+            // scaling to 0..360 before it's wrapped.
+            RgbHue::new(h.clamp(0., 1.) * 360.),
             s.clamp(0., 1.),
             l.clamp(0., 1.),
         ),
@@ -81,17 +83,17 @@ pub const fn red() -> Hsla {
 
 /// The color blue in [`Hsla`]
 pub const fn blue() -> Hsla {
-    Hsla::new_const(RgbHue::new(0.6666666667), 1., 0.5, 1.)
+    Hsla::new_const(RgbHue::new(240.), 1., 0.5, 1.)
 }
 
 /// The color green in [`Hsla`]
 pub const fn green() -> Hsla {
-    Hsla::new_const(RgbHue::new(0.3333333333), 1., 0.25, 1.)
+    Hsla::new_const(RgbHue::new(120.), 1., 0.25, 1.)
 }
 
 /// The color yellow in [`Hsla`]
 pub const fn yellow() -> Hsla {
-    Hsla::new_const(RgbHue::new(0.1666666667), 1., 0.5, 1.)
+    Hsla::new_const(RgbHue::new(60.), 1., 0.5, 1.)
 }
 
 /// Generates the JsonSchema for palette::Hsla

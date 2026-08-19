@@ -86,7 +86,7 @@ impl Default for EditableTextColors {
         const WHITE_50PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.5);
         const WHITE_70PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.7);
         // approx rgb(38 79 120) or oklch(41.9% 0.0829 250.4)
-        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla::new_const(RgbHue::new(0.583), 0.519, 0.31, 0.5);
+        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla::new_const(RgbHue::new(210.), 0.519, 0.31, 0.5);
         Self {
             placeholder: WHITE_50PC,
             selection: LIGHT_NAVY_BLUE_50PC,
