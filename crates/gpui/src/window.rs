@@ -3925,6 +3925,20 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.paint_drop_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paint the drop (non-inset) shadows from `shadows` with Figma-style corner smoothing.
+    /// Inset shadows are skipped.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_drop_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -3932,6 +3946,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if shadow.inset {
                 continue;
@@ -3947,7 +3962,7 @@ impl Window {
                 element_bounds,
                 element_corner_radii,
                 inset: 0,
-                pad: 0,
+                corner_smoothing,
             });
         }
     }
@@ -3961,6 +3976,18 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.paint_inset_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paint the inset shadows from `shadows` with Figma-style corner smoothing. Drop shadows
+    /// are skipped.
+    pub fn paint_inset_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -3968,6 +3995,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if !shadow.inset {
                 continue;
@@ -3992,7 +4020,7 @@ impl Window {
                 element_bounds,
                 element_corner_radii,
                 inset: 1,
-                pad: 0,
+                corner_smoothing,
             });
         }
     }
@@ -4012,6 +4040,22 @@ impl Window {
         corner_radii: Corners<Pixels>,
         filters: &[Filter],
     ) {
+        self.paint_backdrop_filter_with_corner_smoothing(bounds, corner_radii, 0.0, filters);
+    }
+
+    /// Paint a backdrop filter with Figma-style corner smoothing into the scene for the next
+    /// frame at the current z-index.
+    ///
+    /// Does nothing when `filters` produce no visible blur.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_filter_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        filters: &[Filter],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4029,6 +4073,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: self.element_opacity(),
         });
@@ -4047,6 +4092,24 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_filter_layer_with_corner_smoothing(bounds, corner_radii, 0.0, filters, f)
+    }
+
+    /// Isolate the painting performed by `f` into a content-filter group with Figma-style
+    /// corner smoothing.
+    ///
+    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
+    /// indirection.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn with_filter_layer_with_corner_smoothing<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         filters: &[Filter],
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
@@ -4074,6 +4137,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
             is_start: true,
@@ -4099,6 +4163,14 @@ impl Window {
     /// where the circular arcs meet. This will not display well when combined with dashed borders.
     /// Use `Corners::clamp_radii_for_quad_size` if the radii should fit within the bounds.
     pub fn paint_quad(&mut self, quad: PaintQuad) {
+        self.paint_quad_with_corner_smoothing(quad, 0.0);
+    }
+
+    /// Paint one or more quads with Figma-style corner smoothing into the scene for the next
+    /// frame at the current stacking context.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_quad_with_corner_smoothing(&mut self, quad: PaintQuad, corner_smoothing: f32) {
         self.invalidator.debug_assert_paint();
 
         let opacity = self.element_opacity();
@@ -4113,9 +4185,13 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
+            pad: 0,
         };
 
-        if !quad.background.is_transparent() {
+        // Smoothed corners can extend beyond the circular radius used to size the border strips
+        // below. Submit the full quad so the fragment shader can clip the complete curve.
+        if !quad.background.is_transparent() || quad.corner_smoothing > 0.0 {
             self.next_frame.scene.insert_primitive(quad);
             return;
         }
@@ -4426,13 +4502,14 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
                 grayscale: false.into(),
+                opacity,
+                corner_smoothing: 0.0, // Emojis use circular corners
                 bounds,
                 corner_radii: Default::default(),
                 content_mask,
                 tile,
-                opacity,
+                padding: Edges::default(),
             });
         }
         Ok(())
@@ -4520,6 +4597,31 @@ impl Window {
         frame_index: usize,
         grayscale: bool,
     ) -> Result<()> {
+        self.paint_image_with_corner_smoothing(
+            bounds,
+            image_bounds,
+            corner_radii,
+            0.0,
+            data,
+            frame_index,
+            grayscale,
+        )
+    }
+
+    /// Paint an image with Figma-style corner smoothing into the scene for the next frame at the
+    /// current z-index.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_image_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        image_bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let visible_bounds = bounds.intersect(&image_bounds);
@@ -4598,13 +4700,14 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
             grayscale: grayscale.into(),
+            opacity,
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             bounds: visible_bounds_snapped,
             content_mask,
             corner_radii,
             tile: sub_tile,
-            opacity,
+            padding: Edges::default(),
         });
         Ok(())
     }

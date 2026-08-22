@@ -284,6 +284,10 @@ pub struct Style {
     #[refineable]
     pub corner_radii: Corners<AbsoluteLength>,
 
+    /// Figma-style corner smoothing. `0.0` keeps circular corners and `1.0` requests maximum
+    /// smoothing.
+    pub corner_smoothing: Option<f32>,
+
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
 
@@ -777,13 +781,24 @@ impl Style {
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
+        let corner_smoothing = self.corner_smoothing.unwrap_or_default();
 
-        window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
+        window.paint_drop_shadows_with_corner_smoothing(
+            bounds,
+            corner_radii,
+            corner_smoothing,
+            &self.box_shadow,
+        );
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
         if !self.backdrop_filter.is_empty() {
-            window.paint_backdrop_filter(bounds, corner_radii, &self.backdrop_filter);
+            window.paint_backdrop_filter_with_corner_smoothing(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.backdrop_filter,
+            );
         }
 
         // The element's own box — background, inset shadows, children, and border — painted as a
@@ -807,17 +822,25 @@ impl Style {
                     None => Hsla::default(),
                 };
                 border_color.alpha = 0.;
-                window.paint_quad(quad(
-                    bounds,
-                    corner_radii,
-                    background_color.unwrap_or_default(),
-                    Edges::default(),
-                    border_color,
-                    self.border_style,
-                ));
+                window.paint_quad_with_corner_smoothing(
+                    quad(
+                        bounds,
+                        corner_radii,
+                        background_color.unwrap_or_default(),
+                        Edges::default(),
+                        border_color,
+                        self.border_style,
+                    ),
+                    corner_smoothing,
+                );
             }
 
-            window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+            window.paint_inset_shadows_with_corner_smoothing(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.box_shadow,
+            );
 
             continuation(window, cx);
 
@@ -825,23 +848,32 @@ impl Style {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let mut background = self.border_color.unwrap_or_default();
                 background.alpha = 0.;
-                window.paint_quad(quad(
-                    bounds,
-                    corner_radii,
-                    background,
-                    border_widths,
-                    self.border_color.unwrap_or_default(),
-                    self.border_style,
-                ));
+                window.paint_quad_with_corner_smoothing(
+                    quad(
+                        bounds,
+                        corner_radii,
+                        background,
+                        border_widths,
+                        self.border_color.unwrap_or_default(),
+                        self.border_style,
+                    ),
+                    corner_smoothing,
+                );
             }
         };
 
         if self.filter.is_empty() {
             paint_box(window, cx);
         } else {
-            window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
-                paint_box(window, cx);
-            });
+            window.with_filter_layer_with_corner_smoothing(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.filter,
+                |window| {
+                    paint_box(window, cx);
+                },
+            );
         }
 
         #[cfg(debug_assertions)]
@@ -893,6 +925,7 @@ impl Default for Style {
             border_color: None,
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
+            corner_smoothing: None,
             box_shadow: Default::default(),
             filter: Default::default(),
             backdrop_filter: Default::default(),
@@ -1597,6 +1630,48 @@ mod tests {
         assert_eq!(
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
+        );
+    }
+
+    #[test]
+    fn test_rounded_smoothing_style_helpers() {
+        let amounts = [
+            StyleRefinement::default().rounded_smoothing_0(),
+            StyleRefinement::default().rounded_smoothing_0p1(),
+            StyleRefinement::default().rounded_smoothing_0p2(),
+            StyleRefinement::default().rounded_smoothing_0p3(),
+            StyleRefinement::default().rounded_smoothing_0p4(),
+            StyleRefinement::default().rounded_smoothing_0p5(),
+            StyleRefinement::default().rounded_smoothing_0p6(),
+            StyleRefinement::default().rounded_smoothing_0p7(),
+            StyleRefinement::default().rounded_smoothing_0p8(),
+            StyleRefinement::default().rounded_smoothing_0p9(),
+            StyleRefinement::default().rounded_smoothing_1(),
+        ]
+        .map(|style| style.corner_smoothing);
+
+        assert_eq!(
+            amounts,
+            [
+                Some(0.0),
+                Some(0.1),
+                Some(0.2),
+                Some(0.3),
+                Some(0.4),
+                Some(0.5),
+                Some(0.6),
+                Some(0.7),
+                Some(0.8),
+                Some(0.9),
+                Some(1.0),
+            ]
+        );
+
+        assert_eq!(
+            StyleRefinement::default()
+                .rounded_smoothing(2.0)
+                .corner_smoothing,
+            Some(1.0)
         );
     }
 }

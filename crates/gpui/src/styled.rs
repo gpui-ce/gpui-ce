@@ -968,4 +968,16 @@ pub trait Styled: Sized {
         self.style().debug_below = Some(true);
         self
     }
+
+    /// Sets rounded corner smoothing to the specified amount.
+    fn rounded_smoothing(mut self, amount: f32) -> Self {
+        self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Sets rounded corner smoothing to IOS's squircle value (0.6).
+    fn rounded_smoothing_ios(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.6);
+        self
+    }
 }

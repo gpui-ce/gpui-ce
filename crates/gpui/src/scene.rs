@@ -693,6 +693,8 @@ pub struct Quad {
     pub border_color: SceneHsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    pub corner_smoothing: f32,
+    pub pad: u32,
 }
 
 impl From<Quad> for Primitive {
@@ -734,7 +736,7 @@ pub struct Shadow {
     pub element_corner_radii: Corners<ScaledPixels>,
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
     pub inset: u32,
-    pub pad: u32, // align to 8 bytes
+    pub corner_smoothing: f32,
 }
 
 impl From<Shadow> for Primitive {
@@ -753,6 +755,7 @@ pub struct BackdropFilter {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
+    pub corner_smoothing: f32,
     /// The filter chain applied to the backdrop, in scene (device-pixel) space. Identity filters
     /// are dropped at paint time, so a `BackdropFilter` is only emitted when this is non-empty.
     ///
@@ -781,6 +784,7 @@ pub struct FilterBoundary {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
+    pub corner_smoothing: f32,
     /// The filter chain applied to the isolated group, in scene (device-pixel) space. Identity
     /// filters are dropped at paint time, so a `FilterBoundary` is only emitted when non-empty.
     /// Inline capacity 4 (same struct size as 1 here — see [`BackdropFilter::filters`]).
@@ -953,13 +957,14 @@ impl From<SubpixelSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct PolychromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
     pub grayscale: PaddedBool32,
     pub opacity: f32,
+    pub corner_smoothing: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    pub padding: Edges<u32>,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -1166,6 +1171,11 @@ mod tests {
         ScaledPixels(value)
     }
 
+    #[test]
+    fn shadow_matches_gpu_layout() {
+        assert_eq!(std::mem::size_of::<Shadow>(), 112);
+    }
+
     /// All test primitives cover the same region so the bounds tree assigns strictly
     /// increasing orders in insertion order — making the expected batch order deterministic.
     fn full_bounds() -> Bounds<ScaledPixels> {
@@ -1221,6 +1231,7 @@ mod tests {
             bounds: full_bounds(),
             content_mask: mask(),
             corner_radii: Corners::default(),
+            corner_smoothing: 0.0,
             filters: smallvec::smallvec![ScaledFilter::Blur(sp(8.0))],
             opacity: 1.0,
             is_start,
@@ -1232,6 +1243,7 @@ mod tests {
             bounds: full_bounds(),
             content_mask: mask(),
             corner_radii: Corners::default(),
+            corner_smoothing: 0.0,
             filters: smallvec::smallvec![ScaledFilter::Blur(sp(20.0))],
             opacity: 1.0,
             ..Default::default()

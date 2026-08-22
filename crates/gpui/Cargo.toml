@@ -220,6 +220,10 @@ name = "blur"
 path = "examples/learn/blur.rs"
 
 [[example]]
+name = "corner_smoothing"
+path = "examples/learn/corner_smoothing.rs"
+
+[[example]]
 name = "keyring"
 path = "examples/learn/keyring.rs"
 

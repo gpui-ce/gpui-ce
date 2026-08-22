@@ -309,6 +309,762 @@ float quad_sdf(float2 pt, Bounds bounds, Corners corner_radii) {
     return quad_sdf_impl(corner_center_to_point, corner_radius);
 }
 
+float4 corner_values(Corners corner_radii) {
+    return float4(
+        corner_radii.top_left,
+        corner_radii.top_right,
+        corner_radii.bottom_right,
+        corner_radii.bottom_left
+    );
+}
+
+// The Figma-style corner construction below is derived from
+// Tien Pham's figma-squircle implementation:
+// https://github.com/phamfoo/figma-squircle
+// Copyright (c) 2021 Tien Pham
+// Licensed under the MIT License. See ../THIRD_PARTY_NOTICES.md.
+
+struct FigmaCornerLayout {
+    float4 horizontal_budgets;
+    float4 vertical_budgets;
+};
+
+struct FigmaCornerExtents {
+    float4 horizontal;
+    float4 vertical;
+};
+
+float2 figma_split_side(float length, float first_radius, float second_radius) {
+    float total_radius = first_radius + second_radius;
+    if (total_radius == 0.0) return float2(0.0, 0.0);
+    float first_budget = length * first_radius / total_radius;
+    return float2(first_budget, length - first_budget);
+}
+
+// Normalizes the radii, then assigns each corner its share of each adjacent
+// edge. The stable radius order is TL, TR, BL, BR. Vectors use TL, TR, BR, BL.
+FigmaCornerLayout figma_corner_layout(float2 size, Corners corner_radii) {
+    float4 radii = max(
+        corner_values(corner_radii),
+        float4(0.0, 0.0, 0.0, 0.0)
+    );
+    float4 budgets = float4(-1.0, -1.0, -1.0, -1.0);
+    int4 order = int4(0, 1, 3, 2);
+
+    [unroll]
+    for (int sort_pass = 0; sort_pass < 3; sort_pass++) {
+        [unroll]
+        for (int i = 0; i < 3 - sort_pass; i++) {
+            if (radii[order[i + 1]] > radii[order[i]]) {
+                int temporary = order[i];
+                order[i] = order[i + 1];
+                order[i + 1] = temporary;
+            }
+        }
+    }
+
+    [unroll]
+    for (int rank = 0; rank < 4; rank++) {
+        int corner = order[rank];
+        float radius = radii[corner];
+        int horizontal_neighbor;
+        int vertical_neighbor;
+
+        if (corner == 0) {
+            horizontal_neighbor = 1;
+            vertical_neighbor = 3;
+        } else if (corner == 1) {
+            horizontal_neighbor = 0;
+            vertical_neighbor = 2;
+        } else if (corner == 2) {
+            horizontal_neighbor = 3;
+            vertical_neighbor = 1;
+        } else {
+            horizontal_neighbor = 2;
+            vertical_neighbor = 0;
+        }
+
+        float horizontal_radius = radii[horizontal_neighbor];
+        float horizontal_budget = 0.0;
+        if (radius != 0.0 || horizontal_radius != 0.0) {
+            horizontal_budget = budgets[horizontal_neighbor] >= 0.0
+                ? size.x - budgets[horizontal_neighbor]
+                : size.x * radius / (radius + horizontal_radius);
+        }
+
+        float vertical_radius = radii[vertical_neighbor];
+        float vertical_budget = 0.0;
+        if (radius != 0.0 || vertical_radius != 0.0) {
+            vertical_budget = budgets[vertical_neighbor] >= 0.0
+                ? size.y - budgets[vertical_neighbor]
+                : size.y * radius / (radius + vertical_radius);
+        }
+
+        float budget = max(0.0, min(horizontal_budget, vertical_budget));
+        budgets[corner] = budget;
+        radii[corner] = min(radius, budget);
+    }
+
+    float2 top = figma_split_side(size.x, radii[0], radii[1]);
+    float2 bottom = figma_split_side(size.x, radii[3], radii[2]);
+    float2 left = figma_split_side(size.y, radii[0], radii[3]);
+    float2 right = figma_split_side(size.y, radii[1], radii[2]);
+
+    FigmaCornerLayout corner_layout;
+    corner_layout.horizontal_budgets = float4(top.x, top.y, bottom.y, bottom.x);
+    corner_layout.vertical_budgets = float4(left.x, right.x, right.y, left.y);
+    return corner_layout;
+}
+
+struct FigmaAxisParams {
+    float a;
+    float b;
+    float p;
+};
+
+struct FigmaCornerParams {
+    float radius;
+    float smoothing;
+    float arc_sweep;
+    float arc_delta;
+    float c;
+    float d;
+    FigmaAxisParams horizontal;
+    FigmaAxisParams vertical;
+};
+
+struct CubicClosestPoint {
+    float2 point;
+    float2 tangent;
+    float distance;
+    float path_t;
+};
+
+struct SdfSample {
+    float distance;
+    float2 normal;
+    float path_t;
+    uint segment;
+};
+
+struct FigmaRectSample {
+    SdfSample sdf;
+    uint corner;
+};
+
+static const uint FIGMA_SEGMENT_STRAIGHT = 0u;
+// Corner progress runs from the horizontal shoulder through the full arc to
+// the vertical shoulder. Cubic path_t always runs from its straight endpoint
+// to the arc, while arc path_t covers the full arc from 0 to 1.
+static const uint FIGMA_SEGMENT_FIRST_CUBIC = 1u;
+static const uint FIGMA_SEGMENT_ARC = 2u;
+static const uint FIGMA_SEGMENT_SECOND_CUBIC = 3u;
+static const uint FIGMA_NO_CORNER = 4u;
+static const float FIGMA_EPSILON = 0.000001;
+
+FigmaCornerParams figma_corner_params(
+    float corner_radius,
+    float horizontal_budget,
+    float vertical_budget,
+    float corner_smoothing
+) {
+    horizontal_budget = max(horizontal_budget, 0.0);
+    vertical_budget = max(vertical_budget, 0.0);
+    float radius = min(
+        max(corner_radius, 0.0),
+        min(horizontal_budget, vertical_budget)
+    );
+    float smoothing = radius > FIGMA_EPSILON
+        ? clamp(corner_smoothing, 0.0, 1.0)
+        : 0.0;
+    float desired_reach = radius * (1.0 + smoothing);
+    float horizontal_reach = min(desired_reach, horizontal_budget);
+    float vertical_reach = min(desired_reach, vertical_budget);
+    float arc_sweep = 0.5 * M_PI_F * (1.0 - smoothing);
+    float arc_delta = sin(0.5 * arc_sweep) * radius * sqrt(2.0);
+    float beta = (M_PI_F / 4.0) * smoothing;
+    float join_handle = radius * tan(0.5 * beta);
+    float c = join_handle * cos(beta);
+    float d = join_handle * sin(beta);
+    float core_length = arc_delta + c + d;
+    float ideal_b = max((desired_reach - core_length) / 3.0, 0.0);
+    float horizontal_available = max(horizontal_reach - core_length, 0.0);
+    float vertical_available = max(vertical_reach - core_length, 0.0);
+    float shared_b = min(
+        ideal_b,
+        min(
+            horizontal_available * (5.0 / 6.0),
+            vertical_available * (5.0 / 6.0)
+        )
+    );
+
+    FigmaCornerParams params;
+    params.radius = radius;
+    params.smoothing = smoothing;
+    params.arc_sweep = arc_sweep;
+    params.arc_delta = arc_delta;
+    params.c = c;
+    params.d = d;
+    params.horizontal.a = horizontal_available - shared_b;
+    params.horizontal.b = shared_b;
+    params.horizontal.p = horizontal_reach;
+    params.vertical.a = vertical_available - shared_b;
+    params.vertical.b = shared_b;
+    params.vertical.p = vertical_reach;
+    return params;
+}
+
+FigmaCornerExtents figma_corner_extents(
+    Corners corner_radii,
+    float4 horizontal_budgets,
+    float4 vertical_budgets,
+    float corner_smoothing
+) {
+    float4 radii = corner_values(corner_radii);
+    FigmaCornerExtents extents;
+    [unroll]
+    for (int corner = 0; corner < 4; corner++) {
+        float horizontal_budget = max(horizontal_budgets[corner], 0.0);
+        float vertical_budget = max(vertical_budgets[corner], 0.0);
+        float radius = min(
+            max(radii[corner], 0.0),
+            min(horizontal_budget, vertical_budget)
+        );
+        float desired_reach = radius *
+            (1.0 + clamp(corner_smoothing, 0.0, 1.0));
+        extents.horizontal[corner] = min(desired_reach, horizontal_budget);
+        extents.vertical[corner] = min(desired_reach, vertical_budget);
+    }
+    return extents;
+}
+
+float2 figma_cubic_point(
+    FigmaAxisParams axis,
+    float c,
+    float d,
+    float t
+) {
+    float2 p0 = float2(0.0, 0.0);
+    float2 p1 = float2(axis.a, 0.0);
+    float2 p2 = float2(axis.a + axis.b, 0.0);
+    float2 p3 = float2(axis.a + axis.b + c, d);
+    float u = 1.0 - t;
+    return u * u * u * p0 +
+        3.0 * u * u * t * p1 +
+        3.0 * u * t * t * p2 +
+        t * t * t * p3;
+}
+
+float2 figma_cubic_derivative(
+    FigmaAxisParams axis,
+    float c,
+    float d,
+    float t
+) {
+    float2 p0 = float2(0.0, 0.0);
+    float2 p1 = float2(axis.a, 0.0);
+    float2 p2 = float2(axis.a + axis.b, 0.0);
+    float2 p3 = float2(axis.a + axis.b + c, d);
+    float u = 1.0 - t;
+    return 3.0 * u * u * (p1 - p0) +
+        6.0 * u * t * (p2 - p1) +
+        3.0 * t * t * (p3 - p2);
+}
+
+float2 figma_cubic_second_derivative(
+    FigmaAxisParams axis,
+    float c,
+    float d,
+    float t
+) {
+    float2 p0 = float2(0.0, 0.0);
+    float2 p1 = float2(axis.a, 0.0);
+    float2 p2 = float2(axis.a + axis.b, 0.0);
+    float2 p3 = float2(axis.a + axis.b + c, d);
+    return 6.0 * (1.0 - t) * (p2 - 2.0 * p1 + p0) +
+        6.0 * t * (p3 - 2.0 * p2 + p1);
+}
+
+CubicClosestPoint closest_figma_cubic(
+    float2 point,
+    FigmaAxisParams axis,
+    float c,
+    float d
+) {
+    float y_seed = pow(
+        clamp(point.y / max(d, 0.00001), 0.0, 1.0),
+        1.0 / 3.0
+    );
+    float2 chord = figma_cubic_point(axis, c, d, 1.0);
+    float chord_seed = clamp(
+        dot(point, chord) / max(dot(chord, chord), FIGMA_EPSILON),
+        0.0,
+        1.0
+    );
+    float2 y_delta = figma_cubic_point(axis, c, d, y_seed) - point;
+    float2 chord_delta = figma_cubic_point(axis, c, d, chord_seed) - point;
+    float t = dot(chord_delta, chord_delta) < dot(y_delta, y_delta)
+        ? chord_seed
+        : y_seed;
+
+    [unroll]
+    for (int iteration = 0; iteration < 4; iteration++) {
+        float2 curve_point = figma_cubic_point(axis, c, d, t);
+        float2 tangent = figma_cubic_derivative(axis, c, d, t);
+        float2 second_derivative = figma_cubic_second_derivative(axis, c, d, t);
+        float2 delta = curve_point - point;
+        float denominator =
+            dot(tangent, tangent) + dot(delta, second_derivative);
+        if (abs(denominator) > FIGMA_EPSILON) {
+            t = clamp(t - dot(delta, tangent) / denominator, 0.0, 1.0);
+        }
+    }
+
+    float closest_t = t;
+    float2 closest_point = figma_cubic_point(axis, c, d, t);
+    float closest_distance = length(point - closest_point);
+
+    float2 start = float2(0.0, 0.0);
+    float start_distance = length(point - start);
+    if (start_distance < closest_distance) {
+        closest_t = 0.0;
+        closest_point = start;
+        closest_distance = start_distance;
+    }
+
+    float2 end = chord;
+    float end_distance = length(point - end);
+    if (end_distance < closest_distance) {
+        closest_t = 1.0;
+        closest_point = end;
+        closest_distance = end_distance;
+    }
+
+    CubicClosestPoint result;
+    result.point = closest_point;
+    result.tangent = figma_cubic_derivative(axis, c, d, closest_t);
+    result.distance = closest_distance;
+    result.path_t = closest_t;
+    return result;
+}
+
+float figma_signed_distance(float2 delta, float2 normal, float distance) {
+    return dot(delta, normal) >= 0.0 ? distance : -distance;
+}
+
+float figma_cross_2d(float2 a, float2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+float2 figma_unfold_normal(float2 normal, bool mirrored) {
+    return mirrored
+        ? float2(-normal.y, normal.x)
+        : float2(normal.x, -normal.y);
+}
+
+SdfSample figma_corner_sdf_impl(
+    float2 corner_to_point,
+    FigmaCornerParams params
+) {
+    float2 z = corner_to_point + float2(
+        params.horizontal.p,
+        params.vertical.p
+    );
+    SdfSample sample;
+    sample.path_t = 0.0;
+    sample.segment = FIGMA_SEGMENT_STRAIGHT;
+
+    if (params.radius <= FIGMA_EPSILON || z.x <= 0.0 || z.y <= 0.0) {
+        sample.distance = max(corner_to_point.x, corner_to_point.y);
+        sample.normal = corner_to_point.x > corner_to_point.y
+            ? float2(1.0, 0.0)
+            : float2(0.0, 1.0);
+        return sample;
+    }
+
+    float2 horizontal_point = float2(z.x, params.vertical.p - z.y);
+    float2 vertical_point = float2(z.y, params.horizontal.p - z.x);
+
+    float2 circle_center = float2(
+        params.horizontal.p - params.radius,
+        params.radius
+    );
+    float2 join = float2(
+        params.horizontal.a + params.horizontal.b + params.c,
+        params.d
+    );
+    float2 start_direction = (join - circle_center) / params.radius;
+    float2 to_point = horizontal_point - circle_center;
+    float to_point_length = length(to_point);
+    float2 point_direction = to_point_length > FIGMA_EPSILON
+        ? to_point / max(to_point_length, FIGMA_EPSILON)
+        : start_direction;
+    float arc_angle = clamp(
+        atan2(
+            figma_cross_2d(start_direction, point_direction),
+            dot(start_direction, point_direction)
+        ),
+        0.0,
+        params.arc_sweep
+    );
+    float arc_sine = sin(arc_angle);
+    float arc_cosine = cos(arc_angle);
+    float2 arc_normal = float2(
+        arc_cosine * start_direction.x - arc_sine * start_direction.y,
+        arc_sine * start_direction.x + arc_cosine * start_direction.y
+    );
+    float2 arc_point = circle_center + params.radius * arc_normal;
+    float2 arc_delta = horizontal_point - arc_point;
+    float arc_distance = figma_signed_distance(
+        arc_delta,
+        arc_normal,
+        length(arc_delta)
+    );
+    float arc_t = params.arc_sweep > FIGMA_EPSILON
+        ? arc_angle / max(params.arc_sweep, FIGMA_EPSILON)
+        : 0.0;
+
+    sample.distance = arc_distance;
+    sample.normal = figma_unfold_normal(arc_normal, false);
+    sample.path_t = arc_t;
+    sample.segment = FIGMA_SEGMENT_ARC;
+
+    if (params.smoothing > FIGMA_EPSILON) {
+        CubicClosestPoint horizontal_cubic = closest_figma_cubic(
+            horizontal_point,
+            params.horizontal,
+            params.c,
+            params.d
+        );
+        float2 horizontal_normal = normalize(float2(
+            horizontal_cubic.tangent.y,
+            -horizontal_cubic.tangent.x
+        ));
+        float horizontal_distance = figma_signed_distance(
+            horizontal_point - horizontal_cubic.point,
+            horizontal_normal,
+            horizontal_cubic.distance
+        );
+        if (abs(horizontal_distance) <= abs(sample.distance)) {
+            sample.distance = horizontal_distance;
+            sample.normal = figma_unfold_normal(horizontal_normal, false);
+            sample.path_t = horizontal_cubic.path_t;
+            sample.segment = FIGMA_SEGMENT_FIRST_CUBIC;
+        }
+
+        CubicClosestPoint vertical_cubic = closest_figma_cubic(
+            vertical_point,
+            params.vertical,
+            params.c,
+            params.d
+        );
+        float2 vertical_normal = normalize(float2(
+            vertical_cubic.tangent.y,
+            -vertical_cubic.tangent.x
+        ));
+        float vertical_distance = figma_signed_distance(
+            vertical_point - vertical_cubic.point,
+            vertical_normal,
+            vertical_cubic.distance
+        );
+        if (abs(vertical_distance) <= abs(sample.distance)) {
+            sample.distance = vertical_distance;
+            sample.normal = figma_unfold_normal(vertical_normal, true);
+            sample.path_t = vertical_cubic.path_t;
+            sample.segment = FIGMA_SEGMENT_SECOND_CUBIC;
+        }
+    }
+    return sample;
+}
+
+float figma_cubic_length(
+    FigmaCornerParams params,
+    FigmaAxisParams axis,
+    float end_t
+) {
+    float half_t = clamp(end_t, 0.0, 1.0) / 2.0;
+    if (half_t <= 0.0 || params.smoothing <= 0.0) {
+        return 0.0;
+    }
+
+    // Five-point Gauss-Legendre quadrature keeps dash phase stable without a
+    // data-dependent loop.
+    float center = half_t;
+    float offset1 = half_t * 0.5384693101;
+    float offset2 = half_t * 0.9061798459;
+    float speed0 = length(figma_cubic_derivative(
+        axis, params.c, params.d, center
+    ));
+    float speed1 = length(figma_cubic_derivative(
+        axis, params.c, params.d, center - offset1
+    )) + length(figma_cubic_derivative(
+        axis, params.c, params.d, center + offset1
+    ));
+    float speed2 = length(figma_cubic_derivative(
+        axis, params.c, params.d, center - offset2
+    )) + length(figma_cubic_derivative(
+        axis, params.c, params.d, center + offset2
+    ));
+    return half_t * (
+        0.5688888889 * speed0 +
+        0.4786286705 * speed1 +
+        0.2369268851 * speed2
+    );
+}
+
+float figma_corner_length(FigmaCornerParams params) {
+    return figma_cubic_length(params, params.horizontal, 1.0) +
+        params.radius * params.arc_sweep +
+        figma_cubic_length(params, params.vertical, 1.0);
+}
+
+float figma_corner_progress(FigmaCornerParams params, SdfSample sample) {
+    float horizontal_length = figma_cubic_length(
+        params, params.horizontal, 1.0
+    );
+    float vertical_length = figma_cubic_length(
+        params, params.vertical, 1.0
+    );
+    if (sample.segment == FIGMA_SEGMENT_FIRST_CUBIC) {
+        return figma_cubic_length(
+            params, params.horizontal, sample.path_t
+        );
+    }
+    if (sample.segment == FIGMA_SEGMENT_ARC) {
+        return horizontal_length +
+            params.radius * params.arc_sweep * sample.path_t;
+    }
+    if (sample.segment == FIGMA_SEGMENT_SECOND_CUBIC) {
+        return horizontal_length + params.radius * params.arc_sweep +
+            vertical_length - figma_cubic_length(
+                params, params.vertical, sample.path_t
+            );
+    }
+    return 0.0;
+}
+
+bool figma_is_corner_candidate(
+    float2 point,
+    float2 size,
+    float horizontal_extent,
+    float vertical_extent,
+    uint corner
+) {
+    if (horizontal_extent <= FIGMA_EPSILON ||
+        vertical_extent <= FIGMA_EPSILON) return false;
+    if (corner == 0u) {
+        return point.x <= horizontal_extent && point.y <= vertical_extent;
+    }
+    if (corner == 1u) {
+        return size.x - point.x <= horizontal_extent &&
+            point.y <= vertical_extent;
+    }
+    if (corner == 2u) {
+        return size.x - point.x <= horizontal_extent &&
+            size.y - point.y <= vertical_extent;
+    }
+    return point.x <= horizontal_extent &&
+        size.y - point.y <= vertical_extent;
+}
+
+bool figma_has_corner_candidate(
+    float2 point,
+    float2 size,
+    float4 horizontal_extents,
+    float4 vertical_extents
+) {
+    return figma_is_corner_candidate(
+        point, size, horizontal_extents.x, vertical_extents.x, 0u
+    ) || figma_is_corner_candidate(
+        point, size, horizontal_extents.y, vertical_extents.y, 1u
+    ) || figma_is_corner_candidate(
+        point, size, horizontal_extents.z, vertical_extents.z, 2u
+    ) || figma_is_corner_candidate(
+        point, size, horizontal_extents.w, vertical_extents.w, 3u
+    );
+}
+
+float2 figma_corner_to_point(float2 point, float2 size, uint corner) {
+    if (corner == 0u) return -point;
+    if (corner == 1u) return float2(point.x - size.x, -point.y);
+    if (corner == 2u) return point - size;
+    return float2(-point.x, point.y - size.y);
+}
+
+float2 figma_orient_corner_normal(float2 normal, uint corner) {
+    if (corner == 0u) return -normal;
+    if (corner == 1u) return float2(normal.x, -normal.y);
+    if (corner == 2u) return normal;
+    return float2(-normal.x, normal.y);
+}
+
+SdfSample figma_line_segment_sample(
+    float2 point,
+    float2 start,
+    float2 end,
+    float2 normal
+) {
+    float2 line = end - start;
+    float path_t = clamp(
+        dot(point - start, line) / max(dot(line, line), FIGMA_EPSILON),
+        0.0,
+        1.0
+    );
+    float2 closest = lerp(start, end, path_t);
+    float2 delta = point - closest;
+    SdfSample sample;
+    sample.distance = figma_signed_distance(delta, normal, length(delta));
+    sample.normal = normal;
+    sample.path_t = path_t;
+    sample.segment = FIGMA_SEGMENT_STRAIGHT;
+    return sample;
+}
+
+SdfSample figma_nearest_straight_sample(
+    float2 point,
+    float2 size,
+    float4 horizontal_extents,
+    float4 vertical_extents
+) {
+    SdfSample nearest = figma_line_segment_sample(
+        point,
+        float2(horizontal_extents.x, 0.0),
+        float2(size.x - horizontal_extents.y, 0.0),
+        float2(0.0, -1.0)
+    );
+
+    SdfSample candidate = figma_line_segment_sample(
+        point,
+        float2(size.x, vertical_extents.y),
+        float2(size.x, size.y - vertical_extents.z),
+        float2(1.0, 0.0)
+    );
+    if (abs(candidate.distance) < abs(nearest.distance)) nearest = candidate;
+
+    candidate = figma_line_segment_sample(
+        point,
+        float2(horizontal_extents.w, size.y),
+        float2(size.x - horizontal_extents.z, size.y),
+        float2(0.0, 1.0)
+    );
+    if (abs(candidate.distance) < abs(nearest.distance)) nearest = candidate;
+
+    candidate = figma_line_segment_sample(
+        point,
+        float2(0.0, vertical_extents.x),
+        float2(0.0, size.y - vertical_extents.w),
+        float2(-1.0, 0.0)
+    );
+    if (abs(candidate.distance) < abs(nearest.distance)) nearest = candidate;
+    return nearest;
+}
+
+FigmaRectSample figma_smooth_rect_sdf_sample(
+    float2 point,
+    Bounds bounds,
+    Corners corner_radii,
+    float4 horizontal_budgets,
+    float4 vertical_budgets,
+    float corner_smoothing
+) {
+    float2 local_point = point - bounds.origin;
+    FigmaCornerExtents corner_extents = figma_corner_extents(
+        corner_radii,
+        horizontal_budgets,
+        vertical_budgets,
+        corner_smoothing
+    );
+    float4 radii = corner_values(corner_radii);
+    FigmaRectSample result;
+    result.sdf = figma_nearest_straight_sample(
+        local_point,
+        bounds.size,
+        corner_extents.horizontal,
+        corner_extents.vertical
+    );
+    result.corner = FIGMA_NO_CORNER;
+
+    [unroll]
+    for (uint corner = 0u; corner < 4u; corner++) {
+        if (figma_is_corner_candidate(
+            local_point,
+            bounds.size,
+            corner_extents.horizontal[corner],
+            corner_extents.vertical[corner],
+            corner
+        )) {
+            FigmaCornerParams params = figma_corner_params(
+                radii[corner],
+                horizontal_budgets[corner],
+                vertical_budgets[corner],
+                corner_smoothing
+            );
+            if (params.radius > FIGMA_EPSILON) {
+                SdfSample candidate = figma_corner_sdf_impl(
+                    figma_corner_to_point(local_point, bounds.size, corner),
+                    params
+                );
+                candidate.normal = figma_orient_corner_normal(
+                    candidate.normal,
+                    corner
+                );
+                if (abs(candidate.distance) <= abs(result.sdf.distance)) {
+                    result.sdf = candidate;
+                    result.corner = corner;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+float figma_smooth_rect_sdf(
+    float2 point,
+    Bounds bounds,
+    Corners corner_radii,
+    float4 horizontal_budgets,
+    float4 vertical_budgets,
+    float corner_smoothing
+) {
+    FigmaRectSample sample = figma_smooth_rect_sdf_sample(
+        point,
+        bounds,
+        corner_radii,
+        horizontal_budgets,
+        vertical_budgets,
+        corner_smoothing
+    );
+    return sample.sdf.distance;
+}
+
+float styled_rect_sdf(
+    float2 point,
+    Bounds bounds,
+    Corners corner_radii,
+    float4 horizontal_budgets,
+    float4 vertical_budgets,
+    float corner_smoothing
+) {
+    if (corner_smoothing <= 0.0 ||
+        all(corner_values(corner_radii) <= float4(0.0, 0.0, 0.0, 0.0))) {
+        return quad_sdf(point, bounds, corner_radii);
+    }
+
+    return figma_smooth_rect_sdf(
+        point,
+        bounds,
+        corner_radii,
+        horizontal_budgets,
+        vertical_budgets,
+        corner_smoothing
+    );
+}
+
+float gaussian_sdf_coverage(float distance, float sigma) {
+    float normalized = distance / (sqrt(2.0) * sigma);
+    return saturate(0.5 - 0.5 * erf(float2(normalized, normalized)).x);
+}
+
 GradientColor prepare_gradient_color(uint tag, uint color_space, Hsla solid, LinearColorStop colors[2]) {
     GradientColor output;
     if (tag == 0 || tag == 2 || tag == 3) {
@@ -502,10 +1258,14 @@ struct Quad {
     Hsla border_color;
     Corners corner_radii;
     Edges border_widths;
+    float corner_smoothing;
+    uint pad;
 };
 
 struct QuadVertexOutput {
     nointerpolation uint quad_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
     float4 position: SV_Position;
     nointerpolation float4 border_color: COLOR0;
     nointerpolation float4 background_solid: COLOR1;
@@ -516,6 +1276,8 @@ struct QuadVertexOutput {
 
 struct QuadFragmentInput {
     nointerpolation uint quad_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
     float4 position: SV_Position;
     nointerpolation float4 border_color: COLOR0;
     nointerpolation float4 background_solid: COLOR1;
@@ -543,6 +1305,16 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
     output.position = device_position;
     output.border_color = border_color;
     output.quad_id = quad_id;
+    output.horizontal_corner_budgets = corner_values(quad.corner_radii);
+    output.vertical_corner_budgets = corner_values(quad.corner_radii);
+    if (quad.corner_smoothing > 0.0) {
+        FigmaCornerLayout corner_layout = figma_corner_layout(
+            quad.bounds.size,
+            quad.corner_radii
+        );
+        output.horizontal_corner_budgets = corner_layout.horizontal_budgets;
+        output.vertical_corner_budgets = corner_layout.vertical_budgets;
+    }
     output.background_solid = gradient.solid;
     output.background_color0 = gradient.color0;
     output.background_color1 = gradient.color1;
@@ -578,14 +1350,34 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     // minimum distance between the center of the pixel and the edge.
     const float antialias_threshold = 0.5;
 
-    // Radius of the nearest corner
+    // Circular corners keep the existing center-quadrant fast path. Smoothed
+    // corners use edge ownership because a Figma shoulder can cross a half-side.
     float corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
+    float4 horizontal_corner_extents = corner_values(quad.corner_radii);
+    float4 vertical_corner_extents = corner_values(quad.corner_radii);
+    uint smooth_corner = FIGMA_NO_CORNER;
+    bool has_smooth_corner_candidate = false;
+    if (quad.corner_smoothing > 0.0) {
+        FigmaCornerExtents corner_extents = figma_corner_extents(
+            quad.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            quad.corner_smoothing
+        );
+        horizontal_corner_extents = corner_extents.horizontal;
+        vertical_corner_extents = corner_extents.vertical;
+        has_smooth_corner_candidate = figma_has_corner_candidate(
+            the_point,
+            size,
+            horizontal_corner_extents,
+            vertical_corner_extents
+        );
+    }
 
     float2 border = float2(
         center_to_point.x < 0.0 ? quad.border_widths.left : quad.border_widths.right,
         center_to_point.y < 0.0 ? quad.border_widths.top : quad.border_widths.bottom
     );
-
     // 0-width borders are reduced so that `inner_sdf >= antialias_threshold`.
     // The purpose of this is to not draw antialiasing pixels in this case.
     float2 reduced_border = float2(
@@ -597,14 +1389,14 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     // the point into the bottom right quadrant. Both components are <= 0.
     float2 corner_to_point = abs(center_to_point) - half_size;
 
-    // Vector from the point to the center of the rounded corner's circle, also
-    // mirrored into bottom right quadrant.
+    // Vector from the point to the center of the circular corner, also mirrored
+    // into the bottom right quadrant.
     float2 corner_center_to_point = corner_to_point + corner_radius;
 
     // Whether the nearest point on the border is rounded
-    bool is_near_rounded_corner =
-        corner_center_to_point.x >= 0.0 &&
-        corner_center_to_point.y >= 0.0;
+    bool is_near_rounded_corner = quad.corner_smoothing > 0.0
+        ? has_smooth_corner_candidate
+        : corner_center_to_point.x >= 0.0 && corner_center_to_point.y >= 0.0;
 
     // Vector from straight border inner corner to point.
     //
@@ -629,7 +1421,41 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     }
 
     // Signed distance of the point to the outside edge of the quad's border
-    float outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
+    float outer_sdf;
+    SdfSample figma_sample;
+    if (quad.corner_smoothing > 0.0) {
+        FigmaRectSample rect_sample = figma_smooth_rect_sdf_sample(
+            input.position.xy,
+            quad.bounds,
+            quad.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            quad.corner_smoothing
+        );
+        figma_sample = rect_sample.sdf;
+        smooth_corner = rect_sample.corner;
+        outer_sdf = figma_sample.distance;
+        is_near_rounded_corner = figma_sample.segment != FIGMA_SEGMENT_STRAIGHT;
+        if (smooth_corner != FIGMA_NO_CORNER) {
+            if (smooth_corner == 0u) {
+                border = float2(quad.border_widths.left, quad.border_widths.top);
+            } else if (smooth_corner == 1u) {
+                border = float2(quad.border_widths.right, quad.border_widths.top);
+            } else if (smooth_corner == 2u) {
+                border = float2(quad.border_widths.right, quad.border_widths.bottom);
+            } else {
+                border = float2(quad.border_widths.left, quad.border_widths.bottom);
+            }
+            reduced_border = float2(
+                border.x == 0.0 ? -antialias_threshold : border.x,
+                border.y == 0.0 ? -antialias_threshold : border.y
+            );
+            straight_border_inner_corner_to_point =
+                corner_to_point + reduced_border;
+        }
+    } else {
+        outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
+    }
 
     // Approximate signed distance of the point to the inside edge of the quad's
     // border. It is negative outside this edge (within the border), and
@@ -640,7 +1466,28 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     //   nearest-point-on-ellipse.
     // * When it is quickly known to be outside the edge, -1.0 is used.
     float inner_sdf = 0.0;
-    if (corner_center_to_point.x <= 0.0 || corner_center_to_point.y <= 0.0) {
+    if (quad.corner_smoothing > 0.0) {
+        if (!is_near_rounded_corner) {
+            // Keep exact rectangular offsets on straight segments, including
+            // sharp zero-radius corners with unequal adjacent border widths.
+            inner_sdf = -max(
+                straight_border_inner_corner_to_point.x,
+                straight_border_inner_corner_to_point.y
+            );
+        } else {
+            float effective_border_width = reduced_border.x;
+            if (border.x != border.y) {
+                float2 normal = abs(figma_sample.normal);
+                float2 active_sides = float2(
+                    border.x > 0.0 ? 1.0 : 0.0,
+                    border.y > 0.0 ? 1.0 : 0.0
+                );
+                effective_border_width = length(border * normal) -
+                    antialias_threshold * (1.0 - length(active_sides * normal));
+            }
+            inner_sdf = -(outer_sdf + effective_border_width);
+        }
+    } else if (corner_center_to_point.x <= 0.0 || corner_center_to_point.y <= 0.0) {
         // Fast paths for straight borders
         inner_sdf = -max(straight_border_inner_corner_to_point.x,
                         straight_border_inner_corner_to_point.y);
@@ -648,10 +1495,13 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         // Fast path for points that must be outside the inner edge
         inner_sdf = -1.0;
     } else if (reduced_border.x == reduced_border.y) {
-        // Fast path for circular inner edge.
+        // Fast path for a uniform-width inner edge.
         inner_sdf = -(outer_sdf + reduced_border.x);
     } else {
-        float2 ellipse_radii = max(float2(0.0, 0.0), float2(corner_radius, corner_radius) - reduced_border);
+        float2 ellipse_radii = max(
+            float2(0.0, 0.0),
+            float2(corner_radius, corner_radius) - reduced_border
+        );
         inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
     }
 
@@ -693,28 +1543,49 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                 // When corners aren't rounded, the dashes are separately laid
                 // out on each straight line, rather than around the whole
                 // perimeter. This way each line starts and ends with a dash.
-                bool is_horizontal = corner_center_to_point.x < corner_center_to_point.y;
-                // Choosing the right border width for dashed borders.
-                // TODO: A better solution exists taking a look at the whole file.
-                // this does not fix single dashed borders at the corners
-                float2 dashed_border = float2(
-                    max(quad.border_widths.bottom, quad.border_widths.top),
-                    max(quad.border_widths.right, quad.border_widths.left)
-                );
-                float border_width = is_horizontal ? dashed_border.x : dashed_border.y;
-                dash_velocity = dv_numerator / border_width;
-                t = is_horizontal ? the_point.x : the_point.y;
-                t *= dash_velocity;
-                max_t = is_horizontal ? size.x : size.y;
-                max_t *= dash_velocity;
+                bool is_horizontal =
+                    straight_border_inner_corner_to_point.x <
+                    straight_border_inner_corner_to_point.y;
+                float border_width = is_horizontal ? border.y : border.x;
+                if (border_width <= 0.0) {
+                    is_horizontal = !is_horizontal;
+                    border_width = is_horizontal ? border.y : border.x;
+                }
+                if (border_width > 0.0) {
+                    dash_velocity = dv_numerator / border_width;
+                    t = is_horizontal ? the_point.x : the_point.y;
+                    t *= dash_velocity;
+                    max_t = is_horizontal ? size.x : size.y;
+                    max_t *= dash_velocity;
+                }
             } else {
                 // When corners are rounded, the dashes are laid out clockwise
                 // around the whole perimeter.
 
-                float r_tr = quad.corner_radii.top_right;
-                float r_br = quad.corner_radii.bottom_right;
-                float r_bl = quad.corner_radii.bottom_left;
-                float r_tl = quad.corner_radii.top_left;
+                float h_tl = quad.corner_smoothing > 0.0
+                    ? horizontal_corner_extents.x
+                    : quad.corner_radii.top_left;
+                float h_tr = quad.corner_smoothing > 0.0
+                    ? horizontal_corner_extents.y
+                    : quad.corner_radii.top_right;
+                float h_br = quad.corner_smoothing > 0.0
+                    ? horizontal_corner_extents.z
+                    : quad.corner_radii.bottom_right;
+                float h_bl = quad.corner_smoothing > 0.0
+                    ? horizontal_corner_extents.w
+                    : quad.corner_radii.bottom_left;
+                float v_tl = quad.corner_smoothing > 0.0
+                    ? vertical_corner_extents.x
+                    : quad.corner_radii.top_left;
+                float v_tr = quad.corner_smoothing > 0.0
+                    ? vertical_corner_extents.y
+                    : quad.corner_radii.top_right;
+                float v_br = quad.corner_smoothing > 0.0
+                    ? vertical_corner_extents.z
+                    : quad.corner_radii.bottom_right;
+                float v_bl = quad.corner_smoothing > 0.0
+                    ? vertical_corner_extents.w
+                    : quad.corner_radii.bottom_left;
 
                 float w_t = quad.border_widths.top;
                 float w_r = quad.border_widths.right;
@@ -728,21 +1599,58 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                 float dv_l = w_l <= 0.0 ? 0.0 : dv_numerator / w_l;
 
                 // Straight side lengths in dash space
-                float s_t = (size.x - r_tl - r_tr) * dv_t;
-                float s_r = (size.y - r_tr - r_br) * dv_r;
-                float s_b = (size.x - r_br - r_bl) * dv_b;
-                float s_l = (size.y - r_bl - r_tl) * dv_l;
+                float s_t = (size.x - h_tl - h_tr) * dv_t;
+                float s_r = (size.y - v_tr - v_br) * dv_r;
+                float s_b = (size.x - h_br - h_bl) * dv_b;
+                float s_l = (size.y - v_bl - v_tl) * dv_l;
 
                 float corner_dash_velocity_tr = corner_dash_velocity(dv_t, dv_r);
                 float corner_dash_velocity_br = corner_dash_velocity(dv_b, dv_r);
                 float corner_dash_velocity_bl = corner_dash_velocity(dv_b, dv_l);
                 float corner_dash_velocity_tl = corner_dash_velocity(dv_t, dv_l);
 
-                // Corner lengths in dash space
-                float c_tr = r_tr * (M_PI_F / 2.0) * corner_dash_velocity_tr;
-                float c_br = r_br * (M_PI_F / 2.0) * corner_dash_velocity_br;
-                float c_bl = r_bl * (M_PI_F / 2.0) * corner_dash_velocity_bl;
-                float c_tl = r_tl * (M_PI_F / 2.0) * corner_dash_velocity_tl;
+                FigmaCornerParams params_tl;
+                FigmaCornerParams params_tr;
+                FigmaCornerParams params_br;
+                FigmaCornerParams params_bl;
+                float length_tl = quad.corner_radii.top_left * (M_PI_F / 2.0);
+                float length_tr = quad.corner_radii.top_right * (M_PI_F / 2.0);
+                float length_br = quad.corner_radii.bottom_right * (M_PI_F / 2.0);
+                float length_bl = quad.corner_radii.bottom_left * (M_PI_F / 2.0);
+                if (quad.corner_smoothing > 0.0) {
+                    params_tl = figma_corner_params(
+                        quad.corner_radii.top_left,
+                        input.horizontal_corner_budgets.x,
+                        input.vertical_corner_budgets.x,
+                        quad.corner_smoothing
+                    );
+                    params_tr = figma_corner_params(
+                        quad.corner_radii.top_right,
+                        input.horizontal_corner_budgets.y,
+                        input.vertical_corner_budgets.y,
+                        quad.corner_smoothing
+                    );
+                    params_br = figma_corner_params(
+                        quad.corner_radii.bottom_right,
+                        input.horizontal_corner_budgets.z,
+                        input.vertical_corner_budgets.z,
+                        quad.corner_smoothing
+                    );
+                    params_bl = figma_corner_params(
+                        quad.corner_radii.bottom_left,
+                        input.horizontal_corner_budgets.w,
+                        input.vertical_corner_budgets.w,
+                        quad.corner_smoothing
+                    );
+                    length_tl = figma_corner_length(params_tl);
+                    length_tr = figma_corner_length(params_tr);
+                    length_br = figma_corner_length(params_br);
+                    length_bl = figma_corner_length(params_bl);
+                }
+                float c_tr = length_tr * corner_dash_velocity_tr;
+                float c_br = length_br * corner_dash_velocity_br;
+                float c_bl = length_bl * corner_dash_velocity_bl;
+                float c_tl = length_tl * corner_dash_velocity_tl;
 
                 // Cumulative dash space upto each segment
                 float upto_tr = s_t;
@@ -755,61 +1663,89 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                 max_t = upto_tl + c_tl;
 
                 if (is_near_rounded_corner) {
-                    float radians = atan2(corner_center_to_point.y, corner_center_to_point.x);
-                    float corner_t = radians * corner_radius;
+                    if (quad.corner_smoothing > 0.0) {
+                        FigmaCornerParams selected_params = params_tl;
+                        float selected_length = length_tl;
+                        if (smooth_corner == 1u) {
+                            selected_params = params_tr;
+                            selected_length = length_tr;
+                        } else if (smooth_corner == 2u) {
+                            selected_params = params_br;
+                            selected_length = length_br;
+                        } else if (smooth_corner == 3u) {
+                            selected_params = params_bl;
+                            selected_length = length_bl;
+                        }
 
-                    if (center_to_point.x >= 0.0) {
-                        if (center_to_point.y < 0.0) {
+                        float corner_progress = figma_corner_progress(
+                            selected_params,
+                            figma_sample
+                        );
+                        if (smooth_corner == 0u) {
+                            dash_velocity = corner_dash_velocity_tl;
+                            t = upto_tl +
+                                (selected_length - corner_progress) * dash_velocity;
+                        } else if (smooth_corner == 1u) {
                             dash_velocity = corner_dash_velocity_tr;
-                            // Subtracted because radians is pi/2 to 0 when
-                            // going clockwise around the top right corner,
-                            // since the y axis has been flipped
-                            t = upto_r - corner_t * dash_velocity;
-                        } else {
+                            t = upto_tr + corner_progress * dash_velocity;
+                        } else if (smooth_corner == 2u) {
                             dash_velocity = corner_dash_velocity_br;
-                            // Added because radians is 0 to pi/2 when going
-                            // clockwise around the bottom-right corner
-                            t = upto_br + corner_t * dash_velocity;
+                            t = upto_br +
+                                (selected_length - corner_progress) * dash_velocity;
+                        } else {
+                            dash_velocity = corner_dash_velocity_bl;
+                            t = upto_bl + corner_progress * dash_velocity;
                         }
                     } else {
-                        if (center_to_point.y >= 0.0) {
+                        float radians = atan2(
+                            corner_center_to_point.y,
+                            corner_center_to_point.x
+                        );
+                        float corner_t = radians * corner_radius;
+
+                        if (center_to_point.x >= 0.0) {
+                            if (center_to_point.y < 0.0) {
+                                dash_velocity = corner_dash_velocity_tr;
+                                t = upto_r - corner_t * dash_velocity;
+                            } else {
+                                dash_velocity = corner_dash_velocity_br;
+                                t = upto_br + corner_t * dash_velocity;
+                            }
+                        } else if (center_to_point.y >= 0.0) {
                             dash_velocity = corner_dash_velocity_bl;
-                            // Subtracted because radians is pi/1 to 0 when
-                            // going clockwise around the bottom-left corner,
-                            // since the x axis has been flipped
                             t = upto_l - corner_t * dash_velocity;
                         } else {
                             dash_velocity = corner_dash_velocity_tl;
-                            // Added because radians is 0 to pi/2 when going
-                            // clockwise around the top-left corner, since both
-                            // axis were flipped
                             t = upto_tl + corner_t * dash_velocity;
                         }
                     }
                 } else {
                     // Straight borders
-                    bool is_horizontal = corner_center_to_point.x < corner_center_to_point.y;
+                    bool is_horizontal =
+                        straight_border_inner_corner_to_point.x <
+                        straight_border_inner_corner_to_point.y;
+                    float straight_width = is_horizontal ? border.y : border.x;
+                    if (straight_width <= 0.0) {
+                        is_horizontal = !is_horizontal;
+                    }
                     if (is_horizontal) {
                         if (center_to_point.y < 0.0) {
                             dash_velocity = dv_t;
-                            t = (the_point.x - r_tl) * dash_velocity;
+                            t = (the_point.x - h_tl) * dash_velocity;
                         } else {
                             dash_velocity = dv_b;
-                            t = upto_bl - (the_point.x - r_bl) * dash_velocity;
+                            t = upto_bl - (the_point.x - h_bl) * dash_velocity;
                         }
+                    } else if (center_to_point.x < 0.0) {
+                        dash_velocity = dv_l;
+                        t = upto_tl - (the_point.y - v_tl) * dash_velocity;
                     } else {
-                        if (center_to_point.x < 0.0) {
-                            dash_velocity = dv_l;
-                            t = upto_tl - (the_point.y - r_tl) * dash_velocity;
-                        } else {
-                            dash_velocity = dv_r;
-                            t = upto_r + (the_point.y - r_tr) * dash_velocity;
-                        }
+                        dash_velocity = dv_r;
+                        t = upto_r + (the_point.y - v_tr) * dash_velocity;
                     }
                 }
             }
             float dash_length = dash_length_per_width / dash_period_per_width;
-            float desired_dash_gap = dash_gap_per_width / dash_period_per_width;
 
             // Straight borders should start and end with a dash, so max_t is
             // reduced to cause this.
@@ -857,11 +1793,15 @@ struct Shadow {
     Bounds element_bounds;
     Corners element_corner_radii;
     uint inset;
-    uint pad; // align to 8 bytes
+    float corner_smoothing;
 };
 
 struct ShadowVertexOutput {
     nointerpolation uint shadow_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
+    nointerpolation float4 element_horizontal_corner_budgets: TEXCOORD3;
+    nointerpolation float4 element_vertical_corner_budgets: TEXCOORD4;
     float4 position: SV_Position;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
@@ -869,6 +1809,10 @@ struct ShadowVertexOutput {
 
 struct ShadowFragmentInput {
   nointerpolation uint shadow_id: TEXCOORD0;
+  nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+  nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
+  nointerpolation float4 element_horizontal_corner_budgets: TEXCOORD3;
+  nointerpolation float4 element_vertical_corner_budgets: TEXCOORD4;
   float4 position: SV_Position;
   nointerpolation float4 color: COLOR;
 };
@@ -899,6 +1843,25 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint shadow_id: SV
     output.color = color;
     output.shadow_id = shadow_id;
     output.clip_distance = clip_distance;
+    output.horizontal_corner_budgets = corner_values(shadow.corner_radii);
+    output.vertical_corner_budgets = corner_values(shadow.corner_radii);
+    output.element_horizontal_corner_budgets = corner_values(shadow.element_corner_radii);
+    output.element_vertical_corner_budgets = corner_values(shadow.element_corner_radii);
+    if (shadow.corner_smoothing > 0.0) {
+        FigmaCornerLayout layout = figma_corner_layout(
+            shadow.bounds.size,
+            shadow.corner_radii
+        );
+        output.horizontal_corner_budgets = layout.horizontal_budgets;
+        output.vertical_corner_budgets = layout.vertical_budgets;
+
+        FigmaCornerLayout element_layout = figma_corner_layout(
+            shadow.element_bounds.size,
+            shadow.element_corner_radii
+        );
+        output.element_horizontal_corner_budgets = element_layout.horizontal_budgets;
+        output.element_vertical_corner_budgets = element_layout.vertical_budgets;
+    }
 
     return output;
 }
@@ -910,11 +1873,30 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     float2 center = shadow.bounds.origin + half_size;
     float2 point0 = input.position.xy - center;
     float corner_radius = pick_corner_radius(point0, shadow.corner_radii);
+    bool has_smoothed_corners = shadow.corner_smoothing > 0.0 &&
+        any(corner_values(shadow.corner_radii) > float4(0.0, 0.0, 0.0, 0.0));
 
     float alpha;
     if (shadow.blur_radius == 0.) {
-        float distance = quad_sdf(input.position.xy, shadow.bounds, shadow.corner_radii);
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
         alpha = saturate(0.5 - distance);
+    } else if (has_smoothed_corners) {
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
+        alpha = gaussian_sdf_coverage(distance, shadow.blur_radius);
     } else {
         // The signal is only non-zero in a limited range, so don't waste samples
         float low = point0.y - half_size.y;
@@ -938,8 +1920,14 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
         alpha = 1.0 - alpha;
-        float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
-                                          shadow.element_corner_radii);
+        float element_distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.element_bounds,
+            shadow.element_corner_radii,
+            input.element_horizontal_corner_budgets,
+            input.element_vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
         alpha *= saturate(0.5 - element_distance);
     }
 
@@ -1203,17 +2191,20 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
 
 struct PolychromeSprite {
     uint order;
-    uint pad;
     uint grayscale;
     float opacity;
+    float corner_smoothing;
     Bounds bounds;
     Bounds content_mask;
     Corners corner_radii;
     AtlasTile tile;
+    uint4 padding;
 };
 
 struct PolychromeSpriteVertexOutput {
     nointerpolation uint sprite_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
     float4 position: SV_Position;
     float2 tile_position: POSITION;
     float4 clip_distance: SV_ClipDistance;
@@ -1221,6 +2212,8 @@ struct PolychromeSpriteVertexOutput {
 
 struct PolychromeSpriteFragmentInput {
     nointerpolation uint sprite_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
     float4 position: SV_Position;
     float2 tile_position: POSITION;
 };
@@ -1239,6 +2232,16 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.position = device_position;
     output.tile_position = tile_position;
     output.sprite_id = sprite_id;
+    output.horizontal_corner_budgets = corner_values(sprite.corner_radii);
+    output.vertical_corner_budgets = corner_values(sprite.corner_radii);
+    if (sprite.corner_smoothing > 0.0) {
+        FigmaCornerLayout corner_layout = figma_corner_layout(
+            sprite.bounds.size,
+            sprite.corner_radii
+        );
+        output.horizontal_corner_budgets = corner_layout.horizontal_budgets;
+        output.vertical_corner_budgets = corner_layout.vertical_budgets;
+    }
     output.clip_distance = clip_distance;
     return output;
 }
@@ -1246,7 +2249,19 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
-    float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    float distance;
+    if (sprite.corner_smoothing > 0.0) {
+        distance = figma_smooth_rect_sdf(
+            input.position.xy,
+            sprite.bounds,
+            sprite.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            sprite.corner_smoothing
+        );
+    } else {
+        distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    }
 
     float4 color = sample;
     if (sprite.grayscale != 0u) {
@@ -1281,11 +2296,17 @@ cbuffer BlurParams: register(b1) {
     // Spacing between taps in pixels (gaussian passes only); >1 lets `blur_tap_count` taps span
     // very large radii without truncating the gaussian.
     float blur_tap_step;
+    float blur_corner_smoothing;
+    float blur_pad0;
+    float blur_pad1;
+    float blur_pad2;
 };
 
 struct BlurVertexOutput {
     float4 position: SV_Position;
     float2 uv: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
 };
 
 BlurVertexOutput blur_fullscreen(uint vertex_id) {
@@ -1293,6 +2314,8 @@ BlurVertexOutput blur_fullscreen(uint vertex_id) {
     BlurVertexOutput output;
     output.uv = uv;
     output.position = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    output.horizontal_corner_budgets = float4(0.0, 0.0, 0.0, 0.0);
+    output.vertical_corner_budgets = float4(0.0, 0.0, 0.0, 0.0);
     return output;
 }
 
@@ -1336,17 +2359,33 @@ float4 blur_fragment(BlurVertexOutput input): SV_Target {
 
 struct BlurCompositeVertexOutput {
     float4 position: SV_Position;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD0;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD1;
     float4 clip_distance: SV_ClipDistance;
 };
 
 struct BlurCompositeFragmentInput {
     float4 position: SV_Position;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD0;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD1;
 };
 
 BlurCompositeVertexOutput blur_composite_vertex(uint vertex_id: SV_VertexID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     BlurCompositeVertexOutput output;
     output.position = to_device_position(unit_vertex, blur_bounds);
+    output.horizontal_corner_budgets = blur_corner_radii;
+    output.vertical_corner_budgets = blur_corner_radii;
+    if (blur_clip_rounded > 0.5 && blur_corner_smoothing > 0.0) {
+        Corners radii;
+        radii.top_left = blur_corner_radii.x;
+        radii.top_right = blur_corner_radii.y;
+        radii.bottom_right = blur_corner_radii.z;
+        radii.bottom_left = blur_corner_radii.w;
+        FigmaCornerLayout layout = figma_corner_layout(blur_bounds.size, radii);
+        output.horizontal_corner_budgets = layout.horizontal_budgets;
+        output.vertical_corner_budgets = layout.vertical_budgets;
+    }
     output.clip_distance = distance_from_clip_rect(unit_vertex, blur_bounds, blur_content_mask);
     return output;
 }
@@ -1364,10 +2403,20 @@ float4 blur_composite_fragment(BlurCompositeFragmentInput input): SV_Target {
     radii.top_right = blur_corner_radii.y;
     radii.bottom_right = blur_corner_radii.z;
     radii.bottom_left = blur_corner_radii.w;
-    float distance = quad_sdf(input.position.xy, blur_bounds, radii);
     // Backdrop clips to the rounded rect (the panel has a defined shape); content blur bleeds past
     // its bounds like CSS `filter: blur`, so its shape comes from the blurred group's own alpha.
-    float coverage = blur_clip_rounded > 0.5 ? saturate(0.5 - distance) : 1.0;
+    float coverage = 1.0;
+    if (blur_clip_rounded > 0.5) {
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            blur_bounds,
+            radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            blur_corner_smoothing
+        );
+        coverage = saturate(0.5 - distance);
+    }
     // The blurred sample is premultiplied (blurring against the transparent surround scales rgb
     // with the fading alpha), so output premultiplied and use a premultiplied-blend state. A
     // backdrop's scene is opaque (so this replaces); a content-filter group is transparent outside

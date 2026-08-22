@@ -195,6 +195,9 @@ struct BlurUniform {
     /// Spacing between taps in pixels (gaussian passes only); >1 lets `tap_count` taps span very
     /// large radii without truncating the gaussian, matching the wgpu backend.
     tap_step: f32,
+    /// Figma-style smoothing used by the rounded composite mask.
+    corner_smoothing: f32,
+    _pad: [f32; 3],
 }
 
 impl Default for BlurUniform {
@@ -210,9 +213,13 @@ impl Default for BlurUniform {
             clip_rounded: 0.0,
             downsample: 0.0,
             tap_step: 0.0,
+            corner_smoothing: 0.0,
+            _pad: [0.0; 3],
         }
     }
 }
+
+const _: () = assert!(std::mem::size_of::<BlurUniform>() == 96);
 
 #[repr(C)]
 enum BlurInputIndex {
@@ -1106,6 +1113,7 @@ impl MetalRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
+                                filter.corner_smoothing,
                                 max_blur_radius(&filter.filters),
                                 filter.opacity,
                                 true,
@@ -1164,6 +1172,7 @@ impl MetalRenderer {
                                     boundary.bounds,
                                     boundary.content_mask.bounds,
                                     boundary.corner_radii,
+                                    boundary.corner_smoothing,
                                     max_blur_radius(&boundary.filters),
                                     boundary.opacity,
                                     false,
@@ -1298,6 +1307,7 @@ impl MetalRenderer {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
+        corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
@@ -1381,6 +1391,7 @@ impl MetalRenderer {
                 bounds: composite_bounds,
                 content_mask,
                 corner_radii,
+                corner_smoothing,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
                 ..Default::default()

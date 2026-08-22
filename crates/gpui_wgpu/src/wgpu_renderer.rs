@@ -87,6 +87,9 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
+    /// Figma-style smoothing used by the rounded composite mask.
+    corner_smoothing: f32,
+    _pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -1699,6 +1702,7 @@ impl WgpuRenderer {
                                             boundary.corner_radii.bottom_right.0,
                                             boundary.corner_radii.bottom_left.0,
                                         ],
+                                        boundary.corner_smoothing,
                                         max_blur_radius(&boundary.filters),
                                         boundary.opacity,
                                         false,
@@ -1999,6 +2003,7 @@ impl WgpuRenderer {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: [f32; 4],
+        corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
@@ -2110,6 +2115,7 @@ impl WgpuRenderer {
             bounds: composite_bounds.into(),
             content_mask: content_mask.into(),
             corner_radii,
+            corner_smoothing,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
             ..Default::default()
@@ -2155,6 +2161,7 @@ impl WgpuRenderer {
                 filter.corner_radii.bottom_right.0,
                 filter.corner_radii.bottom_left.0,
             ],
+            filter.corner_smoothing,
             max_blur_radius(&filter.filters),
             filter.opacity,
             true,
@@ -2674,5 +2681,27 @@ impl RenderingParameters {
             grayscale_enhanced_contrast,
             subpixel_enhanced_contrast,
         }
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    #[test]
+    fn blur_params_matches_shader_layout() {
+        assert_eq!(std::mem::size_of::<super::BlurParams>(), 96);
+    }
+
+    #[test]
+    fn base_shader_is_valid_wgsl() {
+        use wgpu::naga::{
+            front::wgsl,
+            valid::{Capabilities, ValidationFlags, Validator},
+        };
+
+        let module = wgsl::parse_str(include_str!("shaders.wgsl"))
+            .expect("base shader should parse as WGSL");
+        Validator::new(ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .expect("base shader should pass Naga validation");
     }
 }
