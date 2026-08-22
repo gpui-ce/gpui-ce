@@ -397,6 +397,36 @@ impl LinearColorStop {
     }
 }
 
+/// What a [`Background`] paints, decoded from its packed representation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundKind {
+    /// A flat color.
+    Solid(Hsla),
+    /// A linear gradient between two color stops.
+    LinearGradient {
+        /// The gradient line's angle in degrees, `0.0` pointing up, increasing clockwise.
+        angle: f32,
+        /// The two ends of the gradient.
+        stops: [LinearColorStop; 2],
+    },
+    /// A diagonal stripe pattern.
+    PatternSlash {
+        /// The stripe color.
+        color: Hsla,
+        /// The stripe width, in logical pixels.
+        width: f32,
+        /// The gap between stripes, in logical pixels.
+        interval: f32,
+    },
+    /// Alternating squares of one color and full transparency.
+    Checkerboard {
+        /// The color of one set of squares. The other set is fully transparent.
+        color: Hsla,
+        /// The width and height of each square, in logical pixels.
+        size: f32,
+    },
+}
+
 impl Background {
     /// Returns the solid color if this is a solid background, None otherwise.
     pub fn as_solid(&self) -> Option<Hsla> {
@@ -407,12 +437,43 @@ impl Background {
         }
     }
 
+    /// Returns the decoded form of this background.
+    pub fn kind(&self) -> BackgroundKind {
+        match self.tag {
+            BackgroundTag::Solid => BackgroundKind::Solid(self.solid.into()),
+            BackgroundTag::LinearGradient => BackgroundKind::LinearGradient {
+                angle: self.gradient_angle_or_pattern_height,
+                stops: self.colors,
+            },
+            BackgroundTag::PatternSlash => {
+                // `pattern_slash` packs both values into one f32 as `(width * 255) * 0xFFFF + (interval * 255)`.
+                // floor + rem_euclid to invert it since that's the pairing that stays correct for negative inputs.
+                // truncation and `%` give the wrong entry.
+                let packed = self.gradient_angle_or_pattern_height;
+                BackgroundKind::PatternSlash {
+                    color: self.solid.into(),
+                    width: (packed / 0xFFFF as f32).floor() / 255.0,
+                    interval: (packed.rem_euclid(0xFFFF as f32)) / 255.0,
+                }
+            }
+            BackgroundTag::Checkerboard => BackgroundKind::Checkerboard {
+                color: self.solid.into(),
+                size: self.gradient_angle_or_pattern_height,
+            },
+        }
+    }
+
     /// Use specified color space for color interpolation.
     ///
     /// <https://developer.mozilla.org/en-US/docs/Web/CSS/color-interpolation-method>
     pub fn color_space(mut self, color_space: ColorSpace) -> Self {
         self.color_space = color_space;
         self
+    }
+
+    /// The color space used to interpolate this background, set by [`Background::color_space`].
+    pub fn interpolation_space(&self) -> ColorSpace {
+        self.color_space
     }
 
     /// Returns a new background color with the same hue, saturation, and lightness, but with a modified alpha value.
@@ -478,6 +539,45 @@ mod tests {
         assert_eq!(background.opacity(0.5).colors[1], to.opacity(0.5));
         assert!(!background.is_transparent());
         assert!(background.opacity(0.0).is_transparent());
+    }
+
+    #[test]
+    fn test_background_kind() {
+        let color: Hsla = rgba(0xff0099ff).into_color();
+        assert_eq!(Background::from(color).kind(), BackgroundKind::Solid(color));
+
+        let from = linear_color_stop(rgba(0xff0099ff), 0.0);
+        let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
+        assert_eq!(
+            linear_gradient(90.0, from, to).kind(),
+            BackgroundKind::LinearGradient {
+                angle: 90.0,
+                stops: [from, to],
+            }
+        );
+
+        assert_eq!(
+            checkerboard(color, 12.0).kind(),
+            BackgroundKind::Checkerboard { color, size: 12.0 }
+        );
+    }
+
+    #[test]
+    fn test_background_kind_unpacks_pattern_slash() {
+        let color: Hsla = rgba(0xff0099ff).into_color();
+        // Both values survive to the 1/255 the constructor quantizes them to.
+        for (width, interval) in [(1.0, 3.0), (0.5, 0.25), (2.0, 10.0)] {
+            let BackgroundKind::PatternSlash {
+                width: got_width,
+                interval: got_interval,
+                ..
+            } = pattern_slash(color, width, interval).kind()
+            else {
+                panic!("pattern_slash did not produce a PatternSlash");
+            };
+            assert!((got_width - width).abs() <= 1.0 / 255.0);
+            assert!((got_interval - interval).abs() <= 1.0 / 255.0);
+        }
     }
 
     #[test]
