@@ -183,6 +183,33 @@ pub trait RenderOnce: 'static {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement;
 }
 
+/// A variation on [`ParentElement`] which only supports children of a particular type.
+pub trait ParentElementTyped {
+    /// The specific item type that this element accepts (could simply implement IntoElement or be an element itself).
+    type Child;
+
+    /// Extend this element's children with the given child elements.
+    fn extend(&mut self, elements: impl IntoIterator<Item = Self::Child>);
+
+    /// Add a single child element to this element.
+    fn child(mut self, child: Self::Child) -> Self
+    where
+        Self: Sized,
+    {
+        self.extend(std::iter::once(child));
+        self
+    }
+
+    /// Add multiple child elements to this element.
+    fn children(mut self, children: impl IntoIterator<Item = Self::Child>) -> Self
+    where
+        Self: Sized,
+    {
+        self.extend(children);
+        self
+    }
+}
+
 /// This is a helper trait to provide a uniform interface for constructing elements that
 /// can accept any number of any kind of child elements
 pub trait ParentElement {
