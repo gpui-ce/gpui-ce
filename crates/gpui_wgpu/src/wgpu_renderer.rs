@@ -1852,7 +1852,7 @@ impl WgpuRenderer {
         )
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn draw_surfaces(&self, surfaces: &[PaintSurface], pass: &mut wgpu::RenderPass<'_>) -> bool {
         let resources = self.resources();
         for surface in surfaces {
@@ -1902,7 +1902,7 @@ impl WgpuRenderer {
         true
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "windows")))]
     fn draw_surfaces(&self, _surfaces: &[PaintSurface], _pass: &mut wgpu::RenderPass<'_>) -> bool {
         true
     }

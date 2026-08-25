@@ -4631,7 +4631,11 @@ impl Window {
     /// Paint a surface into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     pub fn paint_surface(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -6045,7 +6049,11 @@ impl Window {
 
     /// Returns the GPU context (device + queue) if available.
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     pub fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context()
     }
@@ -6055,7 +6063,11 @@ impl Window {
     /// cannot know. Embedders that captured the device from
     /// [`Self::gpu_context`] should stop submitting while this is
     /// `Some(true)` and re-acquire the device once it reads `Some(false)`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     pub fn gpu_device_lost(&self) -> Option<bool> {
         self.platform_window.gpu_device_lost()
     }
