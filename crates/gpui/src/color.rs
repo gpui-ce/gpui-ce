@@ -360,6 +360,7 @@ pub fn linear_gradient(
         tag: BackgroundTag::LinearGradient,
         gradient_angle_or_pattern_height: angle,
         colors: [from.into(), to.into()],
+        color_space: ColorSpace::Oklab,
         ..Default::default()
     }
 }
