@@ -6,7 +6,7 @@ set positional-arguments := true
 set allow-duplicate-variables := true
 
 project_root := justfile_directory()
-msrv := "1.92.0"
+msrv := "1.97.0"
 
 # ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ #
 #      Recipes      #
@@ -39,31 +39,31 @@ build-release *flags:
 [group('build')]
 build-linux:
     @echo "🐧 Building Linux crates..."
-    cargo build -p gpui_linux
+    cargo build -p gpui_ce_linux
 
 [doc('Build macOS-specific crates')]
 [group('build')]
 build-mac:
     @echo "🍎 Building macOS crates..."
-    cargo build -p gpui_macos
+    cargo build -p gpui_ce_macos
 
 [doc('Build Windows-specific crates')]
 [group('build')]
 build-windows:
     @echo "🪟 Building Windows crates..."
-    cargo build -p gpui_windows
+    cargo build -p gpui_ce_windows
 
 [doc('Build all GPUI examples')]
 [group('build')]
 build-examples:
     @echo "📐 Building examples..."
-    cargo build --package gpui --examples
+    cargo build --package gpui-ce --examples
 
 [doc('Check WASM target (stable) — requires wasm32-unknown-unknown target to be installed')]
 [group('build')]
 check-wasm:
     @echo "🕸️ Checking WASM target (stable)..."
-    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_platform
+    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
 
 [doc('Check WASM target with atomics (nightly) — requires nightly + rust-src component')]
 [group('build')]
@@ -75,15 +75,15 @@ check-wasm-atomics:
     }
     print "🕸️ Checking WASM target with atomics (nightly)..."
     with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_platform
+        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
     }
 
 [doc('Check examples + WASM web package — requires wasm32-unknown-unknown target to be installed')]
 [group('build')]
 check-examples:
     @echo "📐 Checking examples..."
-    cargo build --package gpui --examples
-    cargo check --package gpui_web --target wasm32-unknown-unknown
+    cargo build --package gpui-ce --examples
+    cargo check --package gpui_ce_web --target wasm32-unknown-unknown
 
 
 [doc('Run all workspace unit and integration tests')]
@@ -216,20 +216,20 @@ ci:
         (run-check "cargo test" { cargo test --workspace --no-fail-fast })
         (run-check "doc tests" { cargo test --workspace --doc --no-fail-fast })
         (run-check "WASM stable" {
-            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_platform
+            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
         })
         (if (available "rustup") {
             run-check "WASM atomics" {
                 with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_platform
+                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
                 }
             }
         } else {
             skip "WASM atomics" "rustup not installed (required for +nightly)"
         })
         (run-check "check examples" {
-            cargo build --package gpui --examples
-            cargo check --package gpui_web --target wasm32-unknown-unknown
+            cargo build --package gpui-ce --examples
+            cargo check --package gpui_ce_web --target wasm32-unknown-unknown
         })
         (if (available "typos") { run-check "typos" { typos } } else { skip "typos" "not installed" })
         (if (available "taplo") { run-check "taplo" { taplo fmt --check } } else { skip "taplo" "not installed" })
@@ -395,11 +395,11 @@ publish dry="false":
     let dry_run = ('{{ dry }}' == "true")
 
     let status = (^git status --porcelain | str trim)
-    if ($status | str length) > 0 {
+    if not $dry_run and ($status | str length) > 0 {
         error make {msg: "Working directory is not clean. Commit or stash changes before publishing."}
     }
 
-    if not ("CARGO_REGISTRY_TOKEN" in $env) {
+    if not $dry_run and not ("CARGO_REGISTRY_TOKEN" in $env) {
         error make {msg: "CARGO_REGISTRY_TOKEN is not set"}
     }
 
@@ -414,6 +414,7 @@ publish dry="false":
         "crates/gpui_sum_tree/Cargo.toml"
         "crates/gpui_scheduler/Cargo.toml"
         "crates/gpui_media/Cargo.toml"
+        "crates/gpui_path/Cargo.toml"
         "crates/gpui_zed_util/Cargo.toml"
 
         # core
@@ -431,14 +432,58 @@ publish dry="false":
         "crates/gpui_elements/Cargo.toml"
 
         "crates/gpui_platform/Cargo.toml"
+
+        # GPUI CE Components. These are a nested workspace because its
+        # examples and web demo have their own resolver and lockfile.
+        "crates/gpui_ce_components/crates/macros/Cargo.toml"
+        "crates/gpui_ce_components/crates/assets/Cargo.toml"
+        "crates/gpui_ce_components/crates/base/Cargo.toml"
+        "crates/gpui_ce_components/crates/fps/Cargo.toml"
+        "crates/gpui_ce_components/crates/shell/Cargo.toml"
+        "crates/gpui_ce_components/crates/ui/Cargo.toml"
+        "crates/gpui_ce_components/crates/webview/Cargo.toml"
     ]
 
     let dry_flag = if $dry_run { ["--dry-run"] } else { [] }
 
+    # A `cargo publish --dry-run` resolves dependencies from crates.io. That
+    # normally makes a dependency-ordered first release fail at the second
+    # crate: its newly-versioned predecessor has not actually been uploaded.
+    # Patch every release package into the temporary verification resolution so
+    # Cargo still packages and compiles each tarball with `cargo publish`, but
+    # validates the complete local release graph rather than stale registry
+    # versions. The patches are passed only to the dry run and are never part
+    # of the published manifests.
+    let root_crates = $crates | where { |manifest| not ($manifest | str starts-with "crates/gpui_ce_components/") }
+
     for manifest in $crates {
         let name = ($manifest | path dirname | path basename)
         print $"\n📦 Publishing ($name)..."
-        run-external "cargo" "publish" "--manifest-path" $manifest "--allow-dirty" ...$dry_flag
+        let patch_manifests = if ($manifest | str starts-with "crates/gpui_ce_components/") {
+            $crates
+        } else {
+            $root_crates
+        }
+        let patch_flags = if $dry_run {
+            $patch_manifests
+                | each { |patch_manifest|
+                    let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $patch_manifest | from json)
+                    let manifest_path = ($patch_manifest | path expand)
+                    let package = ($metadata.packages | where manifest_path == $manifest_path | first | get name)
+                    ["--config" $"patch.crates-io.($package).path=\"($patch_manifest | path dirname | path expand)\""]
+                }
+                | flatten
+        } else {
+            []
+        }
+        # `gpui-ce` has test/example-only edges to `gpui_platform`, while the
+        # Windows platform implementation has the reciprocal `gpui-ce` edge.
+        # Cargo cannot represent the packaged crate and that local cycle in a
+        # single verification lockfile. The release CI builds every target in
+        # the workspace before this recipe; package the archive here and leave
+        # its all-target compilation to that complete workspace check.
+        let no_verify = if $name == "gpui" { ["--no-verify"] } else { [] }
+        run-external "cargo" "publish" "--manifest-path" $manifest "--allow-dirty" ...$dry_flag ...$no_verify ...$patch_flags
         if $env.LAST_EXIT_CODE != 0 {
             error make {msg: $"Failed to publish ($name)"}
         }

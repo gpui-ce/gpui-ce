@@ -1,7 +1,7 @@
 use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
-use gpui_elements::editable_text::{
+use gpui_ce_elements::editable_text::{
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
     text_area, text_input,
 };

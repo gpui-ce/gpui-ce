@@ -64,6 +64,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -160,6 +162,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         run: |
@@ -226,6 +230,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -278,3 +284,45 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.target_linker || '' }}
           PKG_CONFIG_ALLOW_CROSS: "1"
         run: cargo check --workspace ${{ matrix.check_targets }} --target ${{ matrix.target }} ${{ matrix.cargo_args }}
+
+  # The components subtree is a separate Cargo workspace and must be checked
+  # explicitly; it is intentionally not a member of the root workspace.
+  components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-xinput-dev \
+            libxkbcommon-x11-dev libegl1-mesa-dev \
+            libgles2-mesa-dev libglib2.0-dev libfontconfig-dev \
+            libgtk-3-dev \
+            libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev
+      - name: Build components workspace
+        run: |
+          component_patch_args=(
+            --config 'patch.crates-io.gpui-ce.path="../gpui"'
+            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
+            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
+            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+          )
+          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" build --workspace --all-targets)
+      - name: Test components workspace
+        run: |
+          component_patch_args=(
+            --config 'patch.crates-io.gpui-ce.path="../gpui"'
+            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
+            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
+            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+          )
+          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast)

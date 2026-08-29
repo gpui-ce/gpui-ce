@@ -1,5 +1,5 @@
 [package]
-name = "gpui_zed_util"
+name = "gpui_ce_zed_util"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
@@ -15,7 +15,7 @@ doctest = true
 [dependencies]
 anyhow = "1"
 async_zip = { version = "0.0.19", features = ["deflate", "deflate64"] }
-collections = { package = "gpui_collections", version = "0.2.2", path = "../gpui_collections" }
+collections = { package = "gpui_ce_collections", version = "0.2.2", path = "../gpui_collections" }
 dunce = "1"
 futures-lite = "2.6"
 futures = "0.3"
@@ -37,8 +37,8 @@ tempfile = "3.27"
 unicase = "2.9"
 url = "2"
 percent-encoding = "2.3"
-gpui_util = { package = "gpui_ce_util", version = "0.2.2", path = "../gpui_ce_util" }
-path = { package = "gpui_path", version = "0.2.2", path = "../gpui_path", features = [
+gpui_util = { package = "gpui_ce_util", version = "0.2.6", path = "../gpui_ce_util" }
+path = { package = "gpui_ce_path", version = "0.2.2", path = "../gpui_path", features = [
   "serde",
 ] }
 
@@ -64,7 +64,7 @@ windows.workspace = true
 [dev-dependencies]
 pretty_assertions = { version = "1.4", features = ["unstable"] }
 rand = "0.10"
-path = { package = "gpui_path", version = "0.2.2", path = "../gpui_path", features = [
+path = { package = "gpui_ce_path", version = "0.2.2", path = "../gpui_path", features = [
   "test-support",
 ] }
 

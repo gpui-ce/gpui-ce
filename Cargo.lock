@@ -2359,7 +2359,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui"
+name = "gpui-ce"
 version = "0.2.2"
 dependencies = [
  "accesskit",
@@ -2390,16 +2390,16 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.4.3",
+ "gpui_ce_collections",
+ "gpui_ce_macros",
+ "gpui_ce_media",
+ "gpui_ce_platform",
+ "gpui_ce_refineable",
+ "gpui_ce_scheduler",
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_macros",
- "gpui_media",
- "gpui_platform",
- "gpui_refineable",
- "gpui_scheduler",
- "gpui_shared_string",
- "gpui_sum_tree",
- "gpui_web",
+ "gpui_ce_web",
  "hdrhistogram",
  "heapless",
  "http",
@@ -2431,6 +2431,7 @@ dependencies = [
  "seahash",
  "serde",
  "serde_json",
+ "skrifa 0.46.2",
  "slotmap",
  "smallvec",
  "smol",
@@ -2439,7 +2440,6 @@ dependencies = [
  "strum",
  "taffy",
  "thiserror 2.0.20",
- "ttf-parser",
  "unicode-segmentation",
  "url",
  "usvg",
@@ -2451,16 +2451,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_ce_util"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "log",
- "which",
-]
-
-[[package]]
-name = "gpui_collections"
+name = "gpui_ce_collections"
 version = "0.2.2"
 dependencies = [
  "gpui_ce_util",
@@ -2469,7 +2460,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_derive_refineable"
+name = "gpui_ce_derive_refineable"
 version = "0.2.2"
 dependencies = [
  "proc-macro2",
@@ -2478,18 +2469,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_elements"
+name = "gpui_ce_elements"
 version = "0.1.0"
 dependencies = [
- "gpui",
- "gpui_platform",
+ "gpui-ce",
+ "gpui_ce_platform",
  "palette",
  "smallvec",
  "unicode-segmentation",
 ]
 
 [[package]]
-name = "gpui_linux"
+name = "gpui_ce_linux"
 version = "0.1.0"
 dependencies = [
  "accesskit",
@@ -2503,10 +2494,10 @@ dependencies = [
  "calloop-wayland-source",
  "filedescriptor",
  "futures",
- "gpui",
+ "gpui-ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_wgpu",
+ "gpui_ce_wgpu",
  "gpui_xim",
  "image",
  "itertools 0.15.0",
@@ -2538,7 +2529,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_macos"
+name = "gpui_ce_macos"
 version = "0.1.0"
 dependencies = [
  "accesskit",
@@ -2561,10 +2552,10 @@ dependencies = [
  "font-kit",
  "foreign-types",
  "futures",
- "gpui",
+ "gpui-ce",
+ "gpui_ce_collections",
+ "gpui_ce_media",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_media",
  "image",
  "itertools 0.15.0",
  "libc",
@@ -2587,10 +2578,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_macros"
+name = "gpui_ce_macros"
 version = "0.1.0"
 dependencies = [
- "gpui",
  "heck",
  "proc-macro2",
  "quote",
@@ -2598,7 +2588,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_media"
+name = "gpui_ce_media"
 version = "0.2.2"
 dependencies = [
  "anyhow",
@@ -2612,7 +2602,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_path"
+name = "gpui_ce_path"
 version = "0.2.2"
 dependencies = [
  "anyhow",
@@ -2622,26 +2612,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_platform"
+name = "gpui_ce_platform"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "gpui",
- "gpui_linux",
- "gpui_macos",
- "gpui_web",
- "gpui_windows",
+ "gpui-ce",
+ "gpui_ce_linux",
+ "gpui_ce_macos",
+ "gpui_ce_web",
+ "gpui_ce_windows",
 ]
 
 [[package]]
-name = "gpui_refineable"
+name = "gpui_ce_refineable"
 version = "0.2.2"
 dependencies = [
- "gpui_derive_refineable",
+ "gpui_ce_derive_refineable",
 ]
 
 [[package]]
-name = "gpui_scheduler"
+name = "gpui_ce_scheduler"
 version = "0.2.2"
 dependencies = [
  "async-task",
@@ -2655,7 +2645,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_shared_string"
+name = "gpui_ce_shared_string"
 version = "0.1.0"
 dependencies = [
  "schemars",
@@ -2664,7 +2654,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_sum_tree"
+name = "gpui_ce_sum_tree"
 version = "0.2.2"
 dependencies = [
  "heapless",
@@ -2676,35 +2666,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_tokio"
+name = "gpui_ce_tokio"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "gpui",
+ "gpui-ce",
  "gpui_ce_util",
  "tokio",
 ]
 
 [[package]]
-name = "gpui_wasm_thread"
-version = "0.3.3"
+name = "gpui_ce_util"
+version = "0.2.6"
 dependencies = [
- "futures",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
+ "anyhow",
+ "log",
+ "which",
 ]
 
 [[package]]
-name = "gpui_web"
+name = "gpui_ce_web"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "futures",
- "gpui",
+ "gpui-ce",
+ "gpui_ce_wgpu",
  "gpui_wasm_thread",
- "gpui_wgpu",
  "http",
  "js-sys",
  "log",
@@ -2718,7 +2707,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_wgpu"
+name = "gpui_ce_wgpu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2727,9 +2716,9 @@ dependencies = [
  "criterion",
  "etagere",
  "font-kit",
- "gpui",
+ "gpui-ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
  "itertools 0.15.0",
  "js-sys",
  "log",
@@ -2748,7 +2737,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_windows"
+name = "gpui_ce_windows"
 version = "0.1.0"
 dependencies = [
  "accesskit",
@@ -2757,10 +2746,10 @@ dependencies = [
  "dunce",
  "etagere",
  "futures",
- "gpui",
+ "gpui-ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_wgpu",
+ "gpui_ce_wgpu",
  "image",
  "itertools 0.15.0",
  "log",
@@ -2776,20 +2765,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_xim"
-version = "0.4.0-gpui"
-dependencies = [
- "ahash",
- "hashbrown 0.17.1",
- "log",
- "x11-dl",
- "x11rb 0.14.0",
- "xim-ctext",
- "xim-parser",
-]
-
-[[package]]
-name = "gpui_zed_util"
+name = "gpui_ce_zed_util"
 version = "0.2.2"
 dependencies = [
  "anyhow",
@@ -2801,9 +2777,9 @@ dependencies = [
  "futures",
  "futures-lite",
  "globset",
+ "gpui_ce_collections",
+ "gpui_ce_path",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_path",
  "itertools 0.15.0",
  "libc",
  "log",
@@ -2828,6 +2804,29 @@ dependencies = [
  "walkdir",
  "which",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "gpui_wasm_thread"
+version = "0.3.3"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "gpui_xim"
+version = "0.4.0-gpui"
+dependencies = [
+ "ahash",
+ "hashbrown 0.17.1",
+ "log",
+ "x11-dl",
+ "x11rb 0.14.0",
+ "xim-ctext",
+ "xim-parser",
 ]
 
 [[package]]
@@ -4977,6 +4976,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "read-fonts"
+version = "0.43.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "005c8acf251756c478b0bf402885bfd88a1476020c4c7e6060edc1aa68da38ea"
+dependencies = [
+ "bytemuck",
+ "font-types 0.12.4",
+ "once_cell",
+]
+
+[[package]]
 name = "reborrow"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5473,6 +5483,16 @@ checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
 dependencies = [
  "bytemuck",
  "read-fonts 0.41.0",
+]
+
+[[package]]
+name = "skrifa"
+version = "0.46.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4febebda507fb889c545a37a135517769d1391941013561292897961d1887d6"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.43.3",
 ]
 
 [[package]]

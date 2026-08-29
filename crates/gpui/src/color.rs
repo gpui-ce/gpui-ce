@@ -21,6 +21,19 @@ pub fn rgba(hex: u32) -> Rgba {
     Rgba::new(r, g, b, a)
 }
 
+/// Convert an sRGB color to GPUI's HSL-with-alpha representation.
+///
+/// This is the explicit conversion boundary for APIs that store [`Hsla`]. It
+/// avoids exposing Palette's conversion traits to applications and examples.
+pub fn rgb_to_hsla(color: Rgba) -> Hsla {
+    color.into_color()
+}
+
+/// Convert GPUI's HSL-with-alpha representation to sRGB.
+pub fn hsla_to_rgba(color: Hsla) -> Rgba {
+    color.into_color()
+}
+
 /// Swap from RGBA with premultiplied alpha to BGRA
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);

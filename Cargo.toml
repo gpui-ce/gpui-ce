@@ -47,7 +47,7 @@ accesskit_windows = "0.34"
 anyhow = "1"
 backtrace = "0.3"
 bitflags = { version = "2", default-features = false }
-collections = { path = "./crates/gpui_collections/", version = "0.2.2", package = "gpui_collections" }
+collections = { path = "./crates/gpui_collections/", version = "0.2.2", package = "gpui_ce_collections" }
 ctor = "1.0"
 unicode-bidi = { version = "0.3", default-features = false, features = [
     "hardcoded-data",
@@ -79,8 +79,8 @@ chrono = { version = "0.4", features = ["serde"] }
 profiling = "1"
 rand = "0.10"
 regex = "1"
-refineable = { path = "./crates/gpui_refineable/", version = "0.2.2", package = "gpui_refineable" }
-scheduler = { path = "./crates/gpui_scheduler/", version = "0.2.2", package = "gpui_scheduler" }
+refineable = { path = "./crates/gpui_refineable/", version = "0.2.2", package = "gpui_ce_refineable" }
+scheduler = { path = "./crates/gpui_scheduler/", version = "0.2.2", package = "gpui_ce_scheduler" }
 schemars = { version = "1.2", features = ["indexmap2"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -89,7 +89,7 @@ smallvec = { version = "1", features = ["union", "const_new"] }
 async-channel = "2.5"
 stacksafe = "1.0"
 strum = { version = "0.28", features = ["derive"] }
-sum_tree = { path = "./crates/gpui_sum_tree/", version = "0.2.2", package = "gpui_sum_tree" }
+sum_tree = { path = "./crates/gpui_sum_tree/", version = "0.2.2", package = "gpui_ce_sum_tree" }
 thiserror = "2"
 hdrhistogram = "7"
 pollster = "1"
@@ -101,7 +101,7 @@ cocoa-foundation = "=0.2.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 core-video = { version = "0.6", features = ["metal"] }
-media = { path = "./crates/gpui_media/", version = "0.2.2", package = "gpui_media" }
+media = { path = "./crates/gpui_media/", version = "0.2.2", package = "gpui_ce_media" }
 objc = "0.2"
 block2 = "0.6"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
@@ -164,7 +164,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 semver = { version = "1", features = ["serde"] }
 windows-core = "0.62"
 tokio = { version = "1" }
-gpui_util = { path = "./crates/gpui_ce_util/", version = "0.2.2", package = "gpui_ce_util" }
+gpui_util = { path = "./crates/gpui_ce_util/", version = "0.2.6", package = "gpui_ce_util" }
 xim = { path = "./crates/xim/", package = "gpui_xim" }
 
 ahash = { version = "0.8", default-features = false }
@@ -207,7 +207,7 @@ smol_str = "0.3"
 spin = "0.12"
 swash = "0.2"
 taffy = { version = "=0.12.2", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc", "content_size", "detailed_layout_info"] }
-ttf-parser = "0.25"
+skrifa = "0.46"
 usvg = { version = "0.48", default-features = false }
 waker-fn = "1.2"
 wasm-bindgen-futures = "0.4"
@@ -230,18 +230,18 @@ x11-dl = "2.21"
 x11rb = "0.14"
 xkbcommon = "0.9"
 
-gpui = { path = "./crates/gpui/", version = "0.2.2" }
-gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0" }
-gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0" }
-gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0" }
-gpui_windows = { path = "./crates/gpui_windows/", version = "0.1.0" }
-gpui_web = { path = "./crates/gpui_web/", version = "0.1.0" }
+gpui = { path = "./crates/gpui/", version = "0.2.2", package = "gpui-ce" }
+gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0", package = "gpui_ce_platform" }
+gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0", package = "gpui_ce_linux" }
+gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0", package = "gpui_ce_macos" }
+gpui_windows = { path = "./crates/gpui_windows/", version = "0.1.0", package = "gpui_ce_windows" }
+gpui_web = { path = "./crates/gpui_web/", version = "0.1.0", package = "gpui_ce_web" }
 
-gpui_wgpu = { path = "./crates/gpui_wgpu/", version = "0.1.0" }
+gpui_wgpu = { path = "./crates/gpui_wgpu/", version = "0.1.0", package = "gpui_ce_wgpu" }
 
-gpui_macros = { path = "./crates/gpui_macros/", version = "0.1.0" }
-gpui_shared_string = { path = "./crates/gpui_shared_string/", version = "0.1.0" }
-gpui_tokio = { path = "./crates/gpui_tokio/", version = "0.1.0" }
+gpui_macros = { path = "./crates/gpui_macros/", version = "0.1.0", package = "gpui_ce_macros" }
+gpui_shared_string = { path = "./crates/gpui_shared_string/", version = "0.1.0", package = "gpui_ce_shared_string" }
+gpui_tokio = { path = "./crates/gpui_tokio/", version = "0.1.0", package = "gpui_ce_tokio" }
 
 [workspace.dependencies.windows]
 version = "0.62.2"

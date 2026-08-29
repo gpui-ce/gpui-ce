@@ -10,6 +10,7 @@ mod macos_build {
     use std::{
         env,
         path::{Path, PathBuf},
+        process::Command,
     };
 
     use cbindgen::Config;
@@ -17,10 +18,23 @@ mod macos_build {
     pub fn run() {
         let header_path = generate_shader_bindings();
 
-        #[cfg(feature = "runtime_shaders")]
-        emit_stitched_shaders(&header_path);
-        #[cfg(not(feature = "runtime_shaders"))]
-        compile_metal_shaders(&header_path);
+        if cfg!(feature = "runtime_shaders") || !metal_toolchain_available() {
+            // The command-line Metal compiler is an optional Xcode component.
+            // Falling back to the existing runtime path keeps normal Cargo
+            // builds and package verification usable on machines without it.
+            println!("cargo:rustc-cfg=runtime_shaders");
+            println!("cargo:rustc-check-cfg=cfg(runtime_shaders)");
+            emit_stitched_shaders(&header_path);
+        } else {
+            compile_metal_shaders(&header_path);
+        }
+    }
+
+    fn metal_toolchain_available() -> bool {
+        Command::new("xcrun")
+            .args(["--sdk", "macosx", "metal", "-version"])
+            .status()
+            .is_ok_and(|status| status.success())
     }
 
     fn generate_shader_bindings() -> PathBuf {
@@ -107,7 +121,6 @@ mod macos_build {
 
     /// To enable runtime compilation, we need to "stitch" the shaders file with the generated header
     /// so that it is self-contained.
-    #[cfg(feature = "runtime_shaders")]
     fn emit_stitched_shaders(header_path: &Path) {
         fn stitch_header(header: &Path, shader_path: &Path) -> std::io::Result<PathBuf> {
             let header_contents = std::fs::read_to_string(header)?;
@@ -121,10 +134,9 @@ mod macos_build {
         let shader_source_path = "./src/shaders.metal";
         let shader_path = PathBuf::from(shader_source_path);
         stitch_header(header_path, &shader_path).unwrap();
-        println!("cargo:rerun-if-changed={}", &shader_source_path);
+        println!("cargo:rerun-if-changed={shader_source_path}");
     }
 
-    #[cfg(not(feature = "runtime_shaders"))]
     fn compile_metal_shaders(header_path: &Path) {
         use std::process::{self, Command};
         let shader_path = "./src/shaders.metal";

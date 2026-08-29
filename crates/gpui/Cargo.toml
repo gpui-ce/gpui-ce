@@ -1,13 +1,13 @@
 [package]
-name = "gpui"
+name = "gpui-ce"
 version = "0.2.2"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
-description = "Zed's GPU-accelerated UI framework"
-repository = "https://github.com/zed-industries/zed"
+description = "A community fork of Zed's GPU-accelerated UI framework"
+repository = "https://github.com/gpui-ce/gpui-ce"
 publish = true
 license = "Apache-2.0"
-homepage = "https://gpui.rs"
+homepage = "https://gpui-ce.github.io/"
 readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
@@ -35,6 +35,7 @@ input-latency-histogram = ["dep:hdrhistogram"]
 profiler = []
 
 [lib]
+name = "gpui"
 path = "src/gpui.rs"
 doctest = false
 
@@ -79,7 +80,7 @@ resvg = { workspace = true, default-features = false, features = [
     "raster-images"
 ] }
 usvg = { workspace = true, default-features = false }
-ttf-parser.workspace = true
+skrifa.workspace = true
 schemars.workspace = true
 seahash.workspace = true
 serde.workspace = true

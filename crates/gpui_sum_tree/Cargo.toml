@@ -1,5 +1,5 @@
 [package]
-name = "gpui_sum_tree"
+name = "gpui_ce_sum_tree"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"

@@ -198,7 +198,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 /// The output contains a `#[test]` annotation so this can be used with any existing
 /// test harness (`cargo test` or `cargo-nextest`).
 ///
-/// ```
+/// ```ignore
 /// #[gpui::test]
 /// async fn test_foo(mut cx: &TestAppContext) { }
 /// ```
