@@ -23,29 +23,11 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use gpui::*;
 
-/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
-/// blur kernel and the dilated region the blur passes are scissored to.
-///
-/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
-/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
-/// dropping it.
-fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
-    filters.iter().fold(0.0, |acc, filter| match filter {
-        ScaledFilter::Blur(radius) => acc.max(radius.0),
-    })
-}
-
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
 const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
-
-/// Number of content-filter (`filter`) nesting levels that get their own isolated group target.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM. Must match
-/// the wgpu backend's `MAX_FILTER_DEPTH` so nested blur renders consistently across platforms.
-const MAX_FILTER_DEPTH: usize = 2;
 
 pub(crate) struct FontInfo {
     pub gamma_ratios: [f32; 4],
@@ -143,10 +125,10 @@ impl BlurResources {
             create_color_target(device, width, height)?;
         let (ping, ping_rtv, ping_srv) = create_color_target(device, half_w, half_h)?;
         let (pong, pong_rtv, pong_srv) = create_color_target(device, half_w, half_h)?;
-        let mut groups = Vec::with_capacity(MAX_FILTER_DEPTH);
-        let mut group_rtvs = Vec::with_capacity(MAX_FILTER_DEPTH);
-        let mut group_srvs = Vec::with_capacity(MAX_FILTER_DEPTH);
-        for _ in 0..MAX_FILTER_DEPTH {
+        let mut groups = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
+        let mut group_rtvs = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
+        let mut group_srvs = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
+        for _ in 0..MAX_FILTER_GROUP_DEPTH {
             let (group, group_rtv, group_srv) = create_color_target(device, width, height)?;
             groups.push(group);
             group_rtvs.push(group_rtv);
@@ -458,8 +440,7 @@ impl DirectXRenderer {
 
         // Only route through the offscreen scene texture when the scene contains blur filters;
         // otherwise render straight to the swapchain exactly as before.
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let use_offscreen = scene.requires_offscreen_rendering();
 
         // Clone the views we need (AddRef) so the loop can rebind render targets without holding a
         // borrow of `self` across the `&mut self` draw_* calls.
@@ -499,11 +480,9 @@ impl DirectXRenderer {
         } else {
             None
         };
-        // (parent_rtv, parent_srv, isolated)
         let mut filter_stack: Vec<(
             Option<ID3D11RenderTargetView>,
             Option<ID3D11ShaderResourceView>,
-            bool,
         )> = Vec::new();
 
         let annotation = self
@@ -511,30 +490,47 @@ impl DirectXRenderer {
             .as_ref()
             .and_then(|devices| devices.annotation.clone())
             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
-        for batch in scene.batches() {
+        for command in scene.render_commands() {
             let _annotation = annotation
                 .as_ref()
-                .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
-            match batch {
-                PrimitiveBatch::Shadows(range) => self.draw_shadows(range.start, range.len()),
-                PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
-                PrimitiveBatch::Paths(range) => {
+                .map(|annotation| Annotation::new(annotation, HSTRING::from(command.label())));
+            match command {
+                RenderCommand::Batch(PrimitiveBatch::Shadows(range)) => {
+                    self.draw_shadows(range.start, range.len())
+                }
+                RenderCommand::Batch(PrimitiveBatch::Quads(range)) => {
+                    self.draw_quads(range.start, range.len())
+                }
+                RenderCommand::Batch(PrimitiveBatch::Paths(range)) => {
                     let paths = &scene.paths[range];
                     self.draw_paths_to_intermediate(paths)?;
                     self.draw_paths_from_intermediate(paths)
                 }
-                PrimitiveBatch::Underlines(range) => self.draw_underlines(range.start, range.len()),
-                PrimitiveBatch::MonochromeSprites { texture_id, range } => {
+                RenderCommand::Batch(PrimitiveBatch::Underlines(range)) => {
+                    self.draw_underlines(range.start, range.len())
+                }
+                RenderCommand::Batch(PrimitiveBatch::MonochromeSprites {
+                    texture_id,
+                    range,
+                }) => {
                     self.draw_monochrome_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::SubpixelSprites { texture_id, range } => {
+                RenderCommand::Batch(PrimitiveBatch::SubpixelSprites {
+                    texture_id,
+                    range,
+                }) => {
                     self.draw_subpixel_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::PolychromeSprites { texture_id, range } => {
+                RenderCommand::Batch(PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    range,
+                }) => {
                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
-                PrimitiveBatch::BackdropFilters(range) => {
+                RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => {
+                    self.draw_surfaces(&scene.surfaces[range])
+                }
+                RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     let result = (|| {
                         for filter in &scene.backdrop_filters[range] {
                             self.dx_blur_and_composite(
@@ -543,7 +539,7 @@ impl DirectXRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 corner_radii_array(filter.corner_radii),
-                                max_blur_radius(&filter.filters),
+                                filter.max_blur_radius(),
                                 filter.opacity,
                                 true,
                             )?;
@@ -556,54 +552,57 @@ impl DirectXRenderer {
                     }
                     result
                 }
-                PrimitiveBatch::FilterBoundary(ix) => {
-                    let boundary = scene.filter_boundaries[ix].clone();
-                    if boundary.is_start {
-                        // Each isolated nesting level uses its own group target from the pool
-                        // (indexed by current isolation depth). Beyond the pool size
-                        // (MAX_FILTER_DEPTH) deeper filters render inline without isolation rather
-                        // than corrupting an outer group.
-                        let depth = filter_stack.iter().filter(|entry| entry.2).count();
-                        if depth < group_rtvs.len() {
-                            filter_stack.push((current_rtv.clone(), current_srv.clone(), true));
-                            current_rtv = group_rtvs[depth].clone();
-                            current_srv = group_srvs[depth].clone();
-                            self.active_render_target = current_rtv.clone();
-                            unsafe {
-                                if let Some(rtv) = current_rtv.as_ref() {
-                                    ctx.ClearRenderTargetView(rtv, &[0.0; 4]);
-                                }
-                                ctx.OMSetRenderTargets(Some(slice::from_ref(&current_rtv)), None);
-                            }
-                        } else {
-                            filter_stack.push((current_rtv.clone(), current_srv.clone(), false));
+                RenderCommand::BeginFilter {
+                    target_index: Some(target_index),
+                    ..
+                } => {
+                    filter_stack.push((current_rtv.clone(), current_srv.clone()));
+                    current_rtv = group_rtvs[target_index].clone();
+                    current_srv = group_srvs[target_index].clone();
+                    self.active_render_target = current_rtv.clone();
+                    unsafe {
+                        if let Some(rtv) = current_rtv.as_ref() {
+                            ctx.ClearRenderTargetView(rtv, &[0.0; 4]);
                         }
-                        Ok(())
-                    } else if let Some((parent_rtv, parent_srv, isolated)) = filter_stack.pop() {
-                        let result = if isolated {
-                            self.dx_blur_and_composite(
-                                &current_srv,
-                                &parent_rtv,
-                                boundary.bounds,
-                                boundary.content_mask.bounds,
-                                corner_radii_array(boundary.corner_radii),
-                                max_blur_radius(&boundary.filters),
-                                boundary.opacity,
-                                false,
-                            )
-                        } else {
-                            Ok(())
-                        };
-                        current_rtv = parent_rtv;
-                        current_srv = parent_srv;
-                        self.active_render_target = current_rtv.clone();
-                        unsafe {
-                            ctx.OMSetRenderTargets(Some(slice::from_ref(&current_rtv)), None);
-                        }
-                        result
-                    } else {
-                        Ok(())
+                        ctx.OMSetRenderTargets(Some(slice::from_ref(&current_rtv)), None);
                     }
+                    Ok(())
+                }
+                RenderCommand::EndFilter {
+                    boundary,
+                    target_index: Some(_),
+                } => {
+                    let (parent_rtv, parent_srv) = filter_stack
+                        .pop()
+                        .expect("render plan emitted an unmatched isolated filter end");
+                    let result = self.dx_blur_and_composite(
+                        &current_srv,
+                        &parent_rtv,
+                        boundary.bounds,
+                        boundary.content_mask.bounds,
+                        corner_radii_array(boundary.corner_radii),
+                        boundary.max_blur_radius(),
+                        boundary.opacity,
+                        false,
+                    );
+                    current_rtv = parent_rtv;
+                    current_srv = parent_srv;
+                    self.active_render_target = current_rtv.clone();
+                    unsafe {
+                        ctx.OMSetRenderTargets(Some(slice::from_ref(&current_rtv)), None);
+                    }
+                    result
+                }
+                RenderCommand::BeginFilter {
+                    target_index: None,
+                    ..
+                }
+                | RenderCommand::EndFilter {
+                    target_index: None,
+                    ..
+                } => Ok(()),
+                RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
+                    unreachable!("filter boundaries are resolved by the render plan")
                 }
             }
             .with_context(|| {
