@@ -7,12 +7,28 @@
 .DS_Store
 .idea
 .vscode
+.trae
 .codex
 .zed
+*.swp
+*.swo
 *.xcodeproj
 *.xcworkspace
 DerivedData/
 xcuserdata/
+
+# AI agents
+.claude/
+.cursor/
+.aider/
+.copilot/
+.codex/
+.gemini/
+.agents/
+
+# MacOS file system clutter.
+._*
+.DS_STORE
 
 # Python
 **/venv

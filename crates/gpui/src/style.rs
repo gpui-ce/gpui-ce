@@ -1499,7 +1499,6 @@ mod tests {
 
     #[test]
     fn test_combine_highlights() {
-        let nearly_blue = Hsla::new_const(palette::RgbHue::new(0.6666684), 1., 0.5, 1.);
         assert_eq!(
             combine_highlights(
                 [
@@ -1525,14 +1524,14 @@ mod tests {
                 (
                     1..2,
                     HighlightStyle {
-                        color: Some(nearly_blue),
+                        color: Some(blue()),
                         ..Default::default()
                     }
                 ),
                 (
                     2..3,
                     HighlightStyle {
-                        color: Some(nearly_blue),
+                        color: Some(blue()),
                         font_style: Some(FontStyle::Italic),
                         ..Default::default()
                     }

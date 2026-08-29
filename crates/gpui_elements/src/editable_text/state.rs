@@ -428,7 +428,6 @@ impl EditableTextState {
         if let Cow::Owned(mut offset) = scroll_offset {
             offset.x = offset.x.clamp(Pixels::ZERO, content_size.width);
             offset.y = offset.y.clamp(Pixels::ZERO, content_size.height);
-            println!("shift to {offset:?}");
             self.layout_data.next_scroll_offset = Some(offset);
         }
     }

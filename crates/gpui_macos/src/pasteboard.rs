@@ -341,6 +341,7 @@ mod tests {
     use std::sync::Mutex;
 
     use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ImageFormat};
+    use objc::rc::autoreleasepool;
 
     use super::*;
 
@@ -410,6 +411,18 @@ mod tests {
                 Some(ClipboardItem::new_string(text_from_other_app.to_string()))
             );
         });
+    }
+
+    #[test]
+    fn test_custom_types_survive_creation_autorelease_pool() {
+        let pasteboard = autoreleasepool(|| unsafe { Pasteboard::new(nil) });
+
+        unsafe {
+            let text_hash_type = CStr::from_ptr(NSString::UTF8String(*pasteboard.text_hash_type));
+            let metadata_type = CStr::from_ptr(NSString::UTF8String(*pasteboard.metadata_type));
+            assert_eq!(text_hash_type.to_bytes(), b"zed-text-hash");
+            assert_eq!(metadata_type.to_bytes(), b"zed-metadata");
+        }
     }
 
     #[test]

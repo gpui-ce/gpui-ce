@@ -42,6 +42,8 @@ pub use visual_test_context::*;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::InspectorElementRegistry;
+#[cfg(target_os = "macos")]
+use crate::MacActivationPolicy;
 use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
     ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
@@ -219,6 +221,28 @@ impl Application {
     /// By default, [`QuitMode::Default`] is used.
     pub fn with_quit_mode(self, mode: QuitMode) -> Self {
         self.0.borrow_mut().quit_mode = mode;
+        self
+    }
+
+    /// Sets the activation policy for the application (macOS only).
+    ///
+    /// This determines how the application appears in the system:
+    /// - `Regular`: Normal app with Dock icon and menu bar
+    /// - `Accessory`: Background app without Dock icon (LSUIElement)
+    /// - `Prohibited`: Runs in background, no UI allowed
+    ///
+    /// This must be called before the application finishes launching to take effect.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use gpui::Application;
+    /// # fn configure(app: Application) -> Application {
+    /// app.with_activation_policy(gpui::MacActivationPolicy::Accessory)
+    /// # }
+    /// ```
+    #[cfg(target_os = "macos")]
+    pub fn with_activation_policy(self, policy: MacActivationPolicy) -> Self {
+        self.0.borrow().platform.set_mac_activation_policy(policy);
         self
     }
 
@@ -735,6 +759,10 @@ pub struct App {
     // the tokio runtime. As any task attempting to spawn a blocking tokio task,
     // might panic.
     pub(crate) globals_by_type: TypeIdHashMap<Box<dyn Any>>,
+    // Entities which are retained until explicitly removed from the app or dropped at end of life-cycle.
+    // This is an alternative way to define "global" data which uses entities.
+    // There can be multiple entities of a given type & each `Entity<T>` is stored as `Box<dyn Any>`.
+    global_entities: Vec<AnyEntity>,
 
     // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
@@ -820,6 +848,7 @@ impl App {
                 asset_source,
                 http_client,
                 globals_by_type: Default::default(),
+                global_entities: Default::default(),
                 entities,
                 new_entity_observers: SubscriberSet::new(),
                 windows: SlotMap::with_key(),
@@ -2070,6 +2099,28 @@ impl App {
 
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.globals_by_type.insert(global_type, lease.global);
+    }
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
+    pub fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        let any = entity.into_any();
+        if !self.global_entities.contains(&any) {
+            self.global_entities.push(any);
+        }
+    }
+
+    /// Removes the entity from global storage. If no other entities are holding reference to it,
+    /// it will be dropped in the very near future.
+    pub fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.global_entities
+            .retain(|any| any.entity_id() != entity.entity_id());
+    }
+
+    /// Returns an iterator of all globally-stored entities which match the provided type.
+    pub fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let mut iter = self.global_entities.iter();
+        iter.filter_map(|any| any.clone().downcast::<T>().ok())
     }
 
     pub(crate) fn new_entity_observer(
