@@ -2,24 +2,13 @@ use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, BackdropFilter, Background, Bounds, DevicePixels, FilterBoundary, GpuSpecs,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline,
-    get_gamma_correction_ratios,
+    AtlasTextureId, BackdropFilter, Background, Bounds, DevicePixels, GpuSpecs,
+    MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
+    PrimitiveBatch, Quad, RenderCommand, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
+    Underline, get_gamma_correction_ratios,
 };
 use log::warn;
 
-/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
-/// blur kernel and the dilated region the blur passes are scissored to.
-///
-/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
-/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
-/// dropping it.
-fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
-    filters.iter().fold(0.0, |acc, filter| match filter {
-        ScaledFilter::Blur(radius) => acc.max(radius.0),
-    })
-}
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::cell::RefCell;
@@ -268,7 +257,7 @@ struct WgpuResources {
     blur_pong_view: Option<wgpu::TextureView>,
     /// Full-resolution offscreen targets a content-filter (`filter`) group renders into before
     /// being blurred and composited back. One per nesting level (indexed by depth) so nested
-    /// content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render inline.
+    /// content blurs isolate consistently with [`MAX_FILTER_GROUP_DEPTH`]; deeper nests render inline.
     group_textures: Vec<wgpu::Texture>,
     group_views: Vec<wgpu::TextureView>,
 }
@@ -291,10 +280,6 @@ impl WgpuResources {
 }
 
 /// Number of content-filter (`filter`) nesting levels that get their own isolated group texture.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM.
-const MAX_FILTER_DEPTH: usize = 2;
-
 /// Number of [`BlurParams`] slots in the shared blur-params buffer (one per blur pass per frame).
 /// Each frame uses 4 passes per backdrop/group plus one blit; 256 covers dozens of filters.
 const BLUR_PARAMS_SLOTS: u64 = 256;
@@ -1470,7 +1455,7 @@ impl WgpuRenderer {
         resources.blur_pong_texture = Some(t);
         resources.blur_pong_view = Some(v);
 
-        for _ in 0..MAX_FILTER_DEPTH {
+        for _ in 0..MAX_FILTER_GROUP_DEPTH {
             let (t, v) = Self::create_path_intermediate(&resources.device, format, width, height);
             resources.group_textures.push(t);
             resources.group_views.push(v);
@@ -1627,8 +1612,7 @@ impl WgpuRenderer {
 
         // Blur is the only thing that needs the offscreen scene texture; allocate it (and the
         // ping/pong/group targets) lazily so non-blurring apps pay no extra VRAM or blit.
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let use_offscreen = scene.requires_offscreen_rendering();
         if use_offscreen {
             self.ensure_blur_textures();
         }
@@ -1738,8 +1722,9 @@ impl WgpuRenderer {
             } else {
                 Vec::new()
             };
-            // (boundary, parent target to composite back into, whether this level is isolated).
-            let mut filter_stack: Vec<(FilterBoundary, wgpu::TextureView, bool)> = Vec::new();
+            // Parent targets for isolated filter groups. Inline overflow groups do not need an
+            // entry because [`Scene::render_commands`] has already paired them for us.
+            let mut filter_stack: Vec<wgpu::TextureView> = Vec::new();
 
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1757,17 +1742,17 @@ impl WgpuRenderer {
                     ..Default::default()
                 });
 
-                for batch in scene.batches() {
-                    let ok = match batch {
-                        PrimitiveBatch::Quads(range) => {
+                for command in scene.render_commands() {
+                    let ok = match command {
+                        RenderCommand::Batch(PrimitiveBatch::Quads(range)) => {
                             self.draw_quads(&scene.quads[range], &mut instance_offset, &mut pass)
                         }
-                        PrimitiveBatch::Shadows(range) => self.draw_shadows(
+                        RenderCommand::Batch(PrimitiveBatch::Shadows(range)) => self.draw_shadows(
                             &scene.shadows[range],
                             &mut instance_offset,
                             &mut pass,
                         ),
-                        PrimitiveBatch::Paths(range) => {
+                        RenderCommand::Batch(PrimitiveBatch::Paths(range)) => {
                             let paths = &scene.paths[range];
                             if paths.is_empty() {
                                 continue;
@@ -1806,36 +1791,43 @@ impl WgpuRenderer {
                                 false
                             }
                         }
-                        PrimitiveBatch::Underlines(range) => self.draw_underlines(
-                            &scene.underlines[range],
+                        RenderCommand::Batch(PrimitiveBatch::Underlines(range)) => self
+                            .draw_underlines(
+                                &scene.underlines[range],
+                                &mut instance_offset,
+                                &mut pass,
+                            ),
+                        RenderCommand::Batch(PrimitiveBatch::MonochromeSprites {
+                            texture_id,
+                            range,
+                        }) => self.draw_monochrome_sprites(
+                            &scene.monochrome_sprites[range],
+                            texture_id,
                             &mut instance_offset,
                             &mut pass,
                         ),
-                        PrimitiveBatch::MonochromeSprites { texture_id, range } => self
-                            .draw_monochrome_sprites(
-                                &scene.monochrome_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
-                        PrimitiveBatch::SubpixelSprites { texture_id, range } => self
-                            .draw_subpixel_sprites(
-                                &scene.subpixel_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
-                        PrimitiveBatch::PolychromeSprites { texture_id, range } => self
-                            .draw_polychrome_sprites(
-                                &scene.polychrome_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
-                        PrimitiveBatch::Surfaces(range) => {
+                        RenderCommand::Batch(PrimitiveBatch::SubpixelSprites {
+                            texture_id,
+                            range,
+                        }) => self.draw_subpixel_sprites(
+                            &scene.subpixel_sprites[range],
+                            texture_id,
+                            &mut instance_offset,
+                            &mut pass,
+                        ),
+                        RenderCommand::Batch(PrimitiveBatch::PolychromeSprites {
+                            texture_id,
+                            range,
+                        }) => self.draw_polychrome_sprites(
+                            &scene.polychrome_sprites[range],
+                            texture_id,
+                            &mut instance_offset,
+                            &mut pass,
+                        ),
+                        RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => {
                             self.draw_surfaces(&scene.surfaces[range], &mut pass)
                         }
-                        PrimitiveBatch::BackdropFilters(range) => {
+                        RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                             // Interrupt the current pass, blur the content painted so far behind
                             // each backdrop's rounded rect, then resume drawing on top.
                             drop(pass);
@@ -1858,79 +1850,78 @@ impl WgpuRenderer {
                             });
                             true
                         }
-                        PrimitiveBatch::FilterBoundary(ix) => {
-                            let boundary = scene.filter_boundaries[ix].clone();
-                            if boundary.is_start {
-                                // Each isolated nesting level uses its own group texture from the
-                                // pool (indexed by current isolation depth). Beyond the pool size
-                                // (MAX_FILTER_DEPTH) deeper filters render inline without isolation
-                                // rather than corrupting an outer group.
-                                let depth = filter_stack.iter().filter(|entry| entry.2).count();
-                                if depth < group_views.len() {
-                                    drop(pass);
-                                    let parent = current_target.clone();
-                                    current_target = group_views[depth].clone();
-                                    filter_stack.push((boundary, parent, true));
-                                    pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                        label: Some("filter_group"),
-                                        color_attachments: &[Some(
-                                            wgpu::RenderPassColorAttachment {
-                                                view: &current_target,
-                                                resolve_target: None,
-                                                ops: wgpu::Operations {
-                                                    load: wgpu::LoadOp::Clear(
-                                                        wgpu::Color::TRANSPARENT,
-                                                    ),
-                                                    store: wgpu::StoreOp::Store,
-                                                },
-                                                depth_slice: None,
-                                            },
-                                        )],
-                                        depth_stencil_attachment: None,
-                                        ..Default::default()
-                                    });
-                                } else {
-                                    filter_stack.push((boundary, current_target.clone(), false));
-                                }
-                            } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
-                                if isolated {
-                                    drop(pass);
-                                    self.blur_and_composite(
-                                        &mut encoder,
-                                        &current_target,
-                                        &parent,
-                                        boundary.bounds,
-                                        boundary.content_mask.bounds,
-                                        [
-                                            boundary.corner_radii.top_left.0,
-                                            boundary.corner_radii.top_right.0,
-                                            boundary.corner_radii.bottom_right.0,
-                                            boundary.corner_radii.bottom_left.0,
-                                        ],
-                                        max_blur_radius(&boundary.filters),
-                                        boundary.opacity,
-                                        false,
-                                    );
-                                    current_target = parent;
-                                    pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                        label: Some("main_pass_continued"),
-                                        color_attachments: &[Some(
-                                            wgpu::RenderPassColorAttachment {
-                                                view: &current_target,
-                                                resolve_target: None,
-                                                ops: wgpu::Operations {
-                                                    load: wgpu::LoadOp::Load,
-                                                    store: wgpu::StoreOp::Store,
-                                                },
-                                                depth_slice: None,
-                                            },
-                                        )],
-                                        depth_stencil_attachment: None,
-                                        ..Default::default()
-                                    });
-                                }
-                            }
+                        RenderCommand::BeginFilter {
+                            target_index: Some(target_index),
+                            ..
+                        } => {
+                            drop(pass);
+                            filter_stack.push(current_target.clone());
+                            current_target = group_views[target_index].clone();
+                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("filter_group"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &current_target,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                ..Default::default()
+                            });
                             true
+                        }
+                        RenderCommand::EndFilter {
+                            boundary,
+                            target_index: Some(_),
+                        } => {
+                            let parent = filter_stack
+                                .pop()
+                                .expect("render plan emitted an unmatched isolated filter end");
+                            drop(pass);
+                            self.blur_and_composite(
+                                &mut encoder,
+                                &current_target,
+                                &parent,
+                                boundary.bounds,
+                                boundary.content_mask.bounds,
+                                [
+                                    boundary.corner_radii.top_left.0,
+                                    boundary.corner_radii.top_right.0,
+                                    boundary.corner_radii.bottom_right.0,
+                                    boundary.corner_radii.bottom_left.0,
+                                ],
+                                boundary.max_blur_radius(),
+                                boundary.opacity,
+                                false,
+                            );
+                            current_target = parent;
+                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("main_pass_continued"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &current_target,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                ..Default::default()
+                            });
+                            true
+                        }
+                        RenderCommand::BeginFilter {
+                            target_index: None, ..
+                        }
+                        | RenderCommand::EndFilter {
+                            target_index: None, ..
+                        } => true,
+                        RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
+                            unreachable!("filter boundaries are converted into render commands")
                         }
                     };
                     if !ok {
@@ -2581,7 +2572,7 @@ impl WgpuRenderer {
                 filter.corner_radii.bottom_right.0,
                 filter.corner_radii.bottom_left.0,
             ],
-            max_blur_radius(&filter.filters),
+            filter.max_blur_radius(),
             filter.opacity,
             true,
         );

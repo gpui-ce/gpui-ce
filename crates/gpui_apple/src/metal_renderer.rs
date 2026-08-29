@@ -7,22 +7,10 @@ use cocoa::{
 };
 use core_graphics::geometry::CGSize;
 use gpui::{
-    AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
+    AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, MAX_FILTER_GROUP_DEPTH,
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledFilter, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    RenderCommand, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
-
-/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
-/// blur kernel and the dilated region the blur passes are scissored to.
-///
-/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
-/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
-/// dropping it.
-fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
-    filters.iter().fold(0.0, |acc, filter| match filter {
-        ScaledFilter::Blur(radius) => acc.max(radius.0),
-    })
-}
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 use image::RgbaImage;
 
@@ -51,12 +39,6 @@ const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitch
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
 const PATH_SAMPLE_COUNT: u32 = 4;
-
-/// Number of content-filter (`filter`) nesting levels that get their own isolated group texture.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM. Must match
-/// the wgpu backend's `MAX_FILTER_DEPTH` so nested blur renders consistently across platforms.
-const MAX_FILTER_DEPTH: usize = 2;
 
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
 pub type Renderer = MetalRenderer;
@@ -163,7 +145,7 @@ pub struct MetalRenderer {
     blur_pong_texture: Option<metal::Texture>,
     /// Full-resolution offscreen targets a content-filter (`filter`) group renders into before
     /// being blurred and composited back. One per nesting level (indexed by isolation depth) so
-    /// nested content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render
+    /// nested content blurs isolate consistently with [`MAX_FILTER_GROUP_DEPTH`]; deeper nests render
     /// inline.
     group_textures: Vec<metal::Texture>,
     path_sample_count: u32,
@@ -538,7 +520,7 @@ impl MetalRenderer {
         let full_w = size.width.0 as u64;
         let full_h = size.height.0 as u64;
         self.scene_color_texture = Some(make_color_texture(full_w, full_h));
-        self.group_textures = (0..MAX_FILTER_DEPTH)
+        self.group_textures = (0..MAX_FILTER_GROUP_DEPTH)
             .map(|_| make_color_texture(full_w, full_h))
             .collect();
         self.blur_ping_texture = Some(make_color_texture(full_w / 2, full_h / 2));
@@ -974,8 +956,7 @@ impl MetalRenderer {
         // Only route through the offscreen scene texture when the scene actually contains blur
         // filters; otherwise render straight to `texture` exactly as before (no regression, no
         // extra blit for the common case).
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let use_offscreen = scene.requires_offscreen_rendering();
         let scene_color_owned = self.scene_color_texture.clone();
         let blur_ping_owned = self.blur_ping_texture.clone();
         let blur_pong_owned = self.blur_pong_texture.clone();
@@ -987,8 +968,7 @@ impl MetalRenderer {
         };
         // The active render target; switches to the group texture inside a content-filter group.
         let mut current_target: &metal::TextureRef = scene_color;
-        // (boundary, parent target to composite back into, whether this level is isolated).
-        let mut filter_stack: Vec<(FilterBoundary, &metal::TextureRef, bool)> = Vec::new();
+        let mut filter_stack: Vec<&metal::TextureRef> = Vec::new();
 
         let mut command_encoder = new_command_encoder_for_texture(
             command_buffer,
@@ -1000,23 +980,23 @@ impl MetalRenderer {
             },
         );
 
-        for batch in scene.batches() {
-            let ok = match batch {
-                PrimitiveBatch::Shadows(range) => self.draw_shadows(
+        for command in scene.render_commands() {
+            let ok = match command {
+                RenderCommand::Batch(PrimitiveBatch::Shadows(range)) => self.draw_shadows(
                     &scene.shadows[range],
                     instance_buffer,
                     &mut instance_offset,
                     viewport_size,
                     command_encoder,
                 ),
-                PrimitiveBatch::Quads(range) => self.draw_quads(
+                RenderCommand::Batch(PrimitiveBatch::Quads(range)) => self.draw_quads(
                     &scene.quads[range],
                     instance_buffer,
                     &mut instance_offset,
                     viewport_size,
                     command_encoder,
                 ),
-                PrimitiveBatch::Paths(range) => {
+                RenderCommand::Batch(PrimitiveBatch::Paths(range)) => {
                     let paths = &scene.paths[range];
                     command_encoder.end_encoding();
 
@@ -1049,39 +1029,41 @@ impl MetalRenderer {
                         false
                     }
                 }
-                PrimitiveBatch::Underlines(range) => self.draw_underlines(
+                RenderCommand::Batch(PrimitiveBatch::Underlines(range)) => self.draw_underlines(
                     &scene.underlines[range],
                     instance_buffer,
                     &mut instance_offset,
                     viewport_size,
                     command_encoder,
                 ),
-                PrimitiveBatch::MonochromeSprites { texture_id, range } => self
-                    .draw_monochrome_sprites(
+                RenderCommand::Batch(PrimitiveBatch::MonochromeSprites { texture_id, range }) => {
+                    self.draw_monochrome_sprites(
                         texture_id,
                         &scene.monochrome_sprites[range],
                         instance_buffer,
                         &mut instance_offset,
                         viewport_size,
                         command_encoder,
-                    ),
-                PrimitiveBatch::PolychromeSprites { texture_id, range } => self
-                    .draw_polychrome_sprites(
+                    )
+                }
+                RenderCommand::Batch(PrimitiveBatch::PolychromeSprites { texture_id, range }) => {
+                    self.draw_polychrome_sprites(
                         texture_id,
                         &scene.polychrome_sprites[range],
                         instance_buffer,
                         &mut instance_offset,
                         viewport_size,
                         command_encoder,
-                    ),
-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(
+                    )
+                }
+                RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => self.draw_surfaces(
                     &scene.surfaces[range],
                     instance_buffer,
                     &mut instance_offset,
                     viewport_size,
                     command_encoder,
                 ),
-                PrimitiveBatch::BackdropFilters(range) => {
+                RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     command_encoder.end_encoding();
                     if let (Some(ping), Some(pong)) =
                         (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
@@ -1097,7 +1079,7 @@ impl MetalRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
-                                max_blur_radius(&filter.filters),
+                                filter.max_blur_radius(),
                                 filter.opacity,
                                 true,
                             );
@@ -1113,67 +1095,72 @@ impl MetalRenderer {
                     );
                     true
                 }
-                PrimitiveBatch::FilterBoundary(ix) => {
-                    let boundary = scene.filter_boundaries[ix].clone();
-                    if boundary.is_start {
-                        // Each isolated nesting level uses its own group texture from the pool
-                        // (indexed by current isolation depth). Beyond the pool size
-                        // (MAX_FILTER_DEPTH) deeper filters render inline without isolation rather
-                        // than corrupting an outer group.
-                        let depth = filter_stack.iter().filter(|entry| entry.2).count();
-                        if depth < group_owned.len() {
-                            command_encoder.end_encoding();
-                            let parent = current_target;
-                            current_target = group_owned[depth].as_ref();
-                            filter_stack.push((boundary, parent, true));
-                            command_encoder = new_command_encoder_for_texture(
-                                command_buffer,
-                                current_target,
-                                viewport_size,
-                                |color_attachment| {
-                                    color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-                                    color_attachment
-                                        .set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
-                                },
-                            );
-                        } else {
-                            filter_stack.push((boundary, current_target, false));
-                        }
-                    } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
-                        if isolated {
-                            command_encoder.end_encoding();
-                            if let (Some(ping), Some(pong)) =
-                                (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
-                            {
-                                self.metal_blur_and_composite(
-                                    command_buffer,
-                                    current_target,
-                                    parent,
-                                    ping,
-                                    pong,
-                                    viewport_size,
-                                    boundary.bounds,
-                                    boundary.content_mask.bounds,
-                                    boundary.corner_radii,
-                                    max_blur_radius(&boundary.filters),
-                                    boundary.opacity,
-                                    false,
-                                );
-                            }
-                            current_target = parent;
-                            command_encoder = new_command_encoder_for_texture(
-                                command_buffer,
-                                current_target,
-                                viewport_size,
-                                |color_attachment| {
-                                    color_attachment.set_load_action(metal::MTLLoadAction::Load);
-                                },
-                            );
-                        }
-                    }
+                RenderCommand::BeginFilter {
+                    target_index: Some(target_index),
+                    ..
+                } => {
+                    command_encoder.end_encoding();
+                    filter_stack.push(current_target);
+                    current_target = group_owned[target_index].as_ref();
+                    command_encoder = new_command_encoder_for_texture(
+                        command_buffer,
+                        current_target,
+                        viewport_size,
+                        |color_attachment| {
+                            color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                            color_attachment
+                                .set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
+                        },
+                    );
                     true
                 }
-                PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
+                RenderCommand::EndFilter {
+                    boundary,
+                    target_index: Some(_),
+                } => {
+                    let parent = filter_stack
+                        .pop()
+                        .expect("render plan emitted an unmatched isolated filter end");
+                    command_encoder.end_encoding();
+                    if let (Some(ping), Some(pong)) =
+                        (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
+                    {
+                        self.metal_blur_and_composite(
+                            command_buffer,
+                            current_target,
+                            parent,
+                            ping,
+                            pong,
+                            viewport_size,
+                            boundary.bounds,
+                            boundary.content_mask.bounds,
+                            boundary.corner_radii,
+                            boundary.max_blur_radius(),
+                            boundary.opacity,
+                            false,
+                        );
+                    }
+                    current_target = parent;
+                    command_encoder = new_command_encoder_for_texture(
+                        command_buffer,
+                        current_target,
+                        viewport_size,
+                        |color_attachment| {
+                            color_attachment.set_load_action(metal::MTLLoadAction::Load);
+                        },
+                    );
+                    true
+                }
+                RenderCommand::BeginFilter {
+                    target_index: None, ..
+                }
+                | RenderCommand::EndFilter {
+                    target_index: None, ..
+                } => true,
+                RenderCommand::Batch(PrimitiveBatch::SubpixelSprites { .. }) => unreachable!(),
+                RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
+                    unreachable!("filter boundaries are resolved by the render plan")
+                }
             };
             if !ok {
                 command_encoder.end_encoding();

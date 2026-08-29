@@ -250,7 +250,60 @@ impl Scene {
             filter_boundaries_iter: self.filter_boundaries.iter().peekable(),
         }
     }
+
+    /// Returns the backend-neutral sequence of work needed to render this scene.
+    ///
+    /// In addition to preserving primitive batch order, this pairs content-filter boundaries and
+    /// assigns the bounded offscreen target used by each isolated group. GPU backends only need to
+    /// manage their target handles; nesting and overflow behavior stay consistent everywhere.
+    pub fn render_commands(&self) -> impl Iterator<Item = RenderCommand<'_>> + '_ {
+        let mut filter_stack: SmallVec<[(&FilterBoundary, Option<usize>); 4]> = SmallVec::new();
+        let mut isolated_depth = 0;
+
+        self.batches().map(move |batch| match batch {
+            PrimitiveBatch::FilterBoundary(ix) => {
+                let boundary = &self.filter_boundaries[ix];
+                if boundary.is_start {
+                    let target_index =
+                        (isolated_depth < MAX_FILTER_GROUP_DEPTH).then_some(isolated_depth);
+                    if target_index.is_some() {
+                        isolated_depth += 1;
+                    }
+                    filter_stack.push((boundary, target_index));
+                    RenderCommand::BeginFilter {
+                        boundary,
+                        target_index,
+                    }
+                } else if let Some((boundary, target_index)) = filter_stack.pop() {
+                    if target_index.is_some() {
+                        isolated_depth -= 1;
+                    }
+                    RenderCommand::EndFilter {
+                        boundary,
+                        target_index,
+                    }
+                } else {
+                    debug_assert!(false, "content-filter end boundary has no matching start");
+                    RenderCommand::EndFilter {
+                        boundary,
+                        target_index: None,
+                    }
+                }
+            }
+            batch => RenderCommand::Batch(batch),
+        })
+    }
+
+    /// Whether rendering needs an offscreen scene target for backdrop or content filters.
+    pub fn requires_offscreen_rendering(&self) -> bool {
+        !self.backdrop_filters.is_empty() || !self.filter_boundaries.is_empty()
+    }
 }
+
+/// Number of nested content-filter groups with dedicated isolation targets.
+///
+/// Deeper groups render inline instead of allocating an unbounded number of full-size textures.
+pub const MAX_FILTER_GROUP_DEPTH: usize = 2;
 
 /// Internal representation of [`palette::Hsla`] which is layout sensitive, as its provided to the renderer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -645,6 +698,47 @@ pub enum PrimitiveBatch {
     FilterBoundary(usize),
 }
 
+/// Backend-neutral rendering work derived from a [`Scene`].
+///
+/// Filter commands are paired and carry the index of their shared isolation target. `None`
+/// means that the nesting limit was exceeded and the group must render inline.
+#[derive(Debug)]
+pub enum RenderCommand<'a> {
+    /// A normal primitive batch.
+    Batch(PrimitiveBatch),
+    /// Begin rendering a content-filter group.
+    BeginFilter {
+        /// Parameters captured by the opening boundary.
+        boundary: &'a FilterBoundary,
+        /// Index into the backend's fixed isolation-target pool.
+        target_index: Option<usize>,
+    },
+    /// Finish and composite a content-filter group.
+    EndFilter {
+        /// Parameters from the matching opening boundary.
+        boundary: &'a FilterBoundary,
+        /// Index into the backend's fixed isolation-target pool.
+        target_index: Option<usize>,
+    },
+}
+
+impl RenderCommand<'_> {
+    /// A diagnostic label suitable for GPU debug annotations.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Batch(batch) => batch.label(),
+            Self::BeginFilter { target_index, .. } => match target_index {
+                Some(index) => format!("begin filter group ({index})"),
+                None => "begin inline filter group".into(),
+            },
+            Self::EndFilter { target_index, .. } => match target_index {
+                Some(index) => format!("end filter group ({index})"),
+                None => "end inline filter group".into(),
+            },
+        }
+    }
+}
+
 impl PrimitiveBatch {
     #[expect(missing_docs)]
     pub fn label(&self) -> String {
@@ -764,6 +858,13 @@ pub struct BackdropFilter {
     pub opacity: f32,
 }
 
+impl BackdropFilter {
+    /// Largest gaussian blur radius in this filter chain, in device pixels.
+    pub fn max_blur_radius(&self) -> f32 {
+        max_blur_radius(&self.filters)
+    }
+}
+
 impl From<BackdropFilter> for Primitive {
     fn from(filter: BackdropFilter) -> Self {
         Primitive::BackdropFilter(filter)
@@ -788,6 +889,23 @@ pub struct FilterBoundary {
     pub opacity: f32,
     /// `true` for the start marker (opens the group), `false` for the end marker (closes it).
     pub is_start: bool,
+}
+
+impl FilterBoundary {
+    /// Largest gaussian blur radius in this filter chain, in device pixels.
+    pub fn max_blur_radius(&self) -> f32 {
+        max_blur_radius(&self.filters)
+    }
+}
+
+/// Returns the largest blur radius in a scene-space filter chain.
+///
+/// This match is deliberately exhaustive so adding a filter requires one shared scheduling
+/// decision instead of three backend-specific implementations that can drift.
+fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
+    filters.iter().fold(0.0, |radius, filter| match filter {
+        ScaledFilter::Blur(filter_radius) => radius.max(filter_radius.0),
+    })
 }
 
 impl From<FilterBoundary> for Primitive {
@@ -1330,5 +1448,93 @@ mod tests {
         scene.insert_primitive(quad());
 
         assert_eq!(batch_kinds(&mut scene), vec!["quad", "backdrop", "quad"]);
+    }
+
+    #[test]
+    fn render_commands_pair_nested_filters_and_bound_isolation_targets() {
+        let mut scene = Scene::default();
+        // Three nested groups exercise the bounded target allocator. The first two
+        // receive their own targets; the third must render inline rather than aliasing
+        // either outer target.
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(false));
+        scene.insert_primitive(boundary(false));
+        scene.insert_primitive(boundary(false));
+        scene.finish();
+
+        let commands: Vec<_> = scene
+            .render_commands()
+            .map(|command| match command {
+                RenderCommand::Batch(PrimitiveBatch::Quads(_)) => "quad".to_string(),
+                RenderCommand::BeginFilter {
+                    boundary,
+                    target_index,
+                } => {
+                    assert!(boundary.is_start);
+                    format!("begin:{target_index:?}")
+                }
+                // An end command must carry its matched *start* boundary. This lets a
+                // renderer use the opening group's bounds, filters, and opacity while
+                // composing it, rather than trusting an independently-sorted end marker.
+                RenderCommand::EndFilter {
+                    boundary,
+                    target_index,
+                } => {
+                    assert!(boundary.is_start);
+                    format!("end:{target_index:?}")
+                }
+                RenderCommand::Batch(other) => panic!("unexpected batch: {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            commands,
+            vec![
+                "begin:Some(0)",
+                "quad",
+                "begin:Some(1)",
+                "quad",
+                "begin:None",
+                "quad",
+                "end:None",
+                "end:Some(1)",
+                "end:Some(0)",
+            ]
+        );
+    }
+
+    #[test]
+    fn render_commands_keep_later_content_outside_a_completed_filter() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(false));
+        // This non-overlapping sibling would reuse a low order without the close-time
+        // order floor. The command stream is the renderer contract: it must come after
+        // the group has been composited, not be painted into its offscreen target.
+        scene.insert_primitive(detached_quad());
+        scene.finish();
+
+        let commands: Vec<_> = scene
+            .render_commands()
+            .map(|command| match command {
+                RenderCommand::BeginFilter { target_index, .. } => {
+                    format!("begin:{target_index:?}")
+                }
+                RenderCommand::EndFilter { target_index, .. } => format!("end:{target_index:?}"),
+                RenderCommand::Batch(PrimitiveBatch::Quads(_)) => "quad".to_string(),
+                RenderCommand::Batch(other) => panic!("unexpected batch: {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            commands,
+            vec!["begin:Some(0)", "quad", "end:Some(0)", "quad"]
+        );
     }
 }
