@@ -1090,24 +1090,6 @@ impl App {
         self.pending_updates -= 1;
     }
 
-    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
-    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
-    pub fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        let event = self
-            .event_arena
-            .alloc(|| event)
-            .map(|it| it as &mut dyn Any);
-        self.pending_effects.push_back(Effect::Emit {
-            emitter: entity.entity_id(),
-            event_type: TypeId::of::<EventType>(),
-            event,
-        });
-    }
-
     /// Arrange a callback to be invoked when the given entity calls `notify` on its respective context.
     pub fn observe<W>(
         &mut self,
@@ -2112,28 +2094,6 @@ impl App {
         self.globals_by_type.insert(global_type, lease.global);
     }
 
-    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
-    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
-    pub fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let any = entity.into_any();
-        if !self.global_entities.contains(&any) {
-            self.global_entities.push(any);
-        }
-    }
-
-    /// Removes the entity from global storage. If no other entities are holding reference to it,
-    /// it will be dropped in the very near future.
-    pub fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.global_entities
-            .retain(|any| any.entity_id() != entity.entity_id());
-    }
-
-    /// Returns an iterator of all globally-stored entities which match the provided type.
-    pub fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let mut iter = self.global_entities.iter();
-        iter.filter_map(|any| any.clone().downcast::<T>().ok())
-    }
-
     pub(crate) fn new_entity_observer(
         &self,
         key: TypeId,
@@ -2705,43 +2665,6 @@ impl App {
         FocusHandle::new(&self.focus_handles)
     }
 
-    /// Tell GPUI that an entity has changed and observers of it should be notified.
-    pub fn notify(&mut self, entity_id: EntityId) {
-        let window_invalidators = mem::take(
-            self.window_invalidators_by_entity
-                .entry(entity_id)
-                .or_default(),
-        );
-
-        // `window_invalidators_by_entity` is monotonic, so an entry alone
-        // doesn't mean the window is currently rendering the entity. Filter
-        // through `tracked_entities` to keep invalidation tight to windows
-        // that actually display this entity right now.
-        let live_invalidators: SmallVec<[WindowInvalidator; 2]> = window_invalidators
-            .iter()
-            .filter(|(window_id, _)| {
-                self.tracked_entities
-                    .get(window_id)
-                    .is_some_and(|set| set.contains(&entity_id))
-            })
-            .map(|(_, invalidator)| invalidator.clone())
-            .collect();
-
-        if live_invalidators.is_empty() {
-            if self.pending_notifications.insert(entity_id) {
-                self.pending_effects
-                    .push_back(Effect::Notify { emitter: entity_id });
-            }
-        } else {
-            for invalidator in &live_invalidators {
-                invalidator.invalidate_view(entity_id, self);
-            }
-        }
-
-        self.window_invalidators_by_entity
-            .insert(entity_id, window_invalidators);
-    }
-
     /// Returns the name for this [`App`].
     #[cfg(any(test, feature = "test-support", debug_assertions))]
     pub fn get_name(&self) -> Option<&'static str> {
@@ -2862,6 +2785,58 @@ impl AppContext for App {
         read(entity, self)
     }
 
+    fn notify(&mut self, entity_id: EntityId) {
+        let window_invalidators = mem::take(
+            self.window_invalidators_by_entity
+                .entry(entity_id)
+                .or_default(),
+        );
+
+        // `window_invalidators_by_entity` is monotonic, so an entry alone
+        // doesn't mean the window is currently rendering the entity. Filter
+        // through `tracked_entities` to keep invalidation tight to windows
+        // that actually display this entity right now.
+        let live_invalidators: SmallVec<[WindowInvalidator; 2]> = window_invalidators
+            .iter()
+            .filter(|(window_id, _)| {
+                self.tracked_entities
+                    .get(window_id)
+                    .is_some_and(|set| set.contains(&entity_id))
+            })
+            .map(|(_, invalidator)| invalidator.clone())
+            .collect();
+
+        if live_invalidators.is_empty() {
+            if self.pending_notifications.insert(entity_id) {
+                self.pending_effects
+                    .push_back(Effect::Notify { emitter: entity_id });
+            }
+        } else {
+            for invalidator in &live_invalidators {
+                invalidator.invalidate_view(entity_id, self);
+            }
+        }
+
+        self.window_invalidators_by_entity
+            .insert(entity_id, window_invalidators);
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        let event = self
+            .event_arena
+            .alloc(|| event)
+            .map(|it| it as &mut dyn Any);
+        self.pending_effects.push_back(Effect::Emit {
+            emitter: entity.entity_id(),
+            event_type: TypeId::of::<EventType>(),
+            event,
+        });
+    }
+
     fn update_window<T, F>(&mut self, handle: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -2913,6 +2888,23 @@ impl AppContext for App {
     {
         let mut g = self.global::<G>();
         callback(g, self)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        let any = entity.into_any();
+        if !self.global_entities.contains(&any) {
+            self.global_entities.push(any);
+        }
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.global_entities
+            .retain(|any| any.entity_id() != entity.entity_id());
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let mut iter = self.global_entities.iter();
+        iter.filter_map(|any| any.clone().downcast::<T>().ok())
     }
 }
 

@@ -214,6 +214,16 @@ pub trait AppContext {
     where
         T: 'static;
 
+    /// Tell GPUI that an entity has changed and observers of it should be notified.
+    fn notify(&mut self, entity_id: EntityId);
+
+    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
+    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static;
+
     /// Update a window for the given handle.
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
     where
@@ -247,6 +257,17 @@ pub trait AppContext {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global;
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
+
+    /// Removes the entity from global storage. If no other entities are holding reference to it,
+    /// it will be dropped in the very near future.
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>);
+
+    /// Returns an iterator of all globally-stored entities which match the provided type.
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
 }
 
 /// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].

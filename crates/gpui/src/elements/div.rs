@@ -677,11 +677,7 @@ impl Interactivity {
     where
         Self: Sized,
     {
-        debug_assert!(
-            self.hover_listener.is_none(),
-            "calling on_hover more than once on the same element is not supported"
-        );
-        self.hover_listener = Some(Box::new(listener));
+        self.hover_listeners.push(Rc::new(listener));
     }
 
     /// Use the given callback to construct a new tooltip view when the mouse hovers over this element.
@@ -749,6 +745,22 @@ impl Interactivity {
 
     fn has_pinch_listeners(&self) -> bool {
         !self.pinch_listeners.is_empty()
+    }
+
+    /// Bind the given callback to be called during prepaint of the element.
+    /// The imperative API equivalent to [`StatefulInteractiveElement::on_prepaint`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_prepaint(
+        &mut self,
+        listener: impl Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.prepaint_listeners
+            .push(Box::new(move |payload, window, cx| {
+                listener(payload, window, cx)
+            }));
     }
 }
 
@@ -1688,7 +1700,33 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self.interactivity().tooltip_show_delay(delay);
         self
     }
+
+    /// Bind the given callback to execute before the element's prepaint.
+    /// The fluent API equivalent to [`Interactivity::on_prepaint`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_prepaint(
+        mut self,
+        listener: impl Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_prepaint(listener);
+        self
+    }
 }
+
+/// Describes the known state of an Interactivity element before prepaint begins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InteractivityPrepaint {
+    /// The bounds of the element
+    pub bounds: Bounds<Pixels>,
+    /// The size of the contents of the element
+    pub content_size: Size<Pixels>,
+}
+pub(crate) type PrepaintListener =
+    Box<dyn Fn(&InteractivityPrepaint, &mut Window, &mut App) + 'static>;
 
 pub(crate) type MouseDownListener =
     Box<dyn Fn(&MouseDownEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
@@ -1708,6 +1746,7 @@ pub(crate) type PinchListener =
     Box<dyn Fn(&PinchEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+pub(crate) type HoverListener = Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 
 pub(crate) struct DragListener {
     value: Arc<dyn Any>,
@@ -2110,6 +2149,7 @@ pub struct Interactivity {
         Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> StyleRefinement>,
     )>,
     pub(crate) group_drag_over_styles: Vec<(TypeId, GroupStyle)>,
+    pub(crate) prepaint_listeners: Vec<PrepaintListener>,
     pub(crate) mouse_down_listeners: Vec<MouseDownListener>,
     pub(crate) mouse_up_listeners: Vec<MouseUpListener>,
     pub(crate) mouse_pressure_listeners: Vec<MousePressureListener>,
@@ -2126,7 +2166,7 @@ pub struct Interactivity {
     pub(crate) click_listeners: Vec<ClickListener>,
     pub(crate) aux_click_listeners: Vec<ClickListener>,
     pub(crate) drag_listener: Option<DragListener>,
-    pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
+    pub(crate) hover_listeners: Vec<HoverListener>,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
@@ -2286,6 +2326,16 @@ impl Interactivity {
     ) -> R {
         self.content_size = content_size;
 
+        if !self.prepaint_listeners.is_empty() {
+            let payload = InteractivityPrepaint {
+                bounds,
+                content_size,
+            };
+            for listener in self.prepaint_listeners.drain(..) {
+                listener(&payload, window, cx);
+            }
+        }
+
         #[cfg(any(feature = "inspector", debug_assertions))]
         window.with_inspector_state(
             _inspector_id,
@@ -2389,7 +2439,7 @@ impl Interactivity {
             || self.tracked_focus_handle.is_some()
             || self.hover_style.is_some()
             || self.group_hover_style.is_some()
-            || self.hover_listener.is_some()
+            || !self.hover_listeners.is_empty()
             || !self.mouse_up_listeners.is_empty()
             || !self.mouse_pressure_listeners.is_empty()
             || !self.mouse_down_listeners.is_empty()
@@ -3098,7 +3148,7 @@ impl Interactivity {
                 });
             }
 
-            if let Some(hover_listener) = self.hover_listener.take() {
+            if !self.hover_listeners.is_empty() {
                 let was_hovered = element_state
                     .hover_listener_state
                     .get_or_insert_with(Default::default)
@@ -3107,13 +3157,15 @@ impl Interactivity {
                     .pending_mouse_down
                     .get_or_insert_with(Default::default)
                     .clone();
-                let hover_listener = Rc::new(hover_listener);
+                let hover_listeners = self.hover_listeners.clone();
                 let update_hover = move |is_hovered: bool, window: &mut Window, cx: &mut App| {
                     let mut was_hovered = was_hovered.borrow_mut();
                     if is_hovered != *was_hovered {
                         *was_hovered = is_hovered;
                         drop(was_hovered);
-                        hover_listener(&is_hovered, window, cx);
+                        for listener in &hover_listeners {
+                            listener(&is_hovered, window, cx);
+                        }
                     }
                 };
 
@@ -3985,12 +4037,7 @@ where
     }
 }
 
-impl<E> StatefulInteractiveElement for Stateful<E>
-where
-    E: Element,
-    Self: InteractiveElement,
-{
-}
+impl<E> StatefulInteractiveElement for Stateful<E> where Self: InteractiveElement {}
 
 impl<E> InteractiveElement for Stateful<E>
 where
@@ -4077,14 +4124,11 @@ where
     }
 }
 
-impl<E> IntoElement for Stateful<E>
-where
-    E: Element,
-{
-    type Element = Self;
+impl<E: IntoElement> IntoElement for Stateful<E> {
+    type Element = E::Element;
 
     fn into_element(self) -> Self::Element {
-        self
+        self.element.into_element()
     }
 }
 
@@ -4350,8 +4394,8 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, AppContext as _, Context, InputEvent, Keystroke, MouseMoveEvent,
-        TestAppContext, canvas, util::FluentBuilder as _,
+        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, canvas,
+        util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
 
