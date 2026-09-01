@@ -15,6 +15,9 @@ path = "src/gpui_wgpu.rs"
 [features]
 default = []
 font-kit = ["dep:font-kit"]
+# Windows-only: `PaintSurface::texture` exists there only when `gpui` has
+# `wgpu-surfaces` on, so `draw_surfaces` has to follow the same switch.
+wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
 gpui.workspace = true
