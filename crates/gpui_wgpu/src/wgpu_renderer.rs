@@ -1918,11 +1918,14 @@ impl WgpuRenderer {
         true
     }
 
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    )))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            all(target_os = "windows", feature = "wgpu-surfaces")
+        ))
+    ))]
     fn draw_surfaces(&self, _surfaces: &[PaintSurface], _pass: &mut wgpu::RenderPass<'_>) -> bool {
         true
     }
