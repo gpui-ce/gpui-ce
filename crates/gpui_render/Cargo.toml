@@ -1,0 +1,23 @@
+[package]
+name = "gpui_ce_render"
+version = "0.1.0"
+description.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/gpui_render.rs"
+
+[dependencies]
+gpui.workspace = true
+wgsl-rs.workspace = true
+
+[build-dependencies]
+gpui.workspace = true
+naga = { version = "29.0.4", features = ["hlsl-out", "msl-out", "wgsl-in"] }
+naga-old = { package = "naga", version = "24.0.0", features = ["hlsl-out", "wgsl-in"] }
+wgsl-rs.workspace = true
