@@ -1136,10 +1136,10 @@ impl DirectWriteState {
                 bounds_origin: vec2i(layer.bounds.origin.x, layer.bounds.origin.y),
                 bounds_size: vec2i(layer.bounds.size.width, layer.bounds.size.height),
                 run_color: vec4f(
-                    layer.run_color.r,
-                    layer.run_color.g,
-                    layer.run_color.b,
-                    layer.run_color.a,
+                    layer.run_color.red,
+                    layer.run_color.green,
+                    layer.run_color.blue,
+                    layer.run_color.alpha,
                 ),
                 gamma_ratios: vec4f(
                     gamma_ratios[0],

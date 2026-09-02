@@ -22,7 +22,7 @@ use smallvec::SmallVec;
 use wgsl_rs::std::{vec2f, vec4f};
 use windows::{
     Win32::{
-        Foundation::{HMODULE, HWND},
+        Foundation::{FreeLibrary, HMODULE, HWND},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
@@ -30,7 +30,7 @@ use windows::{
             DirectWrite::*,
             Dxgi::{Common::*, *},
         },
-        System::LibraryLoader::{FreeLibrary, LoadLibraryA},
+        System::LibraryLoader::LoadLibraryA,
     },
     core::{HSTRING, Interface, PCSTR},
 };
@@ -1727,6 +1727,9 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
+        // Generated DX11 shaders index the full ByteAddressBuffer with SV_InstanceID, which
+        // includes StartInstanceLocation. Keep one SRV per pipeline buffer instead of creating
+        // a range-specific view for every batch.
         set_pipeline_state(
             device_context,
             slice::from_ref(&self.view),
@@ -2189,7 +2192,7 @@ fn create_buffer_view(
             BufferEx: D3D11_BUFFEREX_SRV {
                 FirstElement: 0,
                 NumElements: buffer_desc.ByteWidth / 4,
-                Flags: D3D11_BUFFEREX_SRV_FLAG(1),
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
             },
         },
     };
@@ -2255,9 +2258,9 @@ pub(crate) mod shader_resources {
     use std::ffi::CString;
 
     use anyhow::{Context as _, Result};
-    use gpui_render::artifacts::{NATIVE_SHADERS, NativeShader};
+    use gpui_render::artifacts::{Dx11ShaderModel, NATIVE_SHADERS, NativeShader};
     use windows::{
-        Win32::Graphics::Direct3D::{Fxc::D3DCompile, ID3DBlob},
+        Win32::Graphics::Direct3D::{Fxc::D3DCompile, ID3DBlob, ID3DInclude},
         core::PCSTR,
     };
 
@@ -2308,6 +2311,15 @@ pub(crate) mod shader_resources {
         Fragment,
     }
 
+    impl ShaderTarget {
+        fn profile(self, model: Dx11ShaderModel) -> &'static [u8] {
+            match (model, self) {
+                (Dx11ShaderModel::Sm50, Self::Vertex) => b"vs_5_0\0",
+                (Dx11ShaderModel::Sm50, Self::Fragment) => b"ps_5_0\0",
+            }
+        }
+    }
+
     pub(crate) struct RawShaderBytes {
         blob: ID3DBlob,
     }
@@ -2319,23 +2331,22 @@ pub(crate) mod shader_resources {
                 ShaderTarget::Vertex => shader.vertex_entry,
                 ShaderTarget::Fragment => shader.fragment_entry,
             };
-            let profile: &[u8] = match target {
-                ShaderTarget::Vertex => b"vs_5_0\0",
-                ShaderTarget::Fragment => b"ps_5_0\0",
-            };
+            let profile = target.profile(shader.dx11.model);
             let entry = CString::new(entry).context("shader entry point name")?;
             let mut blob = None;
             let mut errors = None;
             unsafe {
                 D3DCompile(
-                    shader.hlsl.as_bytes(),
+                    shader.dx11.source.as_ptr().cast(),
+                    shader.dx11.source.len(),
                     PCSTR::from_raw(b"gpui_shaders.hlsl\0".as_ptr()),
                     None,
+                    None::<&ID3DInclude>,
                     PCSTR::from_raw(entry.as_ptr() as *const u8),
                     PCSTR::from_raw(profile.as_ptr()),
                     0,
                     0,
-                    Some(&mut blob),
+                    &mut blob,
                     Some(&mut errors),
                 )
             }
@@ -2389,7 +2400,7 @@ mod nvidia {
     use anyhow::Result;
     use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
 
-    use crate::with_dll_library;
+    use super::with_dll_library;
 
     // https://github.com/NVIDIA/nvapi/blob/7cb76fce2f52de818b3da497af646af1ec16ce27/nvapi_lite_common.h#L180
     const NVAPI_SHORT_STRING_MAX: usize = 64;
@@ -2456,7 +2467,7 @@ mod amd {
     use anyhow::Result;
     use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
 
-    use crate::with_dll_library;
+    use super::with_dll_library;
 
     // https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/blob/5d8812d703d0335741b6f7ffc37838eeb8b967f7/ags_lib/inc/amd_ags.h#L145
     const AGS_CURRENT_VERSION: i32 = (6 << 22) | (3 << 12);

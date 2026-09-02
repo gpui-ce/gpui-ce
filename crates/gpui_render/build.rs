@@ -843,18 +843,25 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             )
         });
         let msl = write_msl(&current_module, &current_info, pipeline.label);
-        let hlsl_name = format!("{}.hlsl", pipeline.label);
+        let dx11_name = format!("{}.hlsl", pipeline.label);
         let msl_name = format!("{}.metal", pipeline.label);
-        write_shader(out_dir, &hlsl_name, &hlsl);
+        write_shader(out_dir, &dx11_name, &hlsl);
         write_shader(out_dir, &msl_name, &msl);
+        let dx11_path = format!("/{dx11_name}");
+        let msl_path = format!("/{msl_name}");
         writeln!(
             generated,
-            "    NativeShader {{ label: {:?}, vertex_entry: {:?}, fragment_entry: {:?}, hlsl: include_str!(concat!(env!(\"OUT_DIR\"), {:?})), msl: include_str!(concat!(env!(\"OUT_DIR\"), {:?})) }},",
-            pipeline.label,
-            pipeline.vertex_entry,
-            pipeline.fragment_entry,
-            format!("/{hlsl_name}"),
-            format!("/{msl_name}"),
+            r#"    NativeShader {{
+        label: {:?},
+        vertex_entry: {:?},
+        fragment_entry: {:?},
+        dx11: Dx11Shader {{
+            source: include_str!(concat!(env!("OUT_DIR"), {:?})),
+            model: Dx11ShaderModel::Sm50,
+        }},
+        msl: include_str!(concat!(env!("OUT_DIR"), {:?})),
+    }},"#,
+            pipeline.label, pipeline.vertex_entry, pipeline.fragment_entry, dx11_path, msl_path,
         )
         .unwrap();
     }
