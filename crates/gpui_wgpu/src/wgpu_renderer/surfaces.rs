@@ -11,14 +11,14 @@ mod platform;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[path = "surfaces/linux.rs"]
 mod platform;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "wgpu-surfaces"))]
 #[path = "surfaces/windows.rs"]
 mod platform;
 #[cfg(not(any(
     target_os = "macos",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "windows"
+    all(target_os = "windows", feature = "wgpu-surfaces")
 )))]
 #[path = "surfaces/unsupported.rs"]
 mod platform;
