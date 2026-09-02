@@ -57,24 +57,6 @@ pub(crate) trait LinuxClient {
     fn display(&self, id: DisplayId) -> Option<Rc<dyn PlatformDisplay>>;
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>>;
 
-    #[cfg(feature = "screen-capture")]
-    fn is_screen_capture_supported(&self) -> bool {
-        true
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn screen_capture_sources(
-        &self,
-    ) -> oneshot::Receiver<Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>> {
-        let (sources_tx, sources_rx) = oneshot::channel();
-        sources_tx
-            .send(Err(anyhow::anyhow!(
-                "gpui_linux was compiled without the screen-capture feature"
-            )))
-            .ok();
-        sources_rx
-    }
-
     fn open_window(
         &self,
         handle: AnyWindowHandle,
@@ -362,18 +344,6 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>> {
         self.inner.displays()
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn is_screen_capture_supported(&self) -> bool {
-        self.inner.is_screen_capture_supported()
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn screen_capture_sources(
-        &self,
-    ) -> oneshot::Receiver<Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>> {
-        self.inner.screen_capture_sources()
     }
 
     fn active_window(&self) -> Option<AnyWindowHandle> {
