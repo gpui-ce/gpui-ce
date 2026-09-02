@@ -12,6 +12,10 @@ extend-exclude = [
 
   # macOS APIs
   "crates/gpui/src/platform/mac/dispatcher.rs",
+
+  # Components fixtures and website build artifacts
+  "crates/gpui_ce_components/crates/story/src/fixtures/",
+  "crates/gpui_ce_components/website/",
 ]
 
 [default]
@@ -20,6 +24,7 @@ extend-ignore-re = [
   "Big Sur",
   # Stripped version of reserved keyword `type`
   "typ",
+  "\\\\u\\{[0-9A-Fa-f]+\\}",
 ]
 check-filename = true
 
@@ -39,3 +44,11 @@ ags = "ags"
 TME = "TME"
 # Level of Detail (DirectX/Graphics)
 LOD = "LOD"
+# Correct Italian singular of "command" in UI locales
+comando = "comando"
+# Deliberately misspelled manifest keys / error message test cases
+capabilites = "capabilites"
+backgrund = "backgrund"
+wtach = "wtach"
+netwrok = "netwrok"
+workspce = "workspce"

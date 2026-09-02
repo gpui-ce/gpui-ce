@@ -123,7 +123,7 @@ impl EditableTextState {
     ///
     /// ```
     /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
-    /// # use gpui_elements::editable_text::{EditableTextState, StringStorage, editable_text};
+    /// # use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, editable_text};
     /// pub struct Form;
     /// impl RenderOnce for Form {
     ///     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -155,7 +155,7 @@ impl EditableTextState {
     /// Expected to be called via [`AppContext::new`] such as:
     /// ```
     /// # use gpui::{AppContext, Window, App, Entity};
-    /// # use gpui_elements::editable_text::{StringStorage, EditableTextState};
+    /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
     /// # fn new(_window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
     /// cx.new(|cx| EditableTextState::new(StringStorage::default(), cx))
     /// # }

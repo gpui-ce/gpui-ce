@@ -1,0 +1,4 @@
+[submodule "crates/gpui_ce_components"]
+	path = crates/gpui_ce_components
+	url = https://github.com/gpui-ce/gpui-component.git
+	branch = main

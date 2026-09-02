@@ -9,6 +9,7 @@ extern crate self as gpui;
 pub static GPUI_MANIFEST_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
 #[macro_use]
 mod action;
+mod animated;
 mod app;
 
 mod arena;
@@ -32,6 +33,7 @@ mod interactive;
 mod key_dispatch;
 mod keymap;
 mod lerp;
+mod motion;
 mod path_builder;
 mod platform;
 pub mod prelude;
@@ -49,6 +51,7 @@ pub mod queue;
 mod scene;
 mod shared_uri;
 mod style;
+mod style_transitions;
 mod styled;
 mod subscription;
 mod svg_renderer;
@@ -90,6 +93,7 @@ pub use accesskit;
 pub use accesskit::Action as AccessibleAction;
 pub use accesskit::{Orientation, Role, Toggled};
 pub use action::*;
+pub use animated::*;
 pub use anyhow::Result;
 pub use app::*;
 pub(crate) use arena::*;
@@ -141,6 +145,7 @@ pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
 pub use lerp::*;
+pub use motion::*;
 pub use path_builder::*;
 pub use platform::*;
 pub use profiler::*;
@@ -152,6 +157,7 @@ pub use scene::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
+pub use style_transitions::*;
 pub use styled::*;
 pub use subscription::*;
 pub use sum_tree;
@@ -211,6 +217,16 @@ pub trait AppContext {
     where
         T: 'static;
 
+    /// Tell GPUI that an entity has changed and observers of it should be notified.
+    fn notify(&mut self, entity_id: EntityId);
+
+    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
+    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static;
+
     /// Update a window for the given handle.
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
     where
@@ -244,6 +260,17 @@ pub trait AppContext {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global;
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
+
+    /// Removes the entity from global storage. If no other entities are holding reference to it,
+    /// it will be dropped in the very near future.
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>);
+
+    /// Returns an iterator of all globally-stored entities which match the provided type.
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
 }
 
 /// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].

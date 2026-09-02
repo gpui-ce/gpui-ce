@@ -45,9 +45,9 @@ use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
 // Exported to metal
 pub(crate) type PointF = gpui::Point<f32>;
 
-#[cfg(not(feature = "runtime_shaders"))]
+#[cfg(not(any(feature = "runtime_shaders", runtime_shaders)))]
 const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
-#[cfg(feature = "runtime_shaders")]
+#[cfg(any(feature = "runtime_shaders", runtime_shaders))]
 const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitched_shaders.metal"));
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
@@ -296,11 +296,11 @@ impl MetalRenderer {
         opaque: bool,
         instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     ) -> Self {
-        #[cfg(feature = "runtime_shaders")]
+        #[cfg(any(feature = "runtime_shaders", runtime_shaders))]
         let library = device
             .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
             .expect("error building metal library");
-        #[cfg(not(feature = "runtime_shaders"))]
+        #[cfg(not(any(feature = "runtime_shaders", runtime_shaders)))]
         let library = device
             .new_library_with_data(SHADERS_METALLIB)
             .expect("error building metal library");

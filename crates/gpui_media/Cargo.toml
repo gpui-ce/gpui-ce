@@ -1,5 +1,5 @@
 [package]
-name = "gpui_media"
+name = "gpui_ce_media"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"

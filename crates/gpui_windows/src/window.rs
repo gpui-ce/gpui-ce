@@ -1091,6 +1091,19 @@ impl PlatformWindow for WindowsWindow {
             .set(Some(callback));
     }
 
+    #[cfg(feature = "wgpu")]
+    fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        let (device, queue) = self.state.renderer.borrow().gpu_context();
+        Some(Box::new((device, queue)))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_device_lost(&self) -> Option<bool> {
+        // Only loads an atomic flag - safe even mid-recovery, when
+        // gpu_context would panic on the torn-down resources.
+        Some(self.state.renderer.borrow().device_lost())
+    }
+
     fn draw(&self, scene: &Scene) {
         #[cfg(not(feature = "wgpu"))]
         {
