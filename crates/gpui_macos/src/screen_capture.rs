@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use block::ConcreteBlock;
 use cocoa::{
     base::{YES, id, nil},
-    foundation::NSArray,
+    foundation::{NSArray, NSInteger},
 };
 use collections::HashMap;
 use core_foundation::base::TCFType;
@@ -11,6 +11,7 @@ use core_graphics::display::{
     CGDirectDisplayID, CGDisplayCopyDisplayMode, CGDisplayModeGetPixelHeight,
     CGDisplayModeGetPixelWidth, CGDisplayModeRelease,
 };
+use core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
 use ctor::ctor;
 use futures::channel::oneshot;
 use gpui::{
@@ -18,7 +19,6 @@ use gpui::{
     SharedString, SourceMetadata, size,
 };
 use media::core_media::{CMSampleBuffer, CMSampleBufferRef};
-use metal::NSInteger;
 use objc::{
     class,
     declare::ClassDecl,
@@ -48,6 +48,7 @@ const FRAME_CALLBACK_IVAR: &str = "frame_callback";
 
 #[allow(non_upper_case_globals)]
 const SCStreamOutputTypeScreen: NSInteger = 0;
+const SCREEN_CAPTURE_QUEUE_DEPTH: NSInteger = 3;
 
 impl ScreenCaptureSource for MacScreenCaptureSource {
     fn metadata(&self) -> Result<SourceMetadata> {
@@ -93,8 +94,8 @@ impl ScreenCaptureSource for MacScreenCaptureSource {
             let filter: id = msg_send![filter, initWithDisplay:self.sc_display excludingWindows:excluded_windows];
             let configuration: id = msg_send![configuration, init];
             let _: id = msg_send![configuration, setScalesToFit: true];
-            let _: id = msg_send![configuration, setPixelFormat: 0x42475241];
-            // let _: id = msg_send![configuration, setShowsCursor: false];
+            let _: id = msg_send![configuration, setPixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange];
+            let _: id = msg_send![configuration, setQueueDepth: SCREEN_CAPTURE_QUEUE_DEPTH];
             // let _: id = msg_send![configuration, setCaptureResolution: 3];
             let delegate: id = msg_send![delegate, init];
             let output: id = msg_send![output, init];
