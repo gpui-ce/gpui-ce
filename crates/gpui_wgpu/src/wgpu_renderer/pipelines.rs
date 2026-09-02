@@ -1,11 +1,12 @@
 use crate::RendererTier;
 use gpui_render::{
     artifacts::{
-        GeneratedBinding, GeneratedBindingKind, BASE_DOWNLEVEL_WGSL, BASE_WGSL, BLUR_BINDINGS,
-        DOWNLEVEL_BLUR_BINDINGS, DOWNLEVEL_INSTANCE_BINDINGS, DOWNLEVEL_RANGE_BINDING,
-        DOWNLEVEL_SURFACE_BINDINGS, DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS, GLOBAL_BINDINGS,
-        INSTANCE_BINDINGS, MONOCHROME_INSTANCE_BINDINGS, SUBPIXEL_DUAL_SOURCE_WGSL,
-        SUBPIXEL_INSTANCE_BINDINGS, SURFACE_BINDINGS, TEXTURED_INSTANCE_BINDINGS,
+        BASE_DOWNLEVEL_WGSL, BASE_WGSL, BLUR_BINDINGS, DOWNLEVEL_BLUR_BINDINGS,
+        DOWNLEVEL_INSTANCE_BINDINGS, DOWNLEVEL_RANGE_BINDING, DOWNLEVEL_SURFACE_BINDINGS,
+        DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS, GLOBAL_BINDINGS, GeneratedBinding,
+        GeneratedBindingKind, INSTANCE_BINDINGS, MONOCHROME_INSTANCE_BINDINGS,
+        SUBPIXEL_DUAL_SOURCE_WGSL, SUBPIXEL_INSTANCE_BINDINGS, SURFACE_BINDINGS,
+        TEXTURED_INSTANCE_BINDINGS,
     },
     shaders::interface as shader,
 };
@@ -382,6 +383,9 @@ impl WgpuPipelines {
             shader::DataLayout::TexturedInstances => &textured_layout,
             shader::DataLayout::MonochromeSprites => &monochrome_layout,
             shader::DataLayout::SubpixelSprites => &subpixel_layout,
+            shader::DataLayout::NativeOnly => {
+                panic!("native-only shader pipeline cannot be created by wgpu")
+            }
             shader::DataLayout::Surface => &surface_layout,
             shader::DataLayout::Blur => &blur_layout,
         };
