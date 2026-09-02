@@ -76,19 +76,6 @@ impl LinuxClient for HeadlessClient {
         (display.id() == id).then_some(display)
     }
 
-    #[cfg(feature = "screen-capture")]
-    fn screen_capture_sources(
-        &self,
-    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>>
-    {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        tx.send(Err(anyhow::anyhow!(
-            "Headless mode does not support screen capture."
-        )))
-        .ok();
-        rx
-    }
-
     fn active_window(&self) -> Option<AnyWindowHandle> {
         None
     }
