@@ -20,7 +20,9 @@ wgpu = ["dep:gpui_wgpu", "gpui/wgpu-surfaces", "gpui_wgpu/wgpu-surfaces"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
 gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit.workspace = true
@@ -47,9 +49,6 @@ windows-registry = "0.6.1"
 [target.'cfg(target_os = "windows")'.dependencies.scap]
 workspace = true
 optional = true
-
-[target.'cfg(target_os = "windows")'.build-dependencies]
-windows-registry = "0.6.1"
 
 [package.metadata.cargo-shear]
 ignored = ["scap"]
