@@ -165,6 +165,7 @@ impl WgpuRenderer {
         let bind_group = resources.instances.textured_bind_group(
             &resources.device,
             &resources.bind_group_layouts,
+            pipeline.data_layout(),
             texture_id,
             texture.generation,
             &texture.view,
@@ -191,6 +192,7 @@ impl WgpuRenderer {
         let bind_group = resources.instances.path_bind_group(
             &resources.device,
             &resources.bind_group_layouts,
+            resources.pipelines.paths.data_layout(),
             path_intermediate_view,
             &resources.atlas_sampler,
         );

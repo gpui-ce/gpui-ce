@@ -1,8 +1,8 @@
 use super::{
-    WgpuRenderer, begin_color_render_pass,
+    begin_color_render_pass,
     buffers::{InstanceTransport, InstanceUpload},
-    filters::{FILTER_UNIFORMS_PER_COMPOSITE, FrameUniformRequirements},
-    path_types,
+    filters::{FrameUniformRequirements, FILTER_UNIFORMS_PER_COMPOSITE},
+    path_types, WgpuRenderer,
 };
 use gpui::{
     FilterRenderTarget, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, RenderCommand,

@@ -15,12 +15,12 @@ use gpui_render::shaders::{
 };
 
 use super::{
-    WgpuRenderer,
     buffers::{DynamicUniformBuffer, InstanceBufferArena},
     filters::FrameUniformRequirements,
     pipelines::{WgpuBindGroupLayouts, WgpuPipelines},
     settings::RenderingParameters,
     surfaces::SurfaceCache,
+    WgpuRenderer,
 };
 
 const INITIAL_FILTER_UNIFORM_CAPACITY: u64 = 16;

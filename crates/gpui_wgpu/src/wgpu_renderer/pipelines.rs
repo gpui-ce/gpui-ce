@@ -4,7 +4,8 @@ use gpui_render::{
         GeneratedBinding, GeneratedBindingKind, BASE_DOWNLEVEL_WGSL, BASE_WGSL, BLUR_BINDINGS,
         DOWNLEVEL_BLUR_BINDINGS, DOWNLEVEL_INSTANCE_BINDINGS, DOWNLEVEL_RANGE_BINDING,
         DOWNLEVEL_SURFACE_BINDINGS, DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS, GLOBAL_BINDINGS,
-        INSTANCE_BINDINGS, SUBPIXEL_DUAL_SOURCE_WGSL, SURFACE_BINDINGS, TEXTURED_INSTANCE_BINDINGS,
+        INSTANCE_BINDINGS, MONOCHROME_INSTANCE_BINDINGS, SUBPIXEL_DUAL_SOURCE_WGSL,
+        SUBPIXEL_INSTANCE_BINDINGS, SURFACE_BINDINGS, TEXTURED_INSTANCE_BINDINGS,
     },
     shaders::interface as shader,
 };
@@ -67,6 +68,10 @@ pub(super) struct WgpuRenderPipeline {
 }
 
 impl WgpuRenderPipeline {
+    pub(super) fn data_layout(&self) -> shader::DataLayout {
+        self.specification.data_layout
+    }
+
     pub(super) fn fixed_vertex_count(&self) -> u32 {
         self.specification.vertex_count.fixed().unwrap_or_else(|| {
             panic!(
@@ -88,30 +93,43 @@ impl std::ops::Deref for WgpuRenderPipeline {
 pub(super) struct WgpuBindGroupLayouts {
     pub(super) globals: wgpu::BindGroupLayout,
     pub(super) instances: wgpu::BindGroupLayout,
-    pub(super) instances_with_texture: wgpu::BindGroupLayout,
+    monochrome_sprites: wgpu::BindGroupLayout,
+    subpixel_sprites: wgpu::BindGroupLayout,
+    textured_instances: wgpu::BindGroupLayout,
     pub(super) surfaces: wgpu::BindGroupLayout,
     pub(super) blur: wgpu::BindGroupLayout,
 }
 
 impl WgpuBindGroupLayouts {
     pub(super) fn new(device: &wgpu::Device, tier: RendererTier) -> Self {
-        let (instance_table, textured_table, surface_table, blur_table, instance_dynamic) =
-            match tier {
-                RendererTier::Modern => (
-                    INSTANCE_BINDINGS,
-                    TEXTURED_INSTANCE_BINDINGS,
-                    SURFACE_BINDINGS,
-                    BLUR_BINDINGS,
-                    None,
-                ),
-                RendererTier::WebGl2 => (
-                    DOWNLEVEL_INSTANCE_BINDINGS,
-                    DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS,
-                    DOWNLEVEL_SURFACE_BINDINGS,
-                    DOWNLEVEL_BLUR_BINDINGS,
-                    Some(DOWNLEVEL_RANGE_BINDING),
-                ),
-            };
+        let (
+            instance_table,
+            monochrome_table,
+            subpixel_table,
+            textured_table,
+            surface_table,
+            blur_table,
+            instance_dynamic,
+        ) = match tier {
+            RendererTier::Modern => (
+                INSTANCE_BINDINGS,
+                MONOCHROME_INSTANCE_BINDINGS,
+                SUBPIXEL_INSTANCE_BINDINGS,
+                TEXTURED_INSTANCE_BINDINGS,
+                SURFACE_BINDINGS,
+                BLUR_BINDINGS,
+                None,
+            ),
+            RendererTier::WebGl2 => (
+                DOWNLEVEL_INSTANCE_BINDINGS,
+                DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS,
+                DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS,
+                DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS,
+                DOWNLEVEL_SURFACE_BINDINGS,
+                DOWNLEVEL_BLUR_BINDINGS,
+                Some(DOWNLEVEL_RANGE_BINDING),
+            ),
+        };
         let globals = generated_bind_group_layout(device, "globals_layout", GLOBAL_BINDINGS, None);
         let instances = generated_bind_group_layout(
             device,
@@ -119,9 +137,21 @@ impl WgpuBindGroupLayouts {
             instance_table,
             instance_dynamic,
         );
-        let instances_with_texture = generated_bind_group_layout(
+        let monochrome_sprites = generated_bind_group_layout(
             device,
-            "instances_with_texture_layout",
+            "monochrome_sprites_layout",
+            monochrome_table,
+            instance_dynamic,
+        );
+        let subpixel_sprites = generated_bind_group_layout(
+            device,
+            "subpixel_sprites_layout",
+            subpixel_table,
+            instance_dynamic,
+        );
+        let textured_instances = generated_bind_group_layout(
+            device,
+            "textured_instances_layout",
             textured_table,
             instance_dynamic,
         );
@@ -140,7 +170,9 @@ impl WgpuBindGroupLayouts {
         Self {
             globals,
             instances,
-            instances_with_texture,
+            monochrome_sprites,
+            subpixel_sprites,
+            textured_instances,
             surfaces,
             blur,
         }
@@ -186,6 +218,7 @@ impl WgpuBindGroupLayouts {
     pub(super) fn create_textured_instances(
         &self,
         device: &wgpu::Device,
+        data_layout: shader::DataLayout,
         source: InstanceBindingSource<'_>,
         texture: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
@@ -201,7 +234,12 @@ impl WgpuBindGroupLayouts {
         });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("textured_instances"),
-            layout: &self.instances_with_texture,
+            layout: match data_layout {
+                shader::DataLayout::MonochromeSprites => &self.monochrome_sprites,
+                shader::DataLayout::SubpixelSprites => &self.subpixel_sprites,
+                shader::DataLayout::TexturedInstances => &self.textured_instances,
+                _ => panic!("{data_layout:?} does not use a textured instance layout"),
+            },
             entries: &entries,
         })
     }
@@ -298,11 +336,23 @@ impl WgpuPipelines {
             bind_group_layouts,
             &bind_group_layouts.instances,
         );
+        let monochrome_layout = create_pipeline_layout(
+            device,
+            "monochrome_pipeline_layout",
+            bind_group_layouts,
+            &bind_group_layouts.monochrome_sprites,
+        );
+        let subpixel_layout = create_pipeline_layout(
+            device,
+            "subpixel_pipeline_layout",
+            bind_group_layouts,
+            &bind_group_layouts.subpixel_sprites,
+        );
         let textured_layout = create_pipeline_layout(
             device,
             "textured_pipeline_layout",
             bind_group_layouts,
-            &bind_group_layouts.instances_with_texture,
+            &bind_group_layouts.textured_instances,
         );
         let surface_layout = create_pipeline_layout(
             device,
@@ -330,6 +380,8 @@ impl WgpuPipelines {
         let layout_for = |data_layout| match data_layout {
             shader::DataLayout::Instances => &instance_layout,
             shader::DataLayout::TexturedInstances => &textured_layout,
+            shader::DataLayout::MonochromeSprites => &monochrome_layout,
+            shader::DataLayout::SubpixelSprites => &subpixel_layout,
             shader::DataLayout::Surface => &surface_layout,
             shader::DataLayout::Blur => &blur_layout,
         };
@@ -655,6 +707,7 @@ mod tests {
         let _instances = layouts.create_instances(device, InstanceBindingSource::Buffer(binding()));
         let _textured = layouts.create_textured_instances(
             device,
+            shader::DataLayout::MonochromeSprites,
             InstanceBindingSource::Buffer(binding()),
             &view,
             &sampler,
@@ -717,8 +770,13 @@ mod tests {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
-        let _textured =
-            layouts.create_textured_instances(device, arena.binding_source(), &view, &sampler);
+        let _textured = layouts.create_textured_instances(
+            device,
+            shader::DataLayout::MonochromeSprites,
+            arena.binding_source(),
+            &view,
+            &sampler,
+        );
 
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

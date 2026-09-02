@@ -2,13 +2,13 @@ use gpui::{BackdropFilter, ScaledPixels};
 use gpui_render::shaders::interface as shader_interface;
 use gpui_render::{
     blur::{
-        BlurAxis, BlurKernel, FilterCompositeClip, FilterCompositeParameters,
-        GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS, ScissorRectangle, downsampled_dimension,
+        downsampled_dimension, BlurAxis, BlurKernel, FilterCompositeClip,
+        FilterCompositeParameters, ScissorRectangle, GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS,
     },
     shaders::blur::BlurUniforms,
 };
 
-use super::{WgpuRenderer, begin_color_render_pass, pipelines};
+use super::{begin_color_render_pass, pipelines, WgpuRenderer};
 
 pub(super) const FILTER_UNIFORMS_PER_COMPOSITE: u64 = 4;
 

@@ -441,8 +441,8 @@ impl RangeUniformArena {
 #[derive(Default)]
 struct TexturedBindGroups {
     atlas_generation: Option<u64>,
-    groups: FxHashMap<AtlasTextureId, wgpu::BindGroup>,
-    path: Option<wgpu::BindGroup>,
+    groups: FxHashMap<(shader_interface::DataLayout, AtlasTextureId), wgpu::BindGroup>,
+    path: FxHashMap<shader_interface::DataLayout, wgpu::BindGroup>,
 }
 
 impl InstanceBufferArena {
@@ -636,6 +636,7 @@ impl InstanceBufferArena {
         &self,
         device: &wgpu::Device,
         layouts: &WgpuBindGroupLayouts,
+        data_layout: shader_interface::DataLayout,
         texture_id: AtlasTextureId,
         atlas_generation: u64,
         texture: &wgpu::TextureView,
@@ -648,9 +649,15 @@ impl InstanceBufferArena {
         }
         cache
             .groups
-            .entry(texture_id)
+            .entry((data_layout, texture_id))
             .or_insert_with(|| {
-                layouts.create_textured_instances(device, self.binding_source(), texture, sampler)
+                layouts.create_textured_instances(
+                    device,
+                    data_layout,
+                    self.binding_source(),
+                    texture,
+                    sampler,
+                )
             })
             .clone()
     }
@@ -659,14 +666,22 @@ impl InstanceBufferArena {
         &self,
         device: &wgpu::Device,
         layouts: &WgpuBindGroupLayouts,
+        data_layout: shader_interface::DataLayout,
         texture: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         let mut cache = self.textured_bind_groups.borrow_mut();
         cache
             .path
-            .get_or_insert_with(|| {
-                layouts.create_textured_instances(device, self.binding_source(), texture, sampler)
+            .entry(data_layout)
+            .or_insert_with(|| {
+                layouts.create_textured_instances(
+                    device,
+                    data_layout,
+                    self.binding_source(),
+                    texture,
+                    sampler,
+                )
             })
             .clone()
     }
