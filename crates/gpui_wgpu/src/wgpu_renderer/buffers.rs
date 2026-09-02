@@ -9,7 +9,7 @@ use std::{
     ops::Range,
 };
 
-use crate::RendererTier;
+use crate::{RendererTier, WgpuTextureIdentity};
 
 use super::pipelines::{InstanceBindingSource, WgpuBindGroupLayouts};
 
@@ -440,8 +440,10 @@ impl RangeUniformArena {
 
 #[derive(Default)]
 struct TexturedBindGroups {
-    atlas_generation: Option<u64>,
-    groups: FxHashMap<(shader_interface::DataLayout, AtlasTextureId), wgpu::BindGroup>,
+    groups: FxHashMap<
+        (shader_interface::DataLayout, AtlasTextureId),
+        (WgpuTextureIdentity, wgpu::BindGroup),
+    >,
     path: FxHashMap<shader_interface::DataLayout, wgpu::BindGroup>,
 }
 
@@ -638,28 +640,29 @@ impl InstanceBufferArena {
         layouts: &WgpuBindGroupLayouts,
         data_layout: shader_interface::DataLayout,
         texture_id: AtlasTextureId,
-        atlas_generation: u64,
+        texture_identity: WgpuTextureIdentity,
         texture: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         let mut cache = self.textured_bind_groups.borrow_mut();
-        if cache.atlas_generation != Some(atlas_generation) {
-            cache.groups.clear();
-            cache.atlas_generation = Some(atlas_generation);
+        let key = (data_layout, texture_id);
+        if let Some((identity, bind_group)) = cache.groups.get(&key)
+            && *identity == texture_identity
+        {
+            return bind_group.clone();
         }
+
+        let bind_group = layouts.create_textured_instances(
+            device,
+            data_layout,
+            self.binding_source(),
+            texture,
+            sampler,
+        );
         cache
             .groups
-            .entry((data_layout, texture_id))
-            .or_insert_with(|| {
-                layouts.create_textured_instances(
-                    device,
-                    data_layout,
-                    self.binding_source(),
-                    texture,
-                    sampler,
-                )
-            })
-            .clone()
+            .insert(key, (texture_identity, bind_group.clone()));
+        bind_group
     }
 
     pub(super) fn path_bind_group(
