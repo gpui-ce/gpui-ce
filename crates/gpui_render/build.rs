@@ -105,9 +105,20 @@ fn main() {
     downlevel.validate_and_write(&out_dir);
 
     let quad = shader_source("quad interface", &shaders::quad::WGSL_SOURCE);
+    let monochrome = shader_source(
+        "monochrome sprite interface",
+        &shaders::monochrome_sprite::WGSL_SOURCE,
+    );
     let polychrome = shader_source(
         "polychrome sprite interface",
         &shaders::polychrome_sprite::WGSL_SOURCE,
+    );
+    let subpixel_interface = format!(
+        "enable dual_source_blending;\n{}",
+        shader_source(
+            "subpixel sprite interface",
+            &shaders::subpixel_sprite::WGSL_SOURCE,
+        )
     );
     let surface = shader_source("surface interface", &shaders::surface::WGSL_SOURCE);
     let blur = shader_source("blur interface", &shaders::blur::WGSL_SOURCE);
@@ -126,6 +137,18 @@ fn main() {
         BindingLayout {
             constant: "INSTANCE_BINDINGS",
             source: &quad,
+            group: shaders::interface::DATA_BIND_GROUP,
+            dialect: ReflectionDialect::Modern,
+        },
+        BindingLayout {
+            constant: "MONOCHROME_INSTANCE_BINDINGS",
+            source: &monochrome,
+            group: shaders::interface::DATA_BIND_GROUP,
+            dialect: ReflectionDialect::Modern,
+        },
+        BindingLayout {
+            constant: "SUBPIXEL_INSTANCE_BINDINGS",
+            source: &subpixel_interface,
             group: shaders::interface::DATA_BIND_GROUP,
             dialect: ReflectionDialect::Modern,
         },
@@ -665,10 +688,17 @@ fn binding_kind(
                 !access.contains(naga::StorageAccess::STORE),
                 "writable shader storage is not supported by the generated interface"
             );
-            format!(
-                "GeneratedBindingKind::StorageRead({})",
-                layouter[variable.ty].size
-            )
+            let min_size = match module.types[variable.ty].inner {
+                // Naga reports the static portion of a runtime array as its layout size;
+                // wgpu requires room for one array element in a storage binding.
+                naga::TypeInner::Array {
+                    size: naga::ArraySize::Dynamic,
+                    stride,
+                    ..
+                } => stride,
+                _ => layouter[variable.ty].size,
+            };
+            format!("GeneratedBindingKind::StorageRead({})", min_size)
         }
         naga::AddressSpace::Handle => match module.types[variable.ty].inner {
             naga::TypeInner::Image {
