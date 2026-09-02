@@ -21,6 +21,7 @@ wayland = [
   "ashpd/wayland",
 
   "calloop-wayland-source",
+  "memfd",
   "wayland-backend",
   "wayland-client",
   "wayland-cursor",
@@ -88,6 +89,7 @@ xkbcommon = { workspace = true, features = ["wayland", "x11"], optional = true }
 
 # Wayland
 calloop-wayland-source = { workspace = true, optional = true }
+memfd = { version = "0.6.5", optional = true }
 wayland-backend = { workspace = true, features = [
     "client_system",
     "dlopen",

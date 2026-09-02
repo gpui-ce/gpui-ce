@@ -15,7 +15,7 @@ path = "src/gpui_windows.rs"
 [features]
 default = ["gpui/default"]
 test-support = ["gpui/test-support"]
-wgpu = ["dep:gpui_wgpu"]
+wgpu = ["dep:gpui_wgpu", "gpui/wgpu-surfaces", "gpui_wgpu/wgpu-surfaces"]
 
 [dependencies]
 gpui.workspace = true

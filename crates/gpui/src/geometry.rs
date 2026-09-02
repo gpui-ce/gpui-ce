@@ -488,6 +488,20 @@ where
             y: self.height.half(),
         }
     }
+
+    /// Returns a point at an anchor along the imaginary edge of a box with this size.
+    pub fn at_anchor(&self, anchor: Anchor) -> Point<T> {
+        match anchor {
+            Anchor::TopLeft => Point::new(T::default(), T::default()),
+            Anchor::TopRight => Point::new(self.width.clone(), T::default()),
+            Anchor::BottomLeft => Point::new(T::default(), self.height.clone()),
+            Anchor::BottomRight => Point::new(self.width.clone(), self.height.clone()),
+            Anchor::TopCenter => Point::new(self.width.half(), T::default()),
+            Anchor::BottomCenter => Point::new(self.width.half(), self.height.clone()),
+            Anchor::LeftCenter => Point::new(T::default(), self.height.half()),
+            Anchor::RightCenter => Point::new(self.width.clone(), self.height.half()),
+        }
+    }
 }
 
 impl Size<Pixels> {
@@ -847,41 +861,10 @@ impl<T> Bounds<T>
 where
     T: Sub<Output = T> + Half + Clone + Debug + Default + PartialEq,
 {
-    /// Constructs a `Bounds` from a corner point and size. The specified corner will be placed at
-    /// the specified origin.
+    /// Constructs a `Bounds` from a corner point and size, where the new origin is the point
+    /// at the anchor along the edges of size subtracted from the original origin.
     pub fn from_anchor_and_size(corner: Anchor, origin: Point<T>, size: Size<T>) -> Bounds<T> {
-        let origin = match corner {
-            Anchor::TopLeft => origin,
-            Anchor::TopRight => Point {
-                x: origin.x - size.width.clone(),
-                y: origin.y,
-            },
-            Anchor::BottomLeft => Point {
-                x: origin.x,
-                y: origin.y - size.height.clone(),
-            },
-            Anchor::BottomRight => Point {
-                x: origin.x - size.width.clone(),
-                y: origin.y - size.height.clone(),
-            },
-            Anchor::TopCenter => Point {
-                x: origin.x - size.width.half(),
-                y: origin.y,
-            },
-            Anchor::BottomCenter => Point {
-                x: origin.x - size.width.half(),
-                y: origin.y - size.height.clone(),
-            },
-            Anchor::LeftCenter => Point {
-                x: origin.x,
-                y: origin.y - size.height.half(),
-            },
-            Anchor::RightCenter => Point {
-                x: origin.x - size.width.clone(),
-                y: origin.y - size.height.half(),
-            },
-        };
-
+        let origin = origin - size.at_anchor(corner);
         Bounds { origin, size }
     }
 }

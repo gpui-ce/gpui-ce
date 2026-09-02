@@ -458,6 +458,39 @@ publish dry="false":
 
     for manifest in $crates {
         let name = ($manifest | path dirname | path basename)
+        let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $manifest | from json)
+        let manifest_path = ($manifest | path expand)
+        let package = ($metadata.packages | where manifest_path == $manifest_path | first)
+        let package_name = ($package | get name)
+        let package_version = ($package | get version)
+
+        # crates.io versions are immutable. A version-bump PR usually changes
+        # only the affected crates, so leave already-published packages alone
+        # instead of making a later stable release fail at the first one.
+        let already_published = if $dry_run {
+            false
+        } else {
+            let response = (^curl
+                --retry 3
+                --retry-all-errors
+                --silent
+                --show-error
+                --user-agent "gpui-ce release workflow"
+                --output /dev/null
+                --write-out "%{http_code}"
+                $"https://crates.io/api/v1/crates/($package_name)/($package_version)"
+                | complete)
+            let status = ($response.stdout | str trim)
+            if $response.exit_code != 0 or ($status != "200" and $status != "404") {
+                error make {msg: $"Could not check crates.io for ($package_name) ($package_version): ($response.stderr) (HTTP ($status))"}
+            }
+            $status == "200"
+        }
+        if $already_published {
+            print $"\n⏭️  Skipping ($name): ($package_name) ($package_version) is already on crates.io."
+            continue
+        }
+
         print $"\n📦 Publishing ($name)..."
         let patch_manifests = if ($manifest | str starts-with "crates/gpui_ce_components/") {
             $crates
@@ -467,16 +500,16 @@ publish dry="false":
         let patch_flags = if $dry_run {
             $patch_manifests
                 | each { |patch_manifest|
-                    let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $patch_manifest | from json)
-                    let manifest_path = ($patch_manifest | path expand)
-                    let package = ($metadata.packages | where manifest_path == $manifest_path | first | get name)
-                    ["--config" $"patch.crates-io.($package).path=\"($patch_manifest | path dirname | path expand)\""]
+                    let patch_metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $patch_manifest | from json)
+                    let patch_manifest_path = ($patch_manifest | path expand)
+                    let patch_package = ($patch_metadata.packages | where manifest_path == $patch_manifest_path | first | get name)
+                    ["--config" $"patch.crates-io.($patch_package).path=\"($patch_manifest | path dirname | path expand)\""]
                 }
                 | flatten
         } else {
             []
         }
-        # `gpui-ce` has test/example-only edges to `gpui_platform`, while the
+        # `gpui-ce` has test/example-only edges to `gpui_ce_platform`, while the
         # Windows platform implementation has the reciprocal `gpui-ce` edge.
         # Cargo cannot represent the packaged crate and that local cycle in a
         # single verification lockfile. The release CI builds every target in

@@ -1,9 +1,8 @@
 use scheduler::Instant;
-use std::{rc::Rc, time::Duration};
 
 use crate::{
-    AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
-    ParentElement, Window,
+    AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Motion,
+    ParentElement, Repeat, Window,
 };
 
 pub use easing::*;
@@ -12,29 +11,23 @@ use smallvec::SmallVec;
 /// An animation that can be applied to an element.
 #[derive(Clone)]
 pub struct Animation {
-    /// The amount of time for which this animation should run
-    pub duration: Duration,
-    /// Whether to repeat this animation when it finishes
-    pub oneshot: bool,
-    /// A function that takes a delta between 0 and 1 and returns a new delta
-    /// between 0 and 1 based on the given easing function.
-    pub easing: Rc<dyn Fn(f32) -> f32>,
+    /// The timing and easing applied to this animation.
+    pub motion: Motion,
 }
 
 impl Animation {
-    /// Create a new animation with the given duration.
-    /// By default the animation will only run once and will use a linear easing function.
-    pub fn new(duration: Duration) -> Self {
+    /// Create a new animation with the given motion.
+    /// The animation runs once unless [`Self::repeat`] is called. Duration inputs
+    /// use linear easing.
+    pub fn new(motion: impl Into<Motion>) -> Self {
         Self {
-            duration,
-            oneshot: true,
-            easing: Rc::new(linear),
+            motion: motion.into(),
         }
     }
 
     /// Set the animation to loop when it finishes.
     pub fn repeat(mut self) -> Self {
-        self.oneshot = false;
+        self.motion.repeat = Repeat::Forever;
         self
     }
 
@@ -42,7 +35,7 @@ impl Animation {
     /// The easing function will take a time delta between 0 and 1 and return a new delta
     /// between 0 and 1
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
-        self.easing = Rc::new(easing);
+        self.motion = self.motion.with_easing(easing);
         self
     }
 }
@@ -83,6 +76,8 @@ pub trait AnimationExt {
     where
         Self: Sized,
     {
+        debug_assert!(!animations.is_empty(), "animations must not be empty");
+
         AnimationElement {
             id: id.into(),
             element: Some(self),
@@ -158,42 +153,29 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
                 start: Instant::now(),
                 animation_ix: 0,
             });
+
             let (animation_ix, delta, done) = if cx.reduce_motion() {
                 let animation_ix = self.animations.len() - 1;
-                let delta = if self.animations[animation_ix].oneshot {
-                    1.0
-                } else {
-                    0.0
-                };
+                let delta = self.animations[animation_ix]
+                    .motion
+                    .resting_progress()
+                    .get();
                 (animation_ix, delta, true)
             } else {
                 let animation_ix = state.animation_ix;
+                let now = Instant::now();
 
-                let mut delta = state.start.elapsed().as_secs_f32()
-                    / self.animations[animation_ix].duration.as_secs_f32();
-
-                let mut done = false;
-                if delta > 1.0 {
-                    if self.animations[animation_ix].oneshot {
-                        if animation_ix >= self.animations.len() - 1 {
-                            done = true;
-                        } else {
-                            state.start = Instant::now();
-                            state.animation_ix += 1;
-                        }
-                        delta = 1.0;
-                    } else {
-                        delta %= 1.0;
-                    }
+                let sample = self.animations[animation_ix]
+                    .motion
+                    .sample_at(state.start, now);
+                let mut done = !sample.is_active;
+                if done && animation_ix < self.animations.len() - 1 {
+                    state.start = now;
+                    state.animation_ix += 1;
+                    done = false;
                 }
-                (animation_ix, delta, done)
+                (animation_ix, sample.progress.get(), done)
             };
-            let delta = (self.animations[animation_ix].easing)(delta);
-
-            debug_assert!(
-                (0.0..=1.0).contains(&delta),
-                "delta should always be between 0 and 1"
-            );
 
             let element = self.element.take().expect("should only be called once");
             let mut element = (self.animator)(element, animation_ix, delta).into_any_element();
@@ -293,8 +275,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use crate::{
-        Animation, Context, InteractiveElement, Render, TestAppContext, WindowHandle, div,
-        prelude::*, px, size,
+        Animation, Context, Render, TestAppContext, WindowHandle, div, prelude::*, px, size,
     };
 
     use super::*;
@@ -303,17 +284,45 @@ mod tests {
         rendered_deltas: Rc<RefCell<Vec<f32>>>,
     }
 
+    struct AnimationSequenceTestView {
+        rendered_samples: Rc<RefCell<Vec<(usize, f32)>>>,
+    }
+
     impl Render for AnimationTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let rendered_deltas = self.rendered_deltas.clone();
-            div().size_full().child(div().with_animation(
-                "repeating-animation",
-                Animation::new(Duration::from_secs(1)).repeat(),
-                move |this, delta| {
-                    rendered_deltas.borrow_mut().push(delta);
+            div().size_full().child(
+                div()
+                    .with_animation(
+                        "repeating-animation",
+                        Animation::new(Duration::from_secs(1))
+                            .repeat()
+                            .with_easing(|progress| progress),
+                        move |this, delta| {
+                            rendered_deltas.borrow_mut().push(delta);
+                            this
+                        },
+                    )
+                    .map_element(|element| element.child(div()))
+                    .child(div()),
+            )
+        }
+    }
+
+    impl Render for AnimationSequenceTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let rendered_samples = self.rendered_samples.clone();
+            div().with_animations(
+                "animation-sequence",
+                vec![
+                    Animation::new(Duration::ZERO),
+                    Animation::new(Duration::ZERO),
+                ],
+                move |this, animation_ix, delta| {
+                    rendered_samples.borrow_mut().push((animation_ix, delta));
                     this
                 },
-            ))
+            )
         }
     }
 
@@ -339,30 +348,8 @@ mod tests {
         cx.run_until_parked();
         callback_count
     }
-    // Before parent-animation-element, using .with_animation
-    // would not allow chaining .parent after. This is just a
-    // build check that we can call div().id().with_animation().child()
-    #[test]
-    fn test_animation_parent() {
-        div()
-            .id("id")
-            //
-            .with_animation(
-                "animation",
-                Animation::new(Duration::from_secs(1)),
-                |el, _t| {
-                    //
-                    el
-                },
-            )
-            .child(
-                //
-                div(),
-            );
-    }
-
     #[gpui::test]
-    fn test_repeating_animation_schedules_animation_frames(cx: &mut TestAppContext) {
+    fn animation_element_exercises_layout_state_paths(cx: &mut TestAppContext) {
         let (rendered_deltas, window) = open_test_window(cx);
 
         assert_eq!(rendered_deltas.borrow().len(), 1);
@@ -371,16 +358,53 @@ mod tests {
             assert_eq!(simulate_next_frame(&window, cx), 1);
             assert_eq!(rendered_deltas.borrow().len(), expected_frames);
         }
-    }
 
-    #[gpui::test]
-    fn test_reduce_motion_renders_single_static_frame(cx: &mut TestAppContext) {
+        let rendered_samples = Rc::new(RefCell::new(Vec::new()));
+        let sequence_window = cx.open_window(size(px(100.), px(100.)), {
+            let rendered_samples = rendered_samples.clone();
+            move |_, _| AnimationSequenceTestView { rendered_samples }
+        });
+        cx.run_until_parked();
+
+        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0)]);
+        assert_eq!(
+            sequence_window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap(),
+            1
+        );
+        cx.run_until_parked();
+        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0), (1, 1.0)]);
+        assert_eq!(
+            sequence_window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap(),
+            0
+        );
+
         cx.update(|cx| cx.set_reduce_motion(true));
-        let (rendered_deltas, window) = open_test_window(cx);
+        let (reduced_deltas, reduced_window) = open_test_window(cx);
 
-        assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
+        assert_eq!(*reduced_deltas.borrow(), vec![0.0]);
 
-        assert_eq!(simulate_next_frame(&window, cx), 0);
-        assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
+        assert_eq!(simulate_next_frame(&reduced_window, cx), 0);
+        assert_eq!(*reduced_deltas.borrow(), vec![0.0]);
+
+        let reduced_samples = Rc::new(RefCell::new(Vec::new()));
+        let reduced_sequence_window = cx.open_window(size(px(100.), px(100.)), {
+            let reduced_samples = reduced_samples.clone();
+            move |_, _| AnimationSequenceTestView {
+                rendered_samples: reduced_samples,
+            }
+        });
+        cx.run_until_parked();
+
+        assert_eq!(*reduced_samples.borrow(), vec![(1, 1.0)]);
+        assert_eq!(
+            reduced_sequence_window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap(),
+            0
+        );
     }
 }

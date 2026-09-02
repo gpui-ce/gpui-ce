@@ -5,7 +5,7 @@ use crate::{
     Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
     Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
     PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, phi, point, px, quad, rems, size,
+    black, hsla_schemar, phi, point, px, quad, rems, size,
 };
 use palette::{Hsla, IntoColor, rgb::Rgba};
 use schemars::JsonSchema;
@@ -170,6 +170,45 @@ pub struct GridTemplate {
     pub min_size: GridTemplateMinSize,
 }
 
+/// The color used to paint a ring.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum RingColor {
+    /// Use the element's effective text color, matching CSS `currentColor`.
+    #[default]
+    CurrentColor,
+    /// Use an explicit color.
+    Color(#[schemars(schema_with = "hsla_schemar")] Hsla),
+}
+
+impl RingColor {
+    fn resolve(self, current_color: Hsla) -> Hsla {
+        match self {
+            Self::CurrentColor => current_color,
+            Self::Color(color) => color,
+        }
+    }
+}
+
+/// A solid ring painted around or inside an element.
+#[derive(Refineable, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[refineable(Debug, PartialEq, Serialize, Deserialize)]
+pub struct RingStyle {
+    /// The width of the ring. A zero width disables it.
+    pub width: Pixels,
+    /// The ring color.
+    pub color: RingColor,
+}
+
+impl RingStyle {
+    fn shadow(self, current_color: Hsla, inset: bool) -> Option<BoxShadow> {
+        (self.width > Pixels::ZERO).then(|| {
+            let shadow = BoxShadow::new(px(0.), px(0.), self.color.resolve(current_color))
+                .spread_radius(self.width);
+            if inset { shadow.inset() } else { shadow }
+        })
+    }
+}
+
 /// The CSS styling that can be applied to an element via the `Styled` trait
 #[derive(Clone, Refineable, Debug)]
 #[refineable(Debug, PartialEq, Serialize, Deserialize)]
@@ -286,6 +325,14 @@ pub struct Style {
 
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
+
+    /// A solid ring painted outside the element.
+    #[refineable]
+    pub ring: RingStyle,
+
+    /// A solid ring painted inside the element.
+    #[refineable]
+    pub inset_ring: RingStyle,
 
     /// Filters applied to this element's own content and children (CSS `filter`).
     pub filter: Vec<Filter>,
@@ -778,7 +825,12 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
+        let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
+
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
+        if let Some(ring) = self.ring.shadow(current_color, false) {
+            window.paint_drop_shadows(bounds, corner_radii, std::slice::from_ref(&ring));
+        }
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
@@ -817,6 +869,9 @@ impl Style {
                 ));
             }
 
+            if let Some(ring) = self.inset_ring.shadow(current_color, true) {
+                window.paint_inset_shadows(bounds, corner_radii, std::slice::from_ref(&ring));
+            }
             window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
 
             continuation(window, cx);
@@ -894,6 +949,8 @@ impl Default for Style {
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            ring: Default::default(),
+            inset_ring: Default::default(),
             filter: Default::default(),
             backdrop_filter: Default::default(),
             text: TextStyleRefinement::default(),
@@ -1404,7 +1461,7 @@ impl From<Position> for taffy::style::Position {
 
 #[cfg(test)]
 mod tests {
-    use crate::{blue, green, px, red, yellow};
+    use crate::{blue, green, hsla, px, red, yellow};
     use palette::WithAlpha;
 
     use super::*;
@@ -1634,5 +1691,51 @@ mod tests {
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
         );
+    }
+
+    #[test]
+    fn ring_utility_composes_with_shadows_and_uses_current_color() {
+        let drop_shadow = BoxShadow::new(px(0.), px(2.), blue()).blur_radius(px(4.));
+        let mut style = Style::default();
+        style.refine(
+            &StyleRefinement::default()
+                .ring_2()
+                .shadow(vec![drop_shadow.clone()]),
+        );
+        let current_color = hsla(0.7, 0.5, 0.4, 0.8);
+        style.refine(&StyleRefinement::default().ring(px(3.5)));
+        let ring = style.ring.shadow(current_color, false).unwrap();
+
+        assert_eq!(ring.offset, point(px(0.), px(0.)));
+        assert_eq!(ring.blur_radius, px(0.));
+        assert_eq!(ring.spread_radius, px(3.5));
+        assert_eq!(ring.color, current_color);
+        assert!(!ring.inset);
+        assert_eq!(style.box_shadow, vec![drop_shadow]);
+
+        style.refine(&StyleRefinement::default().ring_0());
+        assert!(style.ring.shadow(current_color, false).is_none());
+        assert_eq!(style.box_shadow.len(), 1);
+    }
+
+    #[test]
+    fn inset_ring_utility_refines_independently_and_lowers_to_an_inset_shadow() {
+        let explicit_color = hsla(0.1, 0.7, 0.6, 0.9);
+        let mut style = Style::default();
+        style.refine(
+            &StyleRefinement::default()
+                .inset_ring(px(1.))
+                .inset_ring_color(explicit_color),
+        );
+        style.refine(&StyleRefinement::default().inset_ring_4());
+
+        let inset = style.inset_ring.shadow(blue(), true).unwrap();
+
+        assert_eq!(inset.offset, point(px(0.), px(0.)));
+        assert_eq!(inset.blur_radius, px(0.));
+        assert_eq!(inset.spread_radius, px(4.));
+        assert_eq!(inset.color, explicit_color);
+        assert!(inset.inset);
+        assert_eq!(style.ring, RingStyle::default());
     }
 }

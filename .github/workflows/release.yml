@@ -16,6 +16,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Stable and alpha uploads share a registry namespace. Do not let a stable tag
+# overtake an alpha allocation (or vice versa).
+concurrency:
+  group: gpui-ce-registry-publish
+  cancel-in-progress: false
+
 jobs:
   # Determine pre-release status
   prerelease:
@@ -24,7 +30,7 @@ jobs:
       value:   ${{ steps.check.outputs.value }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - id: check
@@ -42,7 +48,7 @@ jobs:
     needs: [prerelease]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -92,7 +98,7 @@ jobs:
     needs: [prerelease, verify]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -108,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -126,7 +132,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: softprops/action-gh-release@v2

@@ -1,20 +1,26 @@
+use core::mem;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
+    collections::BTreeSet,
     ffi::c_void,
+    io::Write,
+    os::fd::AsFd,
     ptr::NonNull,
     rc::Rc,
     sync::Arc,
 };
 
 use crate::collections::{FxHashMap, HashMap};
+use filedescriptor::FileDescriptor;
 use futures::channel::oneshot::Receiver;
 
+use image::{ImageBuffer, Rgba, imageops::FilterType};
 use raw_window_handle as rwh;
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
 use wayland_client::{
     Proxy,
-    protocol::{wl_output, wl_seat, wl_surface},
+    protocol::{wl_output, wl_seat, wl_shm, wl_surface},
 };
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
@@ -130,6 +136,8 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     accesskit_adapter: Option<accesskit_unix::Adapter>,
+    icon: Option<Arc<ImageBuffer<Rgba<u8>, Vec<u8>>>>,
+    generated_icons: Vec<FileDescriptor>,
 }
 
 pub enum WaylandSurfaceState {
@@ -605,6 +613,8 @@ impl WaylandWindowState {
             children: FxHashMap::default(),
             surface,
             app_id: options.app_id,
+            icon: options.icon,
+            generated_icons: Vec::default(),
             blur: None,
             viewport,
             globals,
@@ -1395,6 +1405,87 @@ impl WaylandWindowStatePtr {
 
     pub fn primary_output_scale(&self) -> i32 {
         self.state.borrow_mut().primary_output_scale()
+    }
+
+    pub fn regenerate_icons(&self, icon_sizes: &BTreeSet<i32>) {
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+
+        let Some(icon) = &state.icon else { return };
+        let Some(icon_manager) = &state.globals.icon_manager else {
+            return;
+        };
+
+        let squared = {
+            let (width, height) = icon.dimensions();
+            let size = width.max(height);
+
+            let mut image = ImageBuffer::from_pixel(size, size, Rgba([0u8, 0, 0, 0]));
+
+            image::imageops::overlay(
+                &mut image,
+                icon.as_ref(),
+                (size - width) as i64 / 2,
+                (size - height) as i64 / 2,
+            );
+
+            image
+        };
+
+        let icons: Vec<_> = icon_sizes
+            .iter()
+            .copied()
+            .filter_map(|size| {
+                let mem = memfd::MemfdOptions::new()
+                    .allow_sealing(true)
+                    .create(format!("icon-{size}x{size}"))
+                    .ok()?;
+
+                let buffer_len = size * size * mem::size_of::<Rgba<u8>>() as i32;
+                mem.as_file()
+                    .set_len(u64::try_from(buffer_len).ok()?)
+                    .ok()?;
+
+                let mut fd = FileDescriptor::new(mem);
+
+                let pool =
+                    state
+                        .globals
+                        .shm
+                        .create_pool(fd.as_fd(), buffer_len, &state.globals.qh, ());
+
+                let buffer = pool.create_buffer(
+                    0,
+                    size,
+                    size,
+                    size * 4,
+                    wl_shm::Format::Argb8888,
+                    &state.globals.qh,
+                    (),
+                );
+
+                let image = image::imageops::resize(
+                    &squared,
+                    size as u32,
+                    size as u32,
+                    FilterType::CatmullRom,
+                )
+                .into_raw_bgra();
+
+                fd.write_all(&image).unwrap();
+
+                Some((buffer, fd))
+            })
+            .collect();
+
+        let icon = icon_manager.create_icon(&state.globals.qh, ());
+        icon.set_name(state.app_id.clone().unwrap_or_default());
+        state.generated_icons = Vec::new();
+        for (ref buffer, fd) in icons {
+            icon.add_buffer(buffer, 1);
+            state.generated_icons.push(fd)
+        }
+        icon_manager.set_icon(state.surface_state.toplevel().unwrap(), Some(&icon));
     }
 }
 

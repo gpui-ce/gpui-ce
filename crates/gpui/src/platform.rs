@@ -892,7 +892,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     /// Returns the GPU context for this window's renderer.
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
@@ -903,7 +907,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// captured the device from `gpu_context` should stop submitting while
     /// this is `Some(true)` and re-acquire the device once it reads
     /// `Some(false)` again.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     fn gpu_device_lost(&self) -> Option<bool> {
         None
     }
@@ -1918,7 +1926,8 @@ pub struct WindowParams {
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     pub show: bool,
 
-    /// An image to set as the window icon (x11 only)
+    /// An image to set as the window icon (X11 and Wayland only)
+    /// Wayland requires the xdg-toplevel-icon protocol to be available
     #[cfg_attr(feature = "wayland", allow(dead_code))]
     pub icon: Option<Arc<image::RgbaImage>>,
 

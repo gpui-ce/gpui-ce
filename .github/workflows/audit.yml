@@ -28,7 +28,7 @@ jobs:
       matrix:
         working-directory: ['.', 'crates/gpui_ce_components']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: rustsec/audit-check@v2
@@ -44,7 +44,7 @@ jobs:
       matrix:
         manifest-path: ['./Cargo.toml', './crates/gpui_ce_components/Cargo.toml']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: EmbarkStudios/cargo-deny-action@v2

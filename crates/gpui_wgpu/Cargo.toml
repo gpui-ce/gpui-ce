@@ -15,6 +15,7 @@ path = "src/gpui_wgpu.rs"
 [features]
 default = []
 font-kit = ["dep:font-kit"]
+wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
 gpui.workspace = true

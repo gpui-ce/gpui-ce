@@ -1,5 +1,6 @@
 use std::{
     cell::{RefCell, RefMut},
+    collections::BTreeSet,
     hash::Hash,
     os::fd::{AsRawFd, BorrowedFd, OwnedFd},
     path::PathBuf,
@@ -36,12 +37,6 @@ use wayland_client::{
         wl_shm_pool, wl_surface,
     },
 };
-use wayland_protocols::wp::pointer_gestures::zv1::client::{
-    zwp_pointer_gesture_hold_v1, zwp_pointer_gesture_pinch_v1, zwp_pointer_gestures_v1,
-};
-use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::{
-    self, ZwpPrimarySelectionOfferV1,
-};
 use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
     zwp_primary_selection_source_v1,
@@ -68,6 +63,19 @@ use wayland_protocols::{
 use wayland_protocols::{
     wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1},
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
+};
+use wayland_protocols::{
+    wp::pointer_gestures::zv1::client::{
+        zwp_pointer_gesture_hold_v1, zwp_pointer_gesture_pinch_v1, zwp_pointer_gestures_v1,
+    },
+    xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1,
+};
+use wayland_protocols::{
+    wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::{
+        self, ZwpPrimarySelectionOfferV1,
+    },
+    xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1,
+    xdg::toplevel_icon::v1::client::xdg_toplevel_icon_v1::XdgToplevelIconV1,
 };
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -274,6 +282,7 @@ pub struct Globals {
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+    pub icon_manager: Option<xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -316,6 +325,7 @@ impl Globals {
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+            icon_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
         }
@@ -413,6 +423,7 @@ pub(crate) struct WaylandClientState {
     event_loop: Option<EventLoop<'static, WaylandClientStatePtr>>,
     pub common: LinuxCommon,
     ime_enabled: Option<bool>,
+    pub(crate) icon_sizes: BTreeSet<i32>,
 }
 
 pub struct DragState {
@@ -904,6 +915,7 @@ impl WaylandClient {
             startup_activation_token,
             event_loop: Some(event_loop),
             ime_enabled: None,
+            icon_sizes: BTreeSet::default(),
         }));
 
         WaylandSource::new(conn, event_queue)
@@ -1023,6 +1035,7 @@ impl LinuxClient for WaylandClient {
 
         if window.0.toplevel().is_some() {
             state.consume_startup_activation_token(&window.0.surface());
+            window.0.regenerate_icons(&state.icon_sizes);
         }
         state.windows.insert(surface_id, window.0.clone());
 
@@ -2892,6 +2905,44 @@ impl Dispatch<XdgDialogV1, ()> for WaylandClientStatePtr {
         _state: &mut Self,
         _proxy: &XdgDialogV1,
         _event: <XdgDialogV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<XdgToplevelIconManagerV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _proxy: &XdgToplevelIconManagerV1,
+        event: <XdgToplevelIconManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            xdg_toplevel_icon_manager_v1::Event::IconSize { size } => {
+                state.icon_sizes.insert(size);
+            }
+            xdg_toplevel_icon_manager_v1::Event::Done => {
+                for window in state.windows.values() {
+                    window.regenerate_icons(&state.icon_sizes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<XdgToplevelIconV1, ()> for WaylandClientStatePtr {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgToplevelIconV1,
+        _event: <XdgToplevelIconV1 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,

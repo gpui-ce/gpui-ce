@@ -1,6 +1,7 @@
 //! Transition Example
 //!
-//! This example demonstrates transition capabilities in GPUI via `use_keyed_transition`.
+//! This example uses a keyed transition to bounce a button upward.
+//! Each click resets the transition before starting the same bounce again.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
@@ -8,12 +9,26 @@ mod example_prelude;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, Rgba, Window, WindowBounds,
-    WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
+    AnyElement, App, AppContext, Bounds, Context, ElementId, Pixels, Point, Window, WindowBounds,
+    WindowOptions, actions, bounce, div, ease_in_out, point, prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 
 actions!(app, [Quit]);
+
+const BUTTON_WIDTH: f32 = 120.;
+const BUTTON_HEIGHT: f32 = 44.;
+const BOUNCE_HEIGHT: f32 = 120.;
+const BOUNCE_DURATION: Duration = Duration::from_millis(1200);
+
+fn centered_position(window: &Window) -> Point<Pixels> {
+    let viewport = window.viewport_size();
+
+    point(
+        px(((f32::from(viewport.width) - BUTTON_WIDTH) / 2.).max(0.)),
+        px(((f32::from(viewport.height) - BUTTON_HEIGHT) / 2.).max(0.)),
+    )
+}
 
 #[derive(IntoElement)]
 struct Button {
@@ -38,37 +53,36 @@ impl ParentElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        const HOVER_STRENGTH: f32 = 0.3;
-        let base_color: Rgba = rgb(0x663399);
-
-        let hover_transition = window
+        let bounce_transition = window
             .use_keyed_transition(
-                (self.id.clone(), "hover"),
+                (self.id.clone(), "bounce"),
                 cx,
-                Duration::from_millis(300),
+                BOUNCE_DURATION,
                 |_window, _cx| 0.,
             )
-            .with_easing(ease_in_out);
-
-        let bg_color = base_color.lerp(
-            &rgb(0x000),
-            *hover_transition.evaluate(window, cx) * HOVER_STRENGTH,
-        );
+            .with_easing(bounce(ease_in_out));
+        let progress = *bounce_transition.evaluate(window, cx);
+        let resting_position = centered_position(window);
 
         div()
             .id(self.id)
+            .absolute()
+            .left(resting_position.x)
+            .top(resting_position.y - px(BOUNCE_HEIGHT * progress))
+            .w(px(BUTTON_WIDTH))
+            .h(px(BUTTON_HEIGHT))
+            .flex()
+            .items_center()
+            .justify_center()
             .cursor_pointer()
             .rounded(px(100.))
-            .pl(px(14.))
-            .pr(px(14.))
-            .pt(px(10.))
-            .pb(px(10.))
-            .bg(bg_color)
-            .text_color(rgb(0x110F15))
+            .bg(rgb(0x663399))
+            .text_color(rgb(0xffffff))
             .children(self.children)
-            .on_hover(move |hover, _window, cx| {
-                hover_transition.update(cx, |this, cx| {
-                    *this = *hover as u8 as f32;
+            .on_click(move |_, _window, cx| {
+                bounce_transition.reset(cx);
+                bounce_transition.update(cx, |progress, cx| {
+                    *progress = 1.;
                     cx.notify();
                 });
             })
@@ -80,15 +94,11 @@ struct TransitionExample;
 impl Render for TransitionExample {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .relative()
             .size_full()
-            .flex()
-            .justify_center()
-            .items_center()
-            .absolute()
+            .overflow_hidden()
             .bg(rgb(0x110F15))
-            .gap(px(20.))
-            .p(px(100.))
-            .child(Button::new("btn").child("Click me!"))
+            .child(Button::new("btn").child("Bounce!"))
     }
 }
 
