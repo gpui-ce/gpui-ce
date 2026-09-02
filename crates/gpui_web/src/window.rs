@@ -341,9 +341,10 @@ impl WebWindowInner {
             this.with_callback(
                 |callbacks| &mut callbacks.request_frame,
                 |callback| {
+                    let force_render = this.state.borrow_mut().renderer.needs_redraw();
                     callback(RequestFrameOptions {
-                        require_presentation: true,
-                        force_render: false,
+                        require_presentation: false,
+                        force_render,
                     })
                 },
             );

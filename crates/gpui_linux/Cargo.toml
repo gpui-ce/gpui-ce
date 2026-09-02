@@ -44,9 +44,7 @@ x11 = [
   "x11-clipboard",
   "filedescriptor",
   "open",
-  "scap?/x11",
 ]
-screen-capture = ["gpui/screen-capture", "scap"]
 
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
@@ -91,7 +89,6 @@ open = { version = "5.2.0", optional = true }
 xkbcommon = { version = "0.8.0", default-features = false, optional = true }
 
 # Screen capture
-scap = { workspace = true, optional = true }
 
 # Wayland
 calloop-wayland-source = { version = "0.4.1", optional = true }

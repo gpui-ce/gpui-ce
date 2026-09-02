@@ -2,9 +2,12 @@
 use anyhow::Context as _;
 #[cfg(not(target_family = "wasm"))]
 use gpui_util::ResultExt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::TextureFormat;
+
+/// Environment variable that forces the HWND swapchain path on Windows.
+pub const DISABLE_DIRECT_COMPOSITION_ENV: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
@@ -13,7 +16,18 @@ pub struct WgpuContext {
     pub queue: Arc<wgpu::Queue>,
     dual_source_blending: bool,
     color_texture_format: wgpu::TextureFormat,
+    renderer_tier: RendererTier,
     device_lost: Arc<AtomicBool>,
+    uncaptured_error: Arc<Mutex<Option<String>>>,
+}
+
+/// The resource transport selected for a device.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RendererTier {
+    /// WebGPU-class devices use storage buffers for packed scene data.
+    Modern,
+    /// GLES 3.0 and WebGL2 use a build-generated data-texture transport.
+    WebGl2,
 }
 
 #[derive(Clone, Copy)]
@@ -33,7 +47,7 @@ pub struct WgpuDeviceRequirements {
     /// Additional [`wgpu::Limits`] to request.  Each field is merged by taking
     /// `max(gpui_limit, app_limit)` for upper-bound limits and
     /// `min(gpui_limit, app_limit)` for alignment/lower-bound limits.
-    pub limits: wgpu::Limits,
+    pub limits: Option<wgpu::Limits>,
 }
 
 impl WgpuContext {
@@ -55,6 +69,42 @@ impl WgpuContext {
         extra_requirements: Option<&WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self> {
         Self::new_with_options(instance, surface, compositor_gpu, true, extra_requirements)
+    }
+
+    /// Creates a native device without a presentation surface.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn new_headless(
+        extra_requirements: Option<&WgpuDeviceRequirements>,
+    ) -> anyhow::Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: native_backends(),
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
+        });
+        let adapter = gpui::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            // LowPower avoids waking a discrete GPU just for snapshots on dual-GPU systems.
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|error| anyhow::anyhow!("failed to request headless GPU adapter: {error}"))?;
+        let (device, queue, dual_source_blending, color_texture_format, renderer_tier) =
+            gpui::block_on(Self::create_device(&adapter, extra_requirements))?;
+        let (device_lost, uncaptured_error) = install_device_callbacks(&device);
+
+        Ok(Self {
+            instance,
+            adapter,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            dual_source_blending,
+            color_texture_format,
+            renderer_tier,
+            device_lost,
+            uncaptured_error,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -79,7 +129,7 @@ impl WgpuContext {
 
         // Select an adapter by actually testing surface configuration with the real device.
         // This is the only reliable way to determine compatibility on hybrid GPU systems.
-        let (adapter, device, queue, dual_source_blending, color_texture_format) =
+        let (adapter, device, queue, dual_source_blending, color_texture_format, renderer_tier) =
             gpui::block_on(Self::select_adapter_and_device(
                 &instance,
                 device_id_filter,
@@ -89,16 +139,7 @@ impl WgpuContext {
                 extra_requirements,
             ))?;
 
-        let device_lost = Arc::new(AtomicBool::new(false));
-        device.set_device_lost_callback({
-            let device_lost = Arc::clone(&device_lost);
-            move |reason, message| {
-                log::error!("wgpu device lost: reason={reason:?}, message={message}");
-                if reason != wgpu::DeviceLostReason::Destroyed {
-                    device_lost.store(true, Ordering::Relaxed);
-                }
-            }
-        });
+        let (device_lost, uncaptured_error) = install_device_callbacks(&device);
 
         log::info!(
             "Selected GPU adapter: {:?} ({:?})",
@@ -113,7 +154,9 @@ impl WgpuContext {
             queue: Arc::new(queue),
             dual_source_blending,
             color_texture_format,
+            renderer_tier,
             device_lost,
+            uncaptured_error,
         })
     }
 
@@ -142,9 +185,9 @@ impl WgpuContext {
             adapter.get_info().backend
         );
 
-        let device_lost = Arc::new(AtomicBool::new(false));
-        let (device, queue, dual_source_blending, color_texture_format) =
+        let (device, queue, dual_source_blending, color_texture_format, renderer_tier) =
             Self::create_device(&adapter, None).await?;
+        let (device_lost, uncaptured_error) = install_device_callbacks(&device);
 
         Ok(Self {
             instance,
@@ -153,14 +196,17 @@ impl WgpuContext {
             queue: Arc::new(queue),
             dual_source_blending,
             color_texture_format,
+            renderer_tier,
             device_lost,
+            uncaptured_error,
         })
     }
 
     async fn create_device(
         adapter: &wgpu::Adapter,
         extra_requirements: Option<&WgpuDeviceRequirements>,
-    ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
+    ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat, RendererTier)> {
+        let renderer_tier = renderer_tier(adapter);
         let dual_source_blending = adapter
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
@@ -177,14 +223,20 @@ impl WgpuContext {
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
 
-        let mut required_limits = wgpu::Limits::downlevel_defaults()
+        let baseline = match renderer_tier {
+            RendererTier::Modern => wgpu::Limits::downlevel_defaults(),
+            RendererTier::WebGl2 => wgpu::Limits::downlevel_webgl2_defaults(),
+        };
+        let mut required_limits = baseline
             .using_resolution(adapter.limits())
             .using_alignment(adapter.limits());
 
         // Merge application-requested requirements.
         if let Some(reqs) = extra_requirements {
             required_features |= reqs.features;
-            required_limits = required_limits.or_better_values_from(&reqs.limits);
+            if let Some(limits) = &reqs.limits {
+                required_limits = required_limits.or_better_values_from(limits);
+            }
         }
 
         let (device, queue) = adapter
@@ -204,20 +256,33 @@ impl WgpuContext {
             queue,
             dual_source_blending,
             color_atlas_texture_format,
+            renderer_tier,
         ))
     }
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) -> wgpu::Instance {
-        #[cfg(not(target_os = "windows"))]
-        let backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
         #[cfg(target_os = "windows")]
-        let backends = wgpu::Backends::DX12;
+        let mut backend_options = wgpu::BackendOptions::default();
+        #[cfg(not(target_os = "windows"))]
+        let backend_options = wgpu::BackendOptions::default();
+        #[cfg(target_os = "windows")]
+        {
+            // Mirrors the former D3D DirectComposition path; the env switch keeps a
+            // diagnostic fallback.
+            let direct_composition_disabled = std::env::var(DISABLE_DIRECT_COMPOSITION_ENV)
+                .is_ok_and(|value| value == "true" || value == "1");
+            backend_options.dx12.presentation_system = if direct_composition_disabled {
+                wgpu::Dx12SwapchainKind::DxgiFromHwnd
+            } else {
+                wgpu::Dx12SwapchainKind::DxgiFromVisual
+            };
+        }
 
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
+            backends: native_backends(),
             flags: wgpu::InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions::default(),
+            backend_options,
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: Some(display),
         })
@@ -257,6 +322,7 @@ impl WgpuContext {
         wgpu::Queue,
         bool,
         TextureFormat,
+        RendererTier,
     )> {
         let mut adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::all()).await;
 
@@ -298,6 +364,16 @@ impl WgpuContext {
                 _ => 1,
             };
 
+            #[cfg(target_os = "macos")]
+            let type_priority: u8 = match info.device_type {
+                // Preserves the native renderer's low-power preference on Intel Macs.
+                wgpu::DeviceType::IntegratedGpu => 0,
+                wgpu::DeviceType::DiscreteGpu => 1,
+                wgpu::DeviceType::Other => 2,
+                wgpu::DeviceType::VirtualGpu => 3,
+                wgpu::DeviceType::Cpu => 4,
+            };
+            #[cfg(not(target_os = "macos"))]
             let type_priority: u8 = if info.device_type == wgpu::DeviceType::Cpu {
                 4
             } else {
@@ -353,7 +429,7 @@ impl WgpuContext {
             log::info!("Testing adapter: {} ({:?})...", info.name, info.backend);
 
             match Self::try_adapter_with_surface(&adapter, surface, extra_requirements).await {
-                Ok((device, queue, dual_source_blending, color_atlas_texture_format)) => {
+                Ok((device, queue, dual_source_blending, color_atlas_texture_format, renderer_tier)) => {
                     log::info!(
                         "Selected GPU (passed configuration test): {} ({:?})",
                         info.name,
@@ -365,6 +441,7 @@ impl WgpuContext {
                         queue,
                         dual_source_blending,
                         color_atlas_texture_format,
+                        renderer_tier,
                     ));
                 }
                 Err(e) => {
@@ -388,7 +465,7 @@ impl WgpuContext {
         adapter: &wgpu::Adapter,
         surface: &wgpu::Surface<'_>,
         extra_requirements: Option<&WgpuDeviceRequirements>,
-    ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
+    ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat, RendererTier)> {
         let caps = surface.get_capabilities(adapter);
         if caps.formats.is_empty() {
             anyhow::bail!("no compatible surface formats");
@@ -397,7 +474,7 @@ impl WgpuContext {
             anyhow::bail!("no compatible alpha modes");
         }
 
-        let (device, queue, dual_source_blending, color_atlas_texture_format) =
+        let (device, queue, dual_source_blending, color_atlas_texture_format, renderer_tier) =
             Self::create_device(adapter, extra_requirements).await?;
         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
@@ -424,6 +501,7 @@ impl WgpuContext {
             queue,
             dual_source_blending,
             color_atlas_texture_format,
+            renderer_tier,
         ))
     }
 
@@ -468,7 +546,11 @@ impl WgpuContext {
         self.color_texture_format
     }
 
-    /// Returns true if the GPU device was lost (e.g., due to driver crash, suspend/resume).
+    pub fn renderer_tier(&self) -> RendererTier {
+        self.renderer_tier
+    }
+
+    /// Returns true if the GPU device was lost (driver crash, suspend/resume).
     /// When this returns true, the context should be recreated.
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(Ordering::Relaxed)
@@ -477,6 +559,59 @@ impl WgpuContext {
     /// Returns a clone of the device_lost flag for sharing with renderers.
     pub(crate) fn device_lost_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.device_lost)
+    }
+
+    pub(crate) fn uncaptured_error_slot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.uncaptured_error)
+    }
+}
+
+fn renderer_tier(adapter: &wgpu::Adapter) -> RendererTier {
+    let limits = adapter.limits();
+    let flags = adapter.get_downlevel_capabilities().flags;
+    if limits.max_storage_buffers_per_shader_stage > 0
+        && flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        && flags.contains(wgpu::DownlevelFlags::FRAGMENT_STORAGE)
+    {
+        RendererTier::Modern
+    } else {
+        RendererTier::WebGl2
+    }
+}
+
+fn install_device_callbacks(
+    device: &wgpu::Device,
+) -> (Arc<AtomicBool>, Arc<Mutex<Option<String>>>) {
+    let device_lost = Arc::new(AtomicBool::new(false));
+    device.set_device_lost_callback({
+        let device_lost = Arc::clone(&device_lost);
+        move |reason, message| {
+            log::error!("wgpu device lost: reason={reason:?}, message={message}");
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                device_lost.store(true, Ordering::Relaxed);
+            }
+        }
+    });
+    let uncaptured_error = Arc::new(Mutex::new(None));
+    device.on_uncaptured_error(Arc::new({
+        let uncaptured_error = Arc::clone(&uncaptured_error);
+        move |error| {
+            let message = error.to_string();
+            log::error!("uncaptured wgpu error: {message}");
+            *uncaptured_error.lock().unwrap() = Some(message);
+        }
+    }));
+    (device_lost, uncaptured_error)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn native_backends() -> wgpu::Backends {
+    if cfg!(target_os = "macos") {
+        wgpu::Backends::METAL
+    } else if cfg!(target_os = "windows") {
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL
+    } else {
+        wgpu::Backends::VULKAN | wgpu::Backends::GL
     }
 }
 

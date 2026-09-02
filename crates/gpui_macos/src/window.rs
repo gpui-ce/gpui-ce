@@ -509,6 +509,8 @@ struct MacWindowState {
     cursor_visible: Arc<AtomicBool>,
     frame_source: Option<WindowFrameSource>,
     renderer: renderer::Renderer,
+    /// Forces an uncached scene after GPU recovery or a transient presentation failure.
+    force_render_pending: bool,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
@@ -549,6 +551,13 @@ struct MacWindowState {
 }
 
 impl MacWindowState {
+    fn next_frame_request(&mut self) -> RequestFrameOptions {
+        RequestFrameOptions {
+            force_render: mem::take(&mut self.force_render_pending),
+            ..Default::default()
+        }
+    }
+
     fn move_traffic_light(&mut self) {
         if let Some(traffic_light_position) = self.traffic_light_position {
             if self.is_fullscreen() {
@@ -911,6 +920,7 @@ impl MacWindow {
                     bounds.size.map(|pixels| pixels.as_f32()),
                     false,
                 ),
+                force_render_pending: false,
                 request_frame_callback: None,
                 event_callback: None,
                 activate_callback: None,
@@ -1579,6 +1589,7 @@ impl PlatformWindow for MacWindow {
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
+        // CoreGraphics rasterization and the retired Metal renderer are grayscale-only on macOS.
         false
     }
 
@@ -2699,8 +2710,9 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
             if let Some(mut callback) = lock.request_frame_callback.take() {
                 lock.renderer.set_presents_with_transaction(true);
                 lock.stop_display_link();
+                let request = lock.next_frame_request();
                 drop(lock);
-                callback(Default::default());
+                callback(request);
 
                 let mut lock = window_state.lock();
                 lock.request_frame_callback = Some(callback);
@@ -2813,8 +2825,9 @@ extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
     if let Some(mut callback) = lock.request_frame_callback.take() {
         lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
+        let request = lock.next_frame_request();
         drop(lock);
-        callback(Default::default());
+        callback(request);
 
         let mut lock = window_state.lock();
         lock.request_frame_callback = Some(callback);
@@ -2829,8 +2842,9 @@ extern "C" fn step(view: *mut c_void) {
     let mut lock = window_state.lock();
 
     if let Some(mut callback) = lock.request_frame_callback.take() {
+        let request = lock.next_frame_request();
         drop(lock);
-        callback(Default::default());
+        callback(request);
         window_state.lock().request_frame_callback = Some(callback);
     }
 }

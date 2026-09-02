@@ -9,23 +9,21 @@ use crate::{
     GlobalElementId, GlyphId, GpuSpecs, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
     KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
     ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
-    MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledFilter, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style,
-    SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
-    TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement,
-    ThermalState, TransformationMatrix, Transition, TransitionState, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
-    transparent_black,
+    MouseUpEvent,
+    Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
+    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
+    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
+    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
+    Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
+    WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size, transparent_black,
 };
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
-#[cfg(target_os = "macos")]
-use core_video::pixel_buffer::CVPixelBuffer;
 use derive_more::{Deref, DerefMut};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -3952,8 +3950,8 @@ impl Window {
                 color: shadow.color.opacity(opacity).into(),
                 element_bounds,
                 element_corner_radii,
-                inset: 0,
-                pad: 0,
+                inset: false.into(),
+                padding: 0,
             });
         }
     }
@@ -3997,8 +3995,8 @@ impl Window {
                 color: shadow.color.opacity(opacity).into(),
                 element_bounds,
                 element_corner_radii,
-                inset: 1,
-                pad: 0,
+                inset: true.into(),
+                padding: 0,
             });
         }
     }
@@ -4234,7 +4232,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
             color: style
@@ -4268,7 +4266,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
             thickness: self.snap_stroke(style.thickness),
@@ -4341,7 +4339,7 @@ impl Window {
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,
-                    pad: 0,
+                    padding: 0,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4351,7 +4349,7 @@ impl Window {
             } else {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
-                    pad: 0,
+                    padding: 0,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4432,7 +4430,7 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
+                padding: 0,
                 grayscale: false.into(),
                 bounds,
                 corner_radii: Default::default(),
@@ -4498,7 +4496,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds: final_bounds,
             content_mask,
             color: color.opacity(element_opacity).into(),
@@ -4604,7 +4602,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
+            padding: 0,
             grayscale: grayscale.into(),
             bounds: visible_bounds_snapped,
             content_mask,
@@ -4618,8 +4616,11 @@ impl Window {
     /// Paint a surface into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(target_os = "macos")]
-    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
+    pub fn paint_surface(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        source: impl Into<crate::SurfaceSource>,
+    ) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
@@ -4630,37 +4631,7 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            image_buffer,
-        });
-    }
-
-    /// Paint a surface into the scene for the next frame at the current z-index.
-    ///
-    /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    ))]
-    pub fn paint_surface(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        texture: std::sync::Arc<dyn std::any::Any + Send + Sync>,
-        texture_size: Size<DevicePixels>,
-    ) {
-        use crate::PaintSurface;
-
-        self.invalidator.debug_assert_paint();
-
-        let scale_factor = self.scale_factor();
-        let bounds = bounds.scale(scale_factor);
-        let content_mask = self.content_mask().scale(scale_factor);
-        self.next_frame.scene.insert_primitive(PaintSurface {
-            order: 0,
-            bounds,
-            content_mask,
-            texture,
-            texture_size,
+            source: source.into(),
         });
     }
 
@@ -6055,11 +6026,7 @@ impl Window {
 
     /// Returns the GPU context (device + queue) if available.
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     pub fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context()
     }
@@ -6069,11 +6036,7 @@ impl Window {
     /// cannot know. Embedders that captured the device from
     /// [`Self::gpu_context`] should stop submitting while this is
     /// `Some(true)` and re-acquire the device once it reads `Some(false)`.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     pub fn gpu_device_lost(&self) -> Option<bool> {
         self.platform_window.gpu_device_lost()
     }

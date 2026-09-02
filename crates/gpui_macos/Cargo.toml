@@ -15,12 +15,13 @@ path = "src/gpui_macos.rs"
 [features]
 default = ["gpui/default"]
 test-support = ["gpui/test-support"]
-runtime_shaders = []
 font-kit = ["dep:font-kit"]
 screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
+wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit.workspace = true
@@ -64,10 +65,6 @@ semver.workspace = true
 smallvec.workspace = true
 strum.workspace = true
 uuid.workspace = true
-
-[target.'cfg(target_os = "macos")'.build-dependencies]
-cbindgen.workspace = true
-gpui.workspace = true
 
 # When this crate is itself being tested (cargo test -p gpui_macos), its own
 # cfg(test) flag enables impls of test-only traits like PlatformHeadlessRenderer

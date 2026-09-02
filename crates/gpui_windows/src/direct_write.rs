@@ -6,8 +6,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use collections::HashMap;
+use gpui_render::shaders::emoji_rasterization::GlyphLayerTextureParams;
 use gpui_util::{ResultExt, maybe};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use wgsl_rs::std::{vec2i, vec3f, vec4f};
 use windows::{
     Win32::{
         Foundation::*,
@@ -1098,7 +1100,7 @@ impl DirectWriteState {
         unsafe {
             device_context.OMSetRenderTargets(Some(std::slice::from_ref(&render_target_view)), None)
         };
-        unsafe { device_context.PSSetSamplers(0, Some(std::slice::from_ref(&gpu_state.sampler))) };
+        unsafe { device_context.PSSetSamplers(2, Some(std::slice::from_ref(&gpu_state.sampler))) };
         unsafe { device_context.OMSetBlendState(&gpu_state.blend_state, None, 0xffffffff) };
 
         let crate::FontInfo {
@@ -1109,11 +1111,22 @@ impl DirectWriteState {
 
         for layer in glyph_layers {
             let params = GlyphLayerTextureParams {
-                run_color: layer.run_color,
-                bounds: layer.bounds,
-                gamma_ratios: *gamma_ratios,
+                bounds_origin: vec2i(layer.bounds.origin.x, layer.bounds.origin.y),
+                bounds_size: vec2i(layer.bounds.size.width, layer.bounds.size.height),
+                run_color: vec4f(
+                    layer.run_color.red,
+                    layer.run_color.green,
+                    layer.run_color.blue,
+                    layer.run_color.alpha,
+                ),
+                gamma_ratios: vec4f(
+                    gamma_ratios[0],
+                    gamma_ratios[1],
+                    gamma_ratios[2],
+                    gamma_ratios[3],
+                ),
                 grayscale_enhanced_contrast: *grayscale_enhanced_contrast,
-                _pad: [0f32; 3],
+                padding: vec3f(0.0, 0.0, 0.0),
             };
             unsafe {
                 let mut dest = std::mem::zeroed();
@@ -1131,7 +1144,7 @@ impl DirectWriteState {
             };
 
             let texture = [Some(layer.texture_view)];
-            unsafe { device_context.PSSetShaderResources(0, Some(&texture)) };
+            unsafe { device_context.PSSetShaderResources(1, Some(&texture)) };
 
             let viewport = [D3D11_VIEWPORT {
                 TopLeftX: layer.bounds.origin.x as f32,
@@ -1335,15 +1348,6 @@ impl GlyphLayerTexture {
             _texture: texture,
         })
     }
-}
-
-#[repr(C)]
-struct GlyphLayerTextureParams {
-    bounds: Bounds<i32>,
-    run_color: Rgba,
-    gamma_ratios: [f32; 4],
-    grayscale_enhanced_contrast: f32,
-    _pad: [f32; 3],
 }
 
 struct TextRendererWrapper(IDWriteTextRenderer);
