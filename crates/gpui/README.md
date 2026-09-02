@@ -28,7 +28,7 @@ fn main() {
 
 The features on `gpui_platform` are platform-specific, so the list above is a safe cross-platform default. If you build for a single platform, you can trim it:
 
-- **macOS** — Rendering uses Metal and is always available, but glyph rasterization needs `font-kit`. Without it, GPUI falls back to a placeholder text system that lays text out but renders no glyphs.
+- **macOS** — Rendering uses the shared WGPU renderer over Metal and is always available, but glyph rasterization needs `font-kit`. Without it, GPUI falls back to a placeholder text system that lays text out but renders no glyphs.
 
     ```toml
     gpui_platform = { version = "*", features = ["font-kit"] }
@@ -40,7 +40,7 @@ The features on `gpui_platform` are platform-specific, so the list above is a sa
     gpui_platform = { version = "*", features = ["wayland", "x11"] }
     ```
 
-- **Windows** — no features are required. Windowing uses Win32 and text uses DirectWrite. `font-kit` has no effect here.
+- **Windows** — no features are required. Windowing uses Win32, rendering uses the shared WGPU renderer over Direct3D 12, and text shaping uses `cosmic-text` with system fonts discovered through `font-kit`.
 
 ### Additional Topics
 
