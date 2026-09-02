@@ -15,16 +15,19 @@ path = "src/gpui_wgpu.rs"
 [features]
 default = []
 font-kit = ["dep:font-kit"]
+test-support = ["gpui/test-support", "dep:image"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
 anyhow.workspace = true
 bytemuck = "1"
 collections.workspace = true
 cosmic-text = "0.19.0"
 etagere.workspace = true
 itertools.workspace = true
+image = { workspace = true, optional = true }
 log.workspace = true
 parking_lot.workspace = true
 profiling.workspace = true
@@ -35,13 +38,41 @@ unicode-bidi.workspace = true
 unicode-segmentation.workspace = true
 gpui_util.workspace = true
 wgpu.workspace = true
+wgsl-rs.workspace = true
 
 # Optional: only needed on platforms with multiple font sources (e.g. Linux)
 font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+pollster.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation.workspace = true
+core-video.workspace = true
+metal.workspace = true
+objc2.workspace = true
+objc2-metal = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D12",
+] }
+windows-061 = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Security",
+] }
+
 [target.'cfg(target_family = "wasm")'.dependencies]
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
 wgpu = { workspace = true, features = ["webgl"] }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+js-sys.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -50,3 +81,8 @@ naga = { version = "29.0.4", features = ["wgsl-in"] }
 [[bench]]
 name = "layout_line"
 harness = false
+
+[[bench]]
+name = "renderer"
+harness = false
+required-features = ["test-support"]
