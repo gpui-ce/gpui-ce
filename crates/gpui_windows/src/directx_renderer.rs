@@ -12,11 +12,9 @@ use gpui_render::{
     },
     path_types::{PathRasterizationVertex, PathSprite},
     shaders::{
-        common::{
-            FontRasterizationUniforms, GlobalUniforms, ShaderBool, SurfaceColorFormat,
-            SurfaceUniforms,
-        },
+        common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool, SurfaceColorFormat},
         interface as shader_interface,
+        surface::SurfaceUniforms,
     },
 };
 use gpui_util::ResultExt;
@@ -24,7 +22,7 @@ use smallvec::SmallVec;
 use wgsl_rs::std::{vec2f, vec4f};
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HMODULE, HWND},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
@@ -32,9 +30,11 @@ use windows::{
             DirectWrite::*,
             Dxgi::{Common::*, *},
         },
+        System::LibraryLoader::{FreeLibrary, LoadLibraryA},
     },
     core::{HSTRING, Interface, PCSTR},
 };
+use windows_061::core::Interface as _;
 
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
@@ -570,19 +570,19 @@ impl DirectXRenderer {
                     texture_id,
                     range,
                 }) => {
-                    self.draw_monochrome_sprites(texture_id, range.start, range.len())
+                    self.draw_monochrome_sprites(*texture_id, range.start, range.len())
                 }
                 RenderCommand::Batch(PrimitiveBatch::SubpixelSprites {
                     texture_id,
                     range,
                 }) => {
-                    self.draw_subpixel_sprites(texture_id, range.start, range.len())
+                    self.draw_subpixel_sprites(*texture_id, range.start, range.len())
                 }
                 RenderCommand::Batch(PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     range,
                 }) => {
-                    self.draw_polychrome_sprites(texture_id, range.start, range.len())
+                    self.draw_polychrome_sprites(*texture_id, range.start, range.len())
                 }
                 RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => {
                     self.draw_surfaces(&scene.surfaces[range.clone()])
@@ -1060,12 +1060,13 @@ impl DirectXRenderer {
                 anyhow::bail!("unsupported surface source");
             };
             let mut texture_srv = None;
+            // Screen capture uses windows 0.61 while this renderer uses 0.62. COM interface
+            // pointers are ABI-stable; transferring an owned clone keeps the texture alive.
+            let texture = unsafe { ID3D11Texture2D::from_raw(frame.texture().clone().into_raw()) };
             unsafe {
-                devices.device.CreateShaderResourceView(
-                    frame.texture(),
-                    None,
-                    Some(&mut texture_srv),
-                )?
+                devices
+                    .device
+                    .CreateShaderResourceView(&texture, None, Some(&mut texture_srv))?
             };
             // The surface shader declares both planes; RGBA captures bind one view to both.
             let texture_srvs = [texture_srv.clone(), texture_srv];
@@ -2188,7 +2189,7 @@ fn create_buffer_view(
             BufferEx: D3D11_BUFFEREX_SRV {
                 FirstElement: 0,
                 NumElements: buffer_desc.ByteWidth / 4,
-                Flags: D3D11_BUFFEREX_SRV_RAW,
+                Flags: D3D11_BUFFEREX_SRV_FLAG(1),
             },
         },
     };
@@ -2270,6 +2271,7 @@ pub(crate) mod shader_resources {
         MonochromeSprite,
         SubpixelSprite,
         PolychromeSprite,
+        EmojiRasterization,
         Surface,
         BlurDownsample,
         Blur,
@@ -2287,6 +2289,7 @@ pub(crate) mod shader_resources {
                 Self::MonochromeSprite => "monochrome_sprites",
                 Self::SubpixelSprite => "subpixel_sprites",
                 Self::PolychromeSprite => "polychrome_sprites",
+                Self::EmojiRasterization => "emoji_rasterization",
                 Self::Surface => "surfaces",
                 Self::BlurDownsample => "blur_downsample",
                 Self::Blur => "blur",
@@ -2312,9 +2315,13 @@ pub(crate) mod shader_resources {
     impl RawShaderBytes {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
             let shader = module.shader();
-            let (entry, profile): (&str, &[u8]) = match target {
-                ShaderTarget::Vertex => (shader.vertex_entry, b"vs_5_0\0"),
-                ShaderTarget::Fragment => (shader.fragment_entry, b"ps_5_0\0"),
+            let entry = match target {
+                ShaderTarget::Vertex => shader.vertex_entry,
+                ShaderTarget::Fragment => shader.fragment_entry,
+            };
+            let profile: &[u8] = match target {
+                ShaderTarget::Vertex => b"vs_5_0\0",
+                ShaderTarget::Fragment => b"ps_5_0\0",
             };
             let entry = CString::new(entry).context("shader entry point name")?;
             let mut blob = None;
@@ -2323,7 +2330,6 @@ pub(crate) mod shader_resources {
                 D3DCompile(
                     shader.hlsl.as_bytes(),
                     PCSTR::from_raw(b"gpui_shaders.hlsl\0".as_ptr()),
-                    None,
                     None,
                     PCSTR::from_raw(entry.as_ptr() as *const u8),
                     PCSTR::from_raw(profile.as_ptr()),
@@ -2359,6 +2365,19 @@ pub(crate) mod shader_resources {
             }
         }
     }
+}
+
+fn with_dll_library<R>(dll_name: PCSTR, f: impl FnOnce(HMODULE) -> Result<R>) -> Result<R> {
+    let library = unsafe {
+        LoadLibraryA(dll_name).with_context(|| format!("Loading DLL: {}", dll_name.display()))?
+    };
+    let result = f(library);
+    unsafe {
+        FreeLibrary(library)
+            .with_context(|| format!("Freeing DLL: {}", dll_name.display()))
+            .log_err();
+    }
+    result
 }
 
 mod nvidia {

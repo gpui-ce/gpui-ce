@@ -782,6 +782,11 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
+            pipeline: &EMOJI_RASTERIZATION,
+            source: &shaders::emoji_rasterization::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
             pipeline: &BLUR_DOWNSAMPLE,
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,

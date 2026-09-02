@@ -40,6 +40,7 @@ pub enum DataLayout {
     TexturedInstances,
     MonochromeSprites,
     SubpixelSprites,
+    NativeOnly,
     Surface,
     Blur,
 }
@@ -108,6 +109,15 @@ define_pipelines! {
     BLUR: "blur", vertex_blur_fullscreen, fragment_blur, TriangleList, Blur, FullscreenTriangle;
     BLUR_COMPOSITE: "blur_composite", vertex_blur_composite, fragment_blur_composite, TriangleStrip, Blur, Rectangle;
 }
+
+pub const EMOJI_RASTERIZATION: Pipeline = Pipeline {
+    label: "emoji_rasterization",
+    vertex_entry: "vertex_emoji_rasterization",
+    fragment_entry: "fragment_emoji_rasterization",
+    topology: PrimitiveTopology::TriangleStrip,
+    data_layout: DataLayout::NativeOnly,
+    vertex_count: VertexCount::Rectangle,
+};
 
 pub const GLOBAL_BIND_GROUP: u32 = 0;
 pub const DATA_BIND_GROUP: u32 = 1;
