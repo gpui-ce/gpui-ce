@@ -7,8 +7,9 @@ use crate::WgpuTextureInfo;
 use gpui_render::shaders::interface::{self as shader_interface, BufferData};
 
 use super::{
+    WgpuRenderer,
     buffers::{InstanceSlice, InstanceUpload},
-    frame, path_types, pipelines, WgpuRenderer,
+    frame, path_types, pipelines,
 };
 
 impl WgpuRenderer {
@@ -167,7 +168,7 @@ impl WgpuRenderer {
             &resources.bind_group_layouts,
             pipeline.data_layout(),
             texture_id,
-            texture.generation,
+            texture.identity,
             &texture.view,
             &resources.atlas_sampler,
         );

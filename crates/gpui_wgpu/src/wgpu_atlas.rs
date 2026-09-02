@@ -23,6 +23,10 @@ fn etagere_point_to_device(point: etagere::Point) -> Point<DevicePixels> {
 
 pub struct WgpuAtlas(Mutex<WgpuAtlasState>);
 
+/// Identity of a backing atlas texture, distinct from its reusable slot ID.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WgpuTextureIdentity(u64);
+
 struct PendingUpload {
     id: AtlasTextureId,
     bounds: Bounds<DevicePixels>,
@@ -37,12 +41,13 @@ struct WgpuAtlasState {
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     pending_uploads: Vec<PendingUpload>,
-    generation: u64,
+    next_texture_identity: u64,
 }
 
 pub struct WgpuTextureInfo {
     pub view: wgpu::TextureView,
-    pub generation: u64,
+    /// Distinguishes backing textures even when their AtlasTextureId slot is reused.
+    pub identity: WgpuTextureIdentity,
 }
 
 impl WgpuAtlas {
@@ -60,7 +65,7 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
             pending_uploads: Vec::new(),
-            generation: 0,
+            next_texture_identity: 0,
         }))
     }
 
@@ -82,7 +87,7 @@ impl WgpuAtlas {
         let texture = &lock.storage[id];
         WgpuTextureInfo {
             view: texture.view.clone(),
-            generation: lock.generation,
+            identity: texture.identity,
         }
     }
 
@@ -93,7 +98,6 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
-        lock.generation = lock.generation.wrapping_add(1);
     }
 
     /// Handles device lost by clearing all textures and cached tiles.
@@ -106,7 +110,6 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
-        lock.generation = lock.generation.wrapping_add(1);
     }
 }
 
@@ -188,6 +191,8 @@ impl WgpuAtlasState {
         min_size: Size<DevicePixels>,
         kind: AtlasTextureKind,
     ) -> &mut WgpuAtlasTexture {
+        let identity = WgpuTextureIdentity(self.next_texture_identity);
+        self.next_texture_identity = self.next_texture_identity.wrapping_add(1);
         const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
             width: DevicePixels(1024),
             height: DevicePixels(1024),
@@ -233,6 +238,7 @@ impl WgpuAtlasState {
             format,
             texture,
             view,
+            identity,
             live_atlas_keys: 0,
         };
 
@@ -354,6 +360,7 @@ struct WgpuAtlasTexture {
     allocator: BucketedAtlasAllocator,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    identity: WgpuTextureIdentity,
     format: wgpu::TextureFormat,
     live_atlas_keys: u32,
 }
@@ -510,6 +517,39 @@ mod tests {
         atlas.remove(&big_key_a);
         let tile_b = insert(&big_key_b, big);
         assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
+        Ok(())
+    }
+
+    #[test]
+    fn reusing_an_atlas_texture_slot_changes_its_identity() -> anyhow::Result<()> {
+        let (device, queue) = test_device_and_queue()?;
+        let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+        let size = Size {
+            width: DevicePixels(1),
+            height: DevicePixels(1),
+        };
+        let key = |image_id| {
+            AtlasKey::Image(RenderImageParams {
+                image_id: ImageId(image_id),
+                frame_index: 0,
+            })
+        };
+        let insert = |key: &AtlasKey| {
+            atlas
+                .get_or_insert_with(key, &mut || {
+                    Ok(Some((size, Cow::Owned(vec![0, 0, 0, 255]))))
+                })
+                .expect("allocation should succeed")
+                .expect("callback returns Some")
+        };
+
+        let first = insert(&key(1));
+        let identity = atlas.get_texture_info(first.texture_id).identity;
+        atlas.remove(&key(1));
+        let second = insert(&key(2));
+
+        assert_eq!(first.texture_id, second.texture_id);
+        assert_ne!(atlas.get_texture_info(second.texture_id).identity, identity);
         Ok(())
     }
 
