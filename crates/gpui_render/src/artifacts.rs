@@ -28,11 +28,21 @@ pub enum GeneratedBindingKind {
 
 include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Dx11ShaderModel {
+    Sm50,
+}
+
+pub struct Dx11Shader {
+    pub source: &'static str,
+    pub model: Dx11ShaderModel,
+}
+
 pub struct NativeShader {
     pub label: &'static str,
     pub vertex_entry: &'static str,
     pub fragment_entry: &'static str,
-    pub hlsl: &'static str,
+    pub dx11: Dx11Shader,
     pub msl: &'static str,
 }
 

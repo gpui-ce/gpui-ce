@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::{DirectWrite::*, Dwm::*, Gdi::*},
+        Graphics::{Dwm::*, Gdi::*},
         System::{
             Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*, SystemServices::*,
         },
