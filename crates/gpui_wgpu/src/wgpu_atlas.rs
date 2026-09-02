@@ -37,10 +37,12 @@ struct WgpuAtlasState {
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     pending_uploads: Vec<PendingUpload>,
+    generation: u64,
 }
 
 pub struct WgpuTextureInfo {
     pub view: wgpu::TextureView,
+    pub generation: u64,
 }
 
 impl WgpuAtlas {
@@ -58,6 +60,7 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
             pending_uploads: Vec::new(),
+            generation: 0,
         }))
     }
 
@@ -79,6 +82,7 @@ impl WgpuAtlas {
         let texture = &lock.storage[id];
         WgpuTextureInfo {
             view: texture.view.clone(),
+            generation: lock.generation,
         }
     }
 
@@ -89,6 +93,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.generation = lock.generation.wrapping_add(1);
     }
 
     /// Handles device lost by clearing all textures and cached tiles.
@@ -101,6 +106,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.generation = lock.generation.wrapping_add(1);
     }
 }
 
