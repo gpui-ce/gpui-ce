@@ -17,10 +17,11 @@ path = "src/gpui_apple.rs"
 default = []
 bench-support = ["gpui/bench-support"]
 test-support = ["gpui/test-support"]
-runtime_shaders = []
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
+wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 anyhow.workspace = true
@@ -38,9 +39,6 @@ log.workspace = true
 metal.workspace = true
 objc.workspace = true
 parking_lot.workspace = true
-
-[target.'cfg(target_os = "macos")'.build-dependencies]
-cbindgen.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
