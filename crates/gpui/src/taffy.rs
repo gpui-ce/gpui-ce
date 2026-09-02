@@ -437,6 +437,90 @@ fn border_widths_to_taffy(
     }
 }
 
+// Converts padding, snapping each auto-sized axis as a proportional pair.
+fn padding_to_taffy(
+    padding: &Edges<DefiniteLength>,
+    rem_size: Pixels,
+    scale_factor: f32,
+    proportional_horizontal: bool,
+    proportional_vertical: bool,
+) -> TaffyRect<taffy::style::LengthPercentage> {
+    // Snaps the combined length, then divides it by the authored ratio.
+    fn snap_absolute_pair(
+        first: AbsoluteLength,
+        second: AbsoluteLength,
+        rem_size: Pixels,
+        scale_factor: f32,
+    ) -> (f32, f32) {
+        let first = first.to_pixels(rem_size).0;
+        let second = second.to_pixels(rem_size).0;
+        let total = first + second;
+
+        if first < 0.0 || second < 0.0 || total == 0.0 {
+            return (
+                round_to_device_pixel(first, scale_factor),
+                round_to_device_pixel(second, scale_factor),
+            );
+        }
+
+        let snapped_total = round_to_device_pixel(total, scale_factor);
+        let snapped_first = snapped_total * (first / total);
+
+        (snapped_first, snapped_total - snapped_first)
+    }
+
+    // Keeps normal per-edge conversion for explicit axes and percentage padding.
+    fn convert_pair(
+        first: &DefiniteLength,
+        second: &DefiniteLength,
+        rem_size: Pixels,
+        scale_factor: f32,
+        proportional: bool,
+    ) -> (
+        taffy::style::LengthPercentage,
+        taffy::style::LengthPercentage,
+    ) {
+        if proportional
+            && let (DefiniteLength::Absolute(first), DefiniteLength::Absolute(second)) =
+                (*first, *second)
+        {
+            let (first, second) = snap_absolute_pair(first, second, rem_size, scale_factor);
+
+            (
+                taffy::style::LengthPercentage::length(first),
+                taffy::style::LengthPercentage::length(second),
+            )
+        } else {
+            (
+                first.to_taffy(rem_size, scale_factor),
+                second.to_taffy(rem_size, scale_factor),
+            )
+        }
+    }
+
+    let (left, right) = convert_pair(
+        &padding.left,
+        &padding.right,
+        rem_size,
+        scale_factor,
+        proportional_horizontal,
+    );
+    let (top, bottom) = convert_pair(
+        &padding.top,
+        &padding.bottom,
+        rem_size,
+        scale_factor,
+        proportional_vertical,
+    );
+
+    TaffyRect {
+        top,
+        right,
+        bottom,
+        left,
+    }
+}
+
 trait ToTaffy<Output> {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> Output;
 }
@@ -496,7 +580,13 @@ impl ToTaffy<taffy::style::Style> for Style {
             max_size: self.max_size.to_taffy(rem_size, scale_factor),
             aspect_ratio: self.aspect_ratio,
             margin: self.margin.to_taffy(rem_size, scale_factor),
-            padding: self.padding.to_taffy(rem_size, scale_factor),
+            padding: padding_to_taffy(
+                &self.padding,
+                rem_size,
+                scale_factor,
+                self.size.width == Length::Auto,
+                self.size.height == Length::Auto,
+            ),
             border: border_widths_to_taffy(&self.border_widths, rem_size, scale_factor),
             align_items: self.align_items.map(|x| x.into()),
             align_self: self.align_self.map(|x| x.into()),
@@ -750,6 +840,42 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_sized_axes_snap_padding_proportionally() {
+        use taffy::style::LengthPercentage;
+
+        let mut style = Style {
+            padding: Edges {
+                top: Pixels(6.5).into(),
+                right: Pixels(5.0).into(),
+                bottom: Pixels(6.5).into(),
+                left: Pixels(2.5).into(),
+            },
+            ..Default::default()
+        };
+
+        let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
+        let expected_left = 7.0 * (2.5 / 7.5);
+        assert_eq!(padding.left, LengthPercentage::length(expected_left));
+        assert_eq!(padding.right, LengthPercentage::length(7.0 - expected_left));
+        assert_eq!(padding.top, LengthPercentage::length(6.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(6.5));
+
+        style.size.width = Length::Definite(Pixels(100.0).into());
+        let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
+        assert_eq!(padding.left, LengthPercentage::length(2.0));
+        assert_eq!(padding.right, LengthPercentage::length(5.0));
+        assert_eq!(padding.top, LengthPercentage::length(6.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(6.5));
+
+        style.size.width = Length::Auto;
+        style.padding.top = Pixels(6.75).into();
+        style.padding.bottom = Pixels(6.75).into();
+        let padding = style.to_taffy(Pixels(16.0), 2.0).padding;
+        assert_eq!(padding.top, LengthPercentage::length(13.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(13.5));
+    }
 
     #[test]
     fn border_widths_to_taffy_use_stroke_snapping() {
