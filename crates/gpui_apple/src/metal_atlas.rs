@@ -140,7 +140,9 @@ impl MetalAtlasState {
         let usage;
         match kind {
             AtlasTextureKind::Monochrome => {
-                pixel_format = metal::MTLPixelFormat::A8Unorm;
+                // Shared shaders read coverage from red, like WGPU's R8 atlas; A8 samples
+                // coverage through alpha and made every glyph transparent.
+                pixel_format = metal::MTLPixelFormat::R8Unorm;
                 usage = metal::MTLTextureUsage::ShaderRead;
             }
             AtlasTextureKind::Polychrome => {
@@ -375,5 +377,36 @@ mod tests {
         };
         let key = make_image_key(999, 0);
         atlas.remove(&key);
+    }
+
+    #[test]
+    fn monochrome_atlas_uses_red_channel_coverage() {
+        let Some(atlas) = create_atlas() else {
+            return;
+        };
+        let key = AtlasKey::Svg(gpui::RenderSvgParams {
+            path: "monochrome-format-test".into(),
+            size: Size {
+                width: DevicePixels(8),
+                height: DevicePixels(8),
+            },
+        });
+        let tile = atlas
+            .get_or_insert_with(&key, &mut || {
+                Ok(Some((
+                    Size {
+                        width: DevicePixels(8),
+                        height: DevicePixels(8),
+                    },
+                    Cow::Owned(vec![255; 64]),
+                )))
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            atlas.metal_texture(tile.texture_id).pixel_format(),
+            metal::MTLPixelFormat::R8Unorm
+        );
     }
 }
