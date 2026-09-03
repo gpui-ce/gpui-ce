@@ -85,7 +85,7 @@ xkbcommon = { workspace = true, features = ["wayland", "x11"], optional = true }
 
 # Wayland
 calloop-wayland-source = { workspace = true, optional = true }
-memfd = { version = "0.6.5", optional = true }
+memfd = { version = "0.6.6", optional = true }
 wayland-backend = { workspace = true, features = [
     "client_system",
     "dlopen",
