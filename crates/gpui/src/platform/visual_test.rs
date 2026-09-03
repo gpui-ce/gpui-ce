@@ -82,7 +82,7 @@ impl Platform for VisualTestPlatform {
 
     fn quit(&self) {}
 
-    fn restart(&self, _binary_path: Option<PathBuf>) {}
+    fn restart(&self, _binary_path: Option<PathBuf>, _arguments: Vec<std::ffi::OsString>) {}
 
     fn activate(&self, _ignoring_other_apps: bool) {}
 
@@ -161,7 +161,7 @@ impl Platform for VisualTestPlatform {
         self.platform.open_with_system(path)
     }
 
-    fn on_quit(&self, _callback: Box<dyn FnMut()>) {}
+    fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {}
 
     fn on_reopen(&self, _callback: Box<dyn FnMut()>) {}
 

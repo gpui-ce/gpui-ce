@@ -530,7 +530,7 @@ publish dry="false":
 sync-upstream *args:
     @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py sync {{ args }}
 
-[doc('One-time: record the upstream baseline to sync from (defaults to the pinned zed dep rev)')]
+[doc('One-time: record the upstream baseline to sync from (pass the upstream SHA explicitly)')]
 [group('sync')]
 sync-upstream-bootstrap *args:
     @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py bootstrap {{ args }}

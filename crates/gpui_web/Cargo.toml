@@ -11,14 +11,15 @@ autoexamples = false
 workspace = true
 
 [features]
-default = []
-multithreaded = ["dep:wasm_thread"]
+default = ["multithreaded"]
+multithreaded = ["dep:wasm_thread", "scheduler/wasm-threads"]
 
 [lib]
 path = "src/gpui_web.rs"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gpui.workspace = true
+scheduler.workspace = true
 parking_lot = { workspace = true, features = ["nightly"] }
 gpui_wgpu.workspace = true
 http.workspace = true
@@ -32,16 +33,20 @@ web-time.workspace = true
 console_error_panic_hook.workspace = true
 js-sys.workspace = true
 raw-window-handle.workspace = true
-# Forked because upstream is unmaintained and its worker bootstrap still calls
-# the wasm-bindgen init function with the positional arguments deprecated in 0.2.93.
+# The crates.io release contains the current wasm-bindgen-compatible worker
+# bootstrap, so consumers do not need a Git dependency or the old local fork.
 wasm_thread = { workspace = true, features = ["es_modules"], optional = true }
 web-sys = { workspace = true, features = [
     "console",
+    "Blob",
     "Clipboard",
     "ClipboardEvent",
+    "ClipboardItem",
     "CompositionEvent",
     "CssStyleDeclaration",
     "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
     "Document",
     "DomRect",
     "DragEvent",
@@ -52,14 +57,20 @@ web-sys = { workspace = true, features = [
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
+    "HtmlTextAreaElement",
     "IdleDeadline",
     "IdleRequestOptions",
+    "InputEvent",
     "KeyboardEvent",
+    "Location",
     "MediaQueryList",
     "MediaQueryListEvent",
     "MouseEvent",
     "Navigator",
     "PointerEvent",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "ReadableStreamReadResult",
     "ResizeObserver",
     "ResizeObserverBoxOptions",
     "ResizeObserverEntry",
@@ -77,3 +88,6 @@ web-sys = { workspace = true, features = [
     "WheelEvent",
     "Window",
 ] }
+
+[package.metadata.cargo-shear]
+ignored = ["scheduler"]

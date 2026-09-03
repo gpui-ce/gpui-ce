@@ -2369,14 +2369,7 @@ dependencies = [
  "backtrace",
  "bindgen",
  "bitflags 2.13.1",
- "block",
- "cbindgen",
  "chrono",
- "cocoa",
- "cocoa-foundation",
- "core-foundation",
- "core-foundation-sys",
- "core-graphics 0.25.0",
  "core-text",
  "core-video",
  "criterion",
@@ -2392,14 +2385,12 @@ dependencies = [
  "getrandom 0.4.3",
  "gpui_ce_collections",
  "gpui_ce_macros",
- "gpui_ce_media",
  "gpui_ce_platform",
  "gpui_ce_refineable",
  "gpui_ce_scheduler",
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "gpui_ce_util",
- "gpui_ce_web",
  "hdrhistogram",
  "heapless",
  "http",
@@ -2408,16 +2399,12 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "lyon",
- "mach2",
- "metal",
  "num_cpus",
- "objc",
  "objc2 0.6.4",
  "objc2-metal 0.3.2",
  "palette",
  "parking",
  "parking_lot",
- "pathfinder_geometry",
  "pin-project",
  "pollster 1.0.1",
  "postage",
@@ -2440,14 +2427,39 @@ dependencies = [
  "strum",
  "taffy",
  "thiserror 2.0.20",
+ "tracing",
  "unicode-segmentation",
  "url",
  "usvg",
  "uuid",
  "waker-fn",
  "wasm-bindgen",
+ "web-sys",
  "web-time",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "gpui_ce_apple"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "block",
+ "cbindgen",
+ "cocoa",
+ "core-foundation",
+ "core-graphics 0.25.0",
+ "core-video",
+ "derive_more",
+ "etagere",
+ "foreign-types",
+ "gpui-ce",
+ "gpui_ce_collections",
+ "image",
+ "log",
+ "metal",
+ "objc",
+ "parking_lot",
 ]
 
 [[package]]
@@ -2508,14 +2520,10 @@ dependencies = [
  "oo7",
  "open",
  "parking_lot",
- "pathfinder_geometry",
- "pollster 1.0.1",
- "profiling",
  "raw-window-handle",
  "smallvec",
  "smol",
  "strum",
- "swash",
  "url",
  "uuid",
  "wayland-backend",
@@ -2539,21 +2547,19 @@ dependencies = [
  "async-task",
  "block",
  "block2 0.6.2",
- "cbindgen",
  "cocoa",
  "core-foundation",
  "core-foundation-sys",
  "core-graphics 0.25.0",
  "core-text",
- "core-video",
  "ctor",
- "derive_more",
  "dispatch2",
  "etagere",
  "font-kit",
  "foreign-types",
  "futures",
  "gpui-ce",
+ "gpui_ce_apple",
  "gpui_ce_collections",
  "gpui_ce_media",
  "gpui_ce_util",
@@ -2596,7 +2602,6 @@ dependencies = [
  "bindgen",
  "core-foundation",
  "core-video",
- "ctor",
  "foreign-types",
  "metal",
  "objc",
@@ -2608,6 +2613,7 @@ version = "0.2.2"
 dependencies = [
  "anyhow",
  "dunce",
+ "pretty_assertions",
  "serde",
  "tempfile",
 ]
@@ -2642,6 +2648,7 @@ dependencies = [
  "futures",
  "parking_lot",
  "rand 0.10.2",
+ "wasm_thread",
  "web-time",
 ]
 
@@ -2693,8 +2700,8 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "gpui-ce",
+ "gpui_ce_scheduler",
  "gpui_ce_wgpu",
- "gpui_wasm_thread",
  "http",
  "js-sys",
  "log",
@@ -2703,6 +2710,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm_thread",
  "web-sys",
  "web-time",
 ]
@@ -2721,18 +2729,15 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_util",
  "itertools 0.15.0",
- "js-sys",
  "log",
+ "naga",
  "parking_lot",
- "pollster 1.0.1",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "swash",
  "unicode-bidi",
  "unicode-segmentation",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
 ]
@@ -2808,16 +2813,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_wasm_thread"
-version = "0.3.3"
-dependencies = [
- "futures",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
 dependencies = [
@@ -2829,12 +2824,6 @@ dependencies = [
  "xim-ctext",
  "xim-parser",
 ]
-
-[[package]]
-name = "grid"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "half"
@@ -3998,6 +3987,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.1",
+ "block2 0.6.2",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
 ]
@@ -5806,14 +5796,14 @@ dependencies = [
 
 [[package]]
 name = "taffy"
-version = "0.12.2"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "340a09581f29809fc0df82a3955501dc7f2a21f887e5d1c13dbe288fe1c0bef4"
+checksum = "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f"
 dependencies = [
  "arrayvec",
- "grid",
  "serde",
  "slotmap",
+ "smallvec",
 ]
 
 [[package]]
@@ -6454,6 +6444,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm_thread"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7516db7f32decdadb1c3b8deb1b7d78b9df7606c5cc2f6241737c2ab3a0258e"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "wayland-backend"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6461,6 +6463,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
+ "log",
  "rustix",
  "scoped-tls",
  "smallvec",
@@ -6634,6 +6637,7 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -6654,6 +6658,15 @@ name = "wgpu-core-deps-emscripten"
 version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "29.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1fb1798be2a912497d4c224f72d39bb0cb34af50e8bcc29865bc339c943059"
 dependencies = [
  "wgpu-hal",
 ]

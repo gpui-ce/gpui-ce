@@ -42,29 +42,37 @@ identical paths here. The script uses a **vendor-branch 3-way merge** (a general
      `--retries`) edits out the markers. Because it's a separate commit, its diff shows
      *exactly* what was chosen — auditable in isolation, distinct from git's auto-merge.
    (A conflict-free sync is just one clean merge commit.)
-4. The pinned `zed-industries/zed` git-dep revs in the root `Cargo.toml` are bumped to
-   the synced commit, then the **verify-fix loop** runs: the build gate (`just check`,
+4. The **verify-fix loop** runs: the build gate (`just check`,
    which also treats compile **warnings** as fixable so the branch stays CI-clean), then
-   the test gate (`just test`). Any failure — compile errors, warnings, or test failures —
+   the test gate (`just test`). (There are no `zed-industries/zed` git deps left to bump — PR #91
+   vendored everything in-tree, so the old dep-bump step is now a no-op.) Any failure — compile
+   errors, warnings, or test failures —
    is handed to `claude -p` (`fix-build.prompt.md`), looped up to `--retries` times, and
    committed as a **third** commit. Disable tests with `SYNC_RUN_TESTS=0`, or warning
    enforcement with `SYNC_FAIL_ON_WARNINGS=0`.
 
-### Tracked crates (fork dir ← upstream dir)
+### Tracked crates (fork dir ← upstream dir; dirs, not package names)
 
-Synced 1:1 (same path): `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
+Synced 1:1 (same dir): `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
 `gpui_shared_string`, `gpui_tokio`, `gpui_web`, `gpui_wgpu`, `gpui_windows`.
 
 Synced with **path remapping** — vendored + renamed by the fork (PR #91 removed the git sources):
 `gpui_collections`←`collections`, `gpui_sum_tree`←`sum_tree`, `gpui_refineable`←`refineable`,
 `gpui_derive_refineable`←`refineable/derive_refineable`, `gpui_scheduler`←`scheduler`,
 `gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_ce_util`←`gpui_util`, `gpui_path`←`path`.
+Packaging is orthogonal to directories: every fork package is `gpui_ce_*` (main crate `gpui-ce`
+with a hyphen), each with `[lib] name` preserving the upstream crate name and a
+`[workspace.dependencies]` alias mapping the upstream name back (e.g.
+`collections = { package = "gpui_ce_collections" }`, `gpui = { package = "gpui-ce" }`).
 The merge preserves each
-crate's gpui-ce adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
+crate's gpui-ce adaptations (package rename + lib-name override, path deps, `ztracing`→`tracing`,
+`zlog` removal) via
 conflict resolution while taking upstream's real changes — so upstream API additions land through the
 merge instead of being hand-ported during the build-fix pass.
 
-Left untouched: `crates/gpui_elements` (fork-only stub), `tooling/perf` (fork-only); `util_macros`
+Left untouched: `crates/gpui_elements` (fork-only, package `gpui_ce_elements`),
+`crates/gpui_ce_components` (git submodule, nested workspace), `tooling/perf` (fork-only);
+`util_macros`
 is no longer used by the fork. The mapping lives in `TRACKED_CRATES` in `sync_upstream.py`.
 
 ### Cross-crate file moves

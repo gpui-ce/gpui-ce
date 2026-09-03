@@ -14,8 +14,13 @@ path = "src/gpui_platform.rs"
 
 [features]
 default = []
+bench-support = ["gpui/bench-support", "gpui_macos/bench-support"]
 font-kit = ["gpui_macos/font-kit"]
-test-support = ["gpui/test-support", "gpui_macos/test-support"]
+test-support = [
+  "gpui/test-support",
+  "gpui_macos/test-support",
+  "gpui_windows/test-support",
+]
 runtime_shaders = ["gpui_macos/runtime_shaders"]
 wayland = ["gpui_linux/wayland"]
 x11 = ["gpui_linux/x11"]

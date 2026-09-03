@@ -25,5 +25,5 @@ proptest = { version = "1.11", features = ["attr-macro"] }
 [features]
 test-support = ["proptest"]
 
-[package.metadata.cargo-machete]
+[package.metadata.cargo-shear]
 ignored = ["tracing"]

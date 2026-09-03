@@ -1,8 +1,13 @@
+#![cfg_attr(target_family = "wasm", no_main)]
+
+#[path = "../example_support/fonts.rs"]
+mod example_support;
+
 use gpui::{
     App, Bounds, BoxShadow, Context, Div, SharedString, Window, WindowBounds, WindowOptions, div,
     hsla, prelude::*, px, relative, rgb, size,
 };
-use gpui_platform;
+use gpui_platform::application;
 
 struct Shadow {}
 
@@ -585,8 +590,11 @@ impl Render for Shadow {
     }
 }
 
-fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+fn run_example() {
+    application().run(|cx: &mut App| {
+        if !example_support::load_fonts(cx) {
+            return;
+        }
         let bounds = Bounds::centered(None, size(px(1000.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -599,4 +607,17 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn main() {
+    env_logger::init();
+    run_example();
+}
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    gpui_platform::web_init();
+    run_example();
 }

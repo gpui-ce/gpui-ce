@@ -12,6 +12,11 @@ name = "util"
 path = "src/util.rs"
 doctest = true
 
+[features]
+test-support = ["path/test-support", "dep:rand"]
+# Embed `fs_embed!` assets at compile time even in debug builds.
+debug-embed = ["rust-embed/debug-embed"]
+
 [dependencies]
 anyhow = "1"
 async_zip = { version = "0.0.19", features = ["deflate", "deflate64"] }
@@ -23,6 +28,7 @@ globset = "0.4"
 itertools = "0.15"
 log = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
 regex = "1"
+rand = { version = "0.10", optional = true }
 rust-embed = { version = "8.12", features = ["include-exclude"] }
 schemars = { version = "1.2", features = ["indexmap2"] }
 serde = { version = "1", features = ["derive", "rc"] }
@@ -67,6 +73,3 @@ rand = "0.10"
 path = { package = "gpui_ce_path", version = "0.2.2", path = "../gpui_path", features = [
   "test-support",
 ] }
-
-[features]
-test-support = ["path/test-support"]

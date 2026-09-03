@@ -61,9 +61,6 @@ itertools.workspace = true
 libc.workspace = true
 log.workspace = true
 parking_lot.workspace = true
-pathfinder_geometry.workspace = true
-pollster.workspace = true
-profiling.workspace = true
 smallvec.workspace = true
 smol.workspace = true
 strum.workspace = true
@@ -81,7 +78,6 @@ raw-window-handle.workspace = true
 
 # Used in both windowing options
 ashpd = { workspace = true, optional = true }
-swash.workspace = true
 bitflags = { workspace = true, optional = true }
 filedescriptor = { workspace = true, optional = true }
 open = { workspace = true, optional = true }
@@ -93,6 +89,7 @@ memfd = { version = "0.6.5", optional = true }
 wayland-backend = { workspace = true, features = [
     "client_system",
     "dlopen",
+    "log",
 ], optional = true }
 wayland-client = { workspace = true, optional = true }
 wayland-cursor = { workspace = true, optional = true }
@@ -125,3 +122,6 @@ xim = { workspace = true, features = [
     "x11rb-client",
 ], optional = true }
 x11-clipboard = { workspace = true, optional = true }
+
+[package.metadata.cargo-shear]
+ignored = ["bitflags", "x11-clipboard"]

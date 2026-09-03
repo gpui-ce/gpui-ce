@@ -114,9 +114,11 @@ mod macos_build {
         output_path
     }
 
-    /// Locate the gpui crate directory relative to this crate.
+    /// Locate the gpui crate directory relative to this crate. Resolved at
+    /// build-script runtime against this crate's manifest dir, so no checkout
+    /// path is baked into a compiled artifact (which corgi rejects).
     fn find_gpui_crate_dir() -> PathBuf {
-        gpui::GPUI_MANIFEST_DIR.into()
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../gpui")
     }
 
     /// To enable runtime compilation, we need to "stitch" the shaders file with the generated header

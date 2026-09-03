@@ -14,10 +14,14 @@ mod keyboard;
 mod pasteboard;
 mod system_notifications;
 
-mod metal_atlas;
-pub mod metal_renderer;
+use gpui_apple::metal_renderer as renderer;
 
-use metal_renderer as renderer;
+pub mod metal_renderer {
+    pub use gpui_apple::metal_renderer::{PathRasterizationVertex, PathSprite, SurfaceBounds};
+
+    #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+    pub use gpui_apple::metal_renderer::MetalHeadlessRenderer;
+}
 
 #[cfg(feature = "font-kit")]
 mod open_type;

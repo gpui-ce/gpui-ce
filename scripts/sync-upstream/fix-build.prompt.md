@@ -1,8 +1,8 @@
 ## Repository context
 
 `gpui-ce` is a standalone fork of Zed's GPUI. A 3-way merge of upstream Zed GPUI changes was just
-committed, and the pinned `zed-industries/zed` git-dependency revisions were bumped to match the
-synced commit. The result has a problem the sync introduced — a compile error, a compile warning,
+committed. (There are no `zed-industries/zed` git deps left to bump — PR #91 vendored everything
+in-tree.) The result has a problem the sync introduced — a compile error, a compile warning,
 or a test failure (see the output above). Fix it so the gate passes.
 
 ## Rules
@@ -10,9 +10,12 @@ or a test failure (see the output above). Fix it so the gate passes.
 1. **Fix only what the merge/sync caused.** Address the issues in the output: items moved/renamed
    upstream, changed function signatures or trait bounds, added/removed enum variants, and any
    fallout in gpui-ce's own patches. NOTE: the util crates (`collections`, `util`, `gpui_util`,
-   `sum_tree`, `refineable`, `scheduler`, `media`) are now **vendored in-tree** as `gpui_collections`,
-   `gpui_zed_util`, `gpui_ce_util`, `gpui_sum_tree`, `gpui_refineable`, `gpui_scheduler`,
-   `gpui_media` and are **synced by this same tool** — so if gpui needs a new API from one of them,
+   `sum_tree`, `refineable`, `derive_refineable`, `scheduler`, `media`, `path`) are now
+   **vendored in-tree** as dirs `crates/gpui_collections`, `crates/gpui_zed_util`,
+   `crates/gpui_ce_util`, `crates/gpui_sum_tree`, `crates/gpui_refineable`,
+   `crates/gpui_derive_refineable`, `crates/gpui_scheduler`, `crates/gpui_media`,
+   `crates/gpui_path` (packages `gpui_ce_*`, `[lib] name` = upstream name so `use` sites are
+   unchanged) and are **synced by this same tool** — so if gpui needs a new API from one of them,
    it should already be present from the merge. Prefer using that API; only hand-add to a vendored
    crate if the merge genuinely didn't bring it (and say so in your summary).
 
@@ -41,16 +44,19 @@ or a test failure (see the output above). Fix it so the gate passes.
 6. If an issue stems from the **root `Cargo.toml`** (a workspace dependency that must be added or
    updated to match upstream's new requirements — the sync merges crate trees but not the root
    manifest, so new `[workspace.dependencies]` entries upstream added often need adding here), fix it
-   there using gpui-ce's sourcing convention: **path deps** (`{ path = "crates/gpui_*", package =
-   "gpui_*" }`) for the vendored crates, `zed-font-kit` for font-kit, and crates.io versions
-   otherwise. There are no longer any `zed-industries/zed` git deps.
+   there using gpui-ce's sourcing convention: **path deps via workspace aliases** (e.g.
+   `collections = { path = "crates/gpui_collections", package = "gpui_ce_collections" }`,
+   `gpui = { path = "crates/gpui", package = "gpui-ce" }`) for the vendored/in-tree crates,
+   `zed-font-kit` for font-kit, and crates.io versions otherwise. There are no longer any
+   `zed-industries/zed` git deps.
 
 7. **Newly vendored crates need fork packaging applied.** When upstream adds a crate that this tool
    tracks, it arrives as a *clean add* — no conflict, so no resolution pass adapted it, and it still
    carries upstream's packaging verbatim. If a tracked crate directory is new in this merge, bring it
-   in line with its siblings before anything else: set `name` to the fork's `gpui_*` name (keeping
-   `[lib] name` as the upstream crate name so `use` sites are unchanged), match the siblings'
-   `version`/`edition`/`publish`/`description`/`repository`, convert workspace/git deps to gpui-ce's
+   in line with its siblings before anything else: set `name` to the fork's `gpui_ce_*` name
+   (`gpui-ce` for the main crate; see `crates/gpui_path` / `crates/gpui_zed_util` for the current
+   template, keeping `[lib] name` as the upstream crate name so `use` sites are unchanged), match
+   the siblings' `version`/`edition`/`publish`/`description`/`repository`, convert workspace/git deps to gpui-ce's
    sourcing convention (rule 6), add the crate to the root `Cargo.toml` members, and **set
    `license = "Apache-2.0"`** — gpui-ce is Apache-only, and an upstream manifest may declare another
    license (or contradict its own bundled license file). Also copy a sibling's `LICENSE-APACHE` file

@@ -5,12 +5,12 @@ members = [
     "./crates/gpui_wgpu/",
     "./crates/gpui_linux/",
     "./crates/gpui_macos/",
+    "./crates/gpui_apple/",
     "./crates/gpui_tokio/",
     "./crates/gpui_macros/",
     "./crates/gpui_windows/",
     "./crates/gpui_platform/",
     "./crates/gpui_shared_string/",
-    "./crates/gpui_wasm_thread/",
     "./crates/xim/",
     "./crates/xim_parser/",
     "./crates/xim_ctext/",
@@ -66,11 +66,12 @@ derive_more = { version = "2.1", features = [
 dunce = "1.0"
 futures = "0.3"
 futures-concurrency = "7.7"
+flume = "0.12"
 http = "1"
 image = "0.25"
 inventory = "0.3"
 itertools = "0.15"
-log = { version = "0.4", features = ["serde"] }
+log = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
 palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
 postage = { version = "0.5", features = ["futures-traits"] }
@@ -91,6 +92,7 @@ stacksafe = "1.0"
 strum = { version = "0.28", features = ["derive"] }
 sum_tree = { path = "./crates/gpui_sum_tree/", version = "0.2.2", package = "gpui_ce_sum_tree" }
 thiserror = "2"
+tracing = { version = "0.1.44", features = ["attributes"] }
 hdrhistogram = "7"
 pollster = "1"
 url = "2"
@@ -154,12 +156,15 @@ smol = "2"
 wgpu = "29.0.4"
 criterion = { version = "0.8", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSAlert",
+    "NSApplication",
     "NSButton",
     "NSControl",
     "NSGraphics",
     "NSResponder",
     "NSView",
     "NSWindow",
+    "block2",
 ] }
 semver = { version = "1", features = ["serde"] }
 windows-core = "0.62"
@@ -206,15 +211,12 @@ seahash = "4"
 smol_str = "0.3"
 spin = "0.12"
 swash = "0.2"
-taffy = { version = "=0.12.2", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc", "content_size", "detailed_layout_info"] }
+taffy = { version = "=0.13.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc", "content_size", "detailed_layout_info"] }
 skrifa = "0.46"
 usvg = { version = "0.48", default-features = false }
 waker-fn = "1.2"
 wasm-bindgen-futures = "0.4"
-# Vendored: upstream is unmaintained and its published worker bootstrap still
-# calls the wasm-bindgen init function with the positional arguments deprecated
-# in 0.2.93. See crates/gpui_wasm_thread/README.md for the local patch.
-wasm_thread = { path = "./crates/gpui_wasm_thread/", package = "gpui_wasm_thread" }
+wasm_thread = "0.3.3"
 wayland-backend = "0.3"
 wayland-client = "0.31"
 wayland-cursor = "0.31"
@@ -234,6 +236,7 @@ gpui = { path = "./crates/gpui/", version = "0.2.2", package = "gpui-ce" }
 gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0", package = "gpui_ce_platform" }
 gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0", package = "gpui_ce_linux" }
 gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0", package = "gpui_ce_macos" }
+gpui_apple = { path = "./crates/gpui_apple/", version = "0.1.0", package = "gpui_ce_apple" }
 gpui_windows = { path = "./crates/gpui_windows/", version = "0.1.0", package = "gpui_ce_windows" }
 gpui_web = { path = "./crates/gpui_web/", version = "0.1.0", package = "gpui_ce_web" }
 

@@ -28,14 +28,16 @@ test-support = [
   "x11",
   "proptest",
 ]
-bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
+bench-support = ["profiler", "dep:criterion"]
+# Preserve the published feature name while consumers migrate to `bench-support`.
+bench = ["bench-support"]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
 wayland = []
 x11 = []
 windows-manifest = ["dep:embed-resource"]
-input-latency-histogram = ["dep:hdrhistogram"]
-profiler = []
+profiler = ["dep:hdrhistogram"]
+stacker = ["dep:stacksafe"]
 
 [lib]
 name = "gpui"
@@ -91,11 +93,12 @@ serde_json.workspace = true
 slotmap.workspace = true
 smallvec.workspace = true
 async-channel.workspace = true
-stacksafe.workspace = true
+stacksafe = { workspace = true, optional = true }
 strum.workspace = true
 sum_tree.workspace = true
 taffy.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 gpui_util.workspace = true
 unicode-segmentation.workspace = true
 hdrhistogram = { workspace = true, optional = true }
@@ -115,27 +118,13 @@ uuid = { workspace = true, features = ["js"] }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block.workspace = true
-cocoa.workspace = true
-cocoa-foundation.workspace = true
-core-foundation.workspace = true
-core-foundation-sys.workspace = true
-core-graphics.workspace = true
 core-video.workspace = true
 core-text.workspace = true
 font-kit = { workspace = true, optional = true, features = ["freetype-bundled"] }
 foreign-types.workspace = true
 log.workspace = true
-media.workspace = true
-objc.workspace = true
 objc2 = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
-mach2.workspace = true
-#TODO: replace with "objc2"
-metal.workspace = true
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies]
-pathfinder_geometry.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation"] }
@@ -158,15 +147,24 @@ proptest = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
-gpui_web.workspace = true
+web-sys = { version = "0.3", features = ["console"] }
 
 [build-dependencies]
 embed-resource = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 bindgen.workspace = true
-cbindgen = { workspace = true, default-features = false }
 
+[package.metadata.cargo-shear]
+ignored = [
+  "bindgen",
+  "font-kit",
+  "getrandom",
+  "objc2",
+  "objc2-metal",
+  "tracing",
+]
+ignored-paths = ["src/_ownership_and_data_flow.rs"]
 
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI

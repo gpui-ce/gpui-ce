@@ -21,3 +21,7 @@ serde = { version = "1", features = ["derive", "rc"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"
+pretty_assertions = "1.4"
+
+[lints]
+workspace = true

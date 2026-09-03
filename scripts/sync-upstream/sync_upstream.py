@@ -21,7 +21,7 @@ Options (sync):
   --ref REF        upstream ref to sync to (default: main / SYNC_ZED_REF)
   --model NAME     claude model (default: opus / SYNC_MODEL)
   --retries N      max claude passes per phase (default: 3 / SYNC_RETRIES)
-  --no-bump        don't bump pinned zed git-dep revs
+  --no-bump        don't bump pinned zed git-dep revs (no-op since PR #91 removed them)
   --dry-run        show what would be synced, then stop
 """
 
@@ -59,13 +59,19 @@ def _env(name: str, default: str) -> str:
 ZED_REMOTE_NAME: str = _env("SYNC_ZED_REMOTE_NAME", "zed")
 ZED_REMOTE_URL: str = _env("SYNC_ZED_REMOTE_URL", "https://github.com/zed-industries/zed.git")
 
-# Fork crate dir (under crates/) -> upstream crate path (under crates/). The in-tree gpui*
-# crates map to themselves; the rest were vendored + renamed from the Zed monorepo by PR #91
-# ("removed all of the git sources") and are tracked via path remapping. Their gpui-ce
-# adaptations (package rename, path deps, ztracing->tracing, zlog removal, etc.) are
-# preserved through the 3-way merge's conflict resolution — never re-applied by hand.
-# Left untouched: gpui_elements (fork-only stub), tooling/perf (fork-only). util_macros is
-# no longer used by the fork.
+# Fork crate DIR (under crates/) -> upstream crate path (under crates/). Keys are directory
+# names, not package names. The in-tree gpui* dirs map to themselves; the rest were vendored
+# from the Zed monorepo by PR #91 ("removed all of the git sources") and are tracked via
+# path remapping. Packaging is orthogonal to directories: every fork package is now `gpui_ce_*`
+# — except the main crate, which is `gpui-ce` (hyphen) — each with `[lib] name` preserving the
+# upstream crate name so `use` sites are unchanged, plus a `[workspace.dependencies]` alias
+# mapping the upstream name back (e.g. `collections = { package = "gpui_ce_collections" }`,
+# `gpui = { package = "gpui-ce" }`). Their gpui-ce adaptations (package rename + lib-name
+# override, path deps, ztracing->tracing, zlog removal, etc.) are preserved through the 3-way
+# merge's conflict resolution — never re-applied by hand.
+# Left untouched: gpui_elements (fork-only, package gpui_ce_elements), gpui_ce_components
+# (git submodule, nested workspace), tooling/perf (fork-only). util_macros is no longer used
+# by the fork.
 TRACKED_CRATES: dict[str, str] = {
     # in-tree gpui crates (identity mapping)
     "gpui": "gpui",
@@ -467,9 +473,9 @@ def resolve_conflicts_loop(branch: str, moves: dict[str, str] | None = None) -> 
             warn(f"no progress this pass ({before} → {after} files) — claude may be stuck")
 
 
-# dependency bump
+# dependency bump (legacy no-op: PR #91 removed all zed git deps, so there is currently
+# nothing to bump; kept in case a git dep ever returns)
 def bump_zed_deps(target: str) -> None:
-    log(f"bumping zed-industries/zed git-dep revs → {target[:12]}")
     path = REPO_ROOT / "Cargo.toml"
     lines = path.read_text().splitlines(keepends=True)
     bumped = 0
@@ -479,6 +485,9 @@ def bump_zed_deps(target: str) -> None:
             if count:
                 lines[i] = new_line
                 bumped += 1
+    if bumped == 0:
+        log("no zed-industries/zed git deps to bump (expected since PR #91 vendored everything)")
+        return
     _ = path.write_text("".join(lines))
     ok(f"rewrote {bumped} zed dep rev(s) in Cargo.toml")
 
@@ -590,7 +599,11 @@ def fetch_object(sha: str) -> None:
 
 
 def default_baseline() -> str:
-    """The zed rev currently pinned in the root Cargo.toml (best automatic guess)."""
+    """Legacy auto-baseline: the zed rev pinned in the root Cargo.toml.
+
+    Always empty since PR #91 removed all zed git deps — bootstrap now requires an
+    explicit SHA.
+    """
     for line in (REPO_ROOT / "Cargo.toml").read_text().splitlines():
         if 'github.com/zed-industries/zed"' in line:
             match = re.search(r'rev = "([0-9a-fA-F]{7,40})"', line)
@@ -789,7 +802,7 @@ def main() -> int:
     _ = parser.add_argument("--ref", default=None, help="upstream ref to sync to")
     _ = parser.add_argument("--model", default=None, help="claude model")
     _ = parser.add_argument("--retries", type=int, default=None, help="max claude passes per phase")
-    _ = parser.add_argument("--no-bump", action="store_true", help="don't bump pinned zed git-dep revs")
+    _ = parser.add_argument("--no-bump", action="store_true", help="don't bump pinned zed git-dep revs (no-op since PR #91 removed them)")
     _ = parser.add_argument("--dry-run", action="store_true", help="show what would be synced, then stop")
     ns = parser.parse_args()
 
