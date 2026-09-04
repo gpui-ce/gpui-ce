@@ -21,6 +21,7 @@ members = [
   "./crates/gpui_zed_util/",
   "./crates/gpui_ce_util/",
   "./crates/gpui_path/",
+  "./crates/gpui_webview/",
   "./tooling/perf/",
 ]
 default-members = ["./crates/gpui/"]
@@ -199,6 +200,9 @@ gpui_wgpu = { path = "./crates/gpui_wgpu/", version = "0.1.0", package = "gpui_c
 gpui_macros = { path = "./crates/gpui_macros/", version = "0.1.0", package = "gpui_ce_macros" }
 gpui_shared_string = { path = "./crates/gpui_shared_string/", version = "0.1.0", package = "gpui_ce_shared_string" }
 gpui_tokio = { path = "./crates/gpui_tokio/", version = "0.1.0", package = "gpui_ce_tokio" }
+gpui_webview = { path = "./crates/gpui_webview/", version = "0.1.0", package = "gpui_ce_webview" }
+
+wry = "0.55"
 
 [workspace.dependencies.windows]
 version = "0.62.2"
