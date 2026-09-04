@@ -13,6 +13,24 @@ impl SurfaceCache {
     }
 }
 
+pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSurface]) {
+    let mut textures = smallvec::SmallVec::<[&wgpu::Texture; 4]>::new();
+    for surface in surfaces {
+        let gpui::SurfaceSource::Texture { texture, .. } = &surface.source else {
+            continue;
+        };
+        if let Some(texture) = texture.downcast_ref::<wgpu::Texture>() {
+            textures.push(texture);
+        }
+    }
+    renderer
+        .resources()
+        .surface_cache
+        .borrow_mut()
+        .textures
+        .retain(|texture, _| textures.contains(&texture));
+}
+
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
@@ -33,9 +51,6 @@ pub(super) fn draw_surfaces(
 
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
-    cache
-        .textures
-        .retain(|texture, _| textures.iter().any(|(_, active)| *active == texture));
 
     for (surface, texture) in textures {
         if !cache.textures.contains_key(texture) {

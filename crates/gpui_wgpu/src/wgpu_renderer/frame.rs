@@ -1,12 +1,12 @@
 use super::{
-    begin_color_render_pass,
+    WgpuRenderer, begin_color_render_pass,
     buffers::{InstanceTransport, InstanceUpload},
-    filters::{FrameUniformRequirements, FILTER_UNIFORMS_PER_COMPOSITE},
-    path_types, WgpuRenderer,
+    filters::{FILTER_UNIFORMS_PER_COMPOSITE, FrameUniformRequirements},
+    path_types,
 };
 use gpui::{
-    FilterRenderTarget, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, RenderCommand,
-    Scene, Shadow, SubpixelSprite, Underline,
+    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PolychromeSprite, PrimitiveBatch,
+    Quad, RenderCommand, Scene, Shadow, SubpixelSprite, Underline,
 };
 use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
 use gpui_render::shaders::{
@@ -23,6 +23,9 @@ pub(super) fn render_to_view(
     let Some(targets) = PreparedTargets::prepare(renderer, scene, frame_view) else {
         return None;
     };
+    // Prune once against the complete scene. Doing this inside each draw batch would evict a
+    // texture that reappears after an intervening primitive and recreate its platform view.
+    renderer.retain_surface_cache(&scene.surfaces);
 
     match FrameEncoder::new(renderer, scene, targets).encode(readback) {
         Ok(command_buffer) => Some(renderer.resources().queue.submit([command_buffer])),
@@ -519,14 +522,14 @@ fn begin_scene_render_pass<'a>(
 
 struct TargetStack {
     current: wgpu::TextureView,
-    parents: Vec<wgpu::TextureView>,
+    parents: smallvec::SmallVec<[wgpu::TextureView; MAX_FILTER_GROUP_DEPTH]>,
 }
 
 impl TargetStack {
     fn new(root: wgpu::TextureView) -> Self {
         Self {
             current: root,
-            parents: Vec::new(),
+            parents: smallvec::SmallVec::new(),
         }
     }
 

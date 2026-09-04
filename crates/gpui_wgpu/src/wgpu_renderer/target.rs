@@ -134,6 +134,7 @@ impl RenderTarget {
         true
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn apply(&mut self, requested: WgpuSurfaceConfig) -> bool {
         self.resize(requested.size);
         if let Some(mode) = requested.preferred_present_mode {
@@ -142,6 +143,7 @@ impl RenderTarget {
         self.set_transparent(requested.transparent)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn recovery_config(&self) -> WgpuSurfaceConfig {
         WgpuSurfaceConfig {
             size: self.viewport_size(),

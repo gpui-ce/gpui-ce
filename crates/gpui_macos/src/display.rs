@@ -1,15 +1,12 @@
-use crate::ns_string;
 use anyhow::Result;
 use core_foundation::base::CFRelease;
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
-use core_graphics::geometry::CGRect;
 use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay, point, px, size};
-use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-use std::ptr;
+use objc2::{MainThreadMarker, msg_send, rc::Retained};
+use objc2_app_kit::NSScreen;
+use objc2_foundation::NSString;
 use uuid::Uuid;
-
-type Id = *mut Object;
 
 #[derive(Debug)]
 pub(crate) struct MacDisplay(pub(crate) CGDirectDisplayID);
@@ -32,15 +29,9 @@ impl MacDisplay {
         // The following is what Chromium does too:
         //
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
-        unsafe {
-            let screens: Id = msg_send![class!(NSScreen), screens];
-            let screen: Id = msg_send![screens, objectAtIndex: 0usize];
-            let device_description: Id = msg_send![screen, deviceDescription];
-            let screen_number_key: Id = ns_string("NSScreenNumber");
-            let screen_number: Id = msg_send![device_description, objectForKey: screen_number_key];
-            let screen_number: CGDirectDisplayID = msg_send![screen_number, unsignedIntegerValue];
-            Self(screen_number)
-        }
+        let marker = MainThreadMarker::new().expect("NSScreen access requires the main thread");
+        let screen = NSScreen::mainScreen(marker).expect("macOS reported no primary NSScreen");
+        Self(screen_id(&screen))
     }
 
     /// Obtains an iterator over all currently active system displays.
@@ -118,52 +109,47 @@ impl PlatformDisplay for MacDisplay {
     }
 
     fn visible_bounds(&self) -> Bounds<Pixels> {
-        unsafe {
-            let dominated_screen = self.get_nsscreen();
+        let Some(dominated_screen) = self.get_nsscreen() else {
+            return self.bounds();
+        };
 
-            if dominated_screen.is_null() {
-                return self.bounds();
-            }
+        let screen_frame = dominated_screen.frame();
+        let visible_frame = dominated_screen.visibleFrame();
 
-            let screen_frame: CGRect = msg_send![dominated_screen, frame];
-            let visible_frame: CGRect = msg_send![dominated_screen, visibleFrame];
+        // Convert from bottom-left origin (AppKit) to top-left origin
+        let origin_y =
+            screen_frame.size.height - visible_frame.origin.y - visible_frame.size.height
+                + screen_frame.origin.y;
 
-            // Convert from bottom-left origin (AppKit) to top-left origin
-            let origin_y =
-                screen_frame.size.height - visible_frame.origin.y - visible_frame.size.height
-                    + screen_frame.origin.y;
-
-            Bounds {
-                origin: point(
-                    px(visible_frame.origin.x as f32 - screen_frame.origin.x as f32),
-                    px(origin_y as f32),
-                ),
-                size: size(
-                    px(visible_frame.size.width as f32),
-                    px(visible_frame.size.height as f32),
-                ),
-            }
+        Bounds {
+            origin: point(
+                px(visible_frame.origin.x as f32 - screen_frame.origin.x as f32),
+                px(origin_y as f32),
+            ),
+            size: size(
+                px(visible_frame.size.width as f32),
+                px(visible_frame.size.height as f32),
+            ),
         }
     }
 }
 
 impl MacDisplay {
     /// Find the NSScreen corresponding to this display
-    unsafe fn get_nsscreen(&self) -> Id {
-        let screens: Id = unsafe { msg_send![class!(NSScreen), screens] };
-        let count: usize = unsafe { msg_send![screens, count] };
-        let screen_number_key: Id = unsafe { ns_string("NSScreenNumber") };
-
-        for i in 0..count {
-            let screen: Id = unsafe { msg_send![screens, objectAtIndex: i] };
-            let device_description: Id = unsafe { msg_send![screen, deviceDescription] };
-            let screen_number: Id =
-                unsafe { msg_send![device_description, objectForKey: screen_number_key] };
-            let screen_id: CGDirectDisplayID = msg_send![screen_number, unsignedIntegerValue];
-            if screen_id == self.0 {
-                return screen;
-            }
-        }
-        ptr::null_mut()
+    fn get_nsscreen(&self) -> Option<Retained<NSScreen>> {
+        let marker = MainThreadMarker::new()?;
+        NSScreen::screens(marker)
+            .into_iter()
+            .find(|screen| screen_id(screen) == self.0)
     }
+}
+
+fn screen_id(screen: &NSScreen) -> CGDirectDisplayID {
+    let key = NSString::from_str("NSScreenNumber");
+    let number = screen
+        .deviceDescription()
+        .objectForKey(&key)
+        .expect("NSScreen device description is missing NSScreenNumber");
+    let display_number: usize = unsafe { msg_send![&*number, unsignedIntegerValue] };
+    display_number as CGDirectDisplayID
 }

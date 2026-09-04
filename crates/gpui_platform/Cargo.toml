@@ -14,10 +14,15 @@ path = "src/gpui_platform.rs"
 
 [features]
 default = []
-bench-support = ["gpui/bench-support", "gpui_macos/bench-support"]
+bench-support = [
+  "gpui/bench-support",
+  "gpui_apple/bench-support",
+  "gpui_macos/bench-support",
+]
 font-kit = ["gpui_macos/font-kit"]
 test-support = [
   "gpui/test-support",
+  "gpui_apple/test-support",
   "gpui_macos/test-support",
   "gpui_windows/test-support",
 ]
@@ -34,6 +39,7 @@ gpui.workspace = true
 log.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple.workspace = true
 gpui_macos.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

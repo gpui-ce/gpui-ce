@@ -34,6 +34,24 @@ struct CachedSurface {
     binding: SurfaceBinding,
 }
 
+pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSurface]) {
+    let active_keys = surfaces
+        .iter()
+        .filter_map(|surface| {
+            let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {
+                return None;
+            };
+            core_video_surface_key(image_buffer).ok()
+        })
+        .collect::<smallvec::SmallVec<[usize; 4]>>();
+    renderer
+        .resources()
+        .surface_cache
+        .borrow_mut()
+        .surfaces
+        .retain(|key, _| active_keys.contains(key));
+}
+
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
@@ -56,9 +74,6 @@ pub(super) fn draw_surfaces(
 
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
-    cache
-        .surfaces
-        .retain(|key, _| keyed_surfaces.iter().any(|(_, active)| active == key));
 
     for (surface, key) in keyed_surfaces {
         let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {

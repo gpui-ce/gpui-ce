@@ -15,13 +15,11 @@ path = "src/gpui_windows.rs"
 [features]
 default = ["gpui/default"]
 test-support = ["gpui/test-support"]
-screen-capture = ["gpui/screen-capture", "scap"]
-wgpu = ["dep:gpui_wgpu", "gpui/wgpu-surfaces", "gpui_wgpu/wgpu-surfaces"]
+screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
-gpui.workspace = true
+gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_render.workspace = true
-gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
 wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -46,10 +44,3 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 windows-core.workspace = true
 windows-numerics = "0.3"
 windows-registry = "0.6.1"
-
-[target.'cfg(target_os = "windows")'.dependencies.scap]
-workspace = true
-optional = true
-
-[package.metadata.cargo-shear]
-ignored = ["scap"]

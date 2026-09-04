@@ -90,7 +90,7 @@ impl<'a> MappedTexture<'a> {
         context: &'a windows_061::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         texture: &'a ID3D11Texture2D,
     ) -> Result<Self> {
-        use windows_061::Win32::Graphics::Direct3D11::{D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ};
+        use windows_061::Win32::Graphics::Direct3D11::{D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE};
 
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe { context.Map(texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }

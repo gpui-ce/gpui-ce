@@ -1,10 +1,10 @@
 use std::{
-    ffi::CString,
     slice,
     sync::{Arc, OnceLock},
 };
 
 use anyhow::{Context, Result};
+use collections::FxHashMap;
 use gpui_render::{
     blur::{
         BlurAxis, BlurKernel, BlurUniforms, FilterCompositeClip,
@@ -44,6 +44,7 @@ pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSI
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
+const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
 // Group 0 occupies registers 0 and 1 in native shaders, so generated group-1 bindings start at 2.
 const GROUP_1_REGISTER_OFFSET: u32 = 2;
 const DATA_REGISTER: u32 = shader_interface::DATA_BUFFER_BINDING + GROUP_1_REGISTER_OFFSET;
@@ -106,17 +107,45 @@ struct DirectXResources {
     render_target: Option<ID3D11Texture2D>,
     render_target_view: Option<ID3D11RenderTargetView>,
 
-    // Path intermediate textures (with MSAA)
-    path_intermediate_texture: ID3D11Texture2D,
-    path_intermediate_srv: Option<ID3D11ShaderResourceView>,
-    path_intermediate_msaa_texture: ID3D11Texture2D,
-    path_intermediate_msaa_view: Option<ID3D11RenderTargetView>,
+    // Path intermediates are absent until a scene contains a path batch.
+    path: Option<PathResources>,
 
-    // Offscreen targets for blur filters (each is render-target + shader-resource).
-    blur: BlurResources,
+    // Offscreen targets are absent until a scene actually needs a blur/filter pass.
+    blur: Option<BlurResources>,
+
+    // Views for capture textures that are referenced by the current scene. Keeping the
+    // underlying texture alive makes its COM pointer a stable cache key.
+    surface_views: FxHashMap<usize, CachedSurfaceView>,
 
     // Cached viewport
     viewport: D3D11_VIEWPORT,
+}
+
+struct CachedSurfaceView {
+    #[expect(dead_code)]
+    texture: ID3D11Texture2D,
+    srv: Option<ID3D11ShaderResourceView>,
+}
+
+struct PathResources {
+    texture: ID3D11Texture2D,
+    srv: Option<ID3D11ShaderResourceView>,
+    msaa_texture: ID3D11Texture2D,
+    msaa_view: Option<ID3D11RenderTargetView>,
+}
+
+impl PathResources {
+    fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self> {
+        let (texture, srv) = create_path_intermediate_texture(device, width, height)?;
+        let (msaa_texture, msaa_view) =
+            create_path_intermediate_msaa_texture_and_view(device, width, height)?;
+        Ok(Self {
+            texture,
+            srv,
+            msaa_texture,
+            msaa_view,
+        })
+    }
 }
 
 /// Offscreen render targets used by the blur filters. The scene is rendered into `scene_color`
@@ -138,24 +167,28 @@ struct BlurResources {
     pong_rtv: Option<ID3D11RenderTargetView>,
     pong_srv: Option<ID3D11ShaderResourceView>,
     // Kept alive for the lifetime of their views; indexed by isolation depth.
-    #[expect(dead_code)]
     groups: Vec<ID3D11Texture2D>,
     group_rtvs: Vec<Option<ID3D11RenderTargetView>>,
     group_srvs: Vec<Option<ID3D11ShaderResourceView>>,
 }
 
 impl BlurResources {
-    fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self> {
+    fn new(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        isolated_target_count: usize,
+    ) -> Result<Self> {
         let half_w = downsampled_dimension(width);
         let half_h = downsampled_dimension(height);
         let (scene_color, scene_color_rtv, scene_color_srv) =
             create_color_target(device, width, height)?;
         let (ping, ping_rtv, ping_srv) = create_color_target(device, half_w, half_h)?;
         let (pong, pong_rtv, pong_srv) = create_color_target(device, half_w, half_h)?;
-        let mut groups = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
-        let mut group_rtvs = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
-        let mut group_srvs = Vec::with_capacity(MAX_FILTER_GROUP_DEPTH);
-        for _ in 0..MAX_FILTER_GROUP_DEPTH {
+        let mut groups = Vec::with_capacity(isolated_target_count);
+        let mut group_rtvs = Vec::with_capacity(isolated_target_count);
+        let mut group_srvs = Vec::with_capacity(isolated_target_count);
+        for _ in 0..isolated_target_count {
             let (group, group_rtv, group_srv) = create_color_target(device, width, height)?;
             groups.push(group);
             group_rtvs.push(group_rtv);
@@ -175,6 +208,22 @@ impl BlurResources {
             group_rtvs,
             group_srvs,
         })
+    }
+
+    fn ensure_isolated_targets(
+        &mut self,
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        isolated_target_count: usize,
+    ) -> Result<()> {
+        while self.groups.len() < isolated_target_count {
+            let (group, group_rtv, group_srv) = create_color_target(device, width, height)?;
+            self.groups.push(group);
+            self.group_rtvs.push(group_rtv);
+            self.group_srvs.push(group_srv);
+        }
+        Ok(())
     }
 }
 
@@ -471,6 +520,17 @@ impl DirectXRenderer {
             // and so likely do not have the textures anymore that are required for drawing
             return Ok(());
         }
+        self.render(scene, background_appearance)?;
+        self.present()
+    }
+
+    /// Encodes a complete frame without presenting it. Window drawing and test readback share
+    /// this path so batching, filters, and resource-retention behavior cannot diverge.
+    fn render(
+        &mut self,
+        scene: &Scene,
+        background_appearance: WindowBackgroundAppearance,
+    ) -> Result<()> {
         self.pre_draw(&match background_appearance {
             WindowBackgroundAppearance::Opaque => [1.0f32; 4],
             _ => [0.0f32; 4],
@@ -481,26 +541,45 @@ impl DirectXRenderer {
         // Only route through the offscreen scene texture when the scene contains blur filters;
         // otherwise render straight to the swapchain exactly as before.
         let use_offscreen = scene.requires_offscreen_rendering();
+        let requirements = scene.render_plan().requirements();
+        let device = &self.devices.as_ref().context("devices missing")?.device;
+        let resources = self.resources.as_mut().context("resources missing")?;
+        resources.retain_surface_views(&scene.surfaces);
+        if requirements.uses_path_target {
+            resources.ensure_path_resources(device)?;
+        }
+        if use_offscreen {
+            resources.ensure_blur_resources(device, requirements.isolated_target_count)?;
+        }
 
         // Clone the views we need (AddRef) so the loop can rebind render targets without holding a
         // borrow of `self` across the `&mut self` draw_* calls.
         let (scene_rtv, scene_srv, group_rtvs, group_srvs, swapchain_rtv) = {
             let r = self.resources.as_ref().context("resources missing")?;
-            (
-                r.blur.scene_color_rtv.clone(),
-                r.blur.scene_color_srv.clone(),
-                r.blur
-                    .group_rtvs
-                    .iter()
-                    .cloned()
-                    .collect::<SmallVec<[_; MAX_FILTER_GROUP_DEPTH]>>(),
-                r.blur
-                    .group_srvs
-                    .iter()
-                    .cloned()
-                    .collect::<SmallVec<[_; MAX_FILTER_GROUP_DEPTH]>>(),
-                r.render_target_view.clone(),
-            )
+            if let Some(blur) = r.blur.as_ref() {
+                (
+                    blur.scene_color_rtv.clone(),
+                    blur.scene_color_srv.clone(),
+                    blur.group_rtvs
+                        .iter()
+                        .cloned()
+                        .collect::<SmallVec<[_; MAX_FILTER_GROUP_DEPTH]>>(),
+                    blur.group_srvs
+                        .iter()
+                        .cloned()
+                        .collect::<SmallVec<[_; MAX_FILTER_GROUP_DEPTH]>>(),
+                    r.render_target_view.clone(),
+                )
+            } else {
+                debug_assert!(!use_offscreen);
+                (
+                    None,
+                    None,
+                    SmallVec::new(),
+                    SmallVec::new(),
+                    r.render_target_view.clone(),
+                )
+            }
         };
         let ctx = self
             .devices
@@ -685,7 +764,83 @@ impl DirectXRenderer {
             self.dx_blit(&scene_srv, &swapchain_rtv)?;
         }
         self.active_render_target = None;
-        self.present()
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn render_to_image(
+        &mut self,
+        scene: &Scene,
+        background_appearance: WindowBackgroundAppearance,
+    ) -> Result<image::RgbaImage> {
+        anyhow::ensure!(
+            !self.skip_draws,
+            "render_to_image unavailable while recovering from a lost device"
+        );
+        self.render(scene, background_appearance)?;
+
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let render_target = resources
+            .render_target
+            .as_ref()
+            .context("render target missing")?;
+
+        let mut source_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { render_target.GetDesc(&mut source_desc) };
+        let width = source_desc.Width;
+        let height = source_desc.Height;
+        let staging_desc = D3D11_TEXTURE2D_DESC {
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+            MipLevels: 1,
+            ArraySize: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..source_desc
+        };
+        let mut staging = None;
+        unsafe {
+            devices
+                .device
+                .CreateTexture2D(&staging_desc, None, Some(&mut staging))?
+        };
+        let staging = staging.context("creating staging texture")?;
+        unsafe {
+            devices.device_context.CopyResource(&staging, render_target);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            devices
+                .device_context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?
+        };
+        let row_bytes = width as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * height as usize];
+        // SAFETY: a successful `Map` exposes `RowPitch * height` readable bytes until `Unmap`.
+        // D3D11 guarantees RowPitch is at least the logical row width, and each destination row
+        // is disjoint within the exactly-sized output allocation.
+        unsafe {
+            let source = mapped.pData.cast::<u8>();
+            for row in 0..height as usize {
+                std::ptr::copy_nonoverlapping(
+                    source.add(row * mapped.RowPitch as usize),
+                    pixels.as_mut_ptr().add(row * row_bytes),
+                    row_bytes,
+                );
+            }
+            devices.device_context.Unmap(&staging, 0);
+        }
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        image::RgbaImage::from_raw(width, height, pixels)
+            .context("failed to build RGBA image from DirectX staging readback")
     }
 
     pub(crate) fn resize(&mut self, new_size: Size<DevicePixels>) -> Result<()> {
@@ -839,17 +994,20 @@ impl DirectXRenderer {
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
+        let path = resources
+            .path
+            .as_ref()
+            .context("path resources were not prepared")?;
         // Clear intermediate MSAA texture
         unsafe {
             devices.device_context.ClearRenderTargetView(
-                resources.path_intermediate_msaa_view.as_ref().unwrap(),
+                path.msaa_view.as_ref().context("path MSAA view missing")?,
                 &[0.0; 4],
             );
             // Set intermediate MSAA texture as render target
-            devices.device_context.OMSetRenderTargets(
-                Some(slice::from_ref(&resources.path_intermediate_msaa_view)),
-                None,
-            );
+            devices
+                .device_context
+                .OMSetRenderTargets(Some(slice::from_ref(&path.msaa_view)), None);
         }
 
         self.path_rasterization_vertices.clear();
@@ -887,9 +1045,9 @@ impl DirectXRenderer {
         // Resolve MSAA to non-MSAA intermediate texture
         unsafe {
             devices.device_context.ResolveSubresource(
-                &resources.path_intermediate_texture,
+                &path.texture,
                 0,
-                &resources.path_intermediate_msaa_texture,
+                &path.msaa_texture,
                 0,
                 RENDER_TARGET_FORMAT,
             );
@@ -942,6 +1100,10 @@ impl DirectXRenderer {
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
+        let path = resources
+            .path
+            .as_ref()
+            .context("path resources were not prepared")?;
         self.pipelines.path_sprite_pipeline.update_buffer(
             &devices.device,
             &devices.device_context,
@@ -951,7 +1113,7 @@ impl DirectXRenderer {
         // Draw the sprites with the path texture
         self.pipelines.path_sprite_pipeline.draw_with_texture(
             &devices.device_context,
-            slice::from_ref(&resources.path_intermediate_srv),
+            slice::from_ref(&path.srv),
             slice::from_ref(&resources.viewport),
             &self.globals.cbuffers(),
             slice::from_ref(&self.globals.sampler),
@@ -1049,27 +1211,40 @@ impl DirectXRenderer {
             return Ok(());
         }
         let devices = self.devices.as_ref().context("devices missing")?;
-        let resources = self.resources.as_ref().context("resources missing")?;
+        let resources = self.resources.as_mut().context("resources missing")?;
         let ctx = &devices.device_context;
         let cbuffers = self.globals.cbuffers();
         let surface_cb = [Some(self.pipelines.surfaces.params_buffer.clone())];
         let sampler = [self.globals.sampler.clone()];
+
         for surface in surfaces {
             let gpui::SurfaceSource::WindowsCapture(frame) = &surface.source else {
                 log::error!("DirectX renderer cannot import this surface source");
                 anyhow::bail!("unsupported surface source");
             };
-            let mut texture_srv = None;
-            // Screen capture uses windows 0.61 while this renderer uses 0.62. COM interface
-            // pointers are ABI-stable; transferring an owned clone keeps the texture alive.
-            let texture = unsafe { ID3D11Texture2D::from_raw(frame.texture().clone().into_raw()) };
-            unsafe {
-                devices
-                    .device
-                    .CreateShaderResourceView(&texture, None, Some(&mut texture_srv))?
-            };
+            let key = frame.texture().as_raw() as usize;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                resources.surface_views.entry(key)
+            {
+                let mut srv = None;
+                // Screen capture uses windows 0.61 while this renderer uses 0.62. COM interface
+                // pointers are ABI-stable; transferring an owned clone keeps the texture alive.
+                let texture =
+                    unsafe { ID3D11Texture2D::from_raw(frame.texture().clone().into_raw()) };
+                unsafe {
+                    devices
+                        .device
+                        .CreateShaderResourceView(&texture, None, Some(&mut srv))?
+                };
+                entry.insert(CachedSurfaceView { texture, srv });
+            }
+            let texture_srv = &resources
+                .surface_views
+                .get(&key)
+                .context("capture surface view cache insertion failed")?
+                .srv;
             // The surface shader declares both planes; RGBA captures bind one view to both.
-            let texture_srvs = [texture_srv.clone(), texture_srv];
+            let texture_srvs = [texture_srv.clone(), texture_srv.clone()];
 
             let uniforms = SurfaceUniforms {
                 bounds: surface.bounds.into(),
@@ -1189,12 +1364,16 @@ impl DirectXRenderer {
         };
         let (full_vp, ping_rtv, ping_srv, pong_rtv, pong_srv) = {
             let r = self.resources.as_ref().context("resources missing")?;
+            let blur = r
+                .blur
+                .as_ref()
+                .context("blur resources were not prepared")?;
             (
                 r.viewport,
-                r.blur.ping_rtv.clone(),
-                r.blur.ping_srv.clone(),
-                r.blur.pong_rtv.clone(),
-                r.blur.pong_srv.clone(),
+                blur.ping_rtv.clone(),
+                blur.ping_srv.clone(),
+                blur.pong_rtv.clone(),
+                blur.pong_srv.clone(),
             )
         };
         let Some(kernel) = BlurKernel::for_radius(blur_radius) else {
@@ -1365,27 +1544,16 @@ impl DirectXResources {
             )?
         };
 
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &swap_chain, width, height)?;
         set_rasterizer_state(&devices.device, &devices.device_context)?;
-        let blur = BlurResources::new(&devices.device, width, height)?;
-
         Ok(Self {
             swap_chain,
             render_target: Some(render_target),
             render_target_view,
-            path_intermediate_texture,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            path_intermediate_srv,
-            blur,
+            path: None,
+            blur: None,
+            surface_views: FxHashMap::default(),
             viewport,
         })
     }
@@ -1397,24 +1565,66 @@ impl DirectXResources {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &self.swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &self.swap_chain, width, height)?;
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
-        self.path_intermediate_texture = path_intermediate_texture;
-        self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-        self.path_intermediate_msaa_view = path_intermediate_msaa_view;
-        self.path_intermediate_srv = path_intermediate_srv;
-        self.blur = BlurResources::new(&devices.device, width, height)?;
+        // Intermediate textures are size-dependent and recreated lazily if a later scene needs
+        // them. Ordinary scenes therefore pay neither the allocation nor resize cost.
+        self.path = None;
+        self.blur = None;
         self.viewport = viewport;
         Ok(())
+    }
+
+    fn ensure_blur_resources(
+        &mut self,
+        device: &ID3D11Device,
+        isolated_target_count: usize,
+    ) -> Result<()> {
+        if self.blur.is_none() {
+            self.blur = Some(BlurResources::new(
+                device,
+                self.viewport.Width as u32,
+                self.viewport.Height as u32,
+                isolated_target_count,
+            )?);
+        }
+        let blur = self
+            .blur
+            .as_mut()
+            .expect("blur resources were inserted above");
+        blur.ensure_isolated_targets(
+            device,
+            self.viewport.Width as u32,
+            self.viewport.Height as u32,
+            isolated_target_count,
+        )
+    }
+
+    fn ensure_path_resources(&mut self, device: &ID3D11Device) -> Result<()> {
+        if self.path.is_none() {
+            self.path = Some(PathResources::new(
+                device,
+                self.viewport.Width as u32,
+                self.viewport.Height as u32,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn retain_surface_views(&mut self, surfaces: &[PaintSurface]) {
+        let active_keys = surfaces
+            .iter()
+            .filter_map(|surface| match &surface.source {
+                gpui::SurfaceSource::WindowsCapture(frame) => {
+                    Some(frame.texture().as_raw() as usize)
+                }
+                _ => None,
+            })
+            .collect::<SmallVec<[usize; 4]>>();
+        self.surface_views
+            .retain(|key, _| active_keys.contains(key));
     }
 }
 
@@ -1648,7 +1858,30 @@ impl<T> PipelineState<T> {
         data: &[T],
     ) -> Result<()> {
         if self.buffer_size < data.len() {
-            let new_buffer_size = data.len().next_power_of_two();
+            let element_size = std::mem::size_of::<T>();
+            anyhow::ensure!(
+                element_size > 0,
+                "{} cannot store zero-sized instances",
+                self.label
+            );
+            let required_size = element_size
+                .checked_mul(data.len())
+                .context("instance-buffer byte size overflow")?;
+            anyhow::ensure!(
+                required_size <= MAX_INSTANCE_BUFFER_SIZE,
+                "{} buffer needs {required_size} bytes, above the {MAX_INSTANCE_BUFFER_SIZE}-byte limit",
+                self.label,
+            );
+            let max_elements = MAX_INSTANCE_BUFFER_SIZE / element_size;
+            let new_buffer_size = data
+                .len()
+                .checked_next_power_of_two()
+                .unwrap_or(max_elements)
+                .min(max_elements);
+            anyhow::ensure!(
+                new_buffer_size >= data.len(),
+                "instance-buffer capacity overflow"
+            );
             log::debug!(
                 "Updating {} buffer size from {} to {}",
                 self.label,
@@ -1856,28 +2089,12 @@ fn create_resources(
 ) -> Result<(
     ID3D11Texture2D,
     Option<ID3D11RenderTargetView>,
-    ID3D11Texture2D,
-    Option<ID3D11ShaderResourceView>,
-    ID3D11Texture2D,
-    Option<ID3D11RenderTargetView>,
     D3D11_VIEWPORT,
 )> {
     let (render_target, render_target_view) =
         create_render_target_and_its_view(swap_chain, &devices.device)?;
-    let (path_intermediate_texture, path_intermediate_srv) =
-        create_path_intermediate_texture(&devices.device, width, height)?;
-    let (path_intermediate_msaa_texture, path_intermediate_msaa_view) =
-        create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
     let viewport = set_viewport(&devices.device_context, width as f32, height as f32);
-    Ok((
-        render_target,
-        render_target_view,
-        path_intermediate_texture,
-        path_intermediate_srv,
-        path_intermediate_msaa_texture,
-        path_intermediate_msaa_view,
-        viewport,
-    ))
+    Ok((render_target, render_target_view, viewport))
 }
 
 fn create_render_target_and_its_view(
@@ -2255,12 +2472,12 @@ pub(crate) mod shader_resources {
     //! HLSL generated from shared Rust shader sources in `gpui_render`, compiled
     //! to D3D bytecode when the renderer initializes.
 
-    use std::ffi::CString;
+    use std::{ffi::CString, sync::OnceLock};
 
     use anyhow::{Context as _, Result};
     use gpui_render::artifacts::{Dx11ShaderModel, NATIVE_SHADERS, NativeShader};
     use windows::{
-        Win32::Graphics::Direct3D::{Fxc::D3DCompile, ID3DBlob, ID3DInclude},
+        Win32::Graphics::Direct3D::{Fxc::D3DCompile, ID3DInclude},
         core::PCSTR,
     };
 
@@ -2282,6 +2499,41 @@ pub(crate) mod shader_resources {
     }
 
     impl ShaderModule {
+        const ALL: [Self; 13] = [
+            Self::Quad,
+            Self::Shadow,
+            Self::Underline,
+            Self::PathRasterization,
+            Self::PathSprite,
+            Self::MonochromeSprite,
+            Self::SubpixelSprite,
+            Self::PolychromeSprite,
+            Self::EmojiRasterization,
+            Self::Surface,
+            Self::BlurDownsample,
+            Self::Blur,
+            Self::BlurComposite,
+        ];
+        const COUNT: usize = Self::ALL.len();
+
+        const fn index(self) -> usize {
+            match self {
+                Self::Quad => 0,
+                Self::Shadow => 1,
+                Self::Underline => 2,
+                Self::PathRasterization => 3,
+                Self::PathSprite => 4,
+                Self::MonochromeSprite => 5,
+                Self::SubpixelSprite => 6,
+                Self::PolychromeSprite => 7,
+                Self::EmojiRasterization => 8,
+                Self::Surface => 9,
+                Self::BlurDownsample => 10,
+                Self::Blur => 11,
+                Self::BlurComposite => 12,
+            }
+        }
+
         fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
@@ -2312,6 +2564,15 @@ pub(crate) mod shader_resources {
     }
 
     impl ShaderTarget {
+        const COUNT: usize = 2;
+
+        const fn index(self) -> usize {
+            match self {
+                Self::Vertex => 0,
+                Self::Fragment => 1,
+            }
+        }
+
         fn profile(self, model: Dx11ShaderModel) -> &'static [u8] {
             match (model, self) {
                 (Dx11ShaderModel::Sm50, Self::Vertex) => b"vs_5_0\0",
@@ -2321,11 +2582,25 @@ pub(crate) mod shader_resources {
     }
 
     pub(crate) struct RawShaderBytes {
-        blob: ID3DBlob,
+        bytes: &'static [u8],
     }
 
     impl RawShaderBytes {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
+            type CachedShader = std::result::Result<Vec<u8>, String>;
+            static CACHE: [OnceLock<CachedShader>; ShaderModule::COUNT * ShaderTarget::COUNT] =
+                [const { OnceLock::new() }; ShaderModule::COUNT * ShaderTarget::COUNT];
+
+            let index = module.index() * ShaderTarget::COUNT + target.index();
+            match CACHE[index]
+                .get_or_init(|| Self::compile(module, target).map_err(|error| format!("{error:#}")))
+            {
+                Ok(bytes) => Ok(Self { bytes }),
+                Err(error) => anyhow::bail!("{error}"),
+            }
+        }
+
+        fn compile(module: ShaderModule, target: ShaderTarget) -> Result<Vec<u8>> {
             let shader = module.shader();
             let entry = match target {
                 ShaderTarget::Vertex => shader.vertex_entry,
@@ -2362,17 +2637,33 @@ pub(crate) mod shader_resources {
                     details.unwrap_or_default()
                 )
             })?;
-            Ok(Self {
-                blob: blob.context("the shader compiler returned no blob")?,
-            })
+            let blob = blob.context("the shader compiler returned no blob")?;
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    blob.GetBufferPointer() as *const u8,
+                    blob.GetBufferSize(),
+                )
+            };
+            Ok(bytes.to_vec())
         }
 
         pub(crate) fn as_bytes(&self) -> &[u8] {
-            unsafe {
-                std::slice::from_raw_parts(
-                    self.blob.GetBufferPointer() as *const u8,
-                    self.blob.GetBufferSize(),
-                )
+            self.bytes
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn every_generated_hlsl_entry_compiles_for_direct3d_11() {
+            for module in ShaderModule::ALL {
+                for target in [ShaderTarget::Vertex, ShaderTarget::Fragment] {
+                    RawShaderBytes::new(module, target).unwrap_or_else(|error| {
+                        panic!("failed to compile {module:?} {target:?}: {error:#}")
+                    });
+                }
             }
         }
     }

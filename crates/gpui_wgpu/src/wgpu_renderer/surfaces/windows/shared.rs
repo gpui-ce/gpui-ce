@@ -3,8 +3,8 @@ use super::{
 };
 use anyhow::{Context as _, Result};
 use windows_061::{
-    core::Interface as _,
     Win32::Graphics::Direct3D11::{ID3D11DeviceContext4, ID3D11Fence, ID3D11Texture2D},
+    core::Interface as _,
 };
 
 pub(super) struct SharedTexture {
@@ -27,8 +27,8 @@ impl SharedTexture {
             Foundation::GENERIC_ALL,
             Graphics::{
                 Direct3D11::{
-                    ID3D11Device5, D3D11_BIND_SHADER_RESOURCE, D3D11_FENCE_FLAG_SHARED,
-                    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_USAGE_DEFAULT,
+                    D3D11_BIND_SHADER_RESOURCE, D3D11_FENCE_FLAG_SHARED,
+                    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_USAGE_DEFAULT, ID3D11Device5,
                 },
                 Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_TYPELESS, IDXGIResource1},
             },
@@ -164,7 +164,7 @@ struct OwnedHandle(windows_061::Win32::Foundation::HANDLE);
 
 impl OwnedHandle {
     fn raw(&self) -> *mut std::ffi::c_void {
-        self.0 .0
+        self.0.0
     }
 }
 

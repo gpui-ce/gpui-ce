@@ -57,6 +57,15 @@ pub(super) struct WgpuPipelines {
     pub(super) monochrome_sprites: WgpuRenderPipeline,
     pub(super) subpixel_sprites: Option<WgpuRenderPipeline>,
     pub(super) polychrome_sprites: WgpuRenderPipeline,
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd",
+            all(target_os = "windows", feature = "wgpu-surfaces")
+        )),
+        allow(dead_code)
+    )]
     pub(super) surfaces: WgpuRenderPipeline,
     pub(super) blur_downsample: WgpuRenderPipeline,
     pub(super) blur: WgpuRenderPipeline,
@@ -245,6 +254,12 @@ impl WgpuBindGroupLayouts {
         })
     }
 
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     pub(super) fn create_surface(
         &self,
         device: &wgpu::Device,

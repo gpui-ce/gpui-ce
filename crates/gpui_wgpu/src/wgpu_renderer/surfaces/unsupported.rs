@@ -8,6 +8,8 @@ impl SurfaceCache {
     }
 }
 
+pub(super) fn retain_surface_cache(_renderer: &WgpuRenderer, _surfaces: &[PaintSurface]) {}
+
 pub(super) fn draw_surfaces(
     _renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],

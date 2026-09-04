@@ -1,34 +1,28 @@
 use gpui::WindowAppearance;
-use objc::{msg_send, runtime::Object, sel, sel_impl};
-use std::ffi::{CStr, c_char};
+use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+pub(crate) use objc2_app_kit::{
+    NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSAppearanceNameVibrantDark,
+    NSAppearanceNameVibrantLight,
+};
+use objc2_foundation::NSString;
 
-type Id = *mut Object;
-
-pub(crate) unsafe fn window_appearance_from_native(appearance: Id) -> WindowAppearance {
-    let name: Id = msg_send![appearance, name];
-    unsafe {
-        if name == NSAppearanceNameVibrantLight {
-            WindowAppearance::VibrantLight
-        } else if name == NSAppearanceNameVibrantDark {
-            WindowAppearance::VibrantDark
-        } else if name == NSAppearanceNameAqua {
-            WindowAppearance::Light
-        } else if name == NSAppearanceNameDarkAqua {
-            WindowAppearance::Dark
-        } else {
-            println!("unknown appearance: {:?}", {
-                let utf8: *const c_char = msg_send![name, UTF8String];
-                CStr::from_ptr(utf8)
-            });
-            WindowAppearance::Light
-        }
+/// Converts an AppKit `NSAppearance` object supplied by a native window or
+/// application into GPUI's value type.
+///
+/// The raw object is only accepted at this FFI boundary; the selector result
+/// is immediately owned and typed as `NSString` by objc2.
+pub(crate) unsafe fn window_appearance_from_native(appearance: *mut AnyObject) -> WindowAppearance {
+    let name: Retained<NSString> = unsafe { msg_send![&*appearance, name] };
+    if name.isEqualToString(unsafe { NSAppearanceNameVibrantLight }) {
+        WindowAppearance::VibrantLight
+    } else if name.isEqualToString(unsafe { NSAppearanceNameVibrantDark }) {
+        WindowAppearance::VibrantDark
+    } else if name.isEqualToString(unsafe { NSAppearanceNameAqua }) {
+        WindowAppearance::Light
+    } else if name.isEqualToString(unsafe { NSAppearanceNameDarkAqua }) {
+        WindowAppearance::Dark
+    } else {
+        log::warn!("unknown macOS appearance: {}", name);
+        WindowAppearance::Light
     }
-}
-
-#[link(name = "AppKit", kind = "framework")]
-unsafe extern "C" {
-    pub static NSAppearanceNameAqua: Id;
-    pub static NSAppearanceNameDarkAqua: Id;
-    pub static NSAppearanceNameVibrantLight: Id;
-    pub static NSAppearanceNameVibrantDark: Id;
 }

@@ -87,7 +87,7 @@ impl Scene {
         self.surfaces.clear();
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
-        self.render_plan = ScenePlan::default();
+        self.render_plan.clear();
         self.is_finished = false;
     }
 
@@ -239,7 +239,8 @@ impl Scene {
         // the start (false = 0) ahead of the end (true = 1) so the pair stays well-formed.
         self.filter_boundaries
             .sort_by_key(|boundary| (boundary.order, !boundary.is_start));
-        self.render_plan = ScenePlan::build(self);
+        let commands = std::mem::take(&mut self.render_plan.commands);
+        self.render_plan = ScenePlan::build(self, commands);
         self.is_finished = true;
     }
 
@@ -1505,6 +1506,23 @@ mod tests {
         scene.finish();
         assert_ne!(scene.render_commands(), commands);
         assert_eq!(scene.render_plan().requirements().instance_batch_count, 1);
+    }
+
+    #[test]
+    fn render_plan_reuses_its_command_allocation_across_frames() {
+        let mut scene = Scene::default();
+        for _ in 0..32 {
+            scene.insert_primitive(quad());
+        }
+        scene.finish();
+        let capacity = scene.render_plan.commands.capacity();
+        assert!(capacity >= 32);
+
+        scene.clear();
+        assert_eq!(scene.render_plan.commands.capacity(), capacity);
+        scene.insert_primitive(quad());
+        scene.finish();
+        assert_eq!(scene.render_plan.commands.capacity(), capacity);
     }
 
     #[test]
