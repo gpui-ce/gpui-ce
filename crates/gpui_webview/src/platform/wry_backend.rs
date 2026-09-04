@@ -24,12 +24,12 @@ impl WryWebView {
         let mut builder = wry::WebViewBuilder::new();
 
         let bounds = wry::Rect {
-            position: wry::dpi::PhysicalPosition::new(
+            position: wry::dpi::LogicalPosition::new(
                 config.bounds.origin.x.as_f32(),
                 config.bounds.origin.y.as_f32(),
             )
             .into(),
-            size: wry::dpi::PhysicalSize::new(
+            size: wry::dpi::LogicalSize::new(
                 config.bounds.size.width.as_f32(),
                 config.bounds.size.height.as_f32(),
             )
@@ -101,12 +101,12 @@ impl WryWebView {
 impl PlatformWebView for WryWebView {
     fn set_bounds(&self, bounds: Bounds<Pixels>) {
         let _ = self.webview.set_bounds(wry::Rect {
-            position: wry::dpi::PhysicalPosition::new(
+            position: wry::dpi::LogicalPosition::new(
                 bounds.origin.x.as_f32(),
                 bounds.origin.y.as_f32(),
             )
             .into(),
-            size: wry::dpi::PhysicalSize::new(
+            size: wry::dpi::LogicalSize::new(
                 bounds.size.width.as_f32(),
                 bounds.size.height.as_f32(),
             )
