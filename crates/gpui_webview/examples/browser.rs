@@ -35,7 +35,7 @@ impl Browser {
         if text.is_empty() {
             return;
         }
-        let has_scheme = text.split_once(':').is_some_and(|(scheme, _)| {
+        let has_scheme = text.split_once("://").is_some_and(|(scheme, _)| {
             scheme
                 .chars()
                 .next()
