@@ -1463,7 +1463,7 @@ impl Window {
             }
             let initial_tree = accesskit::TreeUpdate {
                 nodes: vec![(ROOT_NODE_ID, initial_root_node)],
-                tree: Some(accesskit::Tree::new(ROOT_NODE_ID)),
+                tree: Some(accesskit::TreeInfo::new(ROOT_NODE_ID)),
                 tree_id: accesskit::TreeId::ROOT,
                 focus: ROOT_NODE_ID,
             };

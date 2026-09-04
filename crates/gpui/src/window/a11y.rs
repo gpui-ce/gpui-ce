@@ -574,7 +574,7 @@ impl A11yNodeBuilder {
         let nodes = std::mem::take(&mut self.all_nodes);
         let update = TreeUpdate {
             nodes,
-            tree: Some(accesskit::Tree::new(ROOT_NODE_ID)),
+            tree: Some(accesskit::TreeInfo::new(ROOT_NODE_ID)),
             tree_id: accesskit::TreeId::ROOT,
             focus,
         };
