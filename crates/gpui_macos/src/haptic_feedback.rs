@@ -1,6 +1,7 @@
-use cocoa::base::id;
 use gpui::HapticFeedbackStyle;
-use objc::{class, msg_send, sel, sel_impl};
+use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+
+type Id = *mut Object;
 
 /// macOS haptic feedback using [`NSHapticFeedbackManager`].
 ///
@@ -50,7 +51,7 @@ impl MacHaptics {
         // Safety: NSHapticFeedbackManager is always available on macOS 10.11+.
         // All Platform trait methods run on the main thread.
         unsafe {
-            let manager: id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
+            let manager: Id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
             let _: () = msg_send![
                 manager,
                 performFeedbackPattern: pattern

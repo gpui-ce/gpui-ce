@@ -71,7 +71,7 @@ conflict resolution while taking upstream's real changes — so upstream API add
 merge instead of being hand-ported during the build-fix pass.
 
 Left untouched: `crates/gpui_elements` (fork-only, package `gpui_ce_elements`),
-`crates/gpui_ce_components` (git submodule, nested workspace), `tooling/perf` (fork-only);
+`tooling/perf` (fork-only);
 `util_macros`
 is no longer used by the fork. The mapping lives in `TRACKED_CRATES` in `sync_upstream.py`.
 

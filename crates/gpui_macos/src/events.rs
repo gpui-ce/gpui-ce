@@ -1,3 +1,5 @@
+#![allow(non_snake_case, non_upper_case_globals)] // Objective-C selectors and AppKit constants.
+
 use gpui::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
@@ -9,14 +11,186 @@ use crate::{
     LMGetKbdType, NSStringExt, TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty,
     UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
 };
-use cocoa::{
-    appkit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType},
-    base::{YES, id},
-};
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
-use core_graphics::event::CGKeyCode;
-use objc::{msg_send, sel, sel_impl};
+use core_graphics::{event::CGKeyCode, geometry::CGPoint};
+use objc::{
+    msg_send,
+    runtime::{BOOL, Object, YES},
+    sel, sel_impl,
+};
 use std::{borrow::Cow, ffi::c_void};
+
+type Id = *mut Object;
+#[allow(non_camel_case_types)]
+type id = Id;
+
+#[derive(Clone, Copy, PartialEq)]
+struct NSEventType(u64);
+impl NSEventType {
+    const NSLeftMouseDown: Self = Self(EVENT_LEFT_MOUSE_DOWN);
+    const NSLeftMouseUp: Self = Self(EVENT_LEFT_MOUSE_UP);
+    const NSRightMouseDown: Self = Self(EVENT_RIGHT_MOUSE_DOWN);
+    const NSRightMouseUp: Self = Self(EVENT_RIGHT_MOUSE_UP);
+    const NSMouseMoved: Self = Self(EVENT_MOUSE_MOVED);
+    const NSLeftMouseDragged: Self = Self(EVENT_LEFT_MOUSE_DRAGGED);
+    const NSRightMouseDragged: Self = Self(EVENT_RIGHT_MOUSE_DRAGGED);
+    const NSMouseExited: Self = Self(EVENT_MOUSE_EXITED);
+    const NSKeyDown: Self = Self(EVENT_KEY_DOWN);
+    const NSKeyUp: Self = Self(EVENT_KEY_UP);
+    const NSFlagsChanged: Self = Self(EVENT_FLAGS_CHANGED);
+    const NSScrollWheel: Self = Self(EVENT_SCROLL_WHEEL);
+    const NSOtherMouseDown: Self = Self(EVENT_OTHER_MOUSE_DOWN);
+    const NSOtherMouseUp: Self = Self(EVENT_OTHER_MOUSE_UP);
+    const NSOtherMouseDragged: Self = Self(EVENT_OTHER_MOUSE_DRAGGED);
+    const NSEventTypeMagnify: Self = Self(EVENT_MAGNIFY);
+    const NSEventTypeSwipe: Self = Self(EVENT_SWIPE);
+    const NSEventTypePressure: Self = Self(EVENT_PRESSURE);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct NSEventPhase(u64);
+impl NSEventPhase {
+    const NSEventPhaseBegan: Self = Self(PHASE_BEGAN);
+    const NSEventPhaseEnded: Self = Self(PHASE_ENDED);
+    const NSEventPhaseMayBegin: Self = Self(PHASE_MAY_BEGIN);
+}
+
+#[derive(Clone, Copy)]
+struct NSEventModifierFlags(u64);
+impl NSEventModifierFlags {
+    const NSAlphaShiftKeyMask: Self = Self(MODIFIER_CAPS_LOCK);
+    const NSShiftKeyMask: Self = Self(MODIFIER_SHIFT);
+    const NSControlKeyMask: Self = Self(MODIFIER_CONTROL);
+    const NSAlternateKeyMask: Self = Self(MODIFIER_OPTION);
+    const NSCommandKeyMask: Self = Self(MODIFIER_COMMAND);
+    const NSFunctionKeyMask: Self = Self(MODIFIER_FUNCTION);
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
+trait NSEventExt {
+    unsafe fn eventType(self) -> NSEventType;
+    unsafe fn modifierFlags(self) -> NSEventModifierFlags;
+    unsafe fn isARepeat(self) -> BOOL;
+    unsafe fn buttonNumber(self) -> i64;
+    unsafe fn locationInWindow(self) -> CGPoint;
+    unsafe fn clickCount(self) -> i64;
+    unsafe fn stage(self) -> i64;
+    unsafe fn pressure(self) -> f32;
+    unsafe fn phase(self) -> NSEventPhase;
+    unsafe fn deltaX(self) -> f64;
+    unsafe fn magnification(self) -> f64;
+    unsafe fn scrollingDeltaX(self) -> f64;
+    unsafe fn scrollingDeltaY(self) -> f64;
+    unsafe fn hasPreciseScrollingDeltas(self) -> BOOL;
+    unsafe fn charactersIgnoringModifiers(self) -> id;
+    unsafe fn keyCode(self) -> CGKeyCode;
+}
+impl NSEventExt for id {
+    unsafe fn eventType(self) -> NSEventType {
+        NSEventType(unsafe { msg_send![self, type] })
+    }
+    unsafe fn modifierFlags(self) -> NSEventModifierFlags {
+        NSEventModifierFlags(unsafe { msg_send![self, modifierFlags] })
+    }
+    unsafe fn isARepeat(self) -> BOOL {
+        unsafe { msg_send![self, isARepeat] }
+    }
+    unsafe fn buttonNumber(self) -> i64 {
+        unsafe { msg_send![self, buttonNumber] }
+    }
+    unsafe fn locationInWindow(self) -> CGPoint {
+        unsafe { msg_send![self, locationInWindow] }
+    }
+    unsafe fn clickCount(self) -> i64 {
+        unsafe { msg_send![self, clickCount] }
+    }
+    unsafe fn stage(self) -> i64 {
+        unsafe { msg_send![self, stage] }
+    }
+    unsafe fn pressure(self) -> f32 {
+        unsafe { msg_send![self, pressure] }
+    }
+    unsafe fn phase(self) -> NSEventPhase {
+        NSEventPhase(unsafe { msg_send![self, phase] })
+    }
+    unsafe fn deltaX(self) -> f64 {
+        unsafe { msg_send![self, deltaX] }
+    }
+    unsafe fn magnification(self) -> f64 {
+        unsafe { msg_send![self, magnification] }
+    }
+    unsafe fn scrollingDeltaX(self) -> f64 {
+        unsafe { msg_send![self, scrollingDeltaX] }
+    }
+    unsafe fn scrollingDeltaY(self) -> f64 {
+        unsafe { msg_send![self, scrollingDeltaY] }
+    }
+    unsafe fn hasPreciseScrollingDeltas(self) -> BOOL {
+        unsafe { msg_send![self, hasPreciseScrollingDeltas] }
+    }
+    unsafe fn charactersIgnoringModifiers(self) -> id {
+        unsafe { msg_send![self, charactersIgnoringModifiers] }
+    }
+    unsafe fn keyCode(self) -> CGKeyCode {
+        unsafe { msg_send![self, keyCode] }
+    }
+}
+
+const EVENT_LEFT_MOUSE_DOWN: u64 = 1;
+const EVENT_LEFT_MOUSE_UP: u64 = 2;
+const EVENT_RIGHT_MOUSE_DOWN: u64 = 3;
+const EVENT_RIGHT_MOUSE_UP: u64 = 4;
+const EVENT_MOUSE_MOVED: u64 = 5;
+const EVENT_LEFT_MOUSE_DRAGGED: u64 = 6;
+const EVENT_RIGHT_MOUSE_DRAGGED: u64 = 7;
+const EVENT_MOUSE_EXITED: u64 = 9;
+const EVENT_KEY_DOWN: u64 = 10;
+const EVENT_KEY_UP: u64 = 11;
+const EVENT_FLAGS_CHANGED: u64 = 12;
+const EVENT_SCROLL_WHEEL: u64 = 22;
+const EVENT_OTHER_MOUSE_DOWN: u64 = 25;
+const EVENT_OTHER_MOUSE_UP: u64 = 26;
+const EVENT_OTHER_MOUSE_DRAGGED: u64 = 27;
+const EVENT_MAGNIFY: u64 = 30;
+const EVENT_SWIPE: u64 = 31;
+const EVENT_PRESSURE: u64 = 34;
+
+const PHASE_BEGAN: u64 = 1;
+const PHASE_ENDED: u64 = 8;
+const PHASE_MAY_BEGIN: u64 = 32;
+
+const MODIFIER_CAPS_LOCK: u64 = 1 << 16;
+const MODIFIER_SHIFT: u64 = 1 << 17;
+const MODIFIER_CONTROL: u64 = 1 << 18;
+const MODIFIER_OPTION: u64 = 1 << 19;
+const MODIFIER_COMMAND: u64 = 1 << 20;
+const MODIFIER_FUNCTION: u64 = 1 << 23;
+
+macro_rules! function_keys {
+    ($($name:ident = $value:expr),* $(,)?) => { $(const $name: u16 = $value;)* };
+}
+
+function_keys! {
+    NSUpArrowFunctionKey = 0xF700, NSDownArrowFunctionKey = 0xF701,
+    NSLeftArrowFunctionKey = 0xF702, NSRightArrowFunctionKey = 0xF703,
+    NSF1FunctionKey = 0xF704, NSF2FunctionKey = 0xF705, NSF3FunctionKey = 0xF706,
+    NSF4FunctionKey = 0xF707, NSF5FunctionKey = 0xF708, NSF6FunctionKey = 0xF709,
+    NSF7FunctionKey = 0xF70A, NSF8FunctionKey = 0xF70B, NSF9FunctionKey = 0xF70C,
+    NSF10FunctionKey = 0xF70D, NSF11FunctionKey = 0xF70E, NSF12FunctionKey = 0xF70F,
+    NSF13FunctionKey = 0xF710, NSF14FunctionKey = 0xF711, NSF15FunctionKey = 0xF712,
+    NSF16FunctionKey = 0xF713, NSF17FunctionKey = 0xF714, NSF18FunctionKey = 0xF715,
+    NSF19FunctionKey = 0xF716, NSF20FunctionKey = 0xF717, NSF21FunctionKey = 0xF718,
+    NSF22FunctionKey = 0xF719, NSF23FunctionKey = 0xF71A, NSF24FunctionKey = 0xF71B,
+    NSF25FunctionKey = 0xF71C, NSF26FunctionKey = 0xF71D, NSF27FunctionKey = 0xF71E,
+    NSF28FunctionKey = 0xF71F, NSF29FunctionKey = 0xF720, NSF30FunctionKey = 0xF721,
+    NSF31FunctionKey = 0xF722, NSF32FunctionKey = 0xF723, NSF33FunctionKey = 0xF724,
+    NSF34FunctionKey = 0xF725, NSF35FunctionKey = 0xF726,
+    NSDeleteFunctionKey = 0xF728, NSHomeFunctionKey = 0xF729, NSEndFunctionKey = 0xF72B,
+    NSPageUpFunctionKey = 0xF72C, NSPageDownFunctionKey = 0xF72D,
+    NSHelpFunctionKey = 0xF746, NSModeSwitchFunctionKey = 0xF747,
+}
 
 const BACKSPACE_KEY: u16 = 0x7f;
 const SPACE_KEY: u16 = b' ' as u16;
@@ -27,7 +201,6 @@ const TAB_KEY: u16 = 0x09;
 const SHIFT_TAB_KEY: u16 = 0x19;
 
 pub fn key_to_native(key: &str) -> Cow<'_, str> {
-    use cocoa::appkit::*;
     let code = match key {
         "space" => SPACE_KEY,
         "backspace" => BACKSPACE_KEY,
@@ -108,9 +281,8 @@ pub(crate) unsafe fn platform_input_from_native(
     unsafe {
         let event_type = native_event.eventType();
 
-        // Filter out event types that aren't in the NSEventType enum.
-        // See https://github.com/servo/cocoa-rs/issues/155#issuecomment-323482792 for details.
-        match event_type as u64 {
+        // Filter out event types not represented by the AppKit event constants.
+        match event_type.0 {
             0 | 21 | 32 | 33 | 35 | 36 | 37 => {
                 return None;
             }
@@ -337,8 +509,6 @@ pub(crate) unsafe fn platform_input_from_native(
 
 unsafe fn parse_keystroke(native_event: id) -> Keystroke {
     unsafe {
-        use cocoa::appkit::*;
-
         let characters = native_event
             .charactersIgnoringModifiers()
             .to_str()

@@ -35,16 +35,19 @@ mod window_appearance;
 
 pub(crate) use gpui::collections;
 
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSNotFound, NSString, NSUInteger},
+use objc::{
+    class, msg_send,
+    runtime::{BOOL, NO, Object, YES},
+    sel, sel_impl,
 };
-
-use objc::runtime::{BOOL, NO, YES};
 use std::{
     ffi::{CStr, c_char},
     ops::Range,
 };
+
+pub(crate) type Id = *mut Object;
+pub(crate) type NSUInteger = usize;
+pub(crate) const NS_NOT_FOUND: NSUInteger = NSUInteger::MAX;
 
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;
@@ -72,14 +75,14 @@ trait NSStringExt {
     unsafe fn to_str(&self) -> &str;
 }
 
-impl NSStringExt for id {
+impl NSStringExt for Id {
     unsafe fn to_str(&self) -> &str {
         unsafe {
-            let cstr = self.UTF8String();
+            let cstr: *const c_char = msg_send![*self, UTF8String];
             if cstr.is_null() {
                 ""
             } else {
-                CStr::from_ptr(cstr as *mut c_char).to_str().unwrap()
+                CStr::from_ptr(cstr).to_str().unwrap()
             }
         }
     }
@@ -95,19 +98,19 @@ struct NSRange {
 impl NSRange {
     fn invalid() -> Self {
         Self {
-            location: NSNotFound as NSUInteger,
+            location: NS_NOT_FOUND,
             length: 0,
         }
     }
 
     fn is_valid(&self) -> bool {
-        self.location != NSNotFound as NSUInteger
+        self.location != NS_NOT_FOUND
     }
 
     fn to_range(self) -> Option<Range<usize>> {
         if self.is_valid() {
-            let start = self.location as usize;
-            let end = start + self.length as usize;
+            let start = self.location;
+            let end = start + self.length;
             Some(start..end)
         } else {
             None
@@ -137,6 +140,11 @@ unsafe impl objc::Encode for NSRange {
 
 /// Allow NSString::alloc use here because it sets autorelease
 #[allow(clippy::disallowed_methods)]
-unsafe fn ns_string(string: &str) -> id {
-    unsafe { NSString::alloc(nil).init_str(string).autorelease() }
+unsafe fn ns_string(string: &str) -> Id {
+    unsafe {
+        let value: Id = msg_send![class!(NSString), alloc];
+        let value: Id =
+            msg_send![value, initWithBytes: string.as_ptr() length: string.len() encoding: 4usize];
+        msg_send![value, autorelease]
+    }
 }

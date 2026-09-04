@@ -64,8 +64,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -162,8 +160,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust toolchain
         run: |
@@ -230,8 +226,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -285,15 +279,17 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: "1"
         run: cargo check --workspace ${{ matrix.check_targets }} --target ${{ matrix.target }} ${{ matrix.cargo_args }}
 
-  # The components subtree is a separate Cargo workspace and must be checked
-  # explicitly; it is intentionally not a member of the root workspace.
+  # Components live in their own repository. Check current main against this
+  # checkout, but make drift visible as annotations rather than a merge gate.
   components:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
-          submodules: recursive
+          repository: gpui-ce/gpui-component
+          path: gpui-component
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -308,21 +304,22 @@ jobs:
             libgtk-3-dev \
             libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev
-      - name: Build components workspace
+      - name: Check component compatibility (warning only)
+        shell: bash
         run: |
+          component_dir="$GITHUB_WORKSPACE/gpui-component"
           component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+            --config "patch.crates-io.gpui-ce.path=\"$GITHUB_WORKSPACE/crates/gpui\""
+            --config "patch.crates-io.gpui_ce_platform.path=\"$GITHUB_WORKSPACE/crates/gpui_platform\""
+            --config "patch.crates-io.gpui_ce_web.path=\"$GITHUB_WORKSPACE/crates/gpui_web\""
+            --config "patch.crates-io.gpui_ce_macros.path=\"$GITHUB_WORKSPACE/crates/gpui_macros\""
           )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" build --workspace --all-targets)
-      - name: Test components workspace
-        run: |
-          component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
-          )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast)
+          warn() {
+            echo "::warning title=Component compatibility::$1"
+          }
+
+          if ! (cd "$component_dir" && cargo "${component_patch_args[@]}" build --workspace --all-targets); then
+            warn "gpui-ce/gpui-component main does not currently build against this GPUI checkout."
+          elif ! (cd "$component_dir" && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast); then
+            warn "gpui-ce/gpui-component tests do not currently pass against this GPUI checkout."
+          fi

@@ -1052,7 +1052,7 @@ mod tests {
     crate::fs_embed! {
         struct FsEmbedTestAssets,
         crate_relative = "src",
-        root_relative = "crates/util/src",
+        root_relative = "crates/gpui_zed_util/src",
         include = ["*.rs"],
         exclude = ["test/**/*"],
     }

@@ -13,9 +13,6 @@ extend-exclude = [
   # macOS APIs
   "crates/gpui/src/platform/mac/dispatcher.rs",
 
-  # Components fixtures and website build artifacts
-  "crates/gpui_ce_components/crates/story/src/fixtures/",
-  "crates/gpui_ce_components/website/",
 ]
 
 [default]

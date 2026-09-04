@@ -69,9 +69,8 @@ ZED_REMOTE_URL: str = _env("SYNC_ZED_REMOTE_URL", "https://github.com/zed-indust
 # `gpui = { package = "gpui-ce" }`). Their gpui-ce adaptations (package rename + lib-name
 # override, path deps, ztracing->tracing, zlog removal, etc.) are preserved through the 3-way
 # merge's conflict resolution — never re-applied by hand.
-# Left untouched: gpui_elements (fork-only, package gpui_ce_elements), gpui_ce_components
-# (git submodule, nested workspace), tooling/perf (fork-only). util_macros is no longer used
-# by the fork.
+# Left untouched: gpui_elements (fork-only, package gpui_ce_elements), tooling/perf (fork-only).
+# util_macros is no longer used by the fork.
 TRACKED_CRATES: dict[str, str] = {
     # in-tree gpui crates (identity mapping)
     "gpui": "gpui",

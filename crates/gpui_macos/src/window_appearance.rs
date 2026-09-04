@@ -1,14 +1,11 @@
-use cocoa::{
-    appkit::{NSAppearanceNameVibrantDark, NSAppearanceNameVibrantLight},
-    base::id,
-    foundation::NSString,
-};
 use gpui::WindowAppearance;
-use objc::{msg_send, sel, sel_impl};
-use std::ffi::CStr;
+use objc::{msg_send, runtime::Object, sel, sel_impl};
+use std::ffi::{CStr, c_char};
 
-pub(crate) unsafe fn window_appearance_from_native(appearance: id) -> WindowAppearance {
-    let name: id = msg_send![appearance, name];
+type Id = *mut Object;
+
+pub(crate) unsafe fn window_appearance_from_native(appearance: Id) -> WindowAppearance {
+    let name: Id = msg_send![appearance, name];
     unsafe {
         if name == NSAppearanceNameVibrantLight {
             WindowAppearance::VibrantLight
@@ -19,10 +16,10 @@ pub(crate) unsafe fn window_appearance_from_native(appearance: id) -> WindowAppe
         } else if name == NSAppearanceNameDarkAqua {
             WindowAppearance::Dark
         } else {
-            println!(
-                "unknown appearance: {:?}",
-                CStr::from_ptr(name.UTF8String())
-            );
+            println!("unknown appearance: {:?}", {
+                let utf8: *const c_char = msg_send![name, UTF8String];
+                CStr::from_ptr(utf8)
+            });
             WindowAppearance::Light
         }
     }
@@ -30,6 +27,8 @@ pub(crate) unsafe fn window_appearance_from_native(appearance: id) -> WindowAppe
 
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
-    pub static NSAppearanceNameAqua: id;
-    pub static NSAppearanceNameDarkAqua: id;
+    pub static NSAppearanceNameAqua: Id;
+    pub static NSAppearanceNameDarkAqua: Id;
+    pub static NSAppearanceNameVibrantLight: Id;
+    pub static NSAppearanceNameVibrantDark: Id;
 }

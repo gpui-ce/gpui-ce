@@ -1,10 +1,6 @@
 use crate::metal_atlas::MetalAtlas;
 use anyhow::Result;
 use block::ConcreteBlock;
-use cocoa::{
-    base::{NO, YES},
-    quartzcore::AutoresizingMask,
-};
 use core_graphics::geometry::CGSize;
 use gpui::{
     AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
@@ -37,7 +33,12 @@ use metal::{
     CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions, NSRange,
     NSUInteger, RenderPassColorAttachmentDescriptorRef,
 };
-use objc::{self, msg_send, sel, sel_impl};
+use objc::{
+    self, msg_send,
+    runtime::{NO, YES},
+    sel, sel_impl,
+};
+use objc2_quartz_core::CAAutoresizingMask;
 use parking_lot::Mutex;
 
 use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
@@ -250,8 +251,8 @@ impl MetalRenderer {
             let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange: YES];
             let _: () = msg_send![
                 &*layer,
-                setAutoresizingMask: AutoresizingMask::WIDTH_SIZABLE
-                    | AutoresizingMask::HEIGHT_SIZABLE
+                setAutoresizingMask: CAAutoresizingMask::LayerWidthSizable
+                    | CAAutoresizingMask::LayerHeightSizable
             ];
         }
 
