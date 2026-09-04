@@ -1,0 +1,30 @@
+[package]
+name = "gpui_ce_webview"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Native OS webview element for gpui-ce, backed by wry."
+
+[lib]
+name = "gpui_webview"
+
+[lints]
+workspace = true
+
+[features]
+default = ["webview"]
+webview = ["dep:wry"]
+
+[dependencies]
+gpui.workspace = true
+raw-window-handle = "0.6"
+wry = { workspace = true, optional = true }
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["wgpu"] }
+gpui_elements = { path = "../gpui_elements/", package = "gpui_ce_elements" }
+
+[[example]]
+name = "browser"
+path = "examples/browser.rs"
