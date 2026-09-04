@@ -1,5 +1,4 @@
 use anyhow::anyhow;
-use cocoa::appkit::CGFloat;
 use collections::{HashMap, HashSet};
 use core_foundation::{
     array::{CFArray, CFArrayRef},
@@ -8,6 +7,7 @@ use core_foundation::{
     number::CFNumber,
     string::CFString,
 };
+use core_graphics::base::CGFloat;
 use core_graphics::{
     base::{CGGlyph, kCGImageAlphaPremultipliedLast},
     color_space::CGColorSpace,

@@ -13,11 +13,11 @@ workspace = true
 path = "src/gpui_render.rs"
 
 [dependencies]
-gpui.workspace = true
+gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 wgsl-rs.workspace = true
 
 [build-dependencies]
-gpui.workspace = true
+gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 naga = { version = "29.0.4", features = ["hlsl-out", "msl-out", "wgsl-in"] }
 naga-old = { package = "naga", version = "24.0.0", features = ["hlsl-out", "wgsl-in"] }
 wgsl-rs.workspace = true

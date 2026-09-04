@@ -15,12 +15,12 @@ use gpui_render::shaders::{
 };
 
 use super::{
+    WgpuRenderer,
     buffers::{DynamicUniformBuffer, InstanceBufferArena},
     filters::FrameUniformRequirements,
     pipelines::{WgpuBindGroupLayouts, WgpuPipelines},
     settings::RenderingParameters,
     surfaces::SurfaceCache,
-    WgpuRenderer,
 };
 
 const INITIAL_FILTER_UNIFORM_CAPACITY: u64 = 16;
@@ -37,6 +37,15 @@ pub(super) struct WgpuResources {
     pub(super) atlas_sampler: wgpu::Sampler,
     pub(super) surface_sampler: wgpu::Sampler,
     pub(super) surface_uniforms: DynamicUniformBuffer<SurfaceUniforms>,
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd",
+            all(target_os = "windows", feature = "wgpu-surfaces")
+        )),
+        allow(dead_code)
+    )]
     pub(super) surface_cache: RefCell<SurfaceCache>,
     pub(super) filter_uniforms: DynamicUniformBuffer<BlurUniforms>,
     blur_bind_groups: RefCell<BlurBindGroups>,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::WindowsScreenCaptureFrame;
+use crate::{DevicePixels, WindowsScreenCaptureFrame};
 use windows_capture::monitor::Monitor;
 
 pub(super) fn screen_sources(

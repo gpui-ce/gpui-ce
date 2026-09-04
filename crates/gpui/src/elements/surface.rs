@@ -42,9 +42,7 @@ impl std::fmt::Debug for SurfaceSource {
                 .finish_non_exhaustive(),
             #[cfg(target_os = "windows")]
             SurfaceSource::WindowsCapture(ref frame) => frame.fmt(_f),
-            SurfaceSource::Unsupported(size) => {
-                _f.debug_tuple("Unsupported").field(&size).finish()
-            }
+            SurfaceSource::Unsupported(size) => _f.debug_tuple("Unsupported").field(&size).finish(),
         }
     }
 }

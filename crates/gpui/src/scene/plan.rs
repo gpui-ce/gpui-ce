@@ -50,14 +50,24 @@ pub struct ScenePlanRequirements {
 /// A compiled scene command stream, built by [`Scene::finish`] and shared by every renderer.
 #[derive(Debug, Default)]
 pub struct ScenePlan {
-    commands: Box<[RenderCommand]>,
+    // Retain this allocation across `Scene::clear`/`Scene::finish`; scenes are rebuilt every frame.
+    pub(super) commands: Vec<RenderCommand>,
     requirements: ScenePlanRequirements,
     scene_lengths: SceneLengths,
 }
 
 impl ScenePlan {
-    pub(super) fn build(scene: &Scene) -> Self {
-        let mut matched_starts = vec![false; scene.filter_boundaries.len()];
+    pub(super) fn clear(&mut self) {
+        self.commands.clear();
+        self.requirements = ScenePlanRequirements::default();
+        self.scene_lengths = SceneLengths::default();
+    }
+
+    pub(super) fn build(scene: &Scene, mut commands: Vec<RenderCommand>) -> Self {
+        commands.clear();
+        commands.reserve(scene.len());
+        let mut matched_starts =
+            SmallVec::<[bool; 8]>::from_elem(false, scene.filter_boundaries.len());
         let mut pending_starts = SmallVec::<[usize; 4]>::new();
         for (index, boundary) in scene.filter_boundaries.iter().enumerate() {
             if boundary.is_start {
@@ -67,7 +77,6 @@ impl ScenePlan {
             }
         }
 
-        let mut commands = Vec::with_capacity(scene.len());
         let mut filter_stack = SmallVec::<[(usize, FilterRenderTarget); 4]>::new();
         let mut isolated_depth = 0;
         let mut requirements = ScenePlanRequirements::default();
@@ -123,7 +132,7 @@ impl ScenePlan {
 
         requirements.command_count = commands.len();
         Self {
-            commands: commands.into_boxed_slice(),
+            commands,
             requirements,
             scene_lengths: SceneLengths::for_scene(scene),
         }

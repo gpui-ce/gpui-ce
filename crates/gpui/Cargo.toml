@@ -18,8 +18,8 @@ workspace = true
 
 [features]
 default = ["font-kit", "wayland", "x11", "windows-manifest"]
-# Enables `SurfaceSource::Texture` + `gpu_context()` on Windows. Turned on by
-# `gpui_windows/wgpu`, which is what actually puts the wgpu renderer there.
+# Enables `SurfaceSource::Texture` and `gpu_context()` for standalone WGPU
+# surface integrations on Windows.
 wgpu-surfaces = []
 test-support = [
   "leak-detection",

@@ -1,4 +1,4 @@
-use gpui::{get_gamma_correction_ratios, DevicePixels, Size};
+use gpui::{DevicePixels, Size, get_gamma_correction_ratios};
 
 pub struct WgpuSurfaceConfig {
     pub size: Size<DevicePixels>,

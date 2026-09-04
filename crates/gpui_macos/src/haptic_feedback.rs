@@ -1,6 +1,8 @@
-use cocoa::base::id;
 use gpui::HapticFeedbackStyle;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2_app_kit::{
+    NSHapticFeedbackManager, NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime,
+    NSHapticFeedbackPerformer,
+};
 
 /// macOS haptic feedback using [`NSHapticFeedbackManager`].
 ///
@@ -8,14 +10,6 @@ use objc::{class, msg_send, sel, sel_impl};
 /// Fire and forget. On machines without haptic hardware, calls are silently ignored by AppKit.
 pub(crate) struct MacHaptics {
     supported: bool,
-}
-
-/// <https://developer.apple.com/documentation/appkit/nshapticfeedbackmanager/feedbackpattern>
-#[allow(dead_code)]
-mod feedback_pattern {
-    pub const GENERIC: isize = 0;
-    pub const ALIGNMENT: isize = 1;
-    pub const LEVEL_CHANGE: isize = 2;
 }
 
 impl MacHaptics {
@@ -29,11 +23,11 @@ impl MacHaptics {
         self.supported
     }
 
-    fn pattern_for_style(style: HapticFeedbackStyle) -> isize {
+    fn pattern_for_style(style: HapticFeedbackStyle) -> NSHapticFeedbackPattern {
         match style {
-            HapticFeedbackStyle::Generic => feedback_pattern::GENERIC,
-            HapticFeedbackStyle::Alignment => feedback_pattern::ALIGNMENT,
-            HapticFeedbackStyle::LevelChange => feedback_pattern::LEVEL_CHANGE,
+            HapticFeedbackStyle::Generic => NSHapticFeedbackPattern::Generic,
+            HapticFeedbackStyle::Alignment => NSHapticFeedbackPattern::Alignment,
+            HapticFeedbackStyle::LevelChange => NSHapticFeedbackPattern::LevelChange,
         }
     }
 
@@ -44,19 +38,11 @@ impl MacHaptics {
 
         let pattern = Self::pattern_for_style(style);
 
-        /// <https://developer.apple.com/documentation/appkit/nshapticfeedbackmanager/performancetime>
-        const PERFORMANCE_TIME_NOW: usize = 1;
-
-        // Safety: NSHapticFeedbackManager is always available on macOS 10.11+.
-        // All Platform trait methods run on the main thread.
-        unsafe {
-            let manager: id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
-            let _: () = msg_send![
-                manager,
-                performFeedbackPattern: pattern
-                performanceTime: PERFORMANCE_TIME_NOW
-            ];
-        }
+        // NSHapticFeedbackManager is available on macOS 10.11+; platform methods
+        // are invoked on the main thread.
+        let manager = NSHapticFeedbackManager::defaultPerformer();
+        manager
+            .performFeedbackPattern_performanceTime(pattern, NSHapticFeedbackPerformanceTime::Now);
     }
 }
 
@@ -80,15 +66,15 @@ mod tests {
     fn test_style_to_pattern_mapping() {
         assert_eq!(
             MacHaptics::pattern_for_style(HapticFeedbackStyle::Generic),
-            feedback_pattern::GENERIC
+            NSHapticFeedbackPattern::Generic
         );
         assert_eq!(
             MacHaptics::pattern_for_style(HapticFeedbackStyle::Alignment),
-            feedback_pattern::ALIGNMENT
+            NSHapticFeedbackPattern::Alignment
         );
         assert_eq!(
             MacHaptics::pattern_for_style(HapticFeedbackStyle::LevelChange),
-            feedback_pattern::LEVEL_CHANGE
+            NSHapticFeedbackPattern::LevelChange
         );
     }
 }

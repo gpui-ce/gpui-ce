@@ -86,7 +86,7 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
     #[cfg(target_os = "macos")]
     {
         Some(
-            Box::new(gpui_macos::metal_renderer::MetalHeadlessRenderer::new())
+            Box::new(gpui_apple::metal_renderer::MetalHeadlessRenderer::new())
                 as Box<dyn gpui::PlatformHeadlessRenderer>,
         )
     }

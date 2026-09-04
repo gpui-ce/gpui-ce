@@ -2,8 +2,8 @@ use super::*;
 use anyhow::Result;
 use collections::FxHashMap;
 use windows_061::{
+    Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D},
     core::Interface as _,
-    Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC},
 };
 
 #[path = "windows/shared.rs"]
@@ -26,6 +26,19 @@ impl SurfaceCache {
     }
 }
 
+pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSurface]) {
+    let active_keys = surfaces
+        .iter()
+        .filter_map(|surface| capture_texture(surface).map(|texture| texture.as_raw() as usize))
+        .collect::<smallvec::SmallVec<[usize; 4]>>();
+    renderer
+        .resources()
+        .surface_cache
+        .borrow_mut()
+        .textures
+        .retain(|key, _| active_keys.contains(key));
+}
+
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
@@ -33,12 +46,6 @@ pub(super) fn draw_surfaces(
 ) -> frame::DrawResult {
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
-    let active_keys = surfaces
-        .iter()
-        .filter_map(|surface| capture_texture(surface).map(|texture| texture.as_raw() as usize))
-        .collect::<smallvec::SmallVec<[usize; 4]>>();
-    cache.textures.retain(|key, _| active_keys.contains(key));
-
     for surface in surfaces {
         let Some(source) = capture_texture(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");

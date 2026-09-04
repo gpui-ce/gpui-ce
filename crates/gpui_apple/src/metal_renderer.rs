@@ -1,10 +1,6 @@
 use crate::metal_atlas::MetalAtlas;
 use anyhow::Result;
 use block::ConcreteBlock;
-use cocoa::{
-    base::{NO, YES},
-    quartzcore::AutoresizingMask,
-};
 use core_graphics::geometry::CGSize;
 use gpui::{
     AtlasTextureId, Bounds, Corners, DevicePixels, FilterRenderTarget, MAX_FILTER_GROUP_DEPTH,
@@ -36,7 +32,7 @@ use metal::{
     CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions, MTLScissorRect,
     NSRange, NSUInteger, RenderPassColorAttachmentDescriptorRef, SamplerDescriptor,
 };
-use objc::{self, msg_send, sel, sel_impl};
+use objc2_quartz_core::{CAAutoresizingMask, CAMetalLayer as Objc2CAMetalLayer};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use wgsl_rs::std::{vec2f, vec4f};
@@ -280,15 +276,15 @@ impl MetalRenderer {
         // Allow texture reading for visual tests (captures screenshots without ScreenCaptureKit)
         #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
         layer.set_framebuffer_only(false);
-        unsafe {
-            let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
-            let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange: YES];
-            let _: () = msg_send![
-                &*layer,
-                setAutoresizingMask: AutoresizingMask::WIDTH_SIZABLE
-                    | AutoresizingMask::HEIGHT_SIZABLE
-            ];
-        }
+        // `metal::MetalLayer` is a CAMetalLayer retained by the Metal crate.
+        // Reborrow its Objective-C object as the generated objc2 class to keep
+        // selector encodings and the autoresizing mask type checked here.
+        let layer_object = unsafe { &*(layer.as_ptr() as *const Objc2CAMetalLayer) };
+        layer_object.setAllowsNextDrawableTimeout(false);
+        layer_object.setNeedsDisplayOnBoundsChange(true);
+        layer_object.setAutoresizingMask(
+            CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable,
+        );
 
         Self::new_internal(device, Some(layer), !transparent, instance_buffer_pool)
     }

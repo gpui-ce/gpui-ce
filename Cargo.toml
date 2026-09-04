@@ -119,6 +119,7 @@ objc = "0.2"
 objc2 = "0.6"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
   "NSArray",
+  "NSAutoreleasePool",
   "NSAttributedString",
   "NSBundle",
   "NSCoder",
@@ -137,8 +138,10 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
   "NSRunLoop",
   "NSSet",
   "NSString",
+  "NSThread",
   "NSURL",
   "NSUndoManager",
+  "NSUserDefaults",
   "NSValue",
   "objc2-core-foundation",
   "std",
@@ -175,15 +178,50 @@ wgpu = "29.0.3"
 wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = ["validation"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "objc2-core-foundation",
+  "objc2-core-graphics",
   "NSAlert",
   "NSApplication",
+  "NSDocumentController",
+  "NSAppearance",
   "NSButton",
+  "NSCell",
   "NSControl",
+  "NSEvent",
   "NSGraphics",
+  "NSHapticFeedback",
+  "NSCursor",
+  "NSPanel",
+  "NSMenu",
+  "NSMenuItem",
+  "NSOpenPanel",
+  "NSSavePanel",
+  "NSScroller",
+  "NSWorkspace",
+  "NSVisualEffectView",
+  "NSPasteboard",
+  "NSPasteboardItem",
   "NSResponder",
+  "NSRunningApplication",
+  "NSScreen",
   "NSView",
   "NSWindow",
   "block2",
+] }
+objc2-core-media = { version = "0.3", default-features = false, features = [
+  "CMSampleBuffer",
+  "objc2",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CAMetalLayer"] }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "SCShareableContent",
+  "SCStream",
+  "block2",
+  "dispatch2",
+  "objc2-core-foundation",
+  "objc2-core-graphics",
+  "objc2-core-media",
 ] }
 semver = { version = "1.0", features = ["serde"] }
 windows-core = "0.62.2"

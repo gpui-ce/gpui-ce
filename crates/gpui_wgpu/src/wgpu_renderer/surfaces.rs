@@ -1,9 +1,15 @@
 use gpui::PaintSurface;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    all(target_os = "windows", feature = "wgpu-surfaces")
+))]
 use gpui_render::shaders::{
     common::SurfaceColorFormat, interface as shader_interface, surface::SurfaceUniforms,
 };
 
-use super::{frame, WgpuRenderer};
+use super::{WgpuRenderer, frame};
 
 #[cfg(target_os = "macos")]
 #[path = "surfaces/macos.rs"]
@@ -25,6 +31,12 @@ mod platform;
 
 pub(super) use platform::SurfaceCache;
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    all(target_os = "windows", feature = "wgpu-surfaces")
+))]
 struct SurfaceBinding {
     color_view: wgpu::TextureView,
     chroma_view: wgpu::TextureView,
@@ -32,6 +44,12 @@ struct SurfaceBinding {
     bind_group: wgpu::BindGroup,
 }
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    all(target_os = "windows", feature = "wgpu-surfaces")
+))]
 impl SurfaceBinding {
     fn new(
         renderer: &WgpuRenderer,
@@ -57,6 +75,16 @@ impl SurfaceBinding {
 }
 
 impl WgpuRenderer {
+    pub(super) fn retain_surface_cache(&self, surfaces: &[PaintSurface]) {
+        platform::retain_surface_cache(self, surfaces);
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     fn create_surface_bind_group(
         &self,
         color_view: &wgpu::TextureView,
@@ -76,6 +104,12 @@ impl WgpuRenderer {
         )
     }
 
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     fn draw_surface_binding(
         &self,
         surface: &PaintSurface,

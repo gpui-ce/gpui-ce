@@ -19,7 +19,7 @@ test-support = ["gpui/test-support", "dep:image"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
-gpui.workspace = true
+gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_render.workspace = true
 anyhow.workspace = true
 bytemuck = "1"

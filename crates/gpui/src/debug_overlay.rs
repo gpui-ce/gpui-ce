@@ -4,7 +4,7 @@
 
 use crate::{
     BorderStyle, Bounds, ContentMask, Corners, Edges, Hsla, Pixels, Quad, ScaledPixels, Scene,
-    Size, point, rgba, size, transparent_black,
+    Size, point, rgb_to_hsla, rgba, size, transparent_black,
 };
 use std::{collections::VecDeque, time::Duration};
 
@@ -44,11 +44,11 @@ const PANEL_MARGIN: f32 = 4.0;
 const CELL_SIZE: f32 = 2.0;
 
 fn text_color() -> Hsla {
-    rgba(0x33ff33ff).into()
+    rgb_to_hsla(rgba(0x33ff33ff))
 }
 
 fn panel_color() -> Hsla {
-    rgba(0x000000aa).into()
+    rgb_to_hsla(rgba(0x000000aa))
 }
 
 pub(crate) struct DebugFrameOverlay {
@@ -222,7 +222,7 @@ fn solid_quad(
         bounds,
         content_mask: *content_mask,
         background: color.into(),
-        border_color: transparent_black(),
+        border_color: transparent_black().into(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
     }
