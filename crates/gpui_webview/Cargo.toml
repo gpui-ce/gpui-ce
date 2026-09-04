@@ -22,7 +22,7 @@ raw-window-handle = "0.6"
 wry = { workspace = true, optional = true }
 
 [dev-dependencies]
-gpui_platform = { workspace = true, features = ["wgpu"] }
+gpui_platform = { workspace = true, features = ["wgpu", "font-kit"] }
 gpui_elements = { path = "../gpui_elements/", package = "gpui_ce_elements" }
 
 [[example]]
