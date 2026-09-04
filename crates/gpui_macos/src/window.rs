@@ -3342,8 +3342,7 @@ unsafe extern "C" fn insert_text(
     replacement_range: NSRange,
 ) {
     unsafe {
-        let is_attributed_string: Bool =
-            msg_send![text, isKindOfClass: [class!(NSAttributedString)]];
+        let is_attributed_string: Bool = msg_send![text, isKindOfClass: class!(NSAttributedString)];
         let text: ObjcId = if is_attributed_string == Bool::new(true) {
             msg_send![text, string]
         } else {
@@ -3366,8 +3365,7 @@ unsafe extern "C" fn set_marked_text(
     replacement_range: NSRange,
 ) {
     unsafe {
-        let is_attributed_string: Bool =
-            msg_send![text, isKindOfClass: [class!(NSAttributedString)]];
+        let is_attributed_string: Bool = msg_send![text, isKindOfClass: class!(NSAttributedString)];
         let text: ObjcId = if is_attributed_string == Bool::new(true) {
             msg_send![text, string]
         } else {
