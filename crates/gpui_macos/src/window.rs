@@ -35,14 +35,14 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSBackingStoreType, NSBeep, NSButton as Objc2NSButton,
-    NSEventModifierFlags, NSEventType, NSRequestUserAttentionType, NSView as Objc2NSView,
+    NSEventModifierFlags, NSEventType, NSRequestUserAttentionType, NSScreen, NSView as Objc2NSView,
     NSViewLayerContentsRedrawPolicy, NSVisualEffectMaterial, NSVisualEffectState,
     NSWindow as Objc2NSWindow, NSWindowButton as Objc2NSWindowButton, NSWindowCollectionBehavior,
     NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSInteger, NSNotFound, NSOperatingSystemVersion, NSPoint as Objc2NSPoint, NSRange,
-    NSRect as Objc2NSRect, NSSize, NSString, NSUInteger,
+    NSRangePointer, NSRect as Objc2NSRect, NSSize, NSString, NSUInteger,
 };
 use parking_lot::Mutex;
 use raw_window_handle as rwh;
@@ -136,7 +136,6 @@ trait Objc2WindowMessages {
         screen: ObjcId,
     ) -> ObjcId;
     unsafe fn setAutoresizingMask_(self, mask: NSUInteger);
-    unsafe fn setWantsBestResolutionOpenGLSurface_(self, value: Bool);
     unsafe fn setWantsLayer(self, value: Bool);
     unsafe fn autorelease(self) -> ObjcId;
     unsafe fn addSubview_(self, view: ObjcId);
@@ -160,7 +159,6 @@ trait Objc2WindowMessages {
     unsafe fn toggleFullScreen_(self, sender: ObjcId);
     unsafe fn eventType(self) -> NSEventType;
     unsafe fn setTitlebarAppearsTransparent_(self, value: Bool);
-    unsafe fn objectForKey_(self, key: ObjcId) -> ObjcId;
     unsafe fn isEqualToString(self, value: &str) -> Bool;
     unsafe fn objectAtIndex(self, index: NSUInteger) -> ObjcId;
 }
@@ -205,9 +203,6 @@ impl Objc2WindowMessages for ObjcId {
     }
     unsafe fn setAutoresizingMask_(self, mask: NSUInteger) {
         let _: () = msg_send![self, setAutoresizingMask: mask];
-    }
-    unsafe fn setWantsBestResolutionOpenGLSurface_(self, value: Bool) {
-        let _: () = msg_send![self, setWantsBestResolutionOpenGLSurface: value];
     }
     unsafe fn setWantsLayer(self, value: Bool) {
         let _: () = msg_send![self, setWantsLayer: value];
@@ -278,9 +273,6 @@ impl Objc2WindowMessages for ObjcId {
     unsafe fn setTitlebarAppearsTransparent_(self, value: Bool) {
         let _: () = msg_send![self, setTitlebarAppearsTransparent: value];
     }
-    unsafe fn objectForKey_(self, key: ObjcId) -> ObjcId {
-        msg_send![self, objectForKey: key]
-    }
     unsafe fn isEqualToString(self, value: &str) -> Bool {
         let value = ns_string(value);
         msg_send![self, isEqualToString: &*value]
@@ -342,8 +334,8 @@ unsafe extern "C" {
 #[ctor(unsafe)]
 unsafe fn build_classes() {
     unsafe {
-        WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow));
-        PANEL_CLASS = build_window_class("GPUIPanel", class!(NSPanel));
+        WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow), false);
+        PANEL_CLASS = build_window_class("GPUIPanel", class!(NSPanel), true);
         VIEW_CLASS = {
             let mut decl =
                 ClassBuilder::new(CString::new("GPUIView").unwrap().as_c_str(), class!(NSView))
@@ -582,12 +574,20 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
     }
 }
 
-unsafe fn build_window_class(name: &'static str, superclass: &AnyClass) -> *const AnyClass {
+unsafe fn build_window_class(
+    name: &'static str,
+    superclass: &AnyClass,
+    is_panel: bool,
+) -> *const AnyClass {
     unsafe {
         let mut decl =
             ClassBuilder::new(CString::new(name).unwrap().as_c_str(), superclass).unwrap();
         decl.add_ivar::<*mut c_void>(CString::new(WINDOW_STATE_IVAR).unwrap().as_c_str());
-        decl.add_method(sel!(dealloc), dealloc_window as unsafe extern "C" fn(_, _));
+        if is_panel {
+            decl.add_method(sel!(dealloc), dealloc_panel as unsafe extern "C" fn(_, _));
+        } else {
+            decl.add_method(sel!(dealloc), dealloc_window as unsafe extern "C" fn(_, _));
+        }
 
         decl.add_method(
             sel!(canBecomeMainWindow),
@@ -1050,11 +1050,15 @@ impl MacWindowState {
             if screen == NIL {
                 return None;
             }
-            let screen_frame = unsafe { msg_send![screen, frame] };
+            // `frame` returns an NSRect. Keep that ABI at this boundary explicit: letting
+            // the surrounding enum infer it can silently select the wrong Objective-C
+            // stret encoding when this code is refactored.
+            let screen_frame: Objc2NSRect = unsafe { msg_send![screen, frame] };
             let bounds = self.bounds();
 
+            let frame: Objc2NSRect = unsafe { msg_send![self.native_window, frame] };
             self.simple_fullscreen_state = Some(SimpleFullscreenState {
-                frame: unsafe { msg_send![self.native_window, frame] },
+                frame,
                 bounds,
                 style_mask: unsafe { self.native_window.styleMask() },
             });
@@ -1204,9 +1208,10 @@ impl MacWindow {
             }
 
             let screen_frame = screen_frame.unwrap_or_else(|| {
-                let screen = msg_send![class!(NSScreen), mainScreen];
+                let screen: ObjcId = msg_send![class!(NSScreen), mainScreen];
                 target_screen = screen;
-                msg_send![screen, frame]
+                let frame: Objc2NSRect = msg_send![screen, frame];
+                frame
             });
 
             let window_rect = Objc2NSRect::new(
@@ -1332,13 +1337,7 @@ impl MacWindow {
             }
 
             native_view.setAutoresizingMask_(VIEW_WIDTH_SIZABLE | VIEW_HEIGHT_SIZABLE);
-            native_view.setWantsBestResolutionOpenGLSurface_(Bool::new(true));
-
-            // From winit crate: On Mojave, views automatically become layer-backed shortly after
-            // being added to a native_window. Changing the layer-backedness of a view breaks the
-            // association between the view and its associated OpenGL context. To work around this,
-            // on we explicitly make the view layer-backed up front so that AppKit doesn't do it
-            // itself and break the association with its context.
+            // Create the renderer's CAMetalLayer before adding the view to its window.
             native_view.setWantsLayer(Bool::new(true));
             let _: () = msg_send![
             native_view,
@@ -1476,7 +1475,8 @@ impl MacWindow {
                 return None;
             }
 
-            if msg_send![main_window, isKindOfClass: &*WINDOW_CLASS] {
+            let is_gpui_window: Bool = msg_send![main_window, isKindOfClass: &*WINDOW_CLASS];
+            if is_gpui_window.as_bool() {
                 let handle = get_window_state(&*main_window).lock().handle;
                 Some(handle)
             } else {
@@ -1494,7 +1494,8 @@ impl MacWindow {
             let mut window_handles = Vec::new();
             for i in 0..count {
                 let window: ObjcId = msg_send![windows, objectAtIndex:i];
-                if msg_send![window, isKindOfClass: &*WINDOW_CLASS] {
+                let is_gpui_window: Bool = msg_send![window, isKindOfClass: &*WINDOW_CLASS];
+                if is_gpui_window.as_bool() {
                     let handle = get_window_state(&*window).lock().handle;
                     window_handles.push(handle);
                 }
@@ -1679,14 +1680,7 @@ impl PlatformWindow for MacWindow {
             if screen.is_null() {
                 return None;
             }
-            let device_description: ObjcId = msg_send![screen, deviceDescription];
-            let screen_number_key = ns_string("NSScreenNumber");
-            let screen_number: ObjcId =
-                msg_send![device_description, valueForKey: &*screen_number_key];
-
-            let screen_number: u32 = msg_send![screen_number, unsignedIntValue];
-
-            Some(Rc::new(MacDisplay(screen_number)))
+            Some(Rc::new(MacDisplay(display_id_for_screen(screen)?)))
         }
     }
 
@@ -2089,7 +2083,8 @@ impl PlatformWindow for MacWindow {
             let mut result = Vec::new();
             for i in 0..count {
                 let window: ObjcId = msg_send![windows, objectAtIndex:i];
-                if msg_send![window, isKindOfClass: &*WINDOW_CLASS] {
+                let is_gpui_window: Bool = msg_send![window, isKindOfClass: &*WINDOW_CLASS];
+                if is_gpui_window.as_bool() {
                     let handle = get_window_state(&*window).lock().handle;
                     let title: ObjcId = msg_send![window, title];
                     let title = SharedString::from(objc_string(title));
@@ -2470,14 +2465,19 @@ fn get_scale_factor(native_window: ObjcId) -> f32 {
 /// Returns whether `window` is one of GPUI's managed windows.
 unsafe fn is_gpui_window(window: ObjcId) -> bool {
     unsafe {
-        msg_send![window, isKindOfClass: &*WINDOW_CLASS]
-            || msg_send![window, isKindOfClass: &*PANEL_CLASS]
+        let is_window: Bool = msg_send![window, isKindOfClass: &*WINDOW_CLASS];
+        let is_panel: Bool = msg_send![window, isKindOfClass: &*PANEL_CLASS];
+        is_window.as_bool() || is_panel.as_bool()
     }
 }
 
 unsafe fn get_window_state(object: &Objc2Object) -> Arc<Mutex<MacWindowState>> {
     unsafe {
         let raw: *mut c_void = *window_state_ivar(object).load(object);
+        debug_assert!(
+            !raw.is_null(),
+            "GPUI callback invoked before its state was installed"
+        );
         let rc1 = Arc::from_raw(raw as *mut Mutex<MacWindowState>);
         let rc2 = rc1.clone();
         mem::forget(rc1);
@@ -2485,10 +2485,28 @@ unsafe fn get_window_state(object: &Objc2Object) -> Arc<Mutex<MacWindowState>> {
     }
 }
 
+/// Returns `None` while AppKit is running superclass initialization, before the window state can
+/// exist. Overrides invoked in that phase must forward to their superclass without touching GPUI
+/// state.
+unsafe fn initialized_window_state(object: &Objc2Object) -> Option<Arc<Mutex<MacWindowState>>> {
+    unsafe {
+        let raw: *mut c_void = *window_state_ivar(object).load(object);
+        if raw.is_null() {
+            return None;
+        }
+        let rc1 = Arc::from_raw(raw as *mut Mutex<MacWindowState>);
+        let rc2 = rc1.clone();
+        mem::forget(rc1);
+        Some(rc2)
+    }
+}
+
 unsafe fn drop_window_state(object: &Objc2Object) {
     unsafe {
         let raw: *mut c_void = *window_state_ivar(object).load(object);
-        Arc::from_raw(raw as *mut Mutex<MacWindowState>);
+        if !raw.is_null() {
+            drop(Arc::from_raw(raw as *mut Mutex<MacWindowState>));
+        }
     }
 }
 
@@ -2500,6 +2518,13 @@ unsafe extern "C" fn dealloc_window(this: &Objc2Object, _: Sel) {
     unsafe {
         drop_window_state(this);
         let _: () = msg_send![super(this, class!(NSWindow)), dealloc];
+    }
+}
+
+unsafe extern "C" fn dealloc_panel(this: &Objc2Object, _: Sel) {
+    unsafe {
+        drop_window_state(this);
+        let _: () = msg_send![super(this, class!(NSPanel)), dealloc];
     }
 }
 
@@ -3202,21 +3227,23 @@ unsafe extern "C" fn set_frame_size(this: &Objc2Object, _: Sel, size: NSSize) {
         }
     }
 
-    let window_state = unsafe { get_window_state(this) };
-    let mut lock = window_state.as_ref().lock();
-
-    let new_size = convert(size);
     let old_size = unsafe {
         let old_frame: Objc2NSRect = msg_send![this, frame];
         convert(old_frame.size)
     };
-
-    if old_size == new_size {
-        return;
-    }
-
     unsafe {
         let _: () = msg_send![super(this, class!(NSView)), setFrameSize: size];
+    }
+
+    // `initWithFrame:` may dispatch here before `windowState` is installed. Superclass
+    // initialization is complete at this point, but there is no renderer to resize yet.
+    let Some(window_state) = (unsafe { initialized_window_state(this) }) else {
+        return;
+    };
+    let mut lock = window_state.as_ref().lock();
+    let new_size = convert(size);
+    if old_size == new_size {
+        return;
     }
 
     let scale_factor = lock.scale_factor();
@@ -3295,8 +3322,11 @@ unsafe extern "C" fn first_rect_for_character_range(
     this: &Objc2Object,
     _: Sel,
     range: NSRange,
-    _: ObjcId,
+    actual_range: NSRangePointer,
 ) -> Objc2NSRect {
+    if !actual_range.is_null() {
+        unsafe { actual_range.write(range) };
+    }
     let frame = get_frame(this);
     with_input_handler(this, |input_handler| {
         input_handler.bounds_for_range(range.to_range_option()?)
@@ -3387,7 +3417,7 @@ unsafe extern "C" fn attributed_substring_for_proposed_range(
     this: &Objc2Object,
     _: Sel,
     range: NSRange,
-    actual_range: *mut c_void,
+    actual_range: NSRangePointer,
 ) -> ObjcId {
     with_input_handler(this, |input_handler| {
         let range = range.to_range_option()?;
@@ -3397,10 +3427,9 @@ unsafe extern "C" fn attributed_substring_for_proposed_range(
         let mut adjusted: Option<Range<usize>> = None;
 
         let selected_text = input_handler.text_for_range(range.clone(), &mut adjusted)?;
-        if let Some(adjusted) = adjusted
-            && adjusted != range
-        {
-            unsafe { (actual_range as *mut NSRange).write(NSRange::from(adjusted)) };
+        if !actual_range.is_null() {
+            let actual_range_value = adjusted.as_ref().unwrap_or(&range);
+            unsafe { actual_range.write(NSRange::from(actual_range_value.clone())) };
         }
         unsafe {
             let string: ObjcId = msg_send![class!(NSAttributedString), alloc];
@@ -3704,17 +3733,14 @@ where
 }
 
 fn display_id_for_screen(screen: ObjcId) -> Option<CGDirectDisplayID> {
-    if screen.is_null() {
-        return None;
-    }
-
+    // The raw window bridge gives us an untyped object, but it is documented to return an
+    // NSScreen. Rebind it immediately, then use the stable NSScreenNumber bridge rather than
+    // the newer -[NSScreen CGDirectDisplayID] selector, which is absent on older macOS.
     unsafe {
-        let device_description: ObjcId = msg_send![screen, deviceDescription];
-        let screen_number_key = ns_string("NSScreenNumber");
-        let screen_number = device_description
-            .objectForKey_(Retained::<NSString>::as_ptr(&screen_number_key) as ObjcId);
-        let screen_number: NSUInteger = msg_send![screen_number, unsignedIntegerValue];
-        Some(screen_number as CGDirectDisplayID)
+        screen
+            .cast::<NSScreen>()
+            .as_ref()
+            .and_then(crate::display::screen_id)
     }
 }
 

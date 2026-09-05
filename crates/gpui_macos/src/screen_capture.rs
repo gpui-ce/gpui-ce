@@ -1,3 +1,4 @@
+use crate::display::screen_id;
 use anyhow::{Result, anyhow};
 use block2::RcBlock;
 use collections::HashMap;
@@ -41,17 +42,17 @@ const SCREEN_CAPTURE_QUEUE_DEPTH: isize = 3;
 
 impl ScreenCaptureSource for MacScreenCaptureSource {
     fn metadata(&self) -> Result<SourceMetadata> {
-        let (display_id, size) = unsafe {
-            let display_id = self.sc_display.displayID();
-            let display_mode_ref = CGDisplayCopyDisplayMode(display_id);
+        let display_id = unsafe { self.sc_display.displayID() };
+        let display_mode_ref = unsafe { CGDisplayCopyDisplayMode(display_id) };
+        anyhow::ensure!(
+            !display_mode_ref.is_null(),
+            "display {display_id} no longer has an active display mode"
+        );
+        let size = unsafe {
             let width = CGDisplayModeGetPixelWidth(display_mode_ref);
             let height = CGDisplayModeGetPixelHeight(display_mode_ref);
             CGDisplayModeRelease(display_mode_ref);
-
-            (
-                display_id,
-                size(DevicePixels(width as i32), DevicePixels(height as i32)),
-            )
+            size(DevicePixels(width as i32), DevicePixels(height as i32))
         };
         let (label, is_main) = self
             .meta
@@ -191,7 +192,10 @@ fn screen_id_to_human_label() -> HashMap<CGDirectDisplayID, ScreenMeta> {
     let mut map = HashMap::default();
     for i in 0..screens.count() {
         let screen = screens.objectAtIndex(i);
-        let screen_id = screen.CGDirectDisplayID();
+        let Some(screen_id) = screen_id(&screen) else {
+            log::warn!("NSScreen device description is missing NSScreenNumber");
+            continue;
+        };
         let name = screen.localizedName();
         map.insert(
             screen_id,
@@ -279,6 +283,8 @@ define_class!(
 
     unsafe impl NSObjectProtocol for StreamOutput {}
     unsafe impl SCStreamOutput for StreamOutput {
+        // The Rust name mirrors the generated protocol requirement exactly.
+        #[allow(non_snake_case)]
         #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
         fn stream_didOutputSampleBuffer_ofType(
             &self,

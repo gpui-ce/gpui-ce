@@ -55,20 +55,27 @@ impl MacKeyboardLayout {
     pub(crate) fn new() -> Self {
         unsafe {
             let current_keyboard = TISCopyCurrentKeyboardLayoutInputSource();
+            if current_keyboard.is_null() {
+                log::warn!("macOS did not provide a keyboard input source");
+                return Self {
+                    id: String::new(),
+                    name: String::new(),
+                };
+            }
 
             let id: *const NSString = TISGetInputSourceProperty(
                 current_keyboard,
                 kTISPropertyInputSourceID as *const c_void,
             )
             .cast();
-            let id = (&*id).to_string();
+            let id = id.as_ref().map_or_else(String::new, NSString::to_string);
 
             let name: *const NSString = TISGetInputSourceProperty(
                 current_keyboard,
                 kTISPropertyLocalizedName as *const c_void,
             )
             .cast();
-            let name = (&*name).to_string();
+            let name = name.as_ref().map_or_else(String::new, NSString::to_string);
 
             CFRelease(current_keyboard.cast());
 
