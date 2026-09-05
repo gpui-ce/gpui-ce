@@ -2380,10 +2380,25 @@ fn create_buffer(
     element_size: usize,
     buffer_size: usize,
 ) -> Result<ID3D11Buffer> {
+    anyhow::ensure!(
+        element_size > 0,
+        "cannot create a buffer for zero-sized elements"
+    );
+    let byte_width = element_size
+        .checked_mul(buffer_size)
+        .context("instance-buffer byte size overflow")?;
+    anyhow::ensure!(
+        byte_width <= u32::MAX as usize,
+        "instance-buffer byte size exceeds the D3D11 buffer limit"
+    );
+    anyhow::ensure!(
+        byte_width % 4 == 0,
+        "instance-buffer byte size must be four-byte aligned"
+    );
     let desc = D3D11_BUFFER_DESC {
         // The HLSL reads instances through a raw `ByteAddressBuffer` view, which needs
         // a raw-view-enabled buffer with 4-byte-aligned contents.
-        ByteWidth: (element_size * buffer_size) as u32,
+        ByteWidth: byte_width as u32,
         Usage: D3D11_USAGE_DYNAMIC,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -2469,17 +2484,10 @@ fn report_live_objects(device: &ID3D11Device) -> Result<()> {
 const BUFFER_COUNT: usize = 3;
 
 pub(crate) mod shader_resources {
-    //! HLSL generated from shared Rust shader sources in `gpui_render`, compiled
-    //! to D3D bytecode when the renderer initializes.
+    //! D3D11 bytecode generated from the shared Rust shader sources at build time.
 
-    use std::{ffi::CString, sync::OnceLock};
-
-    use anyhow::{Context as _, Result};
-    use gpui_render::artifacts::{Dx11ShaderModel, NATIVE_SHADERS, NativeShader};
-    use windows::{
-        Win32::Graphics::Direct3D::{Fxc::D3DCompile, ID3DInclude},
-        core::PCSTR,
-    };
+    use anyhow::Result;
+    use gpui_render::artifacts::{Dx11Shader, NATIVE_SHADERS, NativeShader};
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
@@ -2514,26 +2522,6 @@ pub(crate) mod shader_resources {
             Self::Blur,
             Self::BlurComposite,
         ];
-        const COUNT: usize = Self::ALL.len();
-
-        const fn index(self) -> usize {
-            match self {
-                Self::Quad => 0,
-                Self::Shadow => 1,
-                Self::Underline => 2,
-                Self::PathRasterization => 3,
-                Self::PathSprite => 4,
-                Self::MonochromeSprite => 5,
-                Self::SubpixelSprite => 6,
-                Self::PolychromeSprite => 7,
-                Self::EmojiRasterization => 8,
-                Self::Surface => 9,
-                Self::BlurDownsample => 10,
-                Self::Blur => 11,
-                Self::BlurComposite => 12,
-            }
-        }
-
         fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
@@ -2563,88 +2551,24 @@ pub(crate) mod shader_resources {
         Fragment,
     }
 
-    impl ShaderTarget {
-        const COUNT: usize = 2;
-
-        const fn index(self) -> usize {
-            match self {
-                Self::Vertex => 0,
-                Self::Fragment => 1,
-            }
-        }
-
-        fn profile(self, model: Dx11ShaderModel) -> &'static [u8] {
-            match (model, self) {
-                (Dx11ShaderModel::Sm50, Self::Vertex) => b"vs_5_0\0",
-                (Dx11ShaderModel::Sm50, Self::Fragment) => b"ps_5_0\0",
-            }
-        }
-    }
-
     pub(crate) struct RawShaderBytes {
         bytes: &'static [u8],
     }
 
     impl RawShaderBytes {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
-            type CachedShader = std::result::Result<Vec<u8>, String>;
-            static CACHE: [OnceLock<CachedShader>; ShaderModule::COUNT * ShaderTarget::COUNT] =
-                [const { OnceLock::new() }; ShaderModule::COUNT * ShaderTarget::COUNT];
-
-            let index = module.index() * ShaderTarget::COUNT + target.index();
-            match CACHE[index]
-                .get_or_init(|| Self::compile(module, target).map_err(|error| format!("{error:#}")))
-            {
-                Ok(bytes) => Ok(Self { bytes }),
-                Err(error) => anyhow::bail!("{error}"),
-            }
-        }
-
-        fn compile(module: ShaderModule, target: ShaderTarget) -> Result<Vec<u8>> {
             let shader = module.shader();
-            let entry = match target {
-                ShaderTarget::Vertex => shader.vertex_entry,
-                ShaderTarget::Fragment => shader.fragment_entry,
-            };
-            let profile = target.profile(shader.dx11.model);
-            let entry = CString::new(entry).context("shader entry point name")?;
-            let mut blob = None;
-            let mut errors = None;
-            unsafe {
-                D3DCompile(
-                    shader.dx11.source.as_ptr().cast(),
-                    shader.dx11.source.len(),
-                    PCSTR::from_raw(b"gpui_shaders.hlsl\0".as_ptr()),
-                    None,
-                    None::<&ID3DInclude>,
-                    PCSTR::from_raw(entry.as_ptr() as *const u8),
-                    PCSTR::from_raw(profile.as_ptr()),
-                    0,
-                    0,
-                    &mut blob,
-                    Some(&mut errors),
-                )
-            }
-            .map_err(|error| {
-                let details = errors.as_ref().map(|errors| unsafe {
-                    std::ffi::CStr::from_ptr(errors.GetBufferPointer() as *const i8)
-                        .to_string_lossy()
-                        .into_owned()
-                });
-                anyhow::anyhow!(
-                    "compiling generated HLSL for {}: {error}\n{}",
+            let Dx11Shader::Sm50(bytecode) = shader.dx11 else {
+                anyhow::bail!(
+                    "{} has no DX11 bytecode: build the Windows target on a Windows host; runtime HLSL compilation is intentionally unsupported",
                     shader.label,
-                    details.unwrap_or_default()
-                )
-            })?;
-            let blob = blob.context("the shader compiler returned no blob")?;
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    blob.GetBufferPointer() as *const u8,
-                    blob.GetBufferSize(),
-                )
+                );
             };
-            Ok(bytes.to_vec())
+            let bytes = match target {
+                ShaderTarget::Vertex => bytecode.vertex,
+                ShaderTarget::Fragment => bytecode.fragment,
+            };
+            Ok(Self { bytes })
         }
 
         pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -2657,7 +2581,7 @@ pub(crate) mod shader_resources {
         use super::*;
 
         #[test]
-        fn every_generated_hlsl_entry_compiles_for_direct3d_11() {
+        fn every_generated_dx11_artifact_is_available() {
             for module in ShaderModule::ALL {
                 for target in [ShaderTarget::Vertex, ShaderTarget::Fragment] {
                     RawShaderBytes::new(module, target).unwrap_or_else(|error| {
