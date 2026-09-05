@@ -106,8 +106,6 @@ skrifa = "0.46.2"
 block = "0.1"
 block2 = "0.6"
 cbindgen = { version = "0.28.0", default-features = false }
-cocoa = "=0.26.0"
-cocoa-foundation = "=0.2.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
 core-graphics = "0.24"
@@ -204,6 +202,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSResponder",
   "NSRunningApplication",
   "NSScreen",
+  "NSTextInputClient",
   "NSView",
   "NSWindow",
   "block2",
