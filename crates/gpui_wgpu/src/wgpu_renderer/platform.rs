@@ -153,7 +153,30 @@ impl WgpuRenderer {
             .window_handle()
             .map_err(|error| anyhow::anyhow!("failed to get window handle: {error}"))?;
         let surface = create_surface(instance, window_handle.as_raw())?;
-        if self.target.apply(config) {
+        // A replacement surface can expose different present modes (for example when a
+        // window moves between displays or Wayland/X11 surfaces). Query the new surface,
+        // rather than reusing capabilities from the old target.
+        let supported_present_modes = {
+            let context_slot = self.context.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("native surface replacement requires a GPU context")
+            })?;
+            let context_slot = context_slot.borrow();
+            let context = context_slot.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("native surface replacement requires an initialized GPU context")
+            })?;
+            let capabilities = surface.get_capabilities(&context.adapter);
+            if capabilities.formats.is_empty() {
+                let info = context.adapter.get_info();
+                anyhow::bail!(
+                    "Adapter {:?} (backend={:?}, device={:#06x}) is not compatible with the display surface for this window.",
+                    info.name,
+                    info.backend,
+                    info.device,
+                );
+            }
+            capabilities.present_modes
+        };
+        if self.target.apply(config, &supported_present_modes) {
             self.rebuild_pipelines();
         }
         let target_config = self.target.configuration().clone();

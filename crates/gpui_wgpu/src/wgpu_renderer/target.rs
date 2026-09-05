@@ -64,10 +64,11 @@ impl RenderTarget {
                     wgpu::CompositeAlphaMode::Opaque,
                     wgpu::CompositeAlphaMode::Inherit,
                 ])?;
-                let present_mode = requested
-                    .preferred_present_mode
-                    .filter(|mode| capabilities.present_modes.contains(mode))
-                    .unwrap_or(wgpu::PresentMode::Fifo);
+                let present_mode = select_present_mode(
+                    requested.preferred_present_mode,
+                    &capabilities.present_modes,
+                    wgpu::PresentMode::Fifo,
+                );
                 (format, transparent, opaque, present_mode)
             } else {
                 // Native desktop swapchains are BGRA; matching that keeps snapshots comparable.
@@ -135,11 +136,17 @@ impl RenderTarget {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(super) fn apply(&mut self, requested: WgpuSurfaceConfig) -> bool {
+    pub(super) fn apply(
+        &mut self,
+        requested: WgpuSurfaceConfig,
+        supported_present_modes: &[wgpu::PresentMode],
+    ) -> bool {
         self.resize(requested.size);
-        if let Some(mode) = requested.preferred_present_mode {
-            self.config.present_mode = mode;
-        }
+        self.config.present_mode = select_present_mode(
+            requested.preferred_present_mode,
+            supported_present_modes,
+            self.config.present_mode,
+        );
         self.set_transparent(requested.transparent)
     }
 
@@ -200,6 +207,29 @@ impl RenderTarget {
     }
 }
 
+fn select_present_mode(
+    requested: Option<wgpu::PresentMode>,
+    supported: &[wgpu::PresentMode],
+    current: wgpu::PresentMode,
+) -> wgpu::PresentMode {
+    // AutoVsync and AutoNoVsync are valid on every surface even though they
+    // are intentionally omitted from SurfaceCapabilities::present_modes.
+    let candidate = requested.unwrap_or(current);
+    if is_supported(candidate, supported) {
+        return candidate;
+    }
+    // FIFO is guaranteed by the surface API, even if a backend omits it from
+    // its capability list.
+    wgpu::PresentMode::Fifo
+}
+
+fn is_supported(mode: wgpu::PresentMode, supported: &[wgpu::PresentMode]) -> bool {
+    matches!(
+        mode,
+        wgpu::PresentMode::AutoVsync | wgpu::PresentMode::AutoNoVsync | wgpu::PresentMode::Fifo
+    ) || supported.contains(&mode)
+}
+
 fn clamped_size(size: Size<DevicePixels>, maximum: u32) -> (u32, u32) {
     let requested_width = size.width.0.max(1) as u32;
     let requested_height = size.height.0.max(1) as u32;
@@ -223,4 +253,73 @@ fn clear_color(transparent: bool) -> wgpu::Color {
     return wgpu::Color::BLACK;
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     wgpu::Color::TRANSPARENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_present_mode;
+
+    #[test]
+    fn unsupported_present_mode_falls_back_to_fifo() {
+        assert_eq!(
+            select_present_mode(
+                Some(wgpu::PresentMode::Immediate),
+                &[wgpu::PresentMode::Fifo],
+                wgpu::PresentMode::Fifo,
+            ),
+            wgpu::PresentMode::Fifo,
+        );
+    }
+
+    #[test]
+    fn missing_capabilities_keep_current_mode() {
+        assert_eq!(
+            select_present_mode(None, &[], wgpu::PresentMode::Fifo,),
+            wgpu::PresentMode::Fifo,
+        );
+    }
+
+    #[test]
+    fn none_preserves_supported_current_mode() {
+        assert_eq!(
+            select_present_mode(
+                None,
+                &[wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox],
+                wgpu::PresentMode::Mailbox,
+            ),
+            wgpu::PresentMode::Mailbox,
+        );
+    }
+
+    #[test]
+    fn none_falls_back_when_replacement_surface_drops_current_mode() {
+        assert_eq!(
+            select_present_mode(None, &[wgpu::PresentMode::Fifo], wgpu::PresentMode::Mailbox,),
+            wgpu::PresentMode::Fifo,
+        );
+    }
+
+    #[test]
+    fn none_preserves_unlisted_auto_current_mode() {
+        assert_eq!(
+            select_present_mode(
+                None,
+                &[wgpu::PresentMode::Fifo],
+                wgpu::PresentMode::AutoVsync,
+            ),
+            wgpu::PresentMode::AutoVsync,
+        );
+    }
+
+    #[test]
+    fn auto_modes_are_valid_without_capability_listing() {
+        assert_eq!(
+            select_present_mode(
+                Some(wgpu::PresentMode::AutoNoVsync),
+                &[wgpu::PresentMode::Fifo],
+                wgpu::PresentMode::Fifo,
+            ),
+            wgpu::PresentMode::AutoNoVsync,
+        );
+    }
 }
