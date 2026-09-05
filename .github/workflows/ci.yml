@@ -258,6 +258,7 @@ jobs:
         with:
           package: gpui-ce
           baseline-rev: ${{ github.event.pull_request.base.sha }}
+          feature-group: default-features
           # This is an API-diff gate, not a release-type waiver. Keep the
           # patch policy so an incompatibility introduced by this PR is shown
           # and fails here; the reserved next-major release record does not
