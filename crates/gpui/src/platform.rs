@@ -33,13 +33,11 @@ pub(crate) type PlatformScreenCaptureFrame = ();
 pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBuffer;
 #[cfg(all(
     feature = "screen-capture",
-    not(any(
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "freebsd"
-    ))
+    not(any(target_os = "macos", target_os = "windows"))
 ))]
+// Screen capture currently has native frame representations only on macOS and Windows. Keep the
+// cross-platform API well-formed for enabled-but-unsupported targets; source enumeration simply
+// yields no platform sources there.
 pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::{
