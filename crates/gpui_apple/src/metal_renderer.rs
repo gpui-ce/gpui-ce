@@ -117,27 +117,27 @@ fn bind_scene_uniforms(encoder: &metal::RenderCommandEncoderRef, uniforms: &Scen
     );
 }
 
-/// Binds an instance slice as the runtime-array data binding, plus the element-count
-/// buffer Naga's bounds checks read.
+/// Binds an instance slice and the byte length used by Naga's runtime-array size ABI.
 fn bind_instances<T>(
     encoder: &metal::RenderCommandEncoderRef,
     buffer: &metal::BufferRef,
     offset: usize,
     instances: &[T],
 ) {
-    bind_instance_count(encoder, buffer, offset, instances.len() as u32);
+    bind_instance_bytes(encoder, buffer, offset, mem::size_of_val(instances));
 }
 
-fn bind_instance_count(
+fn bind_instance_bytes(
     encoder: &metal::RenderCommandEncoderRef,
     buffer: &metal::BufferRef,
     offset: usize,
-    count: u32,
+    byte_len: usize,
 ) {
+    let byte_len = u32::try_from(byte_len).expect("Metal instance binding exceeds 4 GiB");
     encoder.set_vertex_buffer(DATA_SLOT, Some(buffer), offset as u64);
     encoder.set_fragment_buffer(DATA_SLOT, Some(buffer), offset as u64);
-    encoder.set_vertex_bytes(SIZES_SLOT, 4, &count as *const u32 as *const _);
-    encoder.set_fragment_bytes(SIZES_SLOT, 4, &count as *const u32 as *const _);
+    encoder.set_vertex_bytes(SIZES_SLOT, 4, &byte_len as *const u32 as *const _);
+    encoder.set_fragment_bytes(SIZES_SLOT, 4, &byte_len as *const u32 as *const _);
 }
 
 pub unsafe fn new_renderer(
@@ -342,7 +342,7 @@ impl MetalRenderer {
         let mut library_for = |source: &'static str| -> metal::Library {
             if let Some((_, library)) = libraries
                 .iter()
-                .find(|(registered, _)| std::ptr::eq(*registered, source))
+                .find(|(registered, _)| *registered == source)
             {
                 return library.clone();
             }
@@ -1382,11 +1382,11 @@ impl MetalRenderer {
             command_encoder.end_encoding();
             return false;
         }
-        bind_instance_count(
+        bind_instance_bytes(
             command_encoder,
             &instance_buffer.metal_buffer,
             *instance_offset,
-            rasterization_vertex_count as u32,
+            vertices_bytes_len,
         );
         command_encoder.draw_primitives(
             metal::MTLPrimitiveType::Triangle,
@@ -1541,11 +1541,11 @@ impl MetalRenderer {
             return false;
         }
 
-        bind_instance_count(
+        bind_instance_bytes(
             command_encoder,
             &instance_buffer.metal_buffer,
             *instance_offset,
-            sprite_count as u32,
+            sprite_bytes_len,
         );
         command_encoder.draw_primitives_instanced(
             metal::MTLPrimitiveType::TriangleStrip,
