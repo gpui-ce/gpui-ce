@@ -50,7 +50,6 @@ log.workspace = true
 mach2.workspace = true
 media.workspace = true
 metal.workspace = true
-objc.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
