@@ -380,7 +380,7 @@ mod tests {
     fn counted_style_motion_keeps_returned_values_and_respects_reduced_motion() {
         let motion = Motion::new(Duration::from_secs(1))
             .with_delay(Duration::from_millis(500))
-            .with_repeat(crate::Repeat::Count(2))
+            .with_repeat_count(2)
             .with_auto_reverse(true);
         let transitions = StyleTransitions::default()
             .w(motion.clone())
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn optional_style_is_not_removed_when_alternating_motion_returns_to_some() {
         let motion = Motion::new(Duration::from_secs(1))
-            .with_repeat(crate::Repeat::Count(2))
+            .with_repeat_count(2)
             .with_auto_reverse(true);
         let start = Instant::now();
         let mut state = None;

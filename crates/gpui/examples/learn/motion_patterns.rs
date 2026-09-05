@@ -73,13 +73,13 @@ impl Render for MotionPatterns {
             (
                 "Count",
                 "Three forward passes",
-                Motion::new(millis(900)).with_repeat(Repeat::Count(3)),
+                Motion::new(millis(900)).with_repeat_count(3),
             ),
             (
                 "Auto-reverse",
                 "Two passes return to start",
                 Motion::new(millis(900))
-                    .with_repeat(Repeat::Count(2))
+                    .with_repeat_count(2)
                     .with_auto_reverse(true),
             ),
             (

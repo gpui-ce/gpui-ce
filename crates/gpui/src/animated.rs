@@ -156,7 +156,7 @@ mod tests {
     fn delayed_alternating_motion_preserves_position_on_retarget_and_completion() {
         let motion = Motion::new(Duration::from_secs(1))
             .with_delay(Duration::from_millis(500))
-            .with_repeat(crate::Repeat::Count(2))
+            .with_repeat_count(2)
             .with_auto_reverse(true);
         let mut animated = Animated::<f32, Duration>::new(0.0, motion.clone());
         assert!(animated.set(8.0, &motion, Duration::ZERO));

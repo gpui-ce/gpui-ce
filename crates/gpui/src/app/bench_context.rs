@@ -11,9 +11,9 @@ use hdrhistogram::Histogram;
 
 use crate::{
     AnyView, AnyWindowHandle, App, AppCell, AppContext, BackgroundExecutor, Bounds, Context, Empty,
-    Entity, EntityId, Focusable, ForegroundExecutor, Global, Platform, PlatformHeadlessRenderer,
-    PlatformTextSystem, Render, Reservation, Task, TestPlatform, ThreadedDispatcher, VisualContext,
-    Window, WindowBounds, WindowHandle, WindowOptions,
+    Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, Platform,
+    PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Task, TestPlatform,
+    ThreadedDispatcher, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
     app::GpuiBorrow,
     profiler::{
         self, FrameEvent, FrameTimingCollector,
@@ -902,6 +902,18 @@ impl AppContext for BenchAppContext<'_, '_> {
         app.read_entity(handle, read)
     }
 
+    fn notify(&mut self, entity_id: EntityId) {
+        self.app.borrow_mut().notify(entity_id);
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        self.app.borrow_mut().emit(entity, event);
+    }
+
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -944,6 +956,19 @@ impl AppContext for BenchAppContext<'_, '_> {
     {
         let app = self.app.borrow();
         app.read_global(callback)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        self.app.borrow_mut().insert_global_entity(entity);
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.app.borrow_mut().remove_global_entity(entity);
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let app = self.app.borrow();
+        app.global_entities().collect::<Vec<_>>().into_iter()
     }
 }
 
@@ -1027,6 +1052,18 @@ impl AppContext for BenchWindowContext<'_, '_> {
         self.cx.read_entity(handle, read)
     }
 
+    fn notify(&mut self, entity_id: EntityId) {
+        self.cx.notify(entity_id);
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        self.cx.emit(entity, event);
+    }
+
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -1065,6 +1102,18 @@ impl AppContext for BenchWindowContext<'_, '_> {
         G: Global,
     {
         self.cx.read_global(callback)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        self.cx.insert_global_entity(entity);
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.cx.remove_global_entity(entity);
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        self.cx.global_entities()
     }
 }
 
