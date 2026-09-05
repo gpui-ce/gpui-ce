@@ -31,7 +31,7 @@ impl MacDisplay {
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
         let marker = MainThreadMarker::new().expect("NSScreen access requires the main thread");
         let screen = NSScreen::mainScreen(marker).expect("macOS reported no primary NSScreen");
-        Self(screen_id(&screen))
+        Self(screen_id(&screen).expect("NSScreen device description is missing NSScreenNumber"))
     }
 
     /// Obtains an iterator over all currently active system displays.
@@ -140,16 +140,16 @@ impl MacDisplay {
         let marker = MainThreadMarker::new()?;
         NSScreen::screens(marker)
             .into_iter()
-            .find(|screen| screen_id(screen) == self.0)
+            .find(|screen| screen_id(screen) == Some(self.0))
     }
 }
 
-fn screen_id(screen: &NSScreen) -> CGDirectDisplayID {
+/// `NSScreenNumber` is the stable AppKit-to-CoreGraphics bridge. Do not use
+/// `-[NSScreen CGDirectDisplayID]`: it is absent on supported older macOS
+/// runtimes even though newer SDK headers expose it.
+pub(crate) fn screen_id(screen: &NSScreen) -> Option<CGDirectDisplayID> {
     let key = NSString::from_str("NSScreenNumber");
-    let number = screen
-        .deviceDescription()
-        .objectForKey(&key)
-        .expect("NSScreen device description is missing NSScreenNumber");
+    let number = screen.deviceDescription().objectForKey(&key)?;
     let display_number: usize = unsafe { msg_send![&*number, unsignedIntegerValue] };
-    display_number as CGDirectDisplayID
+    Some(display_number as CGDirectDisplayID)
 }

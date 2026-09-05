@@ -33,6 +33,8 @@ use objc2_app_kit::{
     NSMenuDelegate, NSMenuItem, NSModalResponseOK, NSOpenPanel, NSResponder, NSSavePanel,
     NSScroller, NSWorkspace,
 };
+#[cfg(feature = "screen-capture")]
+use objc2_foundation::NSOperatingSystemVersion;
 use objc2_foundation::{
     NSArray, NSAutoreleasePool, NSBundle, NSInteger, NSNotification, NSNotificationCenter,
     NSNumber, NSObjectProtocol, NSProcessInfo, NSString, NSUInteger, NSURL, NSUserDefaults,
@@ -1532,7 +1534,7 @@ unsafe extern "C" {
         actualStringLength: *mut usize,
         unicodeString: *mut u16,
     ) -> u32;
-    pub(super) fn LMGetKbdType() -> u16;
+    pub(super) fn LMGetKbdType() -> u8;
     pub(super) static kTISPropertyUnicodeKeyLayoutData: CFStringRef;
     pub(super) static kTISPropertyInputSourceID: CFStringRef;
     pub(super) static kTISPropertyLocalizedName: CFStringRef;
