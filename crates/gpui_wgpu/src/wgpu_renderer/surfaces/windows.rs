@@ -15,7 +15,7 @@ use shared::SharedTexture;
 use upload::UploadedTexture;
 
 pub(in crate::wgpu_renderer) struct SurfaceCache {
-    textures: FxHashMap<usize, CachedTexture>,
+    textures: FxHashMap<CaptureFrameKey, CachedTexture>,
 }
 
 impl SurfaceCache {
@@ -29,8 +29,8 @@ impl SurfaceCache {
 pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSurface]) {
     let active_keys = surfaces
         .iter()
-        .filter_map(|surface| capture_texture(surface).map(|texture| texture.as_raw() as usize))
-        .collect::<smallvec::SmallVec<[usize; 4]>>();
+        .filter_map(|surface| capture_frame(surface).map(CaptureFrameKey::from_frame))
+        .collect::<smallvec::SmallVec<[CaptureFrameKey; 4]>>();
     renderer
         .resources()
         .surface_cache
@@ -47,11 +47,12 @@ pub(super) fn draw_surfaces(
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
     for surface in surfaces {
-        let Some(source) = capture_texture(surface) else {
+        let Some(frame) = capture_frame(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");
             return Err(frame::DrawError::ExternalSurface);
         };
-        let key = source.as_raw() as usize;
+        let source = frame.texture();
+        let key = CaptureFrameKey::from_frame(frame);
         let size = source_size(source);
         if cache
             .textures
@@ -68,17 +69,23 @@ pub(super) fn draw_surfaces(
             log::error!("capture texture cache insertion failed");
             return Err(frame::DrawError::ExternalSurface);
         };
-        if let Err(error) = cached.update(&resources.queue, source) {
-            if !cached.is_shared() {
-                return Err(surface_error(error));
+        // A frame can be painted more than once (for clipping, filters, or repeated content).
+        // The cache key includes the capture timestamp, so each frame gets its own destination;
+        // `updated` prevents duplicate GPU copies/uploads for repeated uses of that frame.
+        if !cached.updated {
+            if let Err(error) = cached.update(&resources.queue, source) {
+                if !cached.is_shared() {
+                    return Err(surface_error(error));
+                }
+                log::warn!("shared capture update failed, switching to CPU upload: {error:#}");
+                *cached = CachedTexture::new_uploaded(renderer, source)
+                    .and_then(|mut cached| {
+                        cached.update(&resources.queue, source)?;
+                        Ok(cached)
+                    })
+                    .map_err(surface_error)?;
             }
-            log::warn!("shared capture update failed, switching to CPU upload: {error:#}");
-            *cached = CachedTexture::new_uploaded(renderer, source)
-                .and_then(|mut cached| {
-                    cached.update(&resources.queue, source)?;
-                    Ok(cached)
-                })
-                .map_err(surface_error)?;
+            cached.updated = true;
         }
 
         renderer.draw_surface_binding(
@@ -91,11 +98,26 @@ pub(super) fn draw_surfaces(
     Ok(())
 }
 
-fn capture_texture(surface: &PaintSurface) -> Option<&ID3D11Texture2D> {
+fn capture_frame(surface: &PaintSurface) -> Option<&gpui::WindowsScreenCaptureFrame> {
     let gpui::SurfaceSource::WindowsCapture(frame) = &surface.source else {
         return None;
     };
-    Some(frame.texture())
+    Some(frame)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CaptureFrameKey {
+    texture: usize,
+    display_time: u64,
+}
+
+impl CaptureFrameKey {
+    fn from_frame(frame: &gpui::WindowsScreenCaptureFrame) -> Self {
+        Self {
+            texture: frame.texture().as_raw() as usize,
+            display_time: frame.display_time(),
+        }
+    }
 }
 
 fn surface_error(error: anyhow::Error) -> frame::DrawError {
@@ -105,6 +127,7 @@ fn surface_error(error: anyhow::Error) -> frame::DrawError {
 
 struct CachedTexture {
     size: wgpu::Extent3d,
+    updated: bool,
     backend: CaptureBackend,
     _texture: wgpu::Texture,
     binding: SurfaceBinding,
@@ -140,6 +163,7 @@ impl CachedTexture {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
             size,
+            updated: false,
             backend,
             binding: SurfaceBinding::new(renderer, view.clone(), view),
             _texture: texture,
@@ -234,8 +258,40 @@ fn capture_texture_descriptor(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        // Windows Graphics Capture produces DXGI_FORMAT_B8G8R8A8_UNORM. Importing it as
+        // sRGB applies a second decode during sampling and visibly darkens captured content.
+        format: wgpu::TextureFormat::Bgra8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use collections::FxHashMap;
+
+    use super::CaptureFrameKey;
+
+    #[test]
+    fn capture_frame_key_controls_cache_identity_and_pruning() {
+        let first = CaptureFrameKey {
+            texture: 42,
+            display_time: 1,
+        };
+        let second = CaptureFrameKey {
+            texture: 42,
+            display_time: 2,
+        };
+        assert_ne!(first, second);
+
+        let mut cache = FxHashMap::default();
+        assert_eq!(cache.insert(first, 1), None);
+        assert_eq!(cache.insert(second, 2), None);
+        assert_eq!(cache.insert(first, 3), Some(1));
+        assert_eq!(cache.len(), 2);
+
+        cache.retain(|key, _| *key == second);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&second), Some(&2));
     }
 }

@@ -89,7 +89,7 @@ impl SharedTexture {
         let hal_texture = unsafe {
             wgpu::hal::dx12::Device::texture_from_raw(
                 d3d12_resource,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Bgra8Unorm,
                 wgpu::TextureDimension::D2,
                 size,
                 1,
@@ -117,12 +117,24 @@ impl SharedTexture {
     }
 
     pub(super) fn update(&mut self, source: &ID3D11Texture2D) -> Result<()> {
-        self.fence_value = self.fence_value.checked_add(1).unwrap_or(1);
+        // CachedTexture gives each (native texture pointer, capture timestamp) frame
+        // its own destination and initializes it once. That makes this destination
+        // immutable while D3D12 samples it; only the producer-to-consumer handoff is
+        // needed here.
+        let fence_value = self
+            .fence_value
+            .checked_add(1)
+            .context("capture fence value exhausted")?;
         unsafe { self.context.CopyResource(&self.destination, source) };
-        unsafe { self.context.Signal(&self.d3d11_fence, self.fence_value) }
+        unsafe { self.context.Signal(&self.d3d11_fence, fence_value) }
             .context("signaling capture copy completion")?;
-        unsafe { self.d3d12_queue.Wait(&self.d3d12_fence, self.fence_value) }
+        // D3D11 immediate contexts can defer command submission. Flush after the
+        // producer signal so the D3D12 queue wait below cannot wait on work that
+        // is still sitting in the D3D11 command buffer.
+        unsafe { self.context.Flush() };
+        unsafe { self.d3d12_queue.Wait(&self.d3d12_fence, fence_value) }
             .context("waiting for D3D11 capture copy")?;
+        self.fence_value = fence_value;
         Ok(())
     }
 }
