@@ -153,9 +153,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
 
     /// Evaluates and returns the current progress delta of the transition.
     ///
-    /// Returns a value between 0.0 and 1.0 representing how far the transition
-    /// has progressed, after applying the easing function. A value of 0.0 means
-    /// the transition just started, and 1.0 means it has completed.
+    /// Returns eased progress between 0.0 and 1.0 within the current pass.
+    /// Progress can decrease on a reverse pass or reset when repeating; reaching
+    /// 1.0 does not necessarily mean that the entire motion has completed.
     pub fn evaluate_delta(&self, cx: &App) -> f32 {
         if self.cache.borrow().value.is_some() {
             return self.cache.borrow().progress.get();
@@ -251,7 +251,7 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use crate::{AppContext, Context, IntoElement, Render, canvas, px, size};
+    use crate::{AppContext, Context, IntoElement, Render, Repeat, canvas, px, size};
 
     use super::*;
     use gpui::TestAppContext;
@@ -348,6 +348,28 @@ mod tests {
             assert_eq!(*mutators.read_goal(cx), 2.0);
             assert!(mutators.read_cache().is_none());
         });
+    }
+
+    #[test]
+    fn repeating_transition_progress_is_relative_to_the_current_pass() {
+        let motion = Motion::new(Duration::from_secs(1))
+            .with_repeat(Repeat::Count(2))
+            .with_auto_reverse(true);
+        let mut state = Animated::<f32, Duration>::new(0.0_f32, motion.clone());
+        assert!(state.set(10.0, &motion, Duration::ZERO));
+
+        assert_eq!(
+            state.sample(Duration::from_millis(750)).progress.get(),
+            0.75
+        );
+        assert_eq!(
+            state.sample(Duration::from_millis(1_250)).progress.get(),
+            0.75
+        );
+
+        let completed = state.sample(Duration::from_secs(2));
+        assert_eq!(completed.progress, Progress::START);
+        assert!(!completed.is_active);
     }
 
     #[gpui::test]

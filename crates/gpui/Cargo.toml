@@ -218,6 +218,10 @@ name = "style_transitions"
 path = "examples/learn/style_transitions.rs"
 
 [[example]]
+name = "motion_patterns"
+path = "examples/learn/motion_patterns.rs"
+
+[[example]]
 name = "haptic_feedback"
 path = "examples/learn/haptic_feedback.rs"
 
