@@ -153,9 +153,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
 
     /// Evaluates and returns the current progress delta of the transition.
     ///
-    /// Returns a value between 0.0 and 1.0 representing how far the transition
-    /// has progressed, after applying the easing function. A value of 0.0 means
-    /// the transition just started, and 1.0 means it has completed.
+    /// Returns eased progress between 0.0 and 1.0 within the current pass.
+    /// Progress can decrease on a reverse pass or reset when repeating; reaching
+    /// 1.0 does not necessarily mean that the entire motion has completed.
     pub fn evaluate_delta(&self, cx: &App) -> f32 {
         if self.cache.borrow().value.is_some() {
             return self.cache.borrow().progress.get();

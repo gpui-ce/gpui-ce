@@ -196,7 +196,9 @@ fn apply_auto_size(
     let sample = animated.sample(now);
     state.authored_goal = Some(authored_goal);
 
-    if sample.is_active {
+    // Counted, alternating motion can finish at its origin rather than the
+    // authored endpoint. Keep that presentation value after playback stops.
+    if sample.is_active || sample.value != endpoint {
         *value = Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(
             sample.value,
         )));
@@ -282,8 +284,9 @@ where
 
     let restore_none = value.is_none();
     let target = value.clone().unwrap_or_default();
-    let (in_progress, evaluated_value) = evaluate(state, Some(target), motion, now, reduce_motion);
-    *value = if restore_none && !in_progress {
+    let (in_progress, evaluated_value) =
+        evaluate(state, Some(target.clone()), motion, now, reduce_motion);
+    *value = if restore_none && !in_progress && evaluated_value.as_ref() == Some(&target) {
         None
     } else {
         evaluated_value
@@ -370,6 +373,112 @@ mod tests {
             top_right: value,
             bottom_right: value,
             bottom_left: value,
+        }
+    }
+
+    #[test]
+    fn counted_style_motion_keeps_returned_values_and_respects_reduced_motion() {
+        let motion = Motion::new(Duration::from_secs(1))
+            .with_delay(Duration::from_millis(500))
+            .with_repeat(crate::Repeat::Count(2))
+            .with_auto_reverse(true);
+        let transitions = StyleTransitions::default()
+            .w(motion.clone())
+            .opacity(motion);
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let start = Instant::now();
+        let mut state = StyleTransitionState::default();
+        let mut initial = Style {
+            size: size(length(10.0), length(10.0)),
+            opacity: Some(0.0),
+            ..Style::default()
+        };
+        assert!(!transitions.apply(&mut initial, &mut state, context, start, false));
+
+        for (ms, expected, active) in [
+            (0, 0.0, true),
+            (250, 0.0, true),
+            (1_000, 0.5, true),
+            (1_500, 1.0, true),
+            (2_000, 0.5, true),
+            (2_500, 0.0, false),
+            (3_000, 0.0, false),
+        ] {
+            let mut style = Style {
+                size: size(length(20.0), length(10.0)),
+                opacity: Some(1.0),
+                ..Style::default()
+            };
+            assert_eq!(
+                transitions.apply(
+                    &mut style,
+                    &mut state,
+                    context,
+                    start + Duration::from_millis(ms),
+                    false,
+                ),
+                active,
+            );
+            assert_eq!(style.size.width, length(10.0 + 10.0 * expected));
+            assert_eq!(style.opacity, Some(expected));
+        }
+
+        // Enabling reduced motion during a new delayed run immediately applies
+        // the authored values. Disabling it must not restart the old motion.
+        for (ms, reduce_motion) in [(3_000, false), (3_100, true), (3_200, false)] {
+            let mut style = Style {
+                size: size(length(30.0), length(10.0)),
+                opacity: Some(0.25),
+                ..Style::default()
+            };
+            let active = transitions.apply(
+                &mut style,
+                &mut state,
+                context,
+                start + Duration::from_millis(ms),
+                reduce_motion,
+            );
+            assert_eq!(active, ms == 3_000);
+            if ms > 3_000 {
+                assert_eq!(style.size.width, length(30.0));
+                assert_eq!(style.opacity, Some(0.25));
+            }
+        }
+    }
+
+    #[test]
+    fn optional_style_is_not_removed_when_alternating_motion_returns_to_some() {
+        let motion = Motion::new(Duration::from_secs(1))
+            .with_repeat(crate::Repeat::Count(2))
+            .with_auto_reverse(true);
+        let start = Instant::now();
+        let mut state = None;
+        let mut initial = Some(4.0_f32);
+        assert!(!apply_optional(
+            &mut state,
+            &mut initial,
+            Some(&motion),
+            start,
+            false
+        ));
+        for (ms, expected, active) in [
+            (0, Some(4.0), true),
+            (1_000, Some(0.0), true),
+            (2_000, Some(4.0), false),
+            (3_000, Some(4.0), false),
+        ] {
+            let mut value = None;
+            assert_eq!(
+                apply_optional(
+                    &mut state,
+                    &mut value,
+                    Some(&motion),
+                    start + Duration::from_millis(ms),
+                    false,
+                ),
+                active,
+            );
+            assert_eq!(value, expected);
         }
     }
 

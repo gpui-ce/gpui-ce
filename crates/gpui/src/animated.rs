@@ -60,6 +60,7 @@ where
     }
 
     /// Updates the logical value while preserving positional continuity.
+    /// A changed target starts a new run, including its configured delay.
     pub fn set(&mut self, value: T, motion: &Motion, now: Time) -> bool {
         self.retarget(value, motion, now, true)
     }
@@ -148,6 +149,62 @@ mod tests {
         assert_eq!(
             (sample.value, sample.progress, sample.is_active),
             (value, progress, is_active)
+        );
+    }
+
+    #[test]
+    fn delayed_alternating_motion_preserves_position_on_retarget_and_completion() {
+        let motion = Motion::new(Duration::from_secs(1))
+            .with_delay(Duration::from_millis(500))
+            .with_repeat(crate::Repeat::Count(2))
+            .with_auto_reverse(true);
+        let mut animated = Animated::<f32, Duration>::new(0.0, motion.clone());
+        assert!(animated.set(8.0, &motion, Duration::ZERO));
+        assert_sample(animated.sample(Duration::ZERO), 0.0, Progress::START, true);
+        assert_eq!(animated.sample(Duration::from_millis(1_000)).value, 4.0);
+        assert_eq!(animated.sample(Duration::from_millis(1_500)).value, 8.0);
+
+        // Retarget during the reverse pass. Hold the current position for a new
+        // delay, and return to that position when the two new passes finish.
+        assert_eq!(animated.sample(Duration::from_millis(1_750)).value, 6.0);
+        assert!(animated.set(16.0, &motion, Duration::from_millis(1_750)));
+        assert_sample(
+            animated.sample(Duration::from_millis(2_000)),
+            6.0,
+            Progress::START,
+            true,
+        );
+        assert_eq!(animated.sample(Duration::from_millis(2_750)).value, 11.0);
+        for ms in [4_250, 5_000] {
+            assert_sample(
+                animated.sample(Duration::from_millis(ms)),
+                6.0,
+                Progress::START,
+                false,
+            );
+        }
+        assert_eq!(*animated.value(), 16.0);
+        assert!(!animated.set(16.0, &motion, Duration::from_secs(5)));
+        assert_eq!(
+            animated.progress_at(Duration::from_secs(5)),
+            Progress::START
+        );
+    }
+
+    #[test]
+    fn retargeting_during_delay_restarts_delay_and_reset_cancels_it() {
+        let motion = Motion::new(Duration::from_secs(1)).with_delay(Duration::from_secs(1));
+        let mut animated = Animated::<f32, Duration>::new(2.0, motion.clone());
+        assert!(animated.set(10.0, &motion, Duration::ZERO));
+        assert!(animated.set(6.0, &motion, Duration::from_millis(500)));
+        assert_eq!(animated.sample(Duration::from_secs(1)).value, 2.0);
+        assert_eq!(animated.sample(Duration::from_secs(2)).value, 4.0);
+        animated.reset();
+        assert_sample(
+            animated.sample(Duration::from_secs(3)),
+            2.0,
+            Progress::END,
+            false,
         );
     }
 
