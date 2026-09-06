@@ -45,6 +45,8 @@ wgpu = { workspace = true, features = ["webgl"] }
 
 [dev-dependencies]
 criterion.workspace = true
+env_logger.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 
 [[bench]]

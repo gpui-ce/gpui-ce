@@ -1,4 +1,4 @@
-use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
+use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuContextHandle, WgpuDeviceRequirements};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
@@ -96,6 +96,8 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
 struct SurfaceParams {
     bounds: PodBounds,
     content_mask: PodBounds,
+    opacity: f32,
+    _pad: [f32; 3],
 }
 
 /// Uniform passed to the blur pipelines. The same struct drives the downsample, separable
@@ -1533,6 +1535,26 @@ impl WgpuRenderer {
         (resources.device.clone(), resources.queue.clone())
     }
 
+    pub fn gpu_context_info(&self) -> Option<WgpuContextHandle> {
+        if let Some(context) = self.context.as_ref().and_then(|context| {
+            context
+                .borrow()
+                .as_ref()
+                .map(|context| context.handle(self.surface_config.format))
+        }) {
+            return Some(context);
+        }
+        self.resources.as_ref().map(|resources| {
+            WgpuContextHandle::from_resources(
+                resources.device.clone(),
+                resources.queue.clone(),
+                self.surface_config.format,
+                self.adapter_info.clone(),
+                self.device_lost.clone(),
+            )
+        })
+    }
+
     pub fn gpu_specs(&self) -> GpuSpecs {
         GpuSpecs {
             is_software_emulated: self.adapter_info.device_type == wgpu::DeviceType::Cpu,
@@ -2287,6 +2309,8 @@ impl WgpuRenderer {
             let params = SurfaceParams {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
+                opacity: surface.opacity,
+                _pad: [0.0; 3],
             };
 
             resources.queue.write_buffer(
