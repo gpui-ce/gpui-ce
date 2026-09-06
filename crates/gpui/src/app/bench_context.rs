@@ -11,10 +11,11 @@ use hdrhistogram::Histogram;
 
 use crate::{
     AnyView, AnyWindowHandle, App, AppCell, AppContext, BackgroundExecutor, Bounds, Context, Empty,
-    Entity, EntityId, Focusable, ForegroundExecutor, Global, Platform, PlatformHeadlessRenderer,
-    PlatformTextSystem, Render, Reservation, Task, TestPlatform, ThreadedDispatcher, VisualContext,
-    Window, WindowBounds, WindowHandle, WindowOptions,
+    Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, Platform,
+    PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Task, TestPlatform,
+    ThreadedDispatcher, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
     app::GpuiBorrow,
+    http_client,
     profiler::{
         self, FrameEvent, FrameTimingCollector,
         journal::{ForegroundEvent, ForegroundJournalCollector, ForegroundJournalEntry},
@@ -902,6 +903,20 @@ impl AppContext for BenchAppContext<'_, '_> {
         app.read_entity(handle, read)
     }
 
+    fn notify(&mut self, entity_id: EntityId) {
+        let mut app = self.app.borrow_mut();
+        app.notify(entity_id);
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        let mut app = self.app.borrow_mut();
+        app.emit(entity, event)
+    }
+
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -944,6 +959,22 @@ impl AppContext for BenchAppContext<'_, '_> {
     {
         let app = self.app.borrow();
         app.read_global(callback)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        let mut app = self.app.borrow_mut();
+        app.insert_global_entity(entity)
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        let mut app = self.app.borrow_mut();
+        app.remove_global_entity(entity)
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let app = self.app.borrow();
+        let iter = app.global_entities();
+        iter.collect::<Vec<_>>().into_iter()
     }
 }
 
@@ -1027,6 +1058,18 @@ impl AppContext for BenchWindowContext<'_, '_> {
         self.cx.read_entity(handle, read)
     }
 
+    fn notify(&mut self, entity_id: EntityId) {
+        self.cx.notify(entity_id)
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        self.cx.emit(entity, event)
+    }
+
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -1065,6 +1108,18 @@ impl AppContext for BenchWindowContext<'_, '_> {
         G: Global,
     {
         self.cx.read_global(callback)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        self.cx.insert_global_entity(entity)
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.cx.remove_global_entity(entity)
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        self.cx.global_entities()
     }
 }
 
@@ -1251,6 +1306,45 @@ mod tests {
             "expected a ~20ms task poll to be recorded, got {:?}",
             summary.max
         );
+    }
+
+    #[test]
+    fn benchmark_contexts_forward_global_entity_operations() {
+        struct GlobalEntity;
+
+        let platform = bench_platform(None, Arc::new(crate::NoopTextSystem::new()));
+        let name = "benchmark_contexts_forward_global_entity_operations";
+        let mut criterion = criterion::Criterion::default()
+            .without_plots()
+            .sample_size(10)
+            .warm_up_time(Duration::from_millis(1))
+            .measurement_time(Duration::from_millis(1));
+
+        criterion.bench_function(name, |bencher| {
+            let mut app_cx = BenchAppContext::new(platform.clone(), Some(name), bencher);
+            let app_entity = app_cx.new(|_| GlobalEntity);
+            let mut window_cx = app_cx.add_empty_window();
+            let window_entity = window_cx.new(|_| GlobalEntity);
+
+            app_cx.bench_iter(|cx| {
+                cx.insert_global_entity(app_entity.clone());
+                assert_eq!(cx.global_entities::<GlobalEntity>().count(), 1);
+
+                window_cx.insert_global_entity(window_entity.clone());
+                assert_eq!(window_cx.global_entities::<GlobalEntity>().count(), 2);
+
+                window_cx.remove_global_entity(&window_entity);
+                assert_eq!(window_cx.global_entities::<GlobalEntity>().count(), 1);
+
+                cx.remove_global_entity(&app_entity);
+                assert!(cx.global_entities::<GlobalEntity>().next().is_none());
+            });
+
+            drop(window_entity);
+            drop(app_entity);
+            drop(window_cx);
+            app_cx.teardown();
+        });
     }
 
     #[test]
