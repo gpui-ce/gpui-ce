@@ -118,6 +118,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the whitespace of the element.
+    /// [Docs](https://tailwindcss.com/docs/whitespace)
+    fn whitespace(mut self, white_space: WhiteSpace) -> Self {
+        self.text_style().white_space = Some(white_space);
+        self
+    }
+
     /// Sets the whitespace of the element to `normal`.
     /// [Docs](https://tailwindcss.com/docs/whitespace#normal)
     fn whitespace_normal(mut self) -> Self {
