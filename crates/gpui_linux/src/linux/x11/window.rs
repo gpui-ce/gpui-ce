@@ -1952,6 +1952,15 @@ impl PlatformWindow for X11Window {
         Some(Box::new((device, queue)))
     }
 
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.0
+            .state
+            .borrow()
+            .renderer
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
+    }
+
     fn gpu_device_lost(&self) -> Option<bool> {
         // Only loads an atomic flag — safe even mid-recovery, when
         // `gpu_context` would panic on the torn-down resources.

@@ -76,6 +76,8 @@ pub(crate) struct WindowsPlatformState {
     /// Shared with each window to coordinate draws across windows on the UI
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
+    #[cfg(feature = "wgpu")]
+    pub(crate) gpu_requirements: RefCell<Option<gpui_wgpu::WgpuDeviceRequirements>>,
     #[cfg(not(feature = "wgpu"))]
     directx_devices: RefCell<Option<DirectXDevices>>,
 }
@@ -104,6 +106,8 @@ impl WindowsPlatformState {
             current_cursor: Cell::new(current_cursor),
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
+            #[cfg(feature = "wgpu")]
+            gpu_requirements: RefCell::new(None),
             #[cfg(not(feature = "wgpu"))]
             directx_devices: RefCell::new(directx_devices),
             menus: RefCell::new(Vec::new()),
@@ -260,6 +264,8 @@ impl WindowsPlatform {
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
             invalidate_devices: self.invalidate_devices.clone(),
             draw_coordinator: self.inner.state.draw_coordinator.clone(),
+            #[cfg(feature = "wgpu")]
+            gpu_requirements: self.inner.state.gpu_requirements.borrow().clone(),
         }
     }
 
@@ -610,6 +616,15 @@ impl Platform for WindowsPlatform {
         self.raw_window_handles.write().push(handle.into());
 
         Ok(Box::new(window))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
+        if let Ok(requirements) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+            *self.inner.state.gpu_requirements.borrow_mut() = Some(*requirements);
+        } else {
+            log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
+        }
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -1246,6 +1261,8 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) invalidate_devices: Arc<AtomicBool>,
     /// Shared with [`WindowsPlatformState::draw_coordinator`] and every other window.
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
+    #[cfg(feature = "wgpu")]
+    pub(crate) gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
 }
 
 struct PlatformWindowCreateContext {

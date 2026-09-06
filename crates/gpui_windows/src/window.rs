@@ -128,6 +128,7 @@ impl WindowsWindowState {
         #[cfg(not(feature = "wgpu"))] disable_direct_composition: bool,
         #[cfg(not(feature = "wgpu"))] invalidate_devices: Arc<AtomicBool>,
         draw_coordinator: Rc<DrawCoordinator>,
+        #[cfg(feature = "wgpu")] gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
     ) -> Result<Self> {
         let scale_factor = {
             let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
@@ -155,7 +156,7 @@ impl WindowsWindowState {
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             },
             None,
-            None,
+            gpu_requirements,
         )
         .context("Creating Wgpu renderer")?;
         #[cfg(not(feature = "wgpu"))]
@@ -287,6 +288,8 @@ impl WindowsWindowInner {
             #[cfg(not(feature = "wgpu"))]
             context.invalidate_devices.clone(),
             context.draw_coordinator.clone(),
+            #[cfg(feature = "wgpu")]
+            context.gpu_requirements.clone(),
         )?;
 
         Ok(Rc::new(Self {
@@ -438,6 +441,8 @@ struct WindowCreateContext {
     #[cfg(not(feature = "wgpu"))]
     invalidate_devices: Arc<AtomicBool>,
     draw_coordinator: Rc<DrawCoordinator>,
+    #[cfg(feature = "wgpu")]
+    gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
     parent_hwnd: Option<HWND>,
 }
 
@@ -467,6 +472,8 @@ impl WindowsWindow {
             directx_devices,
             invalidate_devices,
             draw_coordinator,
+            #[cfg(feature = "wgpu")]
+            gpu_requirements,
         } = creation_info;
         #[cfg(feature = "wgpu")]
         {
@@ -559,6 +566,8 @@ impl WindowsWindow {
             #[cfg(not(feature = "wgpu"))]
             invalidate_devices,
             draw_coordinator,
+            #[cfg(feature = "wgpu")]
+            gpu_requirements,
             parent_hwnd,
         };
         let creation_result = unsafe {
@@ -1090,6 +1099,15 @@ impl PlatformWindow for WindowsWindow {
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         let (device, queue) = self.state.renderer.borrow().gpu_context();
         Some(Box::new((device, queue)))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.state
+            .renderer
+            .borrow()
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
     }
 
     #[cfg(feature = "wgpu")]

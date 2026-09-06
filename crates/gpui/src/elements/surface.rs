@@ -150,13 +150,15 @@ impl Element for Surface {
         _window: &mut Window,
         _: &mut App,
     ) {
-        match self.source {
+        let mut style = Style::default();
+        style.refine(&self.style);
+        _window.with_element_opacity(style.opacity, |window| match self.source {
             #[cfg(target_os = "macos")]
             SurfaceSource::Surface(ref surface) => {
                 let size = crate::size(surface.get_width().into(), surface.get_height().into());
                 let new_bounds = self.object_fit.get_bounds(_bounds, size);
                 // TODO: Add support for corner_radii
-                _window.paint_surface(new_bounds, surface.clone());
+                window.paint_surface(new_bounds, surface.clone());
             }
             #[cfg(any(
                 target_os = "linux",
@@ -168,9 +170,9 @@ impl Element for Surface {
                 ref size,
             } => {
                 let new_bounds = self.object_fit.get_bounds(_bounds, *size);
-                _window.paint_surface(new_bounds, Arc::clone(texture), *size);
+                window.paint_surface(new_bounds, Arc::clone(texture), *size);
             }
-        }
+        });
     }
 }
 

@@ -355,7 +355,11 @@ pub trait Platform: 'static {
     /// Register additional GPU device requirements (features, limits) before
     /// the first window is opened.  The concrete type inside the `Box` must be
     /// `gpui_wgpu::WgpuDeviceRequirements`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
 
     /// Sets the label applied to credentials stored in the system keyring.
@@ -990,6 +994,18 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         all(target_os = "windows", feature = "wgpu-surfaces")
     ))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+
+    /// Returns typed backend-specific GPU context information for custom
+    /// controls. The value is intentionally type-erased in this crate so the
+    /// core UI crate does not depend on a rendering backend.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_os = "windows", feature = "wgpu-surfaces")
+    ))]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
 
