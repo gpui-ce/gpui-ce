@@ -1156,7 +1156,7 @@ fn write_glsl(
     // parse-and-revalidate round trip would reject valid backend output. The
     // input IR has already passed Naga validation and `Writer::new` checks the
     // target's feature floor; retain cheap invariants that catch truncated or
-    // mis-targeted output without pretending the frontend is a GL compiler.
+    // incorrectly targeted output without pretending the frontend is a GL compiler.
     let expected_version = match version {
         naga::back::glsl::Version::Desktop(version) => format!("#version {version} core"),
         naga::back::glsl::Version::Embedded { version, .. } => format!("#version {version} es"),

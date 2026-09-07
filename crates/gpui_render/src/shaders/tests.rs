@@ -71,9 +71,7 @@ fn shader_buffer_layouts_match_host_layouts() {
                     module
                         .types
                         .iter()
-                        .find_map(|(_, ty)| {
-                            (ty.name.as_deref() == Some(layout.name)).then_some(ty)
-                        })
+                        .find_map(|(_, ty)| (ty.name.as_deref() == Some(layout.name)).then_some(ty))
                 })
                 .unwrap_or_else(|| panic!("missing shader ABI type {}", layout.name));
             let naga::TypeInner::Struct { members, span } = &ty.inner else {
@@ -81,8 +79,7 @@ fn shader_buffer_layouts_match_host_layouts() {
             };
 
             assert_eq!(
-                *span as usize,
-                layout.size,
+                *span as usize, layout.size,
                 "shader ABI size: {}",
                 layout.name
             );
@@ -100,8 +97,7 @@ fn shader_buffer_layouts_match_host_layouts() {
                     layout.name
                 );
                 assert_eq!(
-                    member.offset as usize,
-                    *offset,
+                    member.offset as usize, *offset,
                     "shader ABI offset: {}.{name}",
                     layout.name
                 );

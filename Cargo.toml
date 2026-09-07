@@ -173,7 +173,9 @@ libc = "0.2"
 smol = "2.0"
 util = { path = "crates/gpui_zed_util", version = "0.2.2", package = "gpui_ce_zed_util" }
 wgpu = "29.0.3"
-wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = ["validation"] }
+wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = [
+  "validation",
+] }
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "objc2-core-foundation",
@@ -211,7 +213,10 @@ objc2-core-media = { version = "0.3", default-features = false, features = [
   "CMSampleBuffer",
   "objc2",
 ] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CAMetalLayer"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+  "CALayer",
+  "CAMetalLayer",
+] }
 objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
   "std",
   "SCShareableContent",
