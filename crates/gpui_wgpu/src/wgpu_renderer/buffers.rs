@@ -1,5 +1,6 @@
 use collections::FxHashMap;
 use gpui::AtlasTextureId;
+use gpui_render::InstanceRange;
 use gpui_render::artifacts::DATA_TEXTURE_WIDTH;
 use gpui_render::shaders::interface::{self as shader_interface, BufferData};
 use std::{
@@ -43,9 +44,10 @@ impl InstanceTransport {
 }
 
 pub(super) struct InstanceSlice<T> {
-    /// First index in storage; downlevel draws always start at instance zero.
-    first: u32,
-    count: u32,
+    /// The draw arguments. On the storage-buffer transport the base indexes the whole
+    /// arena; downlevel draws always start at instance zero and carry the base in
+    /// their range-uniform slot instead.
+    instances: InstanceRange,
     transport: InstanceTransport,
     /// Byte offset of this batch's range-uniform slot; downlevel transport only.
     range_offset: u32,
@@ -54,11 +56,7 @@ pub(super) struct InstanceSlice<T> {
 
 impl<T> InstanceSlice<T> {
     pub(super) fn range(&self) -> Range<u32> {
-        let first = match self.transport {
-            InstanceTransport::StorageBuffer => self.first,
-            InstanceTransport::DataTexture => 0,
-        };
-        first..first + self.count
+        self.instances.as_range()
     }
 
     /// Binds the group-1 data bind group, adding the dynamic offset downlevel.
@@ -160,8 +158,7 @@ impl InstanceUpload {
     /// An empty batch: no bytes, no range slot, no draw.
     fn empty_batch<T>(&self) -> InstanceSlice<T> {
         InstanceSlice {
-            first: 0,
-            count: 0,
+            instances: InstanceRange::new(0..0).expect("the empty range is addressable"),
             transport: self.transport,
             range_offset: 0,
             value: PhantomData,
@@ -177,13 +174,13 @@ impl InstanceUpload {
     ) -> InstanceSlice<T> {
         let first = match self.transport {
             InstanceTransport::StorageBuffer => {
-                u32::try_from(offset / stride).expect("batch offsets are stride-aligned")
+                usize::try_from(offset / stride).expect("batch offsets are stride-aligned")
             }
             InstanceTransport::DataTexture => 0,
         };
         InstanceSlice {
-            first,
-            count,
+            instances: InstanceRange::new(first..first + count as usize)
+                .expect("arena capacity is bounded by the 32-bit instance index"),
             transport: self.transport,
             range_offset,
             value: PhantomData,
