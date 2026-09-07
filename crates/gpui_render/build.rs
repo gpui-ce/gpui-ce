@@ -1079,6 +1079,7 @@ fn write_dx11_bytecode(
 
 /// Set to build a Windows target from another host without DXBC, for type-checking only.
 /// The resulting `gpui_windows` cannot draw: every pipeline reports `NativeWindowsBuildRequired`.
+#[cfg(not(windows))]
 const ALLOW_MISSING_DXBC: &str = "GPUI_RENDER_ALLOW_MISSING_DXBC";
 
 #[cfg(not(windows))]
