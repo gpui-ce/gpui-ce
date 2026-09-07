@@ -279,6 +279,9 @@ impl CosmicTextSystemState {
         for bytes in fonts {
             db.load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(bytes)));
         }
+        // Missing families and fallback chains may now resolve. Keep old FontIds alive
+        // for already-shaped lines, but reselect families against the updated database.
+        self.font_ids_by_family_cache.clear();
         Ok(())
     }
 
@@ -343,19 +346,8 @@ impl CosmicTextSystemState {
                 .get_font(font_id, cosmic_text::Weight::NORMAL)
                 .context("Could not load font")?;
 
-            // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
-            let allowed_bad_font_names = [
-                "SegoeFluentIcons", // NOTE: Segoe fluent icons postscript name is inconsistent
-                "Segoe Fluent Icons",
-            ];
-
-            if font.as_swash().charmap().map('m') == 0
-                && !allowed_bad_font_names.contains(&postscript_name.as_str())
-            {
-                self.font_system.db_mut().remove_face(font.id());
-                continue;
-            };
-
+            // Symbol, icon and non-Latin fonts need not contain Latin 'm'. Removing
+            // such faces makes explicitly requested icon fonts disappear on Linux.
             let font_id = FontId(self.loaded_fonts.len());
             loaded_font_ids.push(font_id);
             self.loaded_fonts.push(LoadedFont {
@@ -422,7 +414,12 @@ impl CosmicTextSystemState {
                 Ok((bitmap_size, image.data))
             }
             swash::scale::image::Content::Mask => {
-                if params.subpixel_rendering {
+                if params.is_emoji {
+                    // Color fonts can fall back to an outline (Source::Outline below).
+                    // AtlasKey still selects a four-channel color tile in that case.
+                    let expanded = image.data.iter().flat_map(|&a| [0, 0, 0, a]).collect();
+                    Ok((bitmap_size, expanded))
+                } else if params.subpixel_rendering {
                     // We must always return RGBA data when subpixel rendering is requested.
                     let expanded = image.data.iter().flat_map(|&a| [a, a, a, a]).collect();
                     Ok((bitmap_size, expanded))
