@@ -5,6 +5,9 @@
 //! against the Naga versions its consumers require. Dialect gaps close via mechanical
 //! transforms here, never per-backend hand edits.
 
+#[path = "src/path_types.rs"]
+#[allow(dead_code)]
+mod path_types;
 #[path = "src/shaders/mod.rs"]
 mod shaders;
 
@@ -72,6 +75,8 @@ struct BindingLayout<'a> {
 
 struct NativeShaderModule {
     pipeline: &'static shaders::interface::Pipeline,
+    /// Path of `pipeline` inside `crate::shaders::interface`, for the generated table.
+    pipeline_path: &'static str,
     source: &'static wgsl_rs::Source,
     requires_dual_source_lowering: bool,
 }
@@ -99,6 +104,7 @@ fn main() {
     // Dual-source blending only exists in current compilers, so that artifact skips the floor.
     base.validate_and_write(&out_dir);
     subpixel_dual_source.validate_and_write(&out_dir);
+    write_abi_assertions(&out_dir, &base.source, &subpixel_dual_source.source);
 
     // --- Downlevel dialect (WebGL2 / GLES): storage arrays become data-texture loads ----
     let downlevel = ShaderArtifact::downlevel(
@@ -208,6 +214,59 @@ fn shader_source(name: &str, source: &wgsl_rs::Source) -> String {
     source
         .wgsl_source()
         .unwrap_or_else(|error| panic!("failed to generate {name}: {error}"))
+}
+
+/// Emit target-side const assertions, not just checks against the build host's layout.
+/// Shader validation alone cannot detect a perfectly legal shader reading the wrong CPU bytes.
+fn write_abi_assertions(out_dir: &std::path::Path, base: &str, subpixel: &str) {
+    let modules = [base, subpixel].map(|source| naga::front::wgsl::parse_str(source).unwrap());
+    let mut output = String::from(
+        "// @generated: validated on every target, including release builds.\nconst _: () = {\n",
+    );
+    for (table, layouts) in [
+        ("gpui::SCENE_BUFFER_LAYOUTS", gpui::SCENE_BUFFER_LAYOUTS),
+        (
+            "crate::shaders::interface::RENDER_BUFFER_LAYOUTS",
+            shaders::interface::RENDER_BUFFER_LAYOUTS,
+        ),
+    ] {
+        for (index, layout) in layouts.iter().enumerate() {
+            let ty = modules
+                .iter()
+                .find_map(|module| {
+                    module
+                        .types
+                        .iter()
+                        .find_map(|(_, ty)| (ty.name.as_deref() == Some(layout.name)).then_some(ty))
+                })
+                .unwrap_or_else(|| panic!("missing shader ABI type {}", layout.name));
+            let naga::TypeInner::Struct { members, span } = &ty.inner else {
+                panic!("shader ABI type {} must be a struct", layout.name);
+            };
+            writeln!(
+                output,
+                "assert!({table}[{index}].size == {span}, \"shader ABI size mismatch: {}\");",
+                layout.name
+            )
+            .unwrap();
+            assert_eq!(
+                layout.fields.len(),
+                members.len(),
+                "shader ABI field count: {}",
+                layout.name
+            );
+            for (field_index, (name, _)) in layout.fields.iter().enumerate() {
+                let member = members
+                    .iter()
+                    .find(|member| member.name.as_deref() == Some(name))
+                    .unwrap_or_else(|| panic!("missing shader ABI field {}.{name}", layout.name));
+                writeln!(output, "assert!({table}[{index}].fields[{field_index}].1 == {}, \"shader ABI offset mismatch: {}.{name}\");", member.offset, layout.name).unwrap();
+            }
+        }
+    }
+    output.push_str("};\n");
+    fs::write(out_dir.join("shader_abi.rs"), output)
+        .expect("failed to write shader ABI assertions");
 }
 
 fn write_shader(out_dir: &std::path::Path, name: &str, source: &str) {
@@ -762,66 +821,79 @@ fn write_native_shaders(out_dir: &std::path::Path) {
     let modules = [
         NativeShaderModule {
             pipeline: &QUADS,
+            pipeline_path: "QUADS",
             source: &shaders::quad::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &SHADOWS,
+            pipeline_path: "SHADOWS",
             source: &shaders::shadow::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &PATH_RASTERIZATION,
+            pipeline_path: "PATH_RASTERIZATION",
             source: &shaders::path_rasterization::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &PATHS,
+            pipeline_path: "PATHS",
             source: &shaders::path::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &UNDERLINES,
+            pipeline_path: "UNDERLINES",
             source: &shaders::underline::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &MONOCHROME_SPRITES,
+            pipeline_path: "MONOCHROME_SPRITES",
             source: &shaders::monochrome_sprite::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &SUBPIXEL_SPRITES,
+            pipeline_path: "SUBPIXEL_SPRITES",
             source: &shaders::subpixel_sprite::WGSL_SOURCE,
             requires_dual_source_lowering: true,
         },
         NativeShaderModule {
             pipeline: &POLYCHROME_SPRITES,
+            pipeline_path: "POLYCHROME_SPRITES",
             source: &shaders::polychrome_sprite::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &SURFACES,
+            pipeline_path: "SURFACES",
             source: &shaders::surface::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &EMOJI_RASTERIZATION,
+            pipeline_path: "EMOJI_RASTERIZATION",
             source: &shaders::emoji_rasterization::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &BLUR_DOWNSAMPLE,
+            pipeline_path: "BLUR_DOWNSAMPLE",
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &BLUR,
+            pipeline_path: "BLUR",
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
             pipeline: &BLUR_COMPOSITE,
+            pipeline_path: "BLUR_COMPOSITE",
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
@@ -844,7 +916,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         .validate(&legacy_module)
         .unwrap_or_else(|error| panic!("failed to validate {}: {error}", pipeline.label));
 
-        let hlsl = write_hlsl(&legacy_module, &legacy_info, pipeline.label);
+        let hlsl = write_hlsl(&legacy_module, &legacy_info, &wgsl, pipeline);
         let current_module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|error| {
             panic!(
                 "failed to parse {} with current Naga: {error}",
@@ -936,8 +1008,14 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         let gles_300_fragment_path = format!("/{gles_300_fragment_name}");
         let dx11_artifact = write_dx11_bytecode(out_dir, pipeline.label, &hlsl, pipeline)
             .map(|bytecode| {
+                let draw_constants = match dx11_draw_constants_register(pipeline) {
+                    Some(register) => {
+                        format!("Some(Dx11DrawConstantsBinding {{ register: {register} }})")
+                    }
+                    None => "None".into(),
+                };
                 format!(
-                    "Dx11Shader::Sm50(Dx11Bytecode {{ vertex: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})), fragment: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})) }})",
+                    "Dx11Shader::Sm50(Dx11Bytecode {{ vertex: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})), fragment: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})), draw_constants: {draw_constants} }})",
                     bytecode.vertex_path, bytecode.fragment_path,
                 )
             })
@@ -946,6 +1024,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             generated,
             r#"    NativeShader {{
         label: {:?},
+        pipeline: &crate::shaders::interface::{},
         vertex_entry: {:?},
         fragment_entry: {:?},
         dx11: {},
@@ -960,6 +1039,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         msl: include_str!(concat!(env!("OUT_DIR"), {:?})),
     }},"#,
             pipeline.label,
+            module.pipeline_path,
             pipeline.vertex_entry,
             pipeline.fragment_entry,
             dx11_artifact,
@@ -1051,6 +1131,10 @@ fn write_dx11_bytecode(
     })
 }
 
+/// Set to build a Windows target from another host without DXBC, for type-checking only.
+/// The resulting `gpui_windows` cannot draw: every pipeline reports `NativeWindowsBuildRequired`.
+const ALLOW_MISSING_DXBC: &str = "GPUI_RENDER_ALLOW_MISSING_DXBC";
+
 #[cfg(not(windows))]
 fn write_dx11_bytecode(
     _out_dir: &std::path::Path,
@@ -1058,9 +1142,14 @@ fn write_dx11_bytecode(
     _source: &str,
     _pipeline: &shaders::interface::Pipeline,
 ) -> Option<Dx11BytecodePaths> {
-    if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("windows")) {
+    println!("cargo:rerun-if-env-changed={ALLOW_MISSING_DXBC}");
+    if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("windows"))
+        && env::var_os(ALLOW_MISSING_DXBC).is_none()
+    {
         panic!(
-            "building a Windows target from a non-Windows host cannot produce required DXBC; build on Windows rather than deferring HLSL compilation to runtime"
+            "building a Windows target from a non-Windows host cannot produce required DXBC; \
+             build on Windows rather than deferring HLSL compilation to runtime, or set \
+             {ALLOW_MISSING_DXBC}=1 for a check-only build"
         );
     }
     None
@@ -1133,11 +1222,31 @@ fn write_glsl(
     output
 }
 
+/// Instanced pipelines read their batch base from the draw-constants cbuffer.
+///
+/// Direct3D 11 never folds `StartInstanceLocation` into `SV_InstanceID`, so a shader that
+/// indexes a whole-frame instance buffer needs the base delivered some other way. Naga's
+/// "special constants" cbuffer is that way: `instance_index` becomes
+/// `first_instance + SV_InstanceID`. Fullscreen and per-draw-uniform pipelines draw one
+/// instance from vertex zero and carry no such cbuffer.
+fn dx11_draw_constants_register(pipeline: &shaders::interface::Pipeline) -> Option<u32> {
+    use shaders::interface::DataLayout;
+    match pipeline.data_layout {
+        DataLayout::Instances
+        | DataLayout::TexturedInstances
+        | DataLayout::MonochromeSprites
+        | DataLayout::SubpixelSprites => Some(shaders::interface::DX11_DRAW_CONSTANTS_REGISTER),
+        DataLayout::NativeOnly | DataLayout::Surface | DataLayout::Blur => None,
+    }
+}
+
 fn write_hlsl(
     module: &naga_old::Module,
     info: &naga_old::valid::ModuleInfo,
-    label: &str,
+    wgsl: &str,
+    pipeline: &shaders::interface::Pipeline,
 ) -> String {
+    let label = pipeline.label;
     let mut binding_map = naga_old::back::hlsl::BindingMap::default();
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding {
@@ -1151,17 +1260,65 @@ fn write_hlsl(
             );
         }
     }
+    let draw_constants_register = dx11_draw_constants_register(pipeline);
     let options = naga_old::back::hlsl::Options {
         shader_model: naga_old::back::hlsl::ShaderModel::V5_0,
         binding_map,
         fake_missing_bindings: false,
+        special_constants_binding: draw_constants_register.map(|register| {
+            naga_old::back::hlsl::BindTarget {
+                space: 0,
+                register,
+                ..Default::default()
+            }
+        }),
         ..Default::default()
     };
     let mut output = String::new();
     naga_old::back::hlsl::Writer::new(&mut output, &options)
         .write(module, info, None)
         .unwrap_or_else(|error| panic!("failed to generate HLSL for {label}: {error}"));
-    output
+    match draw_constants_register {
+        Some(register) => lower_draw_constants_to_sm50(output, wgsl, label, register),
+        None => {
+            assert!(
+                !wgsl.contains("instance_index"),
+                "{label} reads instance_index but has no DX11 draw constants"
+            );
+            output
+        }
+    }
+}
+
+/// Naga declares its special constants with `ConstantBuffer<T>`, a shader-model 5.1 form
+/// that `vs_5_0` rejects. Rewrite that one declaration into the classic `cbuffer` block and
+/// prove the base actually reaches every instance lookup.
+fn lower_draw_constants_to_sm50(hlsl: String, wgsl: &str, label: &str, register: u32) -> String {
+    let declaration =
+        format!("ConstantBuffer<NagaConstants> _NagaConstants: register(b{register});");
+    assert_eq!(
+        hlsl.matches(&declaration).count(),
+        1,
+        "{label}: expected exactly one Naga special-constants declaration"
+    );
+    assert_eq!(
+        hlsl.matches(&format!("register(b{register})")).count(),
+        1,
+        "{label}: draw-constants register b{register} collides with another cbuffer"
+    );
+    let lowered = hlsl.replace(
+        &declaration,
+        &format!(
+            "cbuffer DrawConstants : register(b{register}) {{ NagaConstants _NagaConstants; }}"
+        ),
+    );
+    if wgsl.contains("instance_index") {
+        assert!(
+            lowered.contains("_NagaConstants.first_instance + "),
+            "{label}: instance_index must be offset by the draw-constants base"
+        );
+    }
+    lowered
 }
 
 fn write_msl(module: &naga::Module, info: &naga::valid::ModuleInfo, label: &str) -> String {

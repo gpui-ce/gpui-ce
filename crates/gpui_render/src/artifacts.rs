@@ -29,6 +29,7 @@ pub enum GeneratedBindingKind {
 }
 
 include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
+include!(concat!(env!("OUT_DIR"), "/shader_abi.rs"));
 
 /// D3D11 bytecode generated from HLSL at build time.
 ///
@@ -38,7 +39,51 @@ include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
 pub struct Dx11Bytecode {
     pub vertex: &'static [u8],
     pub fragment: &'static [u8],
+    /// Present for every pipeline whose vertex shader reads `instance_index`.
+    ///
+    /// Direct3D 11 does not add `StartInstanceLocation` to `SV_InstanceID`, so the
+    /// generated vertex shader adds [`Dx11DrawConstants::first_instance`] itself. The
+    /// renderer must upload a [`Dx11DrawConstants`] to this register before every draw.
+    pub draw_constants: Option<Dx11DrawConstantsBinding>,
 }
+
+/// Where an instanced pipeline expects its [`Dx11DrawConstants`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Dx11DrawConstantsBinding {
+    /// Constant-buffer register (`b<register>`), bound to the vertex stage.
+    pub register: u32,
+}
+
+/// The per-draw cbuffer Naga's HLSL backend declares as `NagaConstants`.
+///
+/// Layout mirrors the generated `struct NagaConstants { int first_vertex; int
+/// first_instance; uint other; }`, padded to the 16-byte cbuffer granule.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Dx11DrawConstants {
+    /// Added to `SV_VertexID` to form `vertex_index`.
+    pub first_vertex: i32,
+    /// Added to `SV_InstanceID` to form `instance_index`.
+    pub first_instance: i32,
+    /// Unused by graphics pipelines; Naga reserves it for compute dispatch sizes.
+    pub other: u32,
+    pub padding: u32,
+}
+
+impl Dx11DrawConstants {
+    /// Constants for a draw whose instances start at `first_instance` in the bound buffer.
+    pub fn for_instances(first_instance: u32) -> Self {
+        Self {
+            first_vertex: 0,
+            first_instance: i32::try_from(first_instance)
+                .expect("instance bases are bounded by the D3D11 buffer limit"),
+            other: 0,
+            padding: 0,
+        }
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<Dx11DrawConstants>() == 16);
 
 /// The DX11 artifact state for this build host.
 ///
@@ -86,6 +131,9 @@ impl<Profile> GlslShader<Profile> {
 
 pub struct NativeShader {
     pub label: &'static str,
+    /// The shared pipeline description this shader was generated for: topology, vertex
+    /// count and data layout are the same on every backend.
+    pub pipeline: &'static crate::shaders::interface::Pipeline,
     pub vertex_entry: &'static str,
     pub fragment_entry: &'static str,
     pub dx11: Dx11Shader,

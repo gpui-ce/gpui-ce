@@ -130,6 +130,9 @@ pub const PRIMARY_SAMPLER_BINDING: u32 = 2;
 pub const SURFACE_SAMPLER_BINDING: u32 = 3;
 pub const RECTANGLE_VERTEX_COUNT: u32 = 4;
 pub const FULLSCREEN_TRIANGLE_VERTEX_COUNT: u32 = 3;
+/// D3D11 constant-buffer register of the per-draw instance base for instanced pipelines.
+/// Group-0 cbuffers occupy b0 and b1, and the group-1 uniform lands on b2.
+pub const DX11_DRAW_CONSTANTS_REGISTER: u32 = 3;
 
 macro_rules! buffer_data {
         ($($rust:ty => $wgsl:literal),* $(,)?) => {
@@ -161,4 +164,69 @@ pub const SCENE_STORAGE_ABI: &[StorageAbi] = &[
     storage_abi::<gpui::MonochromeSprite>(),
     storage_abi::<gpui::SubpixelSprite>(),
     storage_abi::<gpui::PolychromeSprite>(),
+];
+
+macro_rules! render_layout {
+    ($ty:ty, $name:literal, $($field:ident),+ $(,)?) => {
+        gpui::SceneBufferLayout {
+            name: $name,
+            size: std::mem::size_of::<$ty>(),
+            fields: &[$((stringify!($field), std::mem::offset_of!($ty, $field))),+],
+        }
+    };
+}
+
+#[doc(hidden)]
+pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
+    render_layout!(
+        super::common::GlobalUniforms,
+        "GlobalUniforms",
+        viewport_size,
+        premultiplied_alpha,
+        padding
+    ),
+    render_layout!(
+        super::common::FontRasterizationUniforms,
+        "FontRasterizationUniforms",
+        gamma_ratios,
+        grayscale_enhanced_contrast,
+        subpixel_enhanced_contrast,
+        uses_blue_green_red_subpixel_order,
+        padding
+    ),
+    render_layout!(
+        super::surface::SurfaceUniforms,
+        "SurfaceUniforms",
+        bounds,
+        content_mask,
+        color_format,
+        padding0,
+        padding1,
+        padding2
+    ),
+    render_layout!(
+        super::blur::BlurUniforms,
+        "BlurUniforms",
+        bounds,
+        content_mask,
+        corner_radii,
+        direction,
+        standard_deviation,
+        opacity,
+        sample_count,
+        sample_step,
+        composite_clip,
+        downsample_mode,
+        source_size,
+        target_size
+    ),
+    render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),
+    render_layout!(
+        crate::path_types::PathRasterizationVertex,
+        "PathRasterizationVertex",
+        xy_position,
+        curve_position,
+        color,
+        bounds
+    ),
 ];
