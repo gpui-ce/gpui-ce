@@ -669,7 +669,7 @@ fn subpixel_blend_state() -> wgpu::BlendState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 pub(super) fn desktop_scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {
     scene_blend_state(alpha_mode)
 }
