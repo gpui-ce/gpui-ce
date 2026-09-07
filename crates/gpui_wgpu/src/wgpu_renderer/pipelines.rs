@@ -330,7 +330,8 @@ impl WgpuPipelines {
         dual_source_blending: bool,
         tier: RendererTier,
     ) -> Self {
-        let dual_source_blending = supported_dual_source_blending(device, dual_source_blending);
+        let dual_source_blending = tier == RendererTier::Modern
+            && supported_dual_source_blending(device, dual_source_blending);
         let base_source = match tier {
             RendererTier::Modern => BASE_WGSL,
             // GLES lacks vertex-stage storage; the dialect reads the data texture.

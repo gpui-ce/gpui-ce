@@ -33,8 +33,8 @@ impl FontRasterizationSettings {
     ) -> Self {
         Self {
             gamma_ratios: get_gamma_correction_ratios(gamma.clamp(1.0, 2.2)),
-            grayscale_enhanced_contrast: grayscale_enhanced_contrast.max(0.0),
-            subpixel_enhanced_contrast: subpixel_enhanced_contrast.max(0.0),
+            grayscale_enhanced_contrast: finite_contrast(grayscale_enhanced_contrast),
+            subpixel_enhanced_contrast: finite_contrast(subpixel_enhanced_contrast),
             subpixel_order,
         }
     }
@@ -81,6 +81,17 @@ impl RenderingParameters {
 fn environment_f32(name: &str, default: f32) -> f32 {
     std::env::var(name)
         .ok()
-        .and_then(|value| value.parse().ok())
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
         .unwrap_or(default)
+}
+
+fn finite_contrast(contrast: f32) -> f32 {
+    // Infinity survives max(0), then produces inf/inf (or inf*0) in the coverage
+    // shader. Fall back to neutral correction instead of making every glyph NaN.
+    if contrast.is_finite() {
+        contrast.max(0.0)
+    } else {
+        0.0
+    }
 }

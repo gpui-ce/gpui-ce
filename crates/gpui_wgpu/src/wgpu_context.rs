@@ -421,9 +421,10 @@ impl WgpuContext {
         extra_requirements: Option<&WgpuDeviceRequirements>,
     ) -> anyhow::Result<CreatedDevice> {
         let renderer_tier = renderer_tier(adapter);
-        let dual_source_blending = adapter
-            .features()
-            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        // Our LCD shader uses storage buffers even when the adapter exposes dual-source
+        // blending. Downlevel devices must use grayscale and the data-texture dialect.
+        let dual_source_blending = renderer_tier == RendererTier::Modern
+            && adapter.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
 
         let mut required_features = wgpu::Features::empty();
         if dual_source_blending {
