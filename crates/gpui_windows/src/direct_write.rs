@@ -133,23 +133,16 @@ impl GPUState {
             sampler
         };
 
+        let bytecode = shader_resources::ShaderModule::EmojiRasterization.bytecode()?;
         let vertex_shader = {
-            let source = shader_resources::RawShaderBytes::new(
-                shader_resources::ShaderModule::EmojiRasterization,
-                shader_resources::ShaderTarget::Vertex,
-            )?;
             let mut shader = None;
-            unsafe { device.CreateVertexShader(source.as_bytes(), None, Some(&mut shader)) }?;
+            unsafe { device.CreateVertexShader(bytecode.vertex, None, Some(&mut shader)) }?;
             shader.unwrap()
         };
 
         let pixel_shader = {
-            let source = shader_resources::RawShaderBytes::new(
-                shader_resources::ShaderModule::EmojiRasterization,
-                shader_resources::ShaderTarget::Fragment,
-            )?;
             let mut shader = None;
-            unsafe { device.CreatePixelShader(source.as_bytes(), None, Some(&mut shader)) }?;
+            unsafe { device.CreatePixelShader(bytecode.fragment, None, Some(&mut shader)) }?;
             shader.unwrap()
         };
 
@@ -383,6 +376,9 @@ impl DirectWriteState {
         let set = unsafe { components.builder.CreateFontSet()? };
         let collection = unsafe { components.factory.CreateFontCollectionFromFontSet(&set)? };
         self.custom_font_collection = collection;
+        // New custom faces take precedence over previously selected system faces.
+        // Existing FontIds stay valid for shaped lines; future requests must reselect.
+        self.font_to_font_id.clear();
 
         Ok(())
     }
