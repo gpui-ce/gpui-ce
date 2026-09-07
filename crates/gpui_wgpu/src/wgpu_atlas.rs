@@ -127,6 +127,13 @@ impl PlatformAtlas for WgpuAtlas {
             let Some((size, bytes)) = build()? else {
                 return Ok(None);
             };
+            key.texture_kind().validate_upload(size, &bytes)?;
+            anyhow::ensure!(
+                size.width.0 as u32 <= lock.max_texture_size
+                    && size.height.0 as u32 <= lock.max_texture_size,
+                "atlas tile {size:?} exceeds the device texture limit {}",
+                lock.max_texture_size
+            );
             let tile = lock
                 .allocate(size, key.texture_kind())
                 .context("failed to allocate")?;
@@ -203,7 +210,7 @@ impl WgpuAtlasState {
             height: DevicePixels(max_texture_size),
         };
 
-        let size = min_size.min(&max_atlas_size).max(&DEFAULT_ATLAS_SIZE);
+        let size = min_size.max(&DEFAULT_ATLAS_SIZE).min(&max_atlas_size);
         let format = match kind {
             AtlasTextureKind::Monochrome => wgpu::TextureFormat::R8Unorm,
             AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => self.color_texture_format,
