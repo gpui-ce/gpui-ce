@@ -18,6 +18,9 @@ use std::{
 
 mod plan;
 pub use plan::*;
+mod abi;
+#[doc(hidden)]
+pub use abi::{SCENE_BUFFER_LAYOUTS, SceneBufferLayout};
 
 #[allow(non_camel_case_types, unused)]
 #[expect(missing_docs)]
