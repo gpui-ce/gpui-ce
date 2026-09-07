@@ -1434,6 +1434,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set whether this element disallows input, e.g. a disabled control or a
+    /// disabled group of controls (maps to AccessKit's `Disabled` flag).
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria.disabled = Some(disabled);
+        self
+    }
+
     /// Set the numeric value for this element.
     fn aria_numeric_value(mut self, value: f64) -> Self {
         self.interactivity().aria.numeric_value = Some(value);
@@ -1518,6 +1525,30 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the column count for this element.
     fn aria_column_count(mut self, count: usize) -> Self {
         self.interactivity().aria.column_count = Some(count);
+        self
+    }
+
+    /// Mark this element (typically a dialog) as explicitly modal, so
+    /// assistive technology treats the rest of the window as inert while it
+    /// is open (maps to AccessKit's `Modal` flag).
+    fn aria_modal(mut self, modal: bool) -> Self {
+        self.interactivity().aria.modal = Some(modal);
+        self
+    }
+
+    /// Set how urgently assistive technology should announce updates to this
+    /// element, as an ARIA live region. See [`accesskit::Live`].
+    fn aria_live(mut self, live: accesskit::Live) -> Self {
+        self.interactivity().aria.live = Some(live);
+        self
+    }
+
+    /// Set whether updates to this live region should be announced as a
+    /// whole rather than describing only the changed part (maps to
+    /// AccessKit's `LiveAtomic` flag). Only meaningful alongside
+    /// [`aria_live`][Self::aria_live].
+    fn aria_live_atomic(mut self, atomic: bool) -> Self {
+        self.interactivity().aria.live_atomic = Some(atomic);
         self
     }
 
@@ -2119,6 +2150,7 @@ pub(crate) struct AriaProperties {
     pub(crate) selected: Option<bool>,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
+    pub(crate) disabled: Option<bool>,
     pub(crate) numeric_value: Option<f64>,
     pub(crate) min_numeric_value: Option<f64>,
     pub(crate) max_numeric_value: Option<f64>,
@@ -2133,6 +2165,9 @@ pub(crate) struct AriaProperties {
     pub(crate) column_index: Option<usize>,
     pub(crate) row_count: Option<usize>,
     pub(crate) column_count: Option<usize>,
+    pub(crate) modal: Option<bool>,
+    pub(crate) live: Option<accesskit::Live>,
+    pub(crate) live_atomic: Option<bool>,
 }
 
 /// The interactivity struct. Powers all of the general-purpose
@@ -3617,6 +3652,13 @@ impl Interactivity {
         if let Some(toggled) = self.aria.toggled {
             node.set_toggled(toggled);
         }
+        if let Some(disabled) = self.aria.disabled {
+            if disabled {
+                node.set_disabled();
+            } else {
+                node.clear_disabled();
+            }
+        }
         if let Some(value) = self.aria.numeric_value {
             node.set_numeric_value(value);
         }
@@ -3658,6 +3700,23 @@ impl Interactivity {
         }
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
+        }
+        if let Some(modal) = self.aria.modal {
+            if modal {
+                node.set_modal();
+            } else {
+                node.clear_modal();
+            }
+        }
+        if let Some(live) = self.aria.live {
+            node.set_live(live);
+        }
+        if let Some(atomic) = self.aria.live_atomic {
+            if atomic {
+                node.set_live_atomic();
+            } else {
+                node.clear_live_atomic();
+            }
         }
         if !self.click_listeners.is_empty() {
             node.add_action(accesskit::Action::Click);
@@ -5083,6 +5142,46 @@ mod tests {
         assert_eq!(node.min_numeric_value(), Some(6.0));
         assert_eq!(node.max_numeric_value(), Some(72.0));
         assert_eq!(node.numeric_value_step(), Some(1.0));
+    }
+
+    #[test]
+    fn test_write_a11y_info_disabled_modal_and_live_region() {
+        let mut interactivity = Interactivity::default();
+        interactivity.aria.disabled = Some(true);
+        interactivity.aria.modal = Some(true);
+        interactivity.aria.live = Some(accesskit::Live::Assertive);
+        interactivity.aria.live_atomic = Some(true);
+
+        let mut node = accesskit::Node::new(accesskit::Role::Dialog);
+        interactivity.write_a11y_info(&mut node);
+
+        assert!(node.is_disabled());
+        assert!(node.is_modal());
+        assert_eq!(node.live(), Some(accesskit::Live::Assertive));
+        assert!(node.is_live_atomic());
+    }
+
+    #[test]
+    fn test_write_a11y_info_disabled_and_modal_false_clear_the_flags() {
+        // `Some(false)` must explicitly clear a flag-style AccessKit property,
+        // not merely leave it at its (already-cleared) default: a caller that
+        // re-renders a node from a previous state relies on `Some(false)`
+        // overriding a flag that a prior frame set to `true`.
+        let mut interactivity = Interactivity::default();
+        interactivity.aria.disabled = Some(false);
+        interactivity.aria.modal = Some(false);
+        interactivity.aria.live_atomic = Some(false);
+
+        let mut node = accesskit::Node::new(accesskit::Role::Dialog);
+        node.set_disabled();
+        node.set_modal();
+        node.set_live_atomic();
+
+        interactivity.write_a11y_info(&mut node);
+
+        assert!(!node.is_disabled());
+        assert!(!node.is_modal());
+        assert!(!node.is_live_atomic());
     }
 
     /// Two focusable, clickable elements ("a" and "b") used to exercise the
