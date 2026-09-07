@@ -2557,7 +2557,6 @@ dependencies = [
  "gpui_ce_macos",
  "gpui_ce_web",
  "gpui_ce_windows",
- "log",
 ]
 
 [[package]]
@@ -2661,7 +2660,6 @@ name = "gpui_ce_wgpu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytemuck",
  "core-foundation",
  "core-video",
  "cosmic-text",

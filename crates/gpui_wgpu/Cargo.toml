@@ -22,7 +22,6 @@ wgpu-surfaces = ["gpui/wgpu-surfaces"]
 gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_render.workspace = true
 anyhow.workspace = true
-bytemuck = "1"
 collections.workspace = true
 cosmic-text = "0.19.0"
 etagere.workspace = true
