@@ -290,7 +290,7 @@ pub struct Background {
     pub(crate) gradient_angle_or_pattern_height: f32,
     pub(crate) colors: [LinearColorStop; 2],
     /// Padding for alignment for repr(C) layout.
-    padding: u32,
+    pub(crate) padding: u32,
 }
 
 impl std::fmt::Debug for Background {

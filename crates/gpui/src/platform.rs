@@ -1504,6 +1504,31 @@ pub enum AtlasTextureKind {
     Subpixel = 2,
 }
 
+impl AtlasTextureKind {
+    /// Validates a tightly packed bitmap before an atlas allocates or caches its tile.
+    /// Monochrome tiles contain one coverage byte; color and LCD tiles contain four bytes.
+    pub fn validate_upload(self, size: Size<DevicePixels>, bytes: &[u8]) -> Result<()> {
+        anyhow::ensure!(
+            size.width.0 > 0 && size.height.0 > 0,
+            "{self:?} atlas upload requires positive dimensions, got {size:?}"
+        );
+        let channels = match self {
+            Self::Monochrome => 1,
+            Self::Polychrome | Self::Subpixel => 4,
+        };
+        let expected = (size.width.0 as usize)
+            .checked_mul(size.height.0 as usize)
+            .and_then(|pixels| pixels.checked_mul(channels))
+            .ok_or_else(|| anyhow::anyhow!("atlas upload byte count overflow for {size:?}"))?;
+        anyhow::ensure!(
+            bytes.len() == expected,
+            "{self:?} atlas upload for {size:?} requires {expected} bytes, got {}",
+            bytes.len()
+        );
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 #[expect(missing_docs)]
