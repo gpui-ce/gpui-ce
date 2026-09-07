@@ -85,6 +85,13 @@ impl PlatformAtlas for DirectXAtlas {
             let Some((size, bytes)) = build()? else {
                 return Ok(None);
             };
+            // Validate before allocation: a rejected bitmap must never leave a cached,
+            // uninitialized tile that every later glyph/SVG lookup treats as successful.
+            key.texture_kind().validate_upload(size, &bytes)?;
+            anyhow::ensure!(
+                size.width.0 <= 16384 && size.height.0 <= 16384,
+                "atlas tile {size:?} exceeds the Direct3D 11 texture limit"
+            );
             let tile = lock
                 .allocate(size, key.texture_kind())
                 .ok_or_else(|| anyhow::anyhow!("failed to allocate"))?;
@@ -282,24 +289,8 @@ impl DirectXAtlasTexture {
         bounds: Bounds<DevicePixels>,
         bytes: &[u8],
     ) {
-        // `UpdateSubresource` reads `row_pitch * height` bytes from `bytes` based on the
-        // `D3D11_BOX` below. If the caller hands us a slice shorter than that, the driver would
-        // over-read past the end of the source buffer (potentially by multiple megabytes), so bail
-        // out instead. This is a first-insert path rather than a per-frame one, so the check is
-        // effectively free.
-        let row_bytes = bounds.size.width.to_bytes(self.bytes_per_pixel as u8) as usize;
-        let expected = row_bytes * bounds.size.height.0.max(0) as usize;
-        if bytes.len() < expected {
-            log::error!(
-                "DirectXAtlasTexture::upload: source slice is {} bytes but the {}x{} region \
-                 requires {} bytes; skipping upload to avoid a driver over-read",
-                bytes.len(),
-                bounds.size.width.0,
-                bounds.size.height.0,
-                expected,
-            );
-            return;
-        }
+        // The insertion boundary validates the exact byte count before allocating this tile.
+        debug_assert!(self.id.kind.validate_upload(bounds.size, bytes).is_ok());
         unsafe {
             device_context.UpdateSubresource(
                 &self.texture,
