@@ -56,6 +56,61 @@ fn shader_interface_matches_generated_sources() {
 }
 
 #[test]
+fn shader_buffer_layouts_match_host_layouts() {
+    let modules = [
+        crate::artifacts::BASE_WGSL,
+        crate::artifacts::SUBPIXEL_DUAL_SOURCE_WGSL,
+    ]
+    .map(|source| naga::front::wgsl::parse_str(source).unwrap());
+
+    for layouts in [gpui::SCENE_BUFFER_LAYOUTS, interface::RENDER_BUFFER_LAYOUTS] {
+        for layout in layouts {
+            let ty = modules
+                .iter()
+                .find_map(|module| {
+                    module
+                        .types
+                        .iter()
+                        .find_map(|(_, ty)| {
+                            (ty.name.as_deref() == Some(layout.name)).then_some(ty)
+                        })
+                })
+                .unwrap_or_else(|| panic!("missing shader ABI type {}", layout.name));
+            let naga::TypeInner::Struct { members, span } = &ty.inner else {
+                panic!("shader ABI type {} must be a struct", layout.name);
+            };
+
+            assert_eq!(
+                *span as usize,
+                layout.size,
+                "shader ABI size: {}",
+                layout.name
+            );
+            assert_eq!(
+                members.len(),
+                layout.fields.len(),
+                "shader ABI fields: {}",
+                layout.name
+            );
+            for (member, (name, offset)) in members.iter().zip(layout.fields) {
+                assert_eq!(
+                    member.name.as_deref(),
+                    Some(*name),
+                    "shader ABI field: {}",
+                    layout.name
+                );
+                assert_eq!(
+                    member.offset as usize,
+                    *offset,
+                    "shader ABI offset: {}.{name}",
+                    layout.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn shader_discriminants_match_scene_types() {
     assert_eq!(common::ShaderBool::Disabled as u32, 0);
     assert_eq!(common::ShaderBool::Enabled as u32, 1);

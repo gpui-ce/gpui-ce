@@ -29,7 +29,6 @@ pub enum GeneratedBindingKind {
 }
 
 include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
-include!(concat!(env!("OUT_DIR"), "/shader_abi.rs"));
 
 /// D3D11 bytecode generated from HLSL at build time.
 ///

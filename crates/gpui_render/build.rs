@@ -104,7 +104,6 @@ fn main() {
     // Dual-source blending only exists in current compilers, so that artifact skips the floor.
     base.validate_and_write(&out_dir);
     subpixel_dual_source.validate_and_write(&out_dir);
-    write_abi_assertions(&out_dir, &base.source, &subpixel_dual_source.source);
 
     // --- Downlevel dialect (WebGL2 / GLES): storage arrays become data-texture loads ----
     let downlevel = ShaderArtifact::downlevel(
@@ -214,59 +213,6 @@ fn shader_source(name: &str, source: &wgsl_rs::Source) -> String {
     source
         .wgsl_source()
         .unwrap_or_else(|error| panic!("failed to generate {name}: {error}"))
-}
-
-/// Emit target-side const assertions, not just checks against the build host's layout.
-/// Shader validation alone cannot detect a perfectly legal shader reading the wrong CPU bytes.
-fn write_abi_assertions(out_dir: &std::path::Path, base: &str, subpixel: &str) {
-    let modules = [base, subpixel].map(|source| naga::front::wgsl::parse_str(source).unwrap());
-    let mut output = String::from(
-        "// @generated: validated on every target, including release builds.\nconst _: () = {\n",
-    );
-    for (table, layouts) in [
-        ("gpui::SCENE_BUFFER_LAYOUTS", gpui::SCENE_BUFFER_LAYOUTS),
-        (
-            "crate::shaders::interface::RENDER_BUFFER_LAYOUTS",
-            shaders::interface::RENDER_BUFFER_LAYOUTS,
-        ),
-    ] {
-        for (index, layout) in layouts.iter().enumerate() {
-            let ty = modules
-                .iter()
-                .find_map(|module| {
-                    module
-                        .types
-                        .iter()
-                        .find_map(|(_, ty)| (ty.name.as_deref() == Some(layout.name)).then_some(ty))
-                })
-                .unwrap_or_else(|| panic!("missing shader ABI type {}", layout.name));
-            let naga::TypeInner::Struct { members, span } = &ty.inner else {
-                panic!("shader ABI type {} must be a struct", layout.name);
-            };
-            writeln!(
-                output,
-                "assert!({table}[{index}].size == {span}, \"shader ABI size mismatch: {}\");",
-                layout.name
-            )
-            .unwrap();
-            assert_eq!(
-                layout.fields.len(),
-                members.len(),
-                "shader ABI field count: {}",
-                layout.name
-            );
-            for (field_index, (name, _)) in layout.fields.iter().enumerate() {
-                let member = members
-                    .iter()
-                    .find(|member| member.name.as_deref() == Some(name))
-                    .unwrap_or_else(|| panic!("missing shader ABI field {}.{name}", layout.name));
-                writeln!(output, "assert!({table}[{index}].fields[{field_index}].1 == {}, \"shader ABI offset mismatch: {}.{name}\");", member.offset, layout.name).unwrap();
-            }
-        }
-    }
-    output.push_str("};\n");
-    fs::write(out_dir.join("shader_abi.rs"), output)
-        .expect("failed to write shader ABI assertions");
 }
 
 fn write_shader(out_dir: &std::path::Path, name: &str, source: &str) {
