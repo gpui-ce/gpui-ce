@@ -83,7 +83,7 @@ check-wasm-atomics:
 check-examples:
     @echo "📐 Checking examples..."
     cargo build --package gpui-ce --examples
-    cargo check --package gpui_ce_web --target wasm32-unknown-unknown
+    cargo check --package gpui_ce_web --target wasm32-unknown-unknown --no-default-features
 
 
 [doc('Run all workspace unit and integration tests')]
