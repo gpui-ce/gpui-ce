@@ -60,7 +60,7 @@ pub(super) fn draw_surfaces(
 ) -> frame::DrawResult {
     use core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
 
-    let mut keyed_surfaces = smallvec::SmallVec::<[(&PaintSurface, usize); 4]>::new();
+    let mut keyed_surfaces = smallvec::SmallVec::<[(&PaintSurface, usize, f32); 4]>::new();
     for (index, surface) in surfaces.iter().enumerate() {
         let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {
             log::error!("surface source cannot be imported by the macOS renderer");
@@ -85,7 +85,7 @@ pub(super) fn draw_surfaces(
             return Err(frame::DrawError::ExternalSurface);
         };
         let mut imported = cache.surfaces.remove(&key).map(Ok).unwrap_or_else(|| {
-            create_core_video_surface(renderer, &cache.texture_cache, image_buffer)
+            create_core_video_surface(renderer, &cache.texture_cache, &image_buffer)
         })?;
         renderer.draw_surface_binding(
             surface,
