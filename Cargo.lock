@@ -2313,6 +2313,7 @@ dependencies = [
  "gpui_ce_sum_tree",
  "gpui_ce_util",
  "gpui_types",
+ "gpui_types_ext",
  "hdrhistogram",
  "heapless",
  "http",
@@ -2781,11 +2782,20 @@ dependencies = [
  "etagere",
  "gpui_ce_refineable",
  "lyon",
- "proptest",
  "schemars",
  "serde",
  "serde_json",
  "taffy",
+]
+
+[[package]]
+name = "gpui_types_ext"
+version = "0.1.0"
+dependencies = [
+ "gpui_types",
+ "palette",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

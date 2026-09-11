@@ -12,6 +12,8 @@
 
 #![warn(missing_docs)]
 
+/// Upstream GPUI color types (`Hsla`, `Rgba`, `Background`, ...).
+pub mod color;
 mod geometry;
 mod layout;
 

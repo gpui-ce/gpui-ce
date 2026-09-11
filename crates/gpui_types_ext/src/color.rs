@@ -284,13 +284,18 @@ impl Display for ColorSpace {
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct Background {
-    pub(crate) tag: BackgroundTag,
-    pub(crate) color_space: ColorSpace,
-    pub(crate) solid: crate::SceneHsla,
-    pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 2],
+    /// The kind of background this describes.
+    pub tag: BackgroundTag,
+    /// The color space used to interpolate gradients.
+    pub color_space: ColorSpace,
+    /// The solid color, for solid/pattern/checkerboard backgrounds.
+    pub solid: crate::SceneHsla,
+    /// The gradient angle (degrees) or pattern height, depending on `tag`.
+    pub gradient_angle_or_pattern_height: f32,
+    /// The two color stops of a linear gradient.
+    pub colors: [LinearColorStop; 2],
     /// Padding for alignment for repr(C) layout.
-    pub(crate) padding: u32,
+    pub padding: u32,
 }
 
 impl std::fmt::Debug for Background {

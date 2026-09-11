@@ -15,8 +15,6 @@ doctest = false
 [features]
 default = []
 lyon = ["dep:lyon", "dep:etagere"]
-proptest = ["dep:proptest"]
-test-support = ["proptest"]
 
 [dependencies]
 anyhow.workspace = true
@@ -27,7 +25,6 @@ refineable.workspace = true
 schemars.workspace = true
 serde.workspace = true
 taffy = "=0.13.0"
-proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

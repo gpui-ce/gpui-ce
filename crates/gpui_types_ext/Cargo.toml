@@ -1,0 +1,19 @@
+[package]
+name = "gpui_types_ext"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/gpui_types_ext.rs"
+doctest = false
+
+[dependencies]
+gpui_types.workspace = true
+palette.workspace = true
+schemars.workspace = true
+serde.workspace = true

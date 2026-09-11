@@ -14,7 +14,6 @@ mod arena;
 mod asset_cache;
 mod assets;
 mod bounds_tree;
-mod color;
 /// The default colors used by GPUI.
 pub mod colors;
 #[cfg(feature = "profiler")]
@@ -100,7 +99,6 @@ pub use app::*;
 pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
-pub use color::*;
 pub use ctor::ctor;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;
@@ -139,6 +137,7 @@ macro_rules! bench_main {
 }
 pub use gpui_shared_string::*;
 pub use gpui_types::*;
+pub use gpui_types_ext::*;
 pub use gpui_util::arc_cow::ArcCow;
 /// HTTP client abstraction for making requests.
 pub mod http_client;

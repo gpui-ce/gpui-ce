@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Pixels, Point,
-    Radians, ScaledFilter, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    Radians, ScaledFilter, ScaledPixels, SceneHsla, Size, bounds_tree::BoundsTree, point,
 };
 use smallvec::SmallVec;
 use std::{
@@ -332,35 +332,6 @@ impl Scene {
     /// Whether rendering needs an offscreen scene target for backdrop or content filters.
     pub fn requires_offscreen_rendering(&self) -> bool {
         self.render_plan().requirements().uses_offscreen_target
-    }
-}
-
-/// Internal representation of [`palette::Hsla`] which is layout sensitive, as its provided to the renderer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[repr(C)]
-pub struct SceneHsla {
-    /// Hue, in a range from 0 to 1
-    pub(crate) h: f32,
-    /// Saturation, in a range from 0 to 1
-    pub(crate) s: f32,
-    /// Lightness, in a range from 0 to 1
-    pub(crate) l: f32,
-    /// Alpha, in a range from 0 to 1
-    pub(crate) a: f32,
-}
-impl Into<palette::Hsla> for SceneHsla {
-    fn into(self) -> palette::Hsla {
-        palette::Hsla::new(self.h * 360.0, self.s, self.l, self.a)
-    }
-}
-impl From<palette::Hsla> for SceneHsla {
-    fn from(hsla: palette::Hsla) -> Self {
-        Self {
-            h: hsla.hue.into_positive_degrees() / 360.0,
-            s: hsla.saturation,
-            l: hsla.lightness,
-            a: hsla.alpha,
-        }
     }
 }
 
