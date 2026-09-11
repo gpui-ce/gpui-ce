@@ -1402,6 +1402,15 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Hide this element and its descendants from assistive technology.
+    ///
+    /// This does not change rendering, focus, or input. Do not use it on an
+    /// element that can receive focus or contains focusable descendants.
+    fn aria_hidden(mut self) -> Self {
+        self.interactivity().aria.hidden = true;
+        self
+    }
+
     /// Report this element as the focused node in the accessibility tree,
     /// overriding the element that holds real keyboard focus — but only while
     /// one of its ancestors actually holds focus.
@@ -1426,9 +1435,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// to any element — as children of this element's a11y node. For example,
     /// text runs describing an editor's text content.
     ///
-    /// The closure is called after this element is prepainted, and only if it
-    /// contributed a node to the accessibility tree (i.e. it has an id and a
-    /// [`role`][StatefulInteractiveElement::role]).
+    /// GPUI calls the closure after prepaint. The element must have an id and
+    /// either a [`role`][StatefulInteractiveElement::role] or
+    /// [`aria_hidden()`][StatefulInteractiveElement::aria_hidden].
     ///
     /// See [`Element::a11y_synthetic_children`] for details.
     fn a11y_synthetic_children(
@@ -1941,6 +1950,10 @@ impl Element for Div {
             .filter(|role| *role != accesskit::Role::GenericContainer)
     }
 
+    fn is_a11y_hidden(&self) -> bool {
+        self.interactivity.aria.hidden
+    }
+
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.interactivity.write_a11y_info(node);
     }
@@ -2139,6 +2152,7 @@ pub(crate) struct AriaProperties {
     pub(crate) label: Option<SharedString>,
     pub(crate) description: Option<SharedString>,
     pub(crate) keyshortcuts: Option<SharedString>,
+    pub(crate) hidden: bool,
     pub(crate) selected: Option<bool>,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
@@ -4134,6 +4148,10 @@ where
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.element.a11y_role()
+    }
+
+    fn is_a11y_hidden(&self) -> bool {
+        self.element.is_a11y_hidden()
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {

@@ -141,6 +141,7 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
+accesskit_consumer.workspace = true
 backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }

@@ -259,6 +259,10 @@ fn node_to_json(
     }
 
     // Boolean / enum states.
+    if node.is_hidden() {
+        aria.insert("hidden".into(), json!(true));
+    }
+
     if let Some(v) = node.is_selected() {
         aria.insert("selected".into(), json!(v));
     }
@@ -327,4 +331,81 @@ fn ephemeral_id(mut index: usize) -> String {
     }
     bytes.reverse();
     String::from_utf8(bytes).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        AnyWindowHandle, AppContext as _, Context, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, StatefulInteractiveElement as _, TestAppContext, Window, div,
+        util::FluentBuilder as _,
+    };
+    use accesskit::{Role, TreeUpdate};
+    use accesskit_consumer::{Tree, common_filter};
+    use std::sync::atomic::Ordering;
+
+    struct HiddenSubtree {
+        hidden: bool,
+    }
+
+    impl Render for HiddenSubtree {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(
+                    div()
+                        .id("hidden-boundary")
+                        .when(self.hidden, |element| element.aria_hidden())
+                        .child(div().id("inside").role(Role::Button).aria_label("Inside")),
+                )
+                .child(div().id("outside").role(Role::Button).aria_label("Outside"))
+        }
+    }
+
+    #[test]
+    fn aria_hidden_controls_subtree_visibility() {
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, _| HiddenSubtree { hidden: false });
+        let any_window: AnyWindowHandle = window.into();
+
+        let draw_tree = |window: AnyWindowHandle, cx: &mut TestAppContext| -> TreeUpdate {
+            cx.update_window(window, |_, window, cx| {
+                window.a11y.active_flag.store(true, Ordering::SeqCst);
+                window.draw(cx).clear(cx);
+                window
+                    .a11y
+                    .debug
+                    .last_tree_update
+                    .clone()
+                    .expect("drawing with accessibility active should produce a tree")
+            })
+            .unwrap()
+        };
+        let filtered_labels = |update| {
+            let tree = Tree::new(update, false);
+            tree.state()
+                .root()
+                .filtered_children(common_filter)
+                .filter_map(|node| node.label())
+                .collect::<Vec<_>>()
+        };
+        let set_hidden = |hidden, cx: &mut TestAppContext| {
+            window
+                .update(cx, |view, _, cx| {
+                    view.hidden = hidden;
+                    cx.notify();
+                })
+                .unwrap();
+        };
+
+        let visible_update = draw_tree(any_window, &mut cx);
+        assert_eq!(filtered_labels(visible_update), ["Inside", "Outside"]);
+
+        set_hidden(true, &mut cx);
+        let hidden_update = draw_tree(any_window, &mut cx);
+        assert_eq!(filtered_labels(hidden_update), ["Outside"]);
+
+        set_hidden(false, &mut cx);
+        let restored_update = draw_tree(any_window, &mut cx);
+        assert_eq!(filtered_labels(restored_update), ["Inside", "Outside"]);
+    }
 }

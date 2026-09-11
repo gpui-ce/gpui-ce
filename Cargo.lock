@@ -2285,6 +2285,7 @@ name = "gpui-ce"
 version = "0.2.2"
 dependencies = [
  "accesskit",
+ "accesskit_consumer 0.38.0",
  "anyhow",
  "async-channel",
  "async-task",

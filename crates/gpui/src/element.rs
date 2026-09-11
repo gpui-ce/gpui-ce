@@ -104,7 +104,8 @@ pub trait Element: 'static + IntoElement {
     );
 
     /// Returns the accessible role for this element, if any.
-    /// Elements that return `None` are not included in the accessibility tree.
+    /// Elements that return `None` have no accessibility node unless
+    /// [`Element::is_a11y_hidden`] returns `true`.
     ///
     /// Note: inclusion in accessibility tree requires non-`None` [`id`][Element::id].
     ///
@@ -113,14 +114,26 @@ pub trait Element: 'static + IntoElement {
         None
     }
 
+    /// Whether assistive technology should ignore this element and its
+    /// descendants.
+    ///
+    /// GPUI gives a hidden element without a role an internal container node.
+    /// AccessKit uses that node to omit the subtree.
+    fn is_a11y_hidden(&self) -> bool {
+        false
+    }
+
     /// Write accessibility properties to the given node.
-    /// Called only when `a11y_role()` returns `Some`.
+    /// GPUI calls this only when [`Element::a11y_role`] returns `Some` or
+    /// [`Element::is_a11y_hidden`] returns `true`.
     ///
     /// See the [accessibility guide](crate::_accessibility) for an overview.
     fn write_a11y_info(&self, _node: &mut accesskit::Node) {}
 
-    /// Add synthetic child nodes to an [`Element`] that has an
-    /// [`.id()`][Element::id] and a [`.role()`][Element::a11y_role].
+    /// Add synthetic child nodes to an [`Element`]. The element must have an
+    /// [`.id()`][Element::id]. It must also have a
+    /// [`.role()`][Element::a11y_role] or return `true` from
+    /// [`Element::is_a11y_hidden`].
     ///
     /// Some elements may want to inject accessibility nodes that do not
     /// correspond to any GPUI element. For example, a custom text field element
@@ -392,7 +405,10 @@ impl<E: Element> Drawable<E> {
                 let mut pushed_a11y_node = false;
                 if window.a11y.is_active() {
                     if let Some(global_id) = global_id.as_ref() {
-                        if let Some(role) = self.element.a11y_role() {
+                        let hidden = self.element.is_a11y_hidden();
+                        let role = self.element.a11y_role();
+                        if role.is_some() || hidden {
+                            let role = role.unwrap_or(accesskit::Role::GenericContainer);
                             let node_id = global_id.accesskit_node_id();
                             let mut node = accesskit::Node::new(role);
                             let scale = window.scale_factor();
@@ -403,6 +419,9 @@ impl<E: Element> Drawable<E> {
                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
                             });
                             self.element.write_a11y_info(&mut node);
+                            if hidden {
+                                node.set_hidden();
+                            }
                             window.a11y.node_bounds.insert(node_id, bounds);
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]
