@@ -767,7 +767,7 @@ pub struct Background {
     /// The two color stops of a linear gradient.
     pub colors: [LinearColorStop; 2],
     /// Padding for alignment for repr(C) layout.
-    pub pad: u32,
+    pub padding: u32,
 }
 
 impl std::fmt::Debug for Background {
@@ -802,7 +802,7 @@ impl Default for Background {
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
             colors: [LinearColorStop::default(), LinearColorStop::default()],
-            pad: 0,
+            padding: 0,
         }
     }
 }

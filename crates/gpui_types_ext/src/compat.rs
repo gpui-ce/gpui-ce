@@ -60,7 +60,7 @@ impl BackgroundExt for Background {
                 const PATTERN_COMPONENT_SCALE: f32 = u8::MAX as f32;
                 const PATTERN_PACKING_RADIX: f32 = u16::MAX as f32;
 
-                // `background::pattern_slash` packs both values into one exactly
+                // `pattern_slash` packs both values into one exactly
                 // representable f32; floor + rem_euclid inverts it, since
                 // truncation and `%` give the wrong entry.
                 let packed = self.gradient_angle_or_pattern_height;
