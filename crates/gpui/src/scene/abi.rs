@@ -2,7 +2,7 @@
 //! so private fields are checked too, without exposing them to renderer implementations.
 
 use super::*;
-use crate::{AtlasTextureId, DevicePixels, LinearColorStop, SceneHsla, Size};
+use crate::{AtlasTextureId, DevicePixels, Hsla, LinearColorStop, Size};
 
 #[doc(hidden)]
 pub struct SceneBufferLayout {
@@ -34,7 +34,7 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
         bottom_left
     ),
     layout!(Edges<ScaledPixels>, "Edges", top, right, bottom, left),
-    layout!(SceneHsla, "Hsla", h, s, l, a),
+    layout!(Hsla, "Hsla", h, s, l, a),
     layout!(LinearColorStop, "LinearColorStop", color, percentage),
     layout!(
         Background,
