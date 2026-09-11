@@ -15,5 +15,3 @@ doctest = false
 [dependencies]
 gpui_types.workspace = true
 palette.workspace = true
-schemars.workspace = true
-serde.workspace = true
