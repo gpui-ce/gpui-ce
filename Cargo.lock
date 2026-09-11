@@ -2312,6 +2312,7 @@ dependencies = [
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "gpui_ce_util",
+ "gpui_types",
  "hdrhistogram",
  "heapless",
  "http",
@@ -2436,6 +2437,7 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_util",
  "gpui_ce_wgpu",
+ "gpui_types",
  "image",
  "itertools 0.14.0",
  "libc",
@@ -2768,6 +2770,22 @@ dependencies = [
  "walkdir",
  "which",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "gpui_types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "etagere",
+ "gpui_ce_refineable",
+ "lyon",
+ "proptest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "taffy",
 ]
 
 [[package]]

@@ -25,6 +25,7 @@ wgpu-surfaces = []
 test-support = [
   "leak-detection",
   "collections/test-support",
+  "gpui_types/test-support",
   "wayland",
   "x11",
   "proptest",
@@ -62,6 +63,7 @@ futures.workspace = true
 futures-concurrency.workspace = true
 gpui_macros.workspace = true
 gpui_shared_string.workspace = true
+gpui_types = { workspace = true, features = ["lyon"] }
 http.workspace = true
 image.workspace = true
 inventory.workspace = true
