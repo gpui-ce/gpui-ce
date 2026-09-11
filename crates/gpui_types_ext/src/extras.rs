@@ -115,3 +115,68 @@ pub fn rgb_to_hsla(color: Rgba) -> Hsla {
 pub fn hsla_to_rgba(color: Hsla) -> Rgba {
     color.into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interop::{hsla_from_palette, hsla_to_palette};
+    use gpui_types::color::hsla;
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn into_hsla_accepts_upstream_types() {
+        let color = hsla(0.3, 0.6, 0.5, 1.0);
+        assert_eq!(color.into_hsla(), color);
+
+        let red = Rgba {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let converted = red.into_hsla();
+        assert!(approx(converted.h, 0.0));
+        assert!(approx(converted.s, 1.0));
+        assert!(approx(converted.l, 0.5));
+    }
+
+    #[test]
+    fn into_hsla_accepts_palette_types() {
+        // A palette hue is in degrees; 108 degrees is the same color as upstream `h = 0.3`.
+        let palette_hsla = palette::Hsla::new(108.0, 0.6, 0.5, 1.0);
+        let converted = palette_hsla.into_hsla();
+        assert!(approx(converted.h, 0.3));
+        assert!(approx(converted.s, 0.6));
+        assert!(approx(converted.l, 0.5));
+        assert!(approx(converted.a, 1.0));
+
+        let palette_rgba = palette::rgb::Rgba::new(1.0, 0.0, 0.0, 1.0);
+        let converted = palette_rgba.into_hsla();
+        assert!(approx(converted.h, 0.0));
+        assert!(approx(converted.s, 1.0));
+        assert!(approx(converted.l, 0.5));
+    }
+
+    #[test]
+    fn into_hsla_accepts_references() {
+        let color = hsla(0.5, 0.5, 0.5, 1.0);
+        assert_eq!((&color).into_hsla(), color);
+    }
+
+    #[test]
+    fn palette_round_trip_preserves_the_color() {
+        let color = hsla(0.3, 0.6, 0.5, 1.0);
+        let palette_color = hsla_to_palette(color);
+        assert!(approx(palette_color.hue.into_positive_degrees(), 108.0));
+        assert_eq!(hsla_from_palette(palette_color), color);
+    }
+
+    #[test]
+    fn color_ext_replaces_the_alpha() {
+        let color = hsla(0.0, 1.0, 0.5, 1.0);
+        assert!(approx(color.with_alpha(0.25).a, 0.25));
+    }
+}
