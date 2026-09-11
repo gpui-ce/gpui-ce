@@ -165,6 +165,17 @@ embed-resource = { version = "3.0", optional = true }
 [target.'cfg(target_os = "macos")'.build-dependencies]
 bindgen = "0.72"
 
+[package.metadata.cargo-semver-checks.lints]
+# Rustdoc does not inline re-exported items from other crates, so moving public
+# types out of `gpui` (into gpui_types / gpui_types_ext) and re-exporting them is
+# reported as an item removal even though downstream code still compiles. Until
+# cargo-semver-checks can check cross-crate items, surface these as warnings:
+# https://github.com/obi1kenobi/cargo-semver-checks/issues/638
+struct_missing = "warn"
+enum_missing = "warn"
+function_missing = "warn"
+trait_missing = "warn"
+
 [package.metadata.cargo-shear]
 ignored = [
   "bindgen",
