@@ -339,6 +339,17 @@ impl Interactivity {
             }));
     }
 
+    /// Bind the given callback to the mouse move event, triggering even if the mouse is outside the element's hitbox.
+    /// The imperative API equivalent to [`InteractiveElement::on_mouse_move_all`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_mouse_move_all(
+        &mut self,
+        listener: impl Fn(&MouseMoveEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
+    ) {
+        self.mouse_move_listeners.push(Box::new(listener));
+    }
+
     /// Bind the given callback to the mouse exit event, during the bubble phase.
     /// The imperative API equivalent to [`InteractiveElement::on_mouse_exit`].
     ///
@@ -1051,6 +1062,18 @@ pub trait InteractiveElement: Sized {
         listener: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.interactivity().on_mouse_move(listener);
+        self
+    }
+
+    /// Bind the given callback to the mouse move event, triggering even if the mouse is outside the element's hitbox.
+    /// The fluent API equivalent to [`Interactivity::on_mouse_move_all`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_mouse_move_all(
+        mut self,
+        listener: impl Fn(&MouseMoveEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_mouse_move_all(listener);
         self
     }
 
