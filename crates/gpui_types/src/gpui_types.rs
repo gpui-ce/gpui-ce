@@ -20,5 +20,6 @@ mod layout;
 #[cfg(feature = "lyon")]
 mod lyon_bridge;
 
+pub use color::*;
 pub use geometry::*;
 pub use layout::*;

@@ -15,11 +15,10 @@ use std::time::Duration;
 use anyhow::Result;
 use gpui::colors::Colors;
 use gpui::{
-    Animation, AnimationExt as _, App, AssetSource, Bounds, ColorExt, Context, Hsla, SharedString,
+    Animation, AnimationExt as _, App, AssetSource, Bounds, Context, Hsla, IntoHsla, SharedString,
     Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out, linear,
     percentage, prelude::*, px, rgb, size as gpui_size, svg,
 };
-use palette::IntoColor;
 
 struct Assets {}
 
@@ -242,7 +241,7 @@ fn combined_example(colors: &Colors) -> impl IntoElement {
 }
 
 fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> impl IntoElement {
-    let surface: Hsla = colors.container.into_color();
+    let surface: Hsla = colors.container.into_hsla();
 
     div()
         .flex()

@@ -951,9 +951,9 @@ mod tests {
     fn test_split_at_decorations() {
         // Three decoration runs: red [0..2), green [2..5), blue [5..6).
         // Split at byte 3 — red goes entirely left, green straddles, blue goes entirely right.
-        let red = Hsla::new(0., 1., 0.5, 1.);
-        let green = Hsla::new(108., 1., 0.5, 1.);
-        let blue = Hsla::new(216., 1., 0.5, 1.);
+        let red = crate::hsla(0.0, 1., 0.5, 1.);
+        let green = crate::hsla(0.3, 1., 0.5, 1.);
+        let blue = crate::hsla(0.6, 1., 0.5, 1.);
 
         let line = make_shaped_line(
             "abcdef",

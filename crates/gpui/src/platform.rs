@@ -1183,7 +1183,7 @@ pub trait PlatformTextSystem: Send + Sync {
     fn recommended_rendering_mode(&self, _font_id: FontId, _font_size: Pixels)
     -> TextRenderingMode;
     /// Returns the dilation level to use for a glyph painted in the given color.
-    fn glyph_dilation_for_color(&self, _color: palette::Hsla) -> u8 {
+    fn glyph_dilation_for_color(&self, _color: crate::Hsla) -> u8 {
         0
     }
 }

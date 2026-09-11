@@ -8,7 +8,6 @@ use gpui::{
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;
-use palette::WithAlpha;
 
 struct PatternExample;
 
@@ -59,7 +58,7 @@ impl Render for PatternExample {
                     .flex_col()
                     .border_1()
                     .border_color(gpui::blue())
-                    .bg(gpui::green().with_alpha(0.16))
+                    .bg(gpui::green().alpha(0.16))
                     .child("Elements the same height should align")
                     .child(div().w(px(256.0)).h(px(56.0)).bg(pattern_slash(
                         gpui::red(),

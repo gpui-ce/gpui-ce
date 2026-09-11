@@ -430,27 +430,26 @@ impl Interpolate for Rems {
 
 impl Interpolate for Rgba {
     fn interpolate(from: Self, to: Self, phase: f32) -> Self {
-        Self::new(
-            f32::interpolate(from.color.red, to.color.red, phase),
-            f32::interpolate(from.color.green, to.color.green, phase),
-            f32::interpolate(from.color.blue, to.color.blue, phase),
-            f32::interpolate(from.alpha, to.alpha, phase),
-        )
+        Self {
+            r: f32::interpolate(from.r, to.r, phase),
+            g: f32::interpolate(from.g, to.g, phase),
+            b: f32::interpolate(from.b, to.b, phase),
+            a: f32::interpolate(from.a, to.a, phase),
+        }
     }
 }
 
 impl Interpolate for Hsla {
     fn interpolate(from: Self, to: Self, phase: f32) -> Self {
-        use palette::RgbHue;
-        let from_h = from.color.hue.into_degrees() / 360.0;
-        let to_h = to.color.hue.into_degrees() / 360.0;
+        let from_h = from.h;
+        let to_h = to.h;
         let hue_delta = (to_h - from_h + 0.5).rem_euclid(1.0) - 0.5;
-        Self::new(
-            RgbHue::from_degrees((from_h + hue_delta * phase).rem_euclid(1.0) * 360.0),
-            f32::interpolate(from.color.saturation, to.color.saturation, phase),
-            f32::interpolate(from.color.lightness, to.color.lightness, phase),
-            f32::interpolate(from.alpha, to.alpha, phase),
-        )
+        Self {
+            h: (from_h + hue_delta * phase).rem_euclid(1.0),
+            s: f32::interpolate(from.s, to.s, phase),
+            l: f32::interpolate(from.l, to.l, phase),
+            a: f32::interpolate(from.a, to.a, phase),
+        }
     }
 }
 
@@ -652,11 +651,11 @@ mod tests {
         let to = crate::hsla(0.1, 1.0, 0.75, 0.5);
         let result = AnimationPhase(0.5).interpolate(from, to);
 
-        let h = result.color.hue.into_degrees() / 360.0;
+        let h = result.h;
         assert!(h < EPSILON || (1.0 - h) < EPSILON);
-        assert!((result.color.saturation - 0.75).abs() < EPSILON);
-        assert!((result.color.lightness - 0.625).abs() < EPSILON);
-        assert!((result.alpha - 0.75).abs() < EPSILON);
+        assert!((result.s - 0.75).abs() < EPSILON);
+        assert!((result.l - 0.625).abs() < EPSILON);
+        assert!((result.a - 0.75).abs() < EPSILON);
     }
 
     #[test]

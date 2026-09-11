@@ -14,12 +14,11 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Bounds, ColorExt, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, Hsla,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
+    App, Bounds, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, InteractiveElement,
+    IntoElement, IntoHsla, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
     StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, colors::Colors, div,
     prelude::*, px, relative, rgb, size,
 };
-use palette::IntoColor;
 
 const SLIDER_MIN: f32 = 0.0;
 const SLIDER_MAX: f32 = 100.0;
@@ -57,12 +56,12 @@ impl HapticFeedbackExample {
         id: &'static str,
         label: &'static str,
         style: HapticFeedbackStyle,
-        color: impl IntoColor<Hsla>,
+        color: impl IntoHsla,
         colors: &Colors,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let _ = cx;
-        let color = color.into_color();
+        let color = color.into_hsla();
 
         div()
             .id(id)

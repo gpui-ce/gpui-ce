@@ -758,14 +758,16 @@ impl Display for ColorSpace {
 pub struct Background {
     /// Which kind of background this is, which determines the meaning of the other fields.
     pub tag: BackgroundTag,
-    pub(crate) color_space: ColorSpace,
+    /// The color space used to interpolate gradients.
+    pub color_space: ColorSpace,
     /// The solid color. Used by solid, pattern, and checkerboard backgrounds.
     pub solid: Hsla,
-    pub(crate) gradient_angle_or_pattern_height: f32,
+    /// The gradient angle (degrees) or pattern height, depending on `tag`.
+    pub gradient_angle_or_pattern_height: f32,
     /// The two color stops of a linear gradient.
     pub colors: [LinearColorStop; 2],
     /// Padding for alignment for repr(C) layout.
-    pad: u32,
+    pub pad: u32,
 }
 
 impl std::fmt::Debug for Background {
@@ -905,6 +907,11 @@ impl Background {
     pub fn color_space(mut self, color_space: ColorSpace) -> Self {
         self.color_space = color_space;
         self
+    }
+
+    /// The color space used to interpolate this background, set by [`Background::color_space`].
+    pub fn interpolation_space(&self) -> ColorSpace {
+        self.color_space
     }
 
     /// Returns a new background color with the same hue, saturation, and lightness, but with a modified alpha value.

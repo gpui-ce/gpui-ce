@@ -1,19 +1,16 @@
-//! Palette-based color API for gpui-ce, layered on top of `gpui_types`.
+//! Palette-based color extension for gpui-ce.
 //!
-//! `gpui_types` hosts the upstream color types (available as
-//! [`gpui_types::color`]). This crate keeps gpui-ce's `palette`-based color API
-//! and the renderer-facing [`SceneHsla`], and provides conversions between the
-//! two families.
-//!
-//! `gpui` re-exports this crate, so `gpui::Hsla` continues to name
-//! `palette::Hsla`, `gpui::SceneHsla` is available as before, and the palette
-//! types are re-exported under [`palette`].
+//! The upstream [`gpui_types::color`] API is the canonical color API re-exported
+//! by `gpui`. This crate keeps gpui-ce's `palette` dependency as an extension:
+//! the [`palette`] crate itself is re-exported, conversions between `palette`
+//! and the upstream color types are provided, and gpui-ce's own extras
+//! ([`ColorExt`], [`rgb_to_hsla`], [`SceneHsla`]) live here.
 
-mod color;
+mod extras;
 mod interop;
 mod scene_color;
 
-pub use color::*;
+pub use extras::*;
 pub use interop::*;
 pub use palette;
 pub use scene_color::*;

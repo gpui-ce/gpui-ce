@@ -6,12 +6,11 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element, ElementId,
     ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
+    InteractiveElement, Interactivity, IntoElement, IntoHsla, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
     StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout, WeakEntity,
     Window, WrappedLine, fill, point, px, relative, size,
 };
-use palette::IntoColor;
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
@@ -85,11 +84,10 @@ struct EditableTextColors {
 }
 impl Default for EditableTextColors {
     fn default() -> Self {
-        use palette::RgbHue;
-        const WHITE_50PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.5);
-        const WHITE_70PC: Hsla = Hsla::new_const(RgbHue::new(0.), 0., 1., 0.7);
+        const WHITE_50PC: Hsla = gpui::hsla(0.0, 0., 1., 0.5);
+        const WHITE_70PC: Hsla = gpui::hsla(0.0, 0., 1., 0.7);
         // approx rgb(38 79 120) or oklch(41.9% 0.0829 250.4)
-        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla::new_const(RgbHue::new(210.), 0.519, 0.31, 0.5);
+        const LIGHT_NAVY_BLUE_50PC: Hsla = gpui::hsla(210.0 / 360.0, 0.519, 0.31, 0.5);
         Self {
             placeholder: WHITE_50PC,
             selection: LIGHT_NAVY_BLUE_50PC,
@@ -145,8 +143,8 @@ impl EditableTextElement {
     /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
-    pub fn placeholder_color(mut self, color: impl IntoColor<Hsla>) -> Self {
-        self.colors.placeholder = color.into_color();
+    pub fn placeholder_color(mut self, color: impl IntoHsla) -> Self {
+        self.colors.placeholder = color.into_hsla();
         self
     }
 
@@ -928,7 +926,7 @@ mod tests {
             .placeholder_color(color)
             .caret_w(px(3.))
             .caret_h(relative(0.5));
-        assert_eq!(input.colors.placeholder, color.into_color());
+        assert_eq!(input.colors.placeholder, color.into_hsla());
         assert_eq!(input.caret_width, px(3.));
         assert_eq!(
             input.caret_height.to_pixels(px(20.).into(), px(16.)),

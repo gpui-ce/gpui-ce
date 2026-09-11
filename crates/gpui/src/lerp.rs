@@ -1,11 +1,7 @@
 //! Lerp trait defines behaviour for interpolating between two values of the same type.
 use crate::{
-    AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
-    Percentage, Pixels, Point, Radians, Rems, Size, colors::Colors,
-};
-use palette::{
-    Hsla, IntoColor, Oklab, Oklaba,
-    rgb::{Rgb, Rgba},
+    AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Hsla,
+    Length, Percentage, Pixels, Point, Radians, Rems, Rgba, Size, colors::Colors,
 };
 use std::{
     fmt::Debug,
@@ -90,7 +86,7 @@ struct_lerps!(
     Edges<T> { top, right, bottom, left },
     Corners<T> { top_left, top_right, bottom_right, bottom_left },
     Bounds<T> { origin, size },
-    Rgba { color, alpha },
+    Rgba { r, g, b, a },
     Colors { text, selected_text, background, disabled, selected, border, separator, container }
 );
 
@@ -114,28 +110,6 @@ tuple_struct_lerps!(
     Pixels(f32)
 );
 
-macro_rules! new_constructor_lerps {
-    ( $( $ty:ident $( < $gen:ident > )? ::new ( $( $n:ident ),+ ) ),+ $(,)? ) => {
-        $(
-            impl$(<$gen: Lerp + Clone + Debug + Default + PartialEq>)? Lerp for $ty$(<$gen>)? {
-                fn lerp(&self, to: &Self, delta: f32) -> Self {
-                    $ty$(::<$gen>)?::new(
-                        $(
-                            self.$n.lerp(&to.$n, delta)
-                        ),+
-                    )
-                }
-            }
-        )+
-    };
-}
-
-new_constructor_lerps!(
-    Rgb::new(red, green, blue),
-    Oklab::new(l, a, b),
-    Oklaba::new(l, a, b, alpha)
-);
-
 impl Lerp for Hsla {
     fn lerp(&self, to: &Self, delta: f32) -> Self {
         if delta <= 0.0 {
@@ -145,9 +119,9 @@ impl Lerp for Hsla {
             return *to;
         }
 
-        let from: Rgba = (*self).into_color();
-        let to: Rgba = (*to).into_color();
-        from.lerp(&to, delta).into_color()
+        let from: Rgba = (*self).into();
+        let to: Rgba = (*to).into();
+        from.lerp(&to, delta).into()
     }
 }
 

@@ -4,8 +4,8 @@
 mod example_support;
 
 use gpui::{
-    App, Bounds, Context, CursorStyle, Decorations, HitboxBehavior, Hsla, MouseButton, Pixels,
-    Point, ResizeEdge, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    App, Bounds, Context, CursorStyle, Decorations, HitboxBehavior, MouseButton, Pixels, Point,
+    ResizeEdge, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
     WindowOptions, black, canvas, div, green, point, prelude::*, px, rgb, size, transparent_black,
     white,
 };
@@ -114,7 +114,7 @@ impl Render for WindowShadow {
                                     gpui::BoxShadow::new(
                                         px(0.),
                                         px(0.),
-                                        Hsla::new(0., 0., 0., 0.4),
+                                        gpui::hsla(0., 0., 0., 0.4),
                                     )
                                     .blur_radius(shadow_size / 2.),
                                 ])
@@ -151,7 +151,7 @@ impl Render for WindowShadow {
                                             gpui::BoxShadow::new(
                                                 px(0.),
                                                 px(0.),
-                                                Hsla::new(0., 0., 0., 1.),
+                                                gpui::hsla(0., 0., 0., 1.),
                                             )
                                             .blur_radius(px(20.0)),
                                         ])

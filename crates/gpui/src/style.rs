@@ -1,12 +1,12 @@
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ColorExt, ContentMask,
-    Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
-    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
+    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
+    CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
     PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, hsla_schemar, phi, point, px, quad, rems, size,
+    black, phi, point, px, quad, rems, size,
 };
+use crate::{Hsla, Rgba};
 use collections::HashSet;
-use palette::{Hsla, IntoColor, rgb::Rgba};
 use refineable::Refineable;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -177,7 +177,7 @@ pub enum RingColor {
     #[default]
     CurrentColor,
     /// Use an explicit color.
-    Color(#[schemars(schema_with = "hsla_schemar")] Hsla),
+    Color(Hsla),
 }
 
 impl RingColor {
@@ -647,7 +647,7 @@ impl TextStyle {
         }
 
         if let Some(color) = style.color {
-            self.color = self.color.blend(&color);
+            self.color = self.color.blend(color);
         }
 
         if let Some(factor) = style.fade_out {
@@ -769,7 +769,7 @@ impl Style {
                 let mut min = bounds.origin;
                 let mut max = bounds.bottom_right();
 
-                if self.border_color.is_some_and(|color| color.alpha > 0.) {
+                if self.border_color.is_some_and(|color| color.a > 0.) {
                     min.x += self.border_widths.left.to_pixels(rem_size);
                     max.x -= self.border_widths.right.to_pixels(rem_size);
                     min.y += self.border_widths.top.to_pixels(rem_size);
@@ -848,17 +848,17 @@ impl Style {
                     Some(color) => match color.tag {
                         BackgroundTag::Solid
                         | BackgroundTag::PatternSlash
-                        | BackgroundTag::Checkerboard => color.solid.into(),
+                        | BackgroundTag::Checkerboard => color.solid,
 
                         BackgroundTag::LinearGradient => color
                             .colors
                             .first()
-                            .map(|stop| stop.color.into())
+                            .map(|stop| stop.color)
                             .unwrap_or_default(),
                     },
                     None => Hsla::default(),
                 };
-                border_color.alpha = 0.;
+                border_color.a = 0.;
                 window.paint_quad(quad(
                     bounds,
                     corner_radii,
@@ -879,7 +879,7 @@ impl Style {
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let mut background = self.border_color.unwrap_or_default();
-                background.alpha = 0.;
+                background.a = 0.;
                 window.paint_quad(quad(
                     bounds,
                     corner_radii,
@@ -906,7 +906,7 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        self.border_color.is_some_and(|color| color.alpha > 0.)
+        self.border_color.is_some_and(|color| color.a > 0.)
             && self.border_widths.any(|length| !length.is_zero())
     }
 }
@@ -1058,7 +1058,7 @@ impl HighlightStyle {
                 .color
                 .map(|other_color| {
                     if let Some(color) = self.color {
-                        color.blend(&other_color)
+                        color.blend(other_color)
                     } else {
                         other_color
                     }
@@ -1111,7 +1111,7 @@ impl From<FontStyle> for HighlightStyle {
 impl From<Rgba> for HighlightStyle {
     fn from(color: Rgba) -> Self {
         Self {
-            color: Some(color.into_color()),
+            color: Some(color.into()),
             ..Default::default()
         }
     }
@@ -1462,7 +1462,6 @@ impl From<Position> for taffy::style::Position {
 #[cfg(test)]
 mod tests {
     use crate::{blue, green, hsla, px, red, yellow};
-    use palette::WithAlpha;
 
     use super::*;
 
@@ -1510,7 +1509,7 @@ mod tests {
         let mut style_c = expected_style;
 
         let style_d = HighlightStyle {
-            color: Some(blue().with_alpha(0.7)),
+            color: Some(blue().alpha(0.7)),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(crate::red()),
@@ -1527,7 +1526,7 @@ mod tests {
         };
 
         let expected_style = HighlightStyle {
-            color: Some(red().blend(&blue().with_alpha(0.7))),
+            color: Some(red().blend(blue().alpha(0.7))),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(red()),
