@@ -6794,6 +6794,29 @@ impl Window {
             .push((action, Box::new(listener)));
     }
 
+    /// Perform an accessibility action on a node as assistive technology
+    /// would: a registered [`Self::on_a11y_action`] listener first, else the
+    /// built-in handling (`Click` synthesizes a pointer click at the node's
+    /// bounds, `Focus` focuses it, `Blur` blurs the window).
+    #[cfg(not(target_family = "wasm"))]
+    pub fn perform_a11y_action(
+        &mut self,
+        target: accesskit::NodeId,
+        action: accesskit::Action,
+        data: Option<accesskit::ActionData>,
+        cx: &mut App,
+    ) {
+        self.handle_a11y_action(
+            accesskit::ActionRequest {
+                action,
+                target_tree: accesskit::TreeId::ROOT,
+                target_node: target,
+                data,
+            },
+            cx,
+        );
+    }
+
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
         // Take listeners out temporarily so the closures can borrow Window
