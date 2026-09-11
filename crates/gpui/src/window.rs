@@ -4795,12 +4795,16 @@ impl Window {
     pub fn paint_surface(
         &mut self,
         bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
         source: impl Into<crate::SurfaceSource>,
     ) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
 
+        let corner_radii = corner_radii
+            .clamp_radii_for_quad_size(bounds.size)
+            .scale(self.scale_factor());
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
         self.next_frame.scene.insert_surface(
@@ -4808,6 +4812,7 @@ impl Window {
                 order: 0,
                 bounds,
                 content_mask,
+                corner_radii,
                 source: source.into(),
             },
             self.element_opacity(),

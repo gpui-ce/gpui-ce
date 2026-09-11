@@ -173,11 +173,11 @@ impl Element for Surface {
         _: &mut App,
     ) {
         let new_bounds = self.object_fit.get_bounds(_bounds, self.source.size());
-        // TODO: Add support for corner_radii.
         let mut style = Style::default();
         style.refine(&self.style);
         _window.with_element_opacity(style.opacity, |window| {
-            window.paint_surface(new_bounds, self.source.clone());
+            let corner_radii = style.corner_radii.to_pixels(window.rem_size());
+            window.paint_surface(new_bounds, corner_radii, self.source.clone());
         });
     }
 }
@@ -193,5 +193,94 @@ impl IntoElement for Surface {
 impl Styled for Surface {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{TestAppContext, point, px, size};
+
+    /// A surface inside a rounded frame must carry the frame's curve into the scene. Before
+    /// this, `paint_surface` took no radii at all and the texture drew square corners under
+    /// the frame, which is visible as four bright wedges wherever a rounded pane holds one.
+    #[crate::test]
+    fn a_rounded_surface_carries_its_radii_into_the_scene(cx: &mut TestAppContext) {
+        let window = cx.add_empty_window();
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            surface(SurfaceSource::Unsupported(size(
+                DevicePixels(100),
+                DevicePixels(100),
+            )))
+            .size_full()
+            .rounded(px(12.))
+            .into_any_element()
+        });
+
+        let (radii, expected) = window.update(|window, _| {
+            (
+                window
+                    .rendered_frame
+                    .scene
+                    .surfaces
+                    .last()
+                    .map(|painted| painted.corner_radii.top_left),
+                px(12.).scale(window.scale_factor()),
+            )
+        });
+        assert_eq!(radii, Some(expected));
+    }
+
+    /// The radii are clamped to the surface's own bounds the way an image's are, so a radius
+    /// larger than the element cannot fold the distance field back on itself.
+    #[crate::test]
+    fn radii_larger_than_the_surface_are_clamped_to_it(cx: &mut TestAppContext) {
+        let window = cx.add_empty_window();
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            surface(SurfaceSource::Unsupported(size(
+                DevicePixels(100),
+                DevicePixels(100),
+            )))
+            .size_full()
+            .rounded(px(400.))
+            .into_any_element()
+        });
+
+        let (radii, expected) = window.update(|window, _| {
+            (
+                window
+                    .rendered_frame
+                    .scene
+                    .surfaces
+                    .last()
+                    .map(|painted| painted.corner_radii.top_left),
+                px(50.).scale(window.scale_factor()),
+            )
+        });
+        assert_eq!(radii, Some(expected));
+    }
+
+    /// A plain surface still asks for square corners, so nothing that does not opt in changes.
+    #[crate::test]
+    fn a_plain_surface_still_has_square_corners(cx: &mut TestAppContext) {
+        let window = cx.add_empty_window();
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            surface(SurfaceSource::Unsupported(size(
+                DevicePixels(100),
+                DevicePixels(100),
+            )))
+            .size_full()
+            .into_any_element()
+        });
+
+        let radii = window.update(|window, _| {
+            window
+                .rendered_frame
+                .scene
+                .surfaces
+                .last()
+                .map(|painted| painted.corner_radii)
+        });
+        assert_eq!(radii, Some(crate::Corners::default()));
     }
 }

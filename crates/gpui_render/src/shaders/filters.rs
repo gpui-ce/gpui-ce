@@ -8,14 +8,11 @@ pub mod surface {
     pub struct SurfaceUniforms {
         pub bounds: Bounds,
         pub content_mask: Bounds,
+        pub corner_radii: Corners,
         pub color_format: SurfaceColorFormat,
         pub opacity: f32,
         pub padding0: u32,
         pub padding1: u32,
-        pub padding2: u32,
-        pub padding3: u32,
-        pub padding4: u32,
-        pub padding5: u32,
     }
     uniform!(group(1), binding(0), SURFACE_LOCALS: SurfaceUniforms);
     texture!(group(1), binding(1), SURFACE_TEXTURE: Texture2D<f32>);
@@ -69,15 +66,25 @@ pub mod surface {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+        // A surface inside a rounded frame must follow the frame's curve, so the sample fades
+        // by the same antialiased rounded-quad coverage a polychrome sprite uses. Square
+        // corners are the common case and cost nothing extra: zero radii make the distance
+        // field a plain rectangle, whose coverage is 1 everywhere inside the bounds.
+        let factor = get!(SURFACE_LOCALS).opacity
+            * antialiased_coverage(rounded_rectangle_signed_distance(
+                input.position.xy(),
+                get!(SURFACE_LOCALS).bounds,
+                get!(SURFACE_LOCALS).corner_radii,
+            ));
         if get!(SURFACE_LOCALS).color_format == SurfaceColorFormat::Yuv {
-            return sample_yuv_surface(input.texture_position) * get!(SURFACE_LOCALS).opacity;
+            return sample_yuv_surface(input.texture_position) * factor;
         }
         texture_sample_level(
             SURFACE_TEXTURE,
             SURFACE_SAMPLER,
             input.texture_position,
             0.0,
-        ) * get!(SURFACE_LOCALS).opacity
+        ) * factor
     }
 }
 

@@ -1197,14 +1197,11 @@ impl DirectXRenderer {
             let uniforms = SurfaceUniforms {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
+                corner_radii: surface.corner_radii.into(),
                 color_format: SurfaceColorFormat::Rgba,
                 opacity: opacities.get(index).copied().unwrap_or(1.0),
                 padding0: 0,
                 padding1: 0,
-                padding2: 0,
-                padding3: 0,
-                padding4: 0,
-                padding5: 0,
             };
             update_buffer(ctx, &self.pipelines.surfaces.params_buffer, &[uniforms])?;
 

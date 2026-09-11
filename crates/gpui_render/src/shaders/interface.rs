@@ -199,14 +199,11 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         "SurfaceUniforms",
         bounds,
         content_mask,
+        corner_radii,
         color_format,
         opacity,
         padding0,
-        padding1,
-        padding2,
-        padding3,
-        padding4,
-        padding5
+        padding1
     ),
     render_layout!(
         super::blur::BlurUniforms,
