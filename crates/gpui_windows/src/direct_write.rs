@@ -974,7 +974,12 @@ impl DirectWriteState {
 
                     let run_color = {
                         let run_color = color_run.Base.runColor;
-                        Rgba::new(run_color.r, run_color.g, run_color.b, run_color.a)
+                        Rgba {
+                            r: run_color.r,
+                            g: run_color.g,
+                            b: run_color.b,
+                            a: run_color.a,
+                        }
                     };
                     let bounds = bounds(point(color_bounds.left, color_bounds.top), color_size);
                     glyph_layers.push(GlyphLayerTexture::new(
@@ -1132,10 +1137,10 @@ impl DirectWriteState {
                 bounds_origin: vec2i(layer.bounds.origin.x, layer.bounds.origin.y),
                 bounds_size: vec2i(layer.bounds.size.width, layer.bounds.size.height),
                 run_color: vec4f(
-                    layer.run_color.red,
-                    layer.run_color.green,
-                    layer.run_color.blue,
-                    layer.run_color.alpha,
+                    layer.run_color.r,
+                    layer.run_color.g,
+                    layer.run_color.b,
+                    layer.run_color.a,
                 ),
                 gamma_ratios: vec4f(
                     gamma_ratios[0],
@@ -2131,7 +2136,12 @@ mod tests {
         let layer_alpha = vec![255u8; 4 * 4];
         let layer = GlyphLayerTexture::new(
             &gpu_state,
-            Rgba::new(1.0, 1.0, 1.0, 1.0),
+            Rgba {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
             bounds(point(0, 0), size(4, 4)),
             &layer_alpha,
         )?;
