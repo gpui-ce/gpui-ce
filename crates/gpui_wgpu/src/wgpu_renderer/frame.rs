@@ -260,10 +260,12 @@ impl FrameRequirements {
                 continue;
             };
             match batch {
-                PrimitiveBatch::Shadows(range) => {
+                PrimitiveBatch::Shadows { range, .. } => {
                     reserve(std::mem::size_of::<Shadow>(), range.len())
                 }
-                PrimitiveBatch::Quads(range) => reserve(std::mem::size_of::<Quad>(), range.len()),
+                PrimitiveBatch::Quads { range, .. } => {
+                    reserve(std::mem::size_of::<Quad>(), range.len())
+                }
                 PrimitiveBatch::Paths {
                     rasterization_vertex_count,
                     sprite_count,
@@ -475,6 +477,7 @@ impl<'a> FrameEncoder<'a> {
                             bounds: boundary.bounds,
                             content_mask: boundary.content_mask.bounds,
                             corner_radii: boundary.corner_radii,
+                            corner_smoothing: boundary.corner_smoothing,
                             blur_radius: boundary.max_blur_radius(),
                             opacity: boundary.opacity,
                             clip: FilterCompositeClip::ContentShape,
@@ -576,11 +579,11 @@ fn encode_inline_batch(
     pass: &mut wgpu::RenderPass<'_>,
 ) -> DrawResult {
     match batch {
-        PrimitiveBatch::Quads(range) => {
-            renderer.draw_quads(&scene.quads[range.clone()], instances, pass)
+        PrimitiveBatch::Quads { range, smoothed } => {
+            renderer.draw_quads(&scene.quads[range.clone()], *smoothed, instances, pass)
         }
-        PrimitiveBatch::Shadows(range) => {
-            renderer.draw_shadows(&scene.shadows[range.clone()], instances, pass)
+        PrimitiveBatch::Shadows { range, smoothed } => {
+            renderer.draw_shadows(&scene.shadows[range.clone()], *smoothed, instances, pass)
         }
         PrimitiveBatch::Underlines(range) => {
             renderer.draw_underlines(&scene.underlines[range.clone()], instances, pass)
@@ -598,13 +601,17 @@ fn encode_inline_batch(
             instances,
             pass,
         ),
-        PrimitiveBatch::PolychromeSprites { texture_id, range } => renderer
-            .draw_polychrome_sprites(
-                &scene.polychrome_sprites[range.clone()],
-                *texture_id,
-                instances,
-                pass,
-            ),
+        PrimitiveBatch::PolychromeSprites {
+            texture_id,
+            range,
+            smoothed,
+        } => renderer.draw_polychrome_sprites(
+            &scene.polychrome_sprites[range.clone()],
+            *texture_id,
+            *smoothed,
+            instances,
+            pass,
+        ),
         PrimitiveBatch::Surfaces(range) => renderer.draw_surfaces(
             &scene.surfaces[range.clone()],
             &scene.surface_opacities()[range.clone()],

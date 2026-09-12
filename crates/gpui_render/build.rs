@@ -778,8 +778,20 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
+            pipeline: &SMOOTHED_QUADS,
+            pipeline_path: "SMOOTHED_QUADS",
+            source: &shaders::quad::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
             pipeline: &SHADOWS,
             pipeline_path: "SHADOWS",
+            source: &shaders::shadow::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
+            pipeline: &SMOOTHED_SHADOWS,
+            pipeline_path: "SMOOTHED_SHADOWS",
             source: &shaders::shadow::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
@@ -820,6 +832,12 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
+            pipeline: &SMOOTHED_POLYCHROME_SPRITES,
+            pipeline_path: "SMOOTHED_POLYCHROME_SPRITES",
+            source: &shaders::polychrome_sprite::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
             pipeline: &SURFACES,
             pipeline_path: "SURFACES",
             source: &shaders::surface::WGSL_SOURCE,
@@ -846,6 +864,12 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         NativeShaderModule {
             pipeline: &BLUR_COMPOSITE,
             pipeline_path: "BLUR_COMPOSITE",
+            source: &shaders::blur::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
+            pipeline: &SMOOTHED_BLUR_COMPOSITE,
+            pipeline_path: "SMOOTHED_BLUR_COMPOSITE",
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },

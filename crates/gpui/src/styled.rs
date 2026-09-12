@@ -975,4 +975,21 @@ pub trait Styled: Sized {
         self.style().debug_below = Some(true);
         self
     }
+
+    /// Sets the amount of smoothing applied to rounded corners.
+    /// Use values from `0.0` for circular corners to `1.0` for maximum smoothing.
+    fn rounded_smoothing(mut self, amount: f32) -> Self {
+        debug_assert!(
+            (0.0..=1.0).contains(&amount),
+            "corner smoothing must be between 0 and 1"
+        );
+        self.style().corner_smoothing = Some(amount);
+        self
+    }
+
+    /// Sets corner smoothing to `0.6` for iOS-style corners.
+    fn rounded_smoothing_ios(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.6);
+        self
+    }
 }

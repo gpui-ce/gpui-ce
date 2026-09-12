@@ -160,8 +160,8 @@ impl ScenePlan {
 impl ScenePlanRequirements {
     fn include_batch(&mut self, batch: &PrimitiveBatch) {
         match batch {
-            PrimitiveBatch::Shadows(range)
-            | PrimitiveBatch::Quads(range)
+            PrimitiveBatch::Shadows { range, .. }
+            | PrimitiveBatch::Quads { range, .. }
             | PrimitiveBatch::Underlines(range) => {
                 self.instance_batch_count += usize::from(!range.is_empty());
             }
@@ -229,8 +229,14 @@ impl SceneLengths {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(missing_docs)]
 pub enum PrimitiveBatch {
-    Shadows(Range<usize>),
-    Quads(Range<usize>),
+    Shadows {
+        range: Range<usize>,
+        smoothed: bool,
+    },
+    Quads {
+        range: Range<usize>,
+        smoothed: bool,
+    },
     Paths {
         range: Range<usize>,
         rasterization_vertex_count: usize,
@@ -248,6 +254,7 @@ pub enum PrimitiveBatch {
     PolychromeSprites {
         texture_id: AtlasTextureId,
         range: Range<usize>,
+        smoothed: bool,
     },
     Surfaces(Range<usize>),
     BackdropFilters(Range<usize>),
@@ -312,8 +319,16 @@ impl PrimitiveBatch {
     /// A diagnostic label suitable for GPU debug annotations.
     pub fn label(&self) -> String {
         match self {
-            Self::Shadows(range) => format!("shadows ({})", range.len()),
-            Self::Quads(range) => format!("quads ({})", range.len()),
+            Self::Shadows { range, smoothed } => format!(
+                "{}shadows ({})",
+                if *smoothed { "smoothed " } else { "" },
+                range.len()
+            ),
+            Self::Quads { range, smoothed } => format!(
+                "{}quads ({})",
+                if *smoothed { "smoothed " } else { "" },
+                range.len()
+            ),
             Self::Paths { range, .. } => format!("paths ({})", range.len()),
             Self::Underlines(range) => format!("underlines ({})", range.len()),
             Self::MonochromeSprites { texture_id, range } => format!(
@@ -326,8 +341,13 @@ impl PrimitiveBatch {
                 range.len(),
                 texture_id.index
             ),
-            Self::PolychromeSprites { texture_id, range } => format!(
-                "polychrome sprites ({}) on atlas {}",
+            Self::PolychromeSprites {
+                texture_id,
+                range,
+                smoothed,
+            } => format!(
+                "{}polychrome sprites ({}) on atlas {}",
+                if *smoothed { "smoothed " } else { "" },
                 range.len(),
                 texture_id.index
             ),

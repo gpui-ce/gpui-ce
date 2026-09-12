@@ -247,6 +247,8 @@ struct DirectXRenderPipelines {
     blur_fragment: ID3D11PixelShader,
     blur_composite_vertex: ID3D11VertexShader,
     blur_composite_fragment: ID3D11PixelShader,
+    smoothed_blur_composite_vertex: ID3D11VertexShader,
+    smoothed_blur_composite_fragment: ID3D11PixelShader,
     blur_params_buffer: ID3D11Buffer,
     blur_blend_replace: ID3D11BlendState,
     blur_blend_composite: ID3D11BlendState,
@@ -635,11 +637,11 @@ impl DirectXRenderer {
                 .as_ref()
                 .map(|annotation| Annotation::new(annotation, HSTRING::from(command.label())));
             match command {
-                RenderCommand::Batch(PrimitiveBatch::Shadows(range)) => {
-                    self.draw_shadows(instance_range(range)?)
+                RenderCommand::Batch(PrimitiveBatch::Shadows { range, smoothed }) => {
+                    self.draw_shadows(instance_range(range)?, *smoothed)
                 }
-                RenderCommand::Batch(PrimitiveBatch::Quads(range)) => {
-                    self.draw_quads(instance_range(range)?)
+                RenderCommand::Batch(PrimitiveBatch::Quads { range, smoothed }) => {
+                    self.draw_quads(instance_range(range)?, *smoothed)
                 }
                 RenderCommand::Batch(PrimitiveBatch::Paths {
                     range,
@@ -667,7 +669,12 @@ impl DirectXRenderer {
                 RenderCommand::Batch(PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     range,
-                }) => self.draw_polychrome_sprites(*texture_id, instance_range(range)?),
+                    smoothed,
+                }) => self.draw_polychrome_sprites(
+                    *texture_id,
+                    instance_range(range)?,
+                    *smoothed,
+                ),
                 RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => {
                     self.draw_surfaces(
                         &scene.surfaces[range.clone()],
@@ -683,6 +690,7 @@ impl DirectXRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
+                                filter.corner_smoothing,
                                 filter.max_blur_radius(),
                                 filter.opacity,
                                 true,
@@ -727,6 +735,7 @@ impl DirectXRenderer {
                         boundary.bounds,
                         boundary.content_mask.bounds,
                         boundary.corner_radii,
+                        boundary.corner_smoothing,
                         boundary.max_blur_radius(),
                         boundary.opacity,
                         false,
@@ -966,16 +975,22 @@ impl DirectXRenderer {
         })
     }
 
-    fn draw_shadows(&mut self, instances: InstanceRange) -> Result<()> {
-        self.pipelines
-            .shadow_pipeline
-            .draw_instances(&self.frame_bindings()?, None, instances)
+    fn draw_shadows(&mut self, instances: InstanceRange, smoothed: bool) -> Result<()> {
+        self.pipelines.shadow_pipeline.draw_instances_variant(
+            &self.frame_bindings()?,
+            None,
+            instances,
+            smoothed,
+        )
     }
 
-    fn draw_quads(&mut self, instances: InstanceRange) -> Result<()> {
-        self.pipelines
-            .quad_pipeline
-            .draw_instances(&self.frame_bindings()?, None, instances)
+    fn draw_quads(&mut self, instances: InstanceRange, smoothed: bool) -> Result<()> {
+        self.pipelines.quad_pipeline.draw_instances_variant(
+            &self.frame_bindings()?,
+            None,
+            instances,
+            smoothed,
+        )
     }
 
     fn draw_paths_to_intermediate(
@@ -1145,12 +1160,14 @@ impl DirectXRenderer {
         &mut self,
         texture_id: AtlasTextureId,
         instances: InstanceRange,
+        smoothed: bool,
     ) -> Result<()> {
         let texture_view = self.atlas.get_texture_view(texture_id);
-        self.pipelines.poly_sprites.draw_instances(
+        self.pipelines.poly_sprites.draw_instances_variant(
             &self.frame_bindings()?,
             Some(&texture_view),
             instances,
+            smoothed,
         )
     }
 
@@ -1290,6 +1307,7 @@ impl DirectXRenderer {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
+        corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
@@ -1378,22 +1396,35 @@ impl DirectXRenderer {
                 GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * blur_radius,
             ))
         };
+        let composite_uniforms = BlurUniforms::composite(
+            composite_bounds,
+            content_mask,
+            corner_radii,
+            corner_smoothing,
+            opacity,
+            clip,
+            blur_size,
+            [full_width as f32, full_height as f32],
+        );
+        let (composite_vertex, composite_fragment) = if composite_uniforms.corner_smoothing > 0.0 {
+            (
+                &self.pipelines.smoothed_blur_composite_vertex,
+                &self.pipelines.smoothed_blur_composite_fragment,
+            )
+        } else {
+            (
+                &self.pipelines.blur_composite_vertex,
+                &self.pipelines.blur_composite_fragment,
+            )
+        };
         // Composite the blurred result into the target (preserving its contents).
         self.dx_blur_pass(
-            &self.pipelines.blur_composite_vertex,
-            &self.pipelines.blur_composite_fragment,
+            composite_vertex,
+            composite_fragment,
             &self.pipelines.blur_blend_composite,
             target_rtv,
             &ping_srv,
-            BlurUniforms::composite(
-                composite_bounds,
-                content_mask,
-                corner_radii,
-                opacity,
-                clip,
-                blur_size,
-                [full_width as f32, full_height as f32],
-            ),
+            composite_uniforms,
             &full_vp,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             4,
@@ -1588,14 +1619,16 @@ impl DirectXRenderPipelines {
             ShaderModule::Shadow,
             4,
             create_blend_state(device)?,
-        )?;
+        )?
+        .with_variant(device, ShaderModule::SmoothedShadow)?;
         let quad_pipeline = PipelineState::new(
             device,
             "quad_pipeline",
             ShaderModule::Quad,
             64,
             create_blend_state(device)?,
-        )?;
+        )?
+        .with_variant(device, ShaderModule::SmoothedQuad)?;
         let path_rasterization_pipeline = PipelineState::new(
             device,
             "path_rasterization_pipeline",
@@ -1637,7 +1670,8 @@ impl DirectXRenderPipelines {
             ShaderModule::PolychromeSprite,
             16,
             create_blend_state(device)?,
-        )?;
+        )?
+        .with_variant(device, ShaderModule::SmoothedPolychromeSprite)?;
 
         let blur_downsample = ShaderModule::BlurDownsample.bytecode()?;
         let blur_downsample_vertex = create_vertex_shader(device, blur_downsample.vertex)?;
@@ -1648,6 +1682,11 @@ impl DirectXRenderPipelines {
         let blur_composite = ShaderModule::BlurComposite.bytecode()?;
         let blur_composite_vertex = create_vertex_shader(device, blur_composite.vertex)?;
         let blur_composite_fragment = create_fragment_shader(device, blur_composite.fragment)?;
+        let smoothed_blur_composite = ShaderModule::SmoothedBlurComposite.bytecode()?;
+        let smoothed_blur_composite_vertex =
+            create_vertex_shader(device, smoothed_blur_composite.vertex)?;
+        let smoothed_blur_composite_fragment =
+            create_fragment_shader(device, smoothed_blur_composite.fragment)?;
         let blur_params_buffer =
             create_constant_buffer(device, std::mem::size_of::<BlurUniforms>())?;
         let blur_blend_replace = create_blend_state_no_blend(device)?;
@@ -1679,6 +1718,8 @@ impl DirectXRenderPipelines {
             blur_fragment,
             blur_composite_vertex,
             blur_composite_fragment,
+            smoothed_blur_composite_vertex,
+            smoothed_blur_composite_fragment,
             blur_params_buffer,
             blur_blend_replace,
             blur_blend_composite,
@@ -1756,12 +1797,19 @@ struct PipelineState<T> {
     specification: &'static shader_interface::Pipeline,
     vertex: ID3D11VertexShader,
     fragment: ID3D11PixelShader,
+    variant: Option<PipelineVariant>,
     draw_constants: Dx11DrawConstantsBinding,
     buffer: ID3D11Buffer,
     buffer_size: usize,
     view: Option<ID3D11ShaderResourceView>,
     blend_state: ID3D11BlendState,
     _marker: std::marker::PhantomData<T>,
+}
+
+struct PipelineVariant {
+    specification: &'static shader_interface::Pipeline,
+    vertex: ID3D11VertexShader,
+    fragment: ID3D11PixelShader,
 }
 
 impl<T> PipelineState<T> {
@@ -1787,6 +1835,7 @@ impl<T> PipelineState<T> {
             specification: shader.pipeline,
             vertex,
             fragment,
+            variant: None,
             draw_constants,
             buffer,
             buffer_size,
@@ -1794,6 +1843,35 @@ impl<T> PipelineState<T> {
             blend_state,
             _marker: std::marker::PhantomData,
         })
+    }
+
+    fn with_variant(mut self, device: &ID3D11Device, shader_module: ShaderModule) -> Result<Self> {
+        let shader = shader_module.shader();
+        let bytecode = shader_module.bytecode()?;
+        anyhow::ensure!(
+            shader.pipeline.data_layout == self.specification.data_layout
+                && shader.pipeline.topology == self.specification.topology
+                && shader.pipeline.vertex_count == self.specification.vertex_count,
+            "{} variant has an incompatible pipeline layout",
+            self.label,
+        );
+        let draw_constants = bytecode.draw_constants.with_context(|| {
+            format!(
+                "{} variant was generated without DX11 draw constants",
+                self.label
+            )
+        })?;
+        anyhow::ensure!(
+            draw_constants == self.draw_constants,
+            "{} variant uses a different DX11 draw-constants register",
+            self.label,
+        );
+        self.variant = Some(PipelineVariant {
+            specification: shader.pipeline,
+            vertex: create_vertex_shader(device, bytecode.vertex)?,
+            fragment: create_fragment_shader(device, bytecode.fragment)?,
+        });
+        Ok(self)
     }
 
     fn update_buffer(
@@ -1858,6 +1936,28 @@ impl<T> PipelineState<T> {
         self.draw(frame, texture, vertex_count, instances)
     }
 
+    fn draw_instances_variant(
+        &self,
+        frame: &FrameBindings<'_>,
+        texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        instances: InstanceRange,
+        use_variant: bool,
+    ) -> Result<()> {
+        let variant = use_variant.then(|| {
+            self.variant
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has no shader variant", self.label))
+        });
+        let specification = variant
+            .map(|variant| variant.specification)
+            .unwrap_or(self.specification);
+        let vertex_count = specification
+            .vertex_count
+            .fixed()
+            .with_context(|| format!("{} has no fixed vertex count", self.label))?;
+        self.draw_with_variant(frame, texture, vertex_count, instances, variant)
+    }
+
     /// Draws `vertex_count` vertex-pulled vertices as a single instance.
     fn draw_vertices(&self, frame: &FrameBindings<'_>, vertex_count: u32) -> Result<()> {
         anyhow::ensure!(
@@ -1874,6 +1974,17 @@ impl<T> PipelineState<T> {
         texture: Option<&[Option<ID3D11ShaderResourceView>]>,
         vertex_count: u32,
         instances: InstanceRange,
+    ) -> Result<()> {
+        self.draw_with_variant(frame, texture, vertex_count, instances, None)
+    }
+
+    fn draw_with_variant(
+        &self,
+        frame: &FrameBindings<'_>,
+        texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        vertex_count: u32,
+        instances: InstanceRange,
+        variant: Option<&PipelineVariant>,
     ) -> Result<()> {
         if instances.is_empty() || vertex_count == 0 {
             return Ok(());
@@ -1892,7 +2003,10 @@ impl<T> PipelineState<T> {
             &frame.globals.draw_constants_buffer,
             &[Dx11DrawConstants::for_instances(instances.first())],
         )?;
-        let topology = match self.specification.topology {
+        let specification = variant
+            .map(|variant| variant.specification)
+            .unwrap_or(self.specification);
+        let topology = match specification.topology {
             shader_interface::PrimitiveTopology::TriangleList => {
                 D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
             }
@@ -1906,8 +2020,18 @@ impl<T> PipelineState<T> {
             ctx.PSSetShaderResources(DATA_REGISTER, Some(slice::from_ref(&self.view)));
             ctx.IASetPrimitiveTopology(topology);
             ctx.RSSetViewports(Some(slice::from_ref(frame.viewport)));
-            ctx.VSSetShader(&self.vertex, None);
-            ctx.PSSetShader(&self.fragment, None);
+            ctx.VSSetShader(
+                variant
+                    .map(|variant| &variant.vertex)
+                    .unwrap_or(&self.vertex),
+                None,
+            );
+            ctx.PSSetShader(
+                variant
+                    .map(|variant| &variant.fragment)
+                    .unwrap_or(&self.fragment),
+                None,
+            );
             ctx.VSSetConstantBuffers(0, Some(&frame.globals.cbuffers()));
             ctx.PSSetConstantBuffers(0, Some(&frame.globals.cbuffers()));
             ctx.VSSetConstantBuffers(self.draw_constants.register, Some(&draw_constants));
@@ -2393,53 +2517,65 @@ pub(crate) mod shader_resources {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
         Quad,
+        SmoothedQuad,
         Shadow,
+        SmoothedShadow,
         Underline,
         PathRasterization,
         PathSprite,
         MonochromeSprite,
         SubpixelSprite,
         PolychromeSprite,
+        SmoothedPolychromeSprite,
         EmojiRasterization,
         Surface,
         BlurDownsample,
         Blur,
         BlurComposite,
+        SmoothedBlurComposite,
     }
 
     impl ShaderModule {
         #[cfg(test)]
-        const ALL: [Self; 13] = [
+        const ALL: [Self; 17] = [
             Self::Quad,
+            Self::SmoothedQuad,
             Self::Shadow,
+            Self::SmoothedShadow,
             Self::Underline,
             Self::PathRasterization,
             Self::PathSprite,
             Self::MonochromeSprite,
             Self::SubpixelSprite,
             Self::PolychromeSprite,
+            Self::SmoothedPolychromeSprite,
             Self::EmojiRasterization,
             Self::Surface,
             Self::BlurDownsample,
             Self::Blur,
             Self::BlurComposite,
+            Self::SmoothedBlurComposite,
         ];
 
         pub(crate) fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
+                Self::SmoothedQuad => "smoothed_quads",
                 Self::Shadow => "shadows",
+                Self::SmoothedShadow => "smoothed_shadows",
                 Self::Underline => "underlines",
                 Self::PathRasterization => "path_rasterization",
                 Self::PathSprite => "paths",
                 Self::MonochromeSprite => "monochrome_sprites",
                 Self::SubpixelSprite => "subpixel_sprites",
                 Self::PolychromeSprite => "polychrome_sprites",
+                Self::SmoothedPolychromeSprite => "smoothed_polychrome_sprites",
                 Self::EmojiRasterization => "emoji_rasterization",
                 Self::Surface => "surfaces",
                 Self::BlurDownsample => "blur_downsample",
                 Self::Blur => "blur",
                 Self::BlurComposite => "blur_composite",
+                Self::SmoothedBlurComposite => "smoothed_blur_composite",
             };
             NATIVE_SHADERS
                 .iter()
@@ -2832,9 +2968,9 @@ mod tests {
         });
         scene.insert_primitive(PolychromeSprite {
             order: 0,
-            padding: 0,
             grayscale: ShaderBool::Disabled,
             opacity: 1.0,
+            corner_smoothing: 0.0,
             bounds: scaled(50.0, 60.0, 30.0, 30.0),
             content_mask: full_mask(),
             corner_radii: Default::default(),
@@ -2854,7 +2990,7 @@ mod tests {
             .render_commands()
             .iter()
             .filter_map(|command| match command {
-                RenderCommand::Batch(PrimitiveBatch::Quads(range)) => Some(range.clone()),
+                RenderCommand::Batch(PrimitiveBatch::Quads { range, .. }) => Some(range.clone()),
                 _ => None,
             })
             .collect();

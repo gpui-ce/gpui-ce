@@ -16,24 +16,33 @@ impl WgpuRenderer {
     pub(super) fn draw_quads(
         &self,
         quads: &[Quad],
+        smoothed: bool,
         instances: &mut InstanceUpload,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
-        self.draw_instances(quads, &self.resources().pipelines.quads, instances, pass)
+        let pipelines = &self.resources().pipelines;
+        let pipeline = if smoothed {
+            &pipelines.smoothed_quads
+        } else {
+            &pipelines.quads
+        };
+        self.draw_instances(quads, pipeline, instances, pass)
     }
 
     pub(super) fn draw_shadows(
         &self,
         shadows: &[Shadow],
+        smoothed: bool,
         instances: &mut InstanceUpload,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
-        self.draw_instances(
-            shadows,
-            &self.resources().pipelines.shadows,
-            instances,
-            pass,
-        )
+        let pipelines = &self.resources().pipelines;
+        let pipeline = if smoothed {
+            &pipelines.smoothed_shadows
+        } else {
+            &pipelines.shadows
+        };
+        self.draw_instances(shadows, pipeline, instances, pass)
     }
 
     pub(super) fn draw_underlines(
@@ -89,18 +98,18 @@ impl WgpuRenderer {
         &self,
         sprites: &[PolychromeSprite],
         texture_id: AtlasTextureId,
+        smoothed: bool,
         instances: &mut InstanceUpload,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
         let texture = self.atlas.get_texture_info(texture_id);
-        self.draw_instances_with_texture(
-            sprites,
-            texture_id,
-            &texture,
-            &self.resources().pipelines.polychrome_sprites,
-            instances,
-            pass,
-        )
+        let pipelines = &self.resources().pipelines;
+        let pipeline = if smoothed {
+            &pipelines.smoothed_polychrome_sprites
+        } else {
+            &pipelines.polychrome_sprites
+        };
+        self.draw_instances_with_texture(sprites, texture_id, &texture, pipeline, instances, pass)
     }
 
     fn draw_instances<T: BufferData>(

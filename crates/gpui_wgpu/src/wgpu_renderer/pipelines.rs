@@ -50,13 +50,16 @@ fn instance_binding_entries(source: InstanceBindingSource<'_>) -> Vec<wgpu::Bind
 
 pub(super) struct WgpuPipelines {
     pub(super) quads: WgpuRenderPipeline,
+    pub(super) smoothed_quads: WgpuRenderPipeline,
     pub(super) shadows: WgpuRenderPipeline,
+    pub(super) smoothed_shadows: WgpuRenderPipeline,
     pub(super) path_rasterization: WgpuRenderPipeline,
     pub(super) paths: WgpuRenderPipeline,
     pub(super) underlines: WgpuRenderPipeline,
     pub(super) monochrome_sprites: WgpuRenderPipeline,
     pub(super) subpixel_sprites: Option<WgpuRenderPipeline>,
     pub(super) polychrome_sprites: WgpuRenderPipeline,
+    pub(super) smoothed_polychrome_sprites: WgpuRenderPipeline,
     #[cfg_attr(
         not(any(
             all(target_family = "wasm", feature = "custom-gpu"),
@@ -71,6 +74,7 @@ pub(super) struct WgpuPipelines {
     pub(super) blur_downsample: WgpuRenderPipeline,
     pub(super) blur: WgpuRenderPipeline,
     pub(super) blur_composite: WgpuRenderPipeline,
+    pub(super) smoothed_blur_composite: WgpuRenderPipeline,
 }
 
 pub(super) struct WgpuRenderPipeline {
@@ -421,7 +425,9 @@ impl WgpuPipelines {
 
         Self {
             quads: create(shader::QUADS, &scene_target, 1, &shader_module),
+            smoothed_quads: create(shader::SMOOTHED_QUADS, &scene_target, 1, &shader_module),
             shadows: create(shader::SHADOWS, &scene_target, 1, &shader_module),
+            smoothed_shadows: create(shader::SMOOTHED_SHADOWS, &scene_target, 1, &shader_module),
             path_rasterization: create(
                 shader::PATH_RASTERIZATION,
                 &path_rasterization_target,
@@ -453,6 +459,12 @@ impl WgpuPipelines {
                 1,
                 &shader_module,
             ),
+            smoothed_polychrome_sprites: create(
+                shader::SMOOTHED_POLYCHROME_SPRITES,
+                &scene_target,
+                1,
+                &shader_module,
+            ),
             surfaces: create(shader::SURFACES, &scene_target, 1, &shader_module),
             blur_downsample: create(
                 shader::BLUR_DOWNSAMPLE,
@@ -462,6 +474,12 @@ impl WgpuPipelines {
             ),
             blur: create(shader::BLUR, &overwrite_target, 1, &shader_module),
             blur_composite: create(shader::BLUR_COMPOSITE, &composite_target, 1, &shader_module),
+            smoothed_blur_composite: create(
+                shader::SMOOTHED_BLUR_COMPOSITE,
+                &composite_target,
+                1,
+                &shader_module,
+            ),
         }
     }
 }

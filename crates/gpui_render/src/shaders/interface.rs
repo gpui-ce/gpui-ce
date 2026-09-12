@@ -97,17 +97,21 @@ macro_rules! define_pipelines {
 
 define_pipelines! {
     QUADS: "quads", vertex_quad, fragment_quad, TriangleStrip, Instances, Rectangle;
+    SMOOTHED_QUADS: "smoothed_quads", vertex_smoothed_quad, fragment_smoothed_quad, TriangleStrip, Instances, Rectangle;
     SHADOWS: "shadows", vertex_shadow, fragment_shadow, TriangleStrip, Instances, Rectangle;
+    SMOOTHED_SHADOWS: "smoothed_shadows", vertex_smoothed_shadow, fragment_smoothed_shadow, TriangleStrip, Instances, Rectangle;
     PATH_RASTERIZATION: "path_rasterization", vertex_path_rasterization, fragment_path_rasterization, TriangleList, Instances, Dynamic;
     PATHS: "paths", vertex_path, fragment_path, TriangleStrip, TexturedInstances, Rectangle;
     UNDERLINES: "underlines", vertex_underline, fragment_underline, TriangleStrip, Instances, Rectangle;
     MONOCHROME_SPRITES: "monochrome_sprites", vertex_monochrome_sprite, fragment_monochrome_sprite, TriangleStrip, MonochromeSprites, Rectangle;
     SUBPIXEL_SPRITES: "subpixel_sprites", vertex_subpixel_sprite, fragment_subpixel_sprite, TriangleStrip, SubpixelSprites, Rectangle;
     POLYCHROME_SPRITES: "polychrome_sprites", vertex_polychrome_sprite, fragment_polychrome_sprite, TriangleStrip, TexturedInstances, Rectangle;
+    SMOOTHED_POLYCHROME_SPRITES: "smoothed_polychrome_sprites", vertex_smoothed_polychrome_sprite, fragment_smoothed_polychrome_sprite, TriangleStrip, TexturedInstances, Rectangle;
     SURFACES: "surfaces", vertex_surface, fragment_surface, TriangleStrip, Surface, Rectangle;
     BLUR_DOWNSAMPLE: "blur_downsample", vertex_blur_fullscreen, fragment_blur_downsample, TriangleList, Blur, FullscreenTriangle;
     BLUR: "blur", vertex_blur_fullscreen, fragment_blur, TriangleList, Blur, FullscreenTriangle;
     BLUR_COMPOSITE: "blur_composite", vertex_blur_composite, fragment_blur_composite, TriangleStrip, Blur, Rectangle;
+    SMOOTHED_BLUR_COMPOSITE: "smoothed_blur_composite", vertex_smoothed_blur_composite, fragment_smoothed_blur_composite, TriangleStrip, Blur, Rectangle;
 }
 
 pub const EMOJI_RASTERIZATION: Pipeline = Pipeline {
@@ -222,7 +226,11 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         composite_clip,
         downsample_mode,
         source_size,
-        target_size
+        target_size,
+        corner_smoothing,
+        padding0,
+        padding1,
+        padding2
     ),
     render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),
     render_layout!(

@@ -111,6 +111,7 @@ pub(crate) struct StyleTransitionState {
     border_widths: EdgesTransitionState<AbsoluteLength>,
     gap: SizeTransitionState<DefiniteLength>,
     corner_radii: CornersTransitionState<AbsoluteLength>,
+    corner_smoothing: Option<StyleTransitionPropertyState<f32>>,
     scrollbar_width: Option<StyleTransitionPropertyState<AbsoluteLength>>,
     aspect_ratio: Option<StyleTransitionPropertyState<f32>>,
     flex_basis: Option<StyleTransitionPropertyState<Length>>,
@@ -658,7 +659,8 @@ mod tests {
         let mut state = StyleTransitionState::default();
         let transitions = StyleTransitions::new()
             .opacity(Duration::from_secs(1))
-            .rounded(Duration::from_secs(1));
+            .rounded(Duration::from_secs(1))
+            .rounded_smoothing(Duration::from_secs(1));
         let context = StyleTransitionContext::new(
             Some(Bounds {
                 origin: point(px(0.0), px(0.0)),
@@ -668,19 +670,23 @@ mod tests {
         );
         let mut style = Style {
             corner_radii: corners(30.0),
+            corner_smoothing: Some(0.0),
             ..Style::default()
         };
 
         assert!(!transitions.apply(&mut style, &mut state, context, started_at, false,));
         assert_eq!(style.opacity, None);
         assert_eq!(style.corner_radii, corners(30.0));
+        assert_eq!(style.corner_smoothing, Some(0.0));
 
         style.opacity = Some(0.5);
         style.corner_radii = corners(0.0);
+        style.corner_smoothing = Some(1.0);
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false,));
 
         style.opacity = Some(0.5);
         style.corner_radii = corners(0.0);
+        style.corner_smoothing = Some(1.0);
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -690,6 +696,7 @@ mod tests {
         ));
         assert_eq!(style.opacity, Some(0.25));
         assert_eq!(style.corner_radii, corners(15.0));
+        assert_eq!(style.corner_smoothing, Some(0.5));
 
         let pixels = AbsoluteLength::Pixels(px(10.0));
         let rems = AbsoluteLength::Rems(rems(2.0));

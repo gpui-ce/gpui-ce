@@ -1,6 +1,7 @@
 #[wgsl_rs::wgsl]
 pub mod quad {
     use super::super::common::*;
+    use super::super::corner_smoothing::*;
     use wgsl_rs::std::*;
 
     #[derive(Clone, Copy, Wgsl)]
@@ -13,6 +14,8 @@ pub mod quad {
         pub border_color: Hsla,
         pub corner_radii: Corners,
         pub border_widths: Edges,
+        pub corner_smoothing: f32,
+        pub padding: u32,
     }
     storage!(group(1), binding(0), QUADS: RuntimeArray<Quad>);
 
@@ -216,6 +219,198 @@ pub mod quad {
         }
     }
 
+    pub fn smoothed_corner_lengths(quad: Quad, prepared: PreparedCorners) -> Vec4f {
+        if quad.border_style != BorderStyle::Dashed || quad.corner_smoothing <= 0.0 {
+            return corner_values(quad.corner_radii) * (PI / 2.0);
+        }
+
+        let radii = corner_values(quad.corner_radii);
+        let top_left = figma_corner_length(figma_corner_params(
+            radii.x,
+            prepared.horizontal_reaches.x,
+            prepared.vertical_reaches.x,
+            prepared.smoothing_factors,
+        ));
+        let top_right = figma_corner_length(figma_corner_params(
+            radii.y,
+            prepared.horizontal_reaches.y,
+            prepared.vertical_reaches.y,
+            prepared.smoothing_factors,
+        ));
+        let bottom_right = figma_corner_length(figma_corner_params(
+            radii.z,
+            prepared.horizontal_reaches.z,
+            prepared.vertical_reaches.z,
+            prepared.smoothing_factors,
+        ));
+        let bottom_left = figma_corner_length(figma_corner_params(
+            radii.w,
+            prepared.horizontal_reaches.w,
+            prepared.vertical_reaches.w,
+            prepared.smoothing_factors,
+        ));
+
+        vec4f(top_left, top_right, bottom_right, bottom_left)
+    }
+
+    pub fn smoothed_dash_layout(
+        quad: Quad,
+        prepared: PreparedCorners,
+        corner_lengths: Vec4f,
+    ) -> RoundedDashLayout {
+        let side_velocities = side_dash_velocities(quad.border_widths);
+        let side_lengths = Edges {
+            top: (quad.bounds.size.x
+                - prepared.horizontal_reaches.x
+                - prepared.horizontal_reaches.y)
+                * side_velocities.top,
+            right: (quad.bounds.size.y - prepared.vertical_reaches.y - prepared.vertical_reaches.z)
+                * side_velocities.right,
+            bottom: (quad.bounds.size.x
+                - prepared.horizontal_reaches.z
+                - prepared.horizontal_reaches.w)
+                * side_velocities.bottom,
+            left: (quad.bounds.size.y - prepared.vertical_reaches.w - prepared.vertical_reaches.x)
+                * side_velocities.left,
+        };
+        let corner_velocities = corner_dash_velocities(side_velocities);
+        let top_left_length = corner_lengths.x * corner_velocities.top_left;
+        let top_right_length = corner_lengths.y * corner_velocities.top_right;
+        let bottom_right_length = corner_lengths.z * corner_velocities.bottom_right;
+        let bottom_left_length = corner_lengths.w * corner_velocities.bottom_left;
+        let right_start = side_lengths.top + top_right_length;
+        let bottom_right_start = right_start + side_lengths.right;
+        let bottom_left_start = bottom_right_start + bottom_right_length + side_lengths.bottom;
+        let left_start = bottom_left_start + bottom_left_length;
+        let top_left_start = left_start + side_lengths.left;
+
+        RoundedDashLayout {
+            side_velocities,
+            corner_velocities,
+            right_start,
+            bottom_right_start,
+            bottom_left_start,
+            left_start,
+            top_left_start,
+            perimeter: top_left_start + top_left_length,
+        }
+    }
+
+    pub fn smoothed_dashed_border_alpha(
+        quad: Quad,
+        geometry: QuadGeometry,
+        rectangle_sample: FigmaRectangleSample,
+        prepared: PreparedCorners,
+        corner_lengths: Vec4f,
+        border: Vec2f,
+        straight_border_inner_corner_to_point: Vec2f,
+    ) -> f32 {
+        let dash_layout = smoothed_dash_layout(quad, prepared, corner_lengths);
+        let mut dash_position = 0.0;
+        let mut dash_velocity = 0.0;
+
+        if rectangle_sample.corner != FIGMA_NO_CORNER
+            && rectangle_sample.signed_distance.segment != FIGMA_SEGMENT_STRAIGHT
+        {
+            let corner = rectangle_sample.corner;
+            let mut radius = quad.corner_radii.top_left;
+            let mut horizontal_reach = prepared.horizontal_reaches.x;
+            let mut vertical_reach = prepared.vertical_reaches.x;
+            let mut corner_length = corner_lengths.x;
+
+            match corner {
+                1u32 => {
+                    radius = quad.corner_radii.top_right;
+                    horizontal_reach = prepared.horizontal_reaches.y;
+                    vertical_reach = prepared.vertical_reaches.y;
+                    corner_length = corner_lengths.y;
+                }
+                2u32 => {
+                    radius = quad.corner_radii.bottom_right;
+                    horizontal_reach = prepared.horizontal_reaches.z;
+                    vertical_reach = prepared.vertical_reaches.z;
+                    corner_length = corner_lengths.z;
+                }
+                3u32 => {
+                    radius = quad.corner_radii.bottom_left;
+                    horizontal_reach = prepared.horizontal_reaches.w;
+                    vertical_reach = prepared.vertical_reaches.w;
+                    corner_length = corner_lengths.w;
+                }
+                _ => {}
+            }
+
+            let params = figma_corner_params(
+                radius,
+                horizontal_reach,
+                vertical_reach,
+                prepared.smoothing_factors,
+            );
+            let progress =
+                figma_corner_progress(params, rectangle_sample.signed_distance, corner_length);
+
+            match corner {
+                0u32 => {
+                    dash_velocity = dash_layout.corner_velocities.top_left;
+                    dash_position =
+                        dash_layout.top_left_start + (corner_length - progress) * dash_velocity;
+                }
+                1u32 => {
+                    dash_velocity = dash_layout.corner_velocities.top_right;
+                    dash_position = dash_layout.right_start + progress * dash_velocity;
+                }
+                2u32 => {
+                    dash_velocity = dash_layout.corner_velocities.bottom_right;
+                    dash_position =
+                        dash_layout.bottom_right_start + (corner_length - progress) * dash_velocity;
+                }
+                _ => {
+                    dash_velocity = dash_layout.corner_velocities.bottom_left;
+                    dash_position = dash_layout.bottom_left_start + progress * dash_velocity;
+                }
+            }
+        } else {
+            let mut horizontal =
+                straight_border_inner_corner_to_point.x < straight_border_inner_corner_to_point.y;
+
+            let mut straight_width = select(border.x, border.y, horizontal);
+            if straight_width <= 0.0 {
+                horizontal = !horizontal;
+                straight_width = select(border.x, border.y, horizontal);
+            }
+
+            if horizontal {
+                if geometry.center_to_point.y < 0.0 {
+                    dash_velocity = dash_layout.side_velocities.top;
+                    dash_position =
+                        (geometry.point.x - prepared.horizontal_reaches.x) * dash_velocity;
+                } else {
+                    dash_velocity = dash_layout.side_velocities.bottom;
+                    dash_position = dash_layout.bottom_left_start
+                        - (geometry.point.x - prepared.horizontal_reaches.w) * dash_velocity;
+                }
+            } else if geometry.center_to_point.x < 0.0 {
+                dash_velocity = dash_layout.side_velocities.left;
+                dash_position = dash_layout.top_left_start
+                    - (geometry.point.y - prepared.vertical_reaches.x) * dash_velocity;
+            } else {
+                dash_velocity = dash_layout.side_velocities.right;
+                dash_position = dash_layout.right_start
+                    + (geometry.point.y - prepared.vertical_reaches.y) * dash_velocity;
+            }
+        }
+
+        let dash_period_per_width = DASH_LENGTH_PER_BORDER_WIDTH + DASH_GAP_PER_BORDER_WIDTH;
+        let dash_length = DASH_LENGTH_PER_BORDER_WIDTH / dash_period_per_width;
+
+        if dash_layout.perimeter >= 1.0 {
+            let period = dash_layout.perimeter / floor(dash_layout.perimeter);
+            dash_coverage(dash_position, period, dash_length, dash_velocity)
+        } else {
+            1.0
+        }
+    }
+
     pub fn rounded_dash_position(quad: Quad, geometry: QuadGeometry) -> DashPosition {
         let radii = quad.corner_radii;
         let dash_layout = rounded_dash_layout(quad);
@@ -310,6 +505,26 @@ pub mod quad {
         }
     }
 
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct QuadVertexData {
+        pub position: Vec4f,
+        pub border_color: Vec4f,
+        pub quad_id: u32,
+        pub clip_distances: Vec4f,
+        pub background: PreparedBackground,
+    }
+
+    pub fn prepare_quad_vertex(vertex_id: u32, instance_id: u32, quad: Quad) -> QuadVertexData {
+        let vertex = rectangle_vertex(vertex_id, quad.bounds);
+        QuadVertexData {
+            position: vertex.clip_position,
+            border_color: hsla_to_rgba(quad.border_color),
+            quad_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
+            background: prepare_background(quad.background),
+        }
+    }
+
     #[derive(Wgsl)]
     pub struct QuadVarying {
         #[builtin(position)]
@@ -339,16 +554,15 @@ pub mod quad {
         #[builtin(instance_index)] instance_id: u32,
     ) -> QuadVarying {
         let quad = get!(QUADS)[instance_id as usize];
-        let vertex = rectangle_vertex(vertex_id, quad.bounds);
-        let gradient = prepare_background(quad.background);
+        let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
         QuadVarying {
-            position: vertex.clip_position,
-            border_color: hsla_to_rgba(quad.border_color),
-            quad_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
-            background_solid: gradient.solid,
-            background_color0: gradient.color0,
-            background_color1: gradient.color1,
+            position: vertex.position,
+            border_color: vertex.border_color,
+            quad_id: vertex.quad_id,
+            clip_distances: vertex.clip_distances,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
         }
     }
 
@@ -393,5 +607,210 @@ pub mod quad {
             );
         }
         blend_color(color, antialiased_coverage(distances.outer))
+    }
+
+    #[derive(Wgsl)]
+    pub struct SmoothedQuadVarying {
+        #[builtin(position)]
+        pub position: Vec4f,
+        #[location(0)]
+        #[interpolate(flat)]
+        pub border_color: Vec4f,
+        #[location(1)]
+        #[interpolate(flat)]
+        pub quad_id: u32,
+        #[location(2)]
+        pub clip_distances: Vec4f,
+        #[location(3)]
+        #[interpolate(flat)]
+        pub background_solid: Vec4f,
+        #[location(4)]
+        #[interpolate(flat)]
+        pub background_color0: Vec4f,
+        #[location(5)]
+        #[interpolate(flat)]
+        pub background_color1: Vec4f,
+        #[location(6)]
+        #[interpolate(flat)]
+        pub horizontal_corner_reaches: Vec4f,
+        #[location(7)]
+        #[interpolate(flat)]
+        pub vertical_corner_reaches: Vec4f,
+        #[location(8)]
+        #[interpolate(flat)]
+        pub corner_lengths: Vec4f,
+        #[location(9)]
+        #[interpolate(flat)]
+        pub smoothing_factors: Vec4f,
+        #[location(10)]
+        #[interpolate(flat)]
+        pub superellipse_power: f32,
+    }
+
+    #[vertex]
+    pub fn vertex_smoothed_quad(
+        #[builtin(vertex_index)] vertex_id: u32,
+        #[builtin(instance_index)] instance_id: u32,
+    ) -> SmoothedQuadVarying {
+        let quad = get!(QUADS)[instance_id as usize];
+        let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
+        let prepared = prepare_corners(
+            quad.bounds.size,
+            quad.corner_radii,
+            quad.corner_smoothing,
+            quad.border_style == BorderStyle::Solid && Edges::is_zero(quad.border_widths),
+        );
+
+        SmoothedQuadVarying {
+            position: vertex.position,
+            border_color: vertex.border_color,
+            quad_id: vertex.quad_id,
+            clip_distances: vertex.clip_distances,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
+            horizontal_corner_reaches: prepared.horizontal_reaches,
+            vertical_corner_reaches: prepared.vertical_reaches,
+            corner_lengths: smoothed_corner_lengths(quad, prepared),
+            smoothing_factors: prepared.smoothing_factors,
+            superellipse_power: prepared.superellipse_power,
+        }
+    }
+
+    #[fragment]
+    pub fn fragment_smoothed_quad(input: SmoothedQuadVarying) -> Vec4f {
+        if is_clipped(input.clip_distances) {
+            return transparent();
+        }
+        let quad = get!(QUADS)[input.quad_id as usize];
+        let background_color = background_color(
+            quad.background,
+            input.position.xy(),
+            quad.bounds,
+            PreparedBackground {
+                solid: input.background_solid,
+                color0: input.background_color0,
+                color1: input.background_color1,
+            },
+        );
+        let prepared = PreparedCorners {
+            horizontal_reaches: input.horizontal_corner_reaches,
+            vertical_reaches: input.vertical_corner_reaches,
+            smoothing_factors: input.smoothing_factors,
+            superellipse_power: input.superellipse_power,
+        };
+
+        if Edges::is_zero(quad.border_widths) {
+            let distance = prepared_corner_signed_distance(
+                input.position.xy(),
+                quad.bounds,
+                quad.corner_radii,
+                quad.corner_smoothing,
+                prepared,
+            );
+
+            return blend_color(background_color, antialiased_coverage(distance));
+        }
+
+        let geometry = quad_geometry(quad, input.position.xy());
+        let rectangle_sample = figma_smooth_rectangle_sample(
+            input.position.xy(),
+            quad.bounds,
+            quad.corner_radii,
+            prepared.horizontal_reaches,
+            prepared.vertical_reaches,
+            prepared.smoothing_factors,
+        );
+        let mut border = vec2f(
+            select(
+                quad.border_widths.right,
+                quad.border_widths.left,
+                geometry.center_to_point.x < 0.0,
+            ),
+            select(
+                quad.border_widths.bottom,
+                quad.border_widths.top,
+                geometry.center_to_point.y < 0.0,
+            ),
+        );
+
+        match rectangle_sample.corner {
+            0u32 => {
+                border = vec2f(quad.border_widths.left, quad.border_widths.top);
+            }
+            1u32 => {
+                border = vec2f(quad.border_widths.right, quad.border_widths.top);
+            }
+            2u32 => {
+                border = vec2f(quad.border_widths.right, quad.border_widths.bottom);
+            }
+            3u32 => {
+                border = vec2f(quad.border_widths.left, quad.border_widths.bottom);
+            }
+            _ => {}
+        }
+
+        let reduced_border = vec2f(
+            select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
+            select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
+        );
+        let half_size = Bounds::half_size(quad.bounds);
+        let corner_to_point = abs(geometry.center_to_point) - half_size;
+        let straight_border_inner_corner_to_point = corner_to_point + reduced_border;
+        let near_curve = rectangle_sample.signed_distance.segment != FIGMA_SEGMENT_STRAIGHT;
+
+        if straight_border_inner_corner_to_point.x < -PIXEL_ANTIALIAS_RADIUS
+            && straight_border_inner_corner_to_point.y < -PIXEL_ANTIALIAS_RADIUS
+            && !near_curve
+        {
+            return blend_color(background_color, 1.0);
+        }
+
+        let outer = rectangle_sample.signed_distance.distance;
+        let mut inner = 0.0;
+
+        if near_curve {
+            let normal = abs(rectangle_sample.signed_distance.normal);
+            let active_sides = vec2f(
+                select(0.0, 1.0, border.x > 0.0),
+                select(0.0, 1.0, border.y > 0.0),
+            );
+            let effective_width = length(border * normal)
+                - PIXEL_ANTIALIAS_RADIUS * (1.0 - length(active_sides * normal));
+            inner = -(outer + effective_width);
+        } else {
+            inner = -max(
+                straight_border_inner_corner_to_point.x,
+                straight_border_inner_corner_to_point.y,
+            );
+        }
+
+        let mut color = background_color;
+
+        if max(inner, outer) < PIXEL_ANTIALIAS_RADIUS {
+            let mut border_color = input.border_color;
+            if quad.border_style == BorderStyle::Dashed {
+                border_color.w *= smoothed_dashed_border_alpha(
+                    quad,
+                    geometry,
+                    rectangle_sample,
+                    prepared,
+                    input.corner_lengths,
+                    border,
+                    straight_border_inner_corner_to_point,
+                );
+            }
+
+            let blended_border = over(background_color, border_color);
+            let factor = antialiased_coverage(inner);
+
+            color = mix(
+                background_color,
+                blended_border,
+                vec4f(factor, factor, factor, factor),
+            );
+        }
+
+        blend_color(color, antialiased_coverage(outer))
     }
 }
