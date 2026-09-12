@@ -32,13 +32,9 @@ impl Progress {
         self.0
     }
 
-    /// Returns whether this progress has reached the end.
+    /// Returns whether this progress has reached the end of the current pass.
     pub const fn is_complete(self) -> bool {
         self.0 >= Self::END.0
-    }
-
-    fn repeating(value: f32) -> Self {
-        Self::clamped(value % Self::END.0)
     }
 
     fn contains(value: f32) -> bool {
@@ -87,12 +83,17 @@ impl Default for Easing {
     }
 }
 
-/// Whether motion runs once or repeats indefinitely.
+/// Controls how many passes a motion runs.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Repeat {
     /// Run once.
     #[default]
     Once,
+
+    /// Run a fixed number of passes, including the first pass.
+    ///
+    /// A count of zero leaves the motion at its starting value and inactive.
+    Count(u32),
 
     /// Repeat and remain active until the owner removes the animation.
     Forever,
@@ -101,24 +102,25 @@ pub enum Repeat {
 /// The result of evaluating motion at a point in time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionSample {
-    /// Eased progress between zero and one.
+    /// Eased progress within the current pass.
+    ///
+    /// Repeating or auto-reversing motion may reset or decrease this value
+    /// while active. Use `is_active` to determine whether the entire motion
+    /// has completed.
     pub progress: Progress,
 
     /// Whether another sample may produce a different value.
     pub is_active: bool,
 }
 
-/// Configuration for one-shot or repeating motion.
+/// Configuration for delayed, one-shot, finite, or repeating motion.
 #[derive(Clone)]
 pub struct Motion {
-    /// How long this motion takes.
-    pub duration: Duration,
-
-    /// Maps linear progress to eased progress.
-    pub easing: Easing,
-
-    /// Whether this motion runs once or forever.
-    pub repeat: Repeat,
+    duration: Duration,
+    easing: Easing,
+    repeat: Repeat,
+    delay: Duration,
+    auto_reverse: bool,
 }
 
 impl Motion {
@@ -128,7 +130,34 @@ impl Motion {
             duration,
             easing: Easing::default(),
             repeat: Repeat::Once,
+            delay: Duration::ZERO,
+            auto_reverse: false,
         }
+    }
+
+    /// Returns the duration of each pass, excluding the initial delay.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// Returns the easing function used by this motion.
+    pub fn easing(&self) -> &Easing {
+        &self.easing
+    }
+
+    /// Returns the motion's repeat policy.
+    pub fn repeat(&self) -> Repeat {
+        self.repeat
+    }
+
+    /// Returns the delay before the first pass of each run.
+    pub fn delay(&self) -> Duration {
+        self.delay
+    }
+
+    /// Returns whether every other pass runs in reverse.
+    pub fn auto_reverse(&self) -> bool {
+        self.auto_reverse
     }
 
     /// Replaces the linear easing function.
@@ -137,8 +166,46 @@ impl Motion {
         self
     }
 
+    /// Holds the starting value before the first pass of each run.
+    /// Retargeting an animated value starts a new run with this delay.
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
+    /// Sets the motion's repeat policy.
+    pub fn with_repeat(mut self, repeat: Repeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// Reverses every other pass. Two passes make one out-and-back cycle.
+    /// Before easing, finite motion ends at progress zero after an even number
+    /// of alternating passes, and at progress one after an odd number.
+    pub fn with_auto_reverse(mut self, auto_reverse: bool) -> Self {
+        self.auto_reverse = auto_reverse;
+        self
+    }
+
     /// Evaluates this motion after the supplied elapsed time.
+    /// During the delay, progress is zero and the motion remains active.
+    /// Zero-duration motion settles immediately after the delay, even when
+    /// repeating forever. [`Repeat::Count(0)`] is always inactive.
     pub fn sample(&self, elapsed: Duration) -> MotionSample {
+        if self.repeat == Repeat::Count(0) {
+            return MotionSample {
+                progress: Progress::START,
+                is_active: false,
+            };
+        }
+
+        let Some(elapsed) = elapsed.checked_sub(self.delay) else {
+            return MotionSample {
+                progress: Progress::START,
+                is_active: true,
+            };
+        };
+
         if self.duration.is_zero() {
             return MotionSample {
                 progress: self.resting_progress(),
@@ -146,18 +213,32 @@ impl Motion {
             };
         }
 
-        let linear_progress = elapsed.as_secs_f32() / self.duration.as_secs_f32();
-        let (linear_progress, is_active) = match self.repeat {
-            Repeat::Once => {
-                let progress = Progress::clamped(linear_progress);
-                (progress, !progress.is_complete())
-            }
-            Repeat::Forever => (Progress::repeating(linear_progress), true),
+        // Keep pass boundaries and parity exact, including after long runs or
+        // skipped frames. Only the fraction within one pass needs floating point.
+        let duration_nanos = self.duration.as_nanos();
+        let elapsed_nanos = elapsed.as_nanos();
+        let pass = elapsed_nanos / duration_nanos;
+        let finished = match self.repeat {
+            Repeat::Once => pass >= 1,
+            Repeat::Count(count) => pass >= u128::from(count),
+            Repeat::Forever => false,
+        };
+
+        let linear_progress = if finished {
+            self.resting_progress()
+        } else {
+            let fraction = (elapsed_nanos % duration_nanos) as f64 / duration_nanos as f64;
+            let progress = if self.auto_reverse && pass % 2 == 1 {
+                1.0 - fraction
+            } else {
+                fraction
+            };
+            Progress::clamped(progress as f32)
         };
 
         MotionSample {
             progress: self.easing.sample(linear_progress),
-            is_active,
+            is_active: !finished,
         }
     }
 
@@ -172,6 +253,9 @@ impl Motion {
     pub(crate) fn resting_progress(&self) -> Progress {
         match self.repeat {
             Repeat::Once => Progress::END,
+            Repeat::Count(0) => Progress::START,
+            Repeat::Count(count) if self.auto_reverse && count % 2 == 0 => Progress::START,
+            Repeat::Count(_) => Progress::END,
             Repeat::Forever => Progress::START,
         }
     }
@@ -196,6 +280,116 @@ pub type MotionInfo = Motion;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_sample(motion: &Motion, elapsed: Duration, progress: f32, is_active: bool) {
+        assert_eq!(
+            motion.sample(elapsed),
+            MotionSample {
+                progress: Progress::clamped(progress),
+                is_active,
+            },
+            "at {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn delayed_counted_motion_waits_only_before_the_first_pass() {
+        let motion = Motion::new(secs(1))
+            .with_delay(millis(500))
+            .with_repeat(Repeat::Count(3));
+
+        for (ms, progress, active) in [
+            (0, 0.0, true),
+            (499, 0.0, true),
+            (500, 0.0, true),
+            (750, 0.25, true),
+            (1_500, 0.0, true),
+            (1_750, 0.25, true),
+            (2_500, 0.0, true),
+            (3_250, 0.75, true),
+            (3_500, 1.0, false),
+            (9_000, 1.0, false),
+        ] {
+            assert_sample(&motion, millis(ms), progress, active);
+        }
+    }
+
+    #[test]
+    fn alternating_passes_reverse_the_easing_curve_and_settle_by_parity() {
+        let motion = Motion::new(secs(1))
+            .with_easing(|progress| progress * progress)
+            .with_repeat(Repeat::Count(4))
+            .with_auto_reverse(true);
+
+        for (ms, progress, active) in [
+            (250, 0.0625, true),
+            (1_000, 1.0, true),
+            (1_250, 0.5625, true),
+            (2_000, 0.0, true),
+            (3_000, 1.0, true),
+            (4_000, 0.0, false),
+            (9_000, 0.0, false),
+        ] {
+            assert_sample(&motion, millis(ms), progress, active);
+        }
+
+        let odd = motion.clone().with_repeat(Repeat::Count(3));
+        assert_sample(&odd, secs(3), 1.0, false);
+        let forever = motion.with_repeat(Repeat::Forever);
+        assert_sample(&forever, secs(4), 0.0, true);
+        assert_sample(&forever, secs(5), 1.0, true);
+    }
+
+    #[test]
+    fn zero_passes_and_zero_duration_have_finite_activity() {
+        let motion = Motion::new(Duration::ZERO)
+            .with_delay(secs(1))
+            .with_auto_reverse(true);
+        for (repeat, end) in [(Repeat::Once, 1.0), (Repeat::Forever, 0.0)] {
+            let motion = motion.clone().with_repeat(repeat);
+            assert_sample(&motion, millis(999), 0.0, true);
+            assert_sample(&motion, secs(1), end, false);
+            assert_sample(&motion, Duration::MAX, end, false);
+        }
+        for (count, end) in [(1, 1.0), (2, 0.0), (3, 1.0)] {
+            let motion = motion.clone().with_repeat(Repeat::Count(count));
+            assert_sample(&motion, millis(999), 0.0, true);
+            assert_sample(&motion, secs(1), end, false);
+            assert_sample(&motion, Duration::MAX, end, false);
+        }
+        for duration in [Duration::ZERO, secs(1)] {
+            let motion = Motion::new(duration)
+                .with_delay(secs(1))
+                .with_repeat(Repeat::Count(0));
+            assert_sample(&motion, Duration::ZERO, 0.0, false);
+            assert_sample(&motion, Duration::MAX, 0.0, false);
+        }
+    }
+
+    #[test]
+    fn delay_holds_the_origin_even_with_a_nonzero_easing_start() {
+        let motion = Motion::new(secs(1))
+            .with_delay(secs(1))
+            .with_easing(|_| 0.5);
+        assert_sample(&motion, millis(999), 0.0, true);
+        assert_sample(&motion, secs(1), 0.5, true);
+    }
+
+    #[test]
+    fn pass_boundaries_remain_exact_for_long_runs_and_tiny_durations() {
+        let motion = Motion::new(Duration::from_nanos(2))
+            .with_repeat(Repeat::Forever)
+            .with_auto_reverse(true);
+        // The elapsed nanoseconds exceed the integer precision of f32 and f64.
+        assert_sample(&motion, Duration::new(100_000_000, 1), 0.5, true);
+        assert_sample(&motion, Duration::new(100_000_000, 2), 1.0, true);
+        assert_sample(&motion, Duration::MAX, 0.5, true);
+
+        let finite = motion.with_repeat(Repeat::Count(u32::MAX));
+        assert_sample(&finite, Duration::MAX, 1.0, false);
+        let long = Motion::new(Duration::MAX).with_repeat(Repeat::Count(u32::MAX));
+        assert_sample(&long, Duration::MAX, 0.0, true);
+    }
 
     #[test]
     fn creates_durations() {
@@ -245,15 +439,13 @@ mod tests {
         assert_eq!(once.progress, Progress::END);
         assert!(!once.is_active);
 
-        let mut repeating = Motion::new(Duration::ZERO);
-        repeating.repeat = Repeat::Forever;
+        let repeating = Motion::new(Duration::ZERO).with_repeat(Repeat::Forever);
         let sample = repeating.sample(Duration::from_secs(10));
         assert_eq!(sample.progress, Progress::START);
         assert!(!sample.is_active);
 
         let duration = Duration::from_secs(1);
-        let mut motion = Motion::new(duration);
-        motion.repeat = Repeat::Forever;
+        let motion = Motion::new(duration).with_repeat(Repeat::Forever);
 
         assert_eq!(
             motion.sample(Duration::from_millis(250)),
