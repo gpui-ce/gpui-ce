@@ -2474,7 +2474,12 @@ impl Interactivity {
                         style.overflow_mask(bounds, window.rem_size()),
                         |window| {
                             let hitbox = if self.should_insert_hitbox(&style, window, cx) {
-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+                                let hitbox = window.insert_hitbox_mut(bounds, self.hitbox_behavior);
+                                // attach the group of the div to the hitbox's tags so it can be queried in hit-test related listeners
+                                if let Some(group) = &self.group {
+                                    hitbox.tags.push(group.clone());
+                                }
+                                Some(hitbox.clone())
                             } else {
                                 None
                             };
@@ -4079,6 +4084,7 @@ fn handle_tooltip_check_visible_and_update(
     active_tooltip.borrow().is_some()
 }
 
+/// Temporary cache of hitbox groups, written and read from during paint recursion.
 #[derive(Default)]
 pub(crate) struct GroupHitboxes(HashMap<SharedString, SmallVec<[HitboxId; 1]>>);
 
