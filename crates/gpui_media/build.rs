@@ -1,16 +1,28 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
-#[cfg(target_os = "macos")]
 fn main() {
     use std::{env, path::PathBuf, process::Command};
 
-    let sdk_path = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--sdk", "macosx", "--show-sdk-path"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
+    // A build script compiles for the host, so `cfg!(target_os)` here would
+    // describe the machine running cargo. The platform being compiled for is
+    // only visible through the environment cargo sets for build scripts.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+
+    // An explicit SDKROOT (a cross build, or a pinned SDK) wins over asking
+    // Xcode, which a non-Apple host does not have.
+    println!("cargo:rerun-if-env-changed=SDKROOT");
+    let sdk_path = match env::var("SDKROOT") {
+        Ok(root) if !root.is_empty() => root,
+        _ => String::from_utf8(
+            Command::new("xcrun")
+                .args(["--sdk", "macosx", "--show-sdk-path"])
+                .output()
+                .expect("neither SDKROOT nor xcrun can locate the macOS SDK")
+                .stdout,
+        )
+        .unwrap(),
+    };
     let sdk_path = sdk_path.trim_end();
 
     println!("cargo:rerun-if-changed=src/bindings.h");
@@ -39,6 +51,3 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("couldn't write dispatch bindings");
 }
-
-#[cfg(not(target_os = "macos"))]
-fn main() {}
