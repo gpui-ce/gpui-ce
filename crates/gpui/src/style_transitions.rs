@@ -146,7 +146,7 @@ fn apply_auto_size(
         Length::Definite(DefiniteLength::Absolute(length)) => {
             Some(length.to_pixels(context.rem_size))
         }
-        Length::Definite(DefiniteLength::Fraction(_)) => None,
+        Length::Definite(DefiniteLength::Relative(_)) => None,
         Length::Auto => state.resolved_auto,
     };
 

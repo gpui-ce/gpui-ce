@@ -697,7 +697,8 @@ impl From<Size<Pixels>> for Size<AbsoluteLength> {
 impl Size<Length> {
     /// Returns a `Size` with both width and height set to fill the available space.
     ///
-    /// This function creates a `Size` instance where both the width and height are set to `Length::Definite(DefiniteLength::Fraction(1.0))`,
+    /// This function creates a `Size` instance where both the width and height are set to
+    /// `Length::Definite(DefiniteLength::Relative(Relative(1.0)))`,
     /// which represents 100% of the available space in both dimensions.
     ///
     /// # Returns
@@ -1993,12 +1994,12 @@ impl Edges<DefiniteLength> {
     /// # Examples
     ///
     /// ```
-    /// # use gpui::{Edges, DefiniteLength, px, AbsoluteLength, rems, Size};
+    /// # use gpui::{Edges, DefiniteLength, px, relative, AbsoluteLength, rems, Size};
     /// let edges = Edges {
     ///     top: DefiniteLength::Absolute(AbsoluteLength::Pixels(px(10.0))),
-    ///     right: DefiniteLength::Fraction(0.5),
+    ///     right: relative(0.5).into(),
     ///     bottom: DefiniteLength::Absolute(AbsoluteLength::Rems(rems(2.0))),
-    ///     left: DefiniteLength::Fraction(0.25),
+    ///     left: relative(0.25).into(),
     /// };
     /// let parent_size = Size {
     ///     width: AbsoluteLength::Pixels(px(200.0)),
@@ -3286,6 +3287,61 @@ impl TryFrom<&'_ str> for Rems {
     }
 }
 
+/// Represents a length relative to another length, expressed as a fraction.
+///
+/// A value of `1.0` represents the full reference length, while `0.5` represents half of it.
+#[derive(Clone, Copy, Default, Add, Sub, Mul, Div, Neg, PartialEq)]
+#[repr(transparent)]
+pub struct Relative(pub(crate) f32);
+
+impl Relative {
+    /// A relative length of zero.
+    pub const ZERO: Self = Self(0.0);
+
+    /// Returns the raw `f32` value of this `Relative`.
+    pub fn as_f32(self) -> f32 {
+        self.0
+    }
+
+    /// Resolves this relative length against a base size.
+    pub fn to_pixels(self, base_size: AbsoluteLength, rem_size: Pixels) -> Pixels {
+        match base_size {
+            AbsoluteLength::Pixels(pixels) => pixels * self.0,
+            AbsoluteLength::Rems(rems) => rems * rem_size * self.0,
+        }
+    }
+}
+
+impl AddAssign<Relative> for Relative {
+    fn add_assign(&mut self, rhs: Relative) {
+        self.0 += rhs.0;
+    }
+}
+
+impl Display for Relative {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}%", (self.0 * 100.0) as i32)
+    }
+}
+
+impl Debug for Relative {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
+}
+
+impl TryFrom<&'_ str> for Relative {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &'_ str) -> Result<Self, Self::Error> {
+        value
+            .strip_suffix('%')
+            .context("expected '%' suffix")
+            .and_then(|number| Ok(number.parse::<f32>()?))
+            .map(|percentage| Self(percentage / 100.0))
+    }
+}
+
 /// Represents an absolute length in pixels or rems.
 ///
 /// `AbsoluteLength` can be either a fixed number of pixels, which is an absolute measurement not
@@ -3458,8 +3514,8 @@ impl Serialize for AbsoluteLength {
 pub enum DefiniteLength {
     /// An absolute length specified in pixels or rems.
     Absolute(AbsoluteLength),
-    /// A relative length specified as a fraction of the parent's size, between 0 and 1.
-    Fraction(f32),
+    /// A length relative to the parent's size.
+    Relative(Relative),
 }
 
 impl DefiniteLength {
@@ -3480,10 +3536,10 @@ impl DefiniteLength {
     /// # Examples
     ///
     /// ```
-    /// # use gpui::{DefiniteLength, AbsoluteLength, Pixels, px, rems};
+    /// # use gpui::{DefiniteLength, AbsoluteLength, Pixels, px, relative, rems};
     /// let length_in_pixels = DefiniteLength::Absolute(AbsoluteLength::Pixels(px(42.0)));
     /// let length_in_rems = DefiniteLength::Absolute(AbsoluteLength::Rems(rems(2.0)));
-    /// let length_as_fraction = DefiniteLength::Fraction(0.5);
+    /// let length_as_fraction = DefiniteLength::from(relative(0.5));
     /// let base_size = AbsoluteLength::Pixels(px(100.0));
     /// let rem_size = px(16.0);
     ///
@@ -3494,10 +3550,7 @@ impl DefiniteLength {
     pub fn to_pixels(self, base_size: AbsoluteLength, rem_size: Pixels) -> Pixels {
         match self {
             DefiniteLength::Absolute(size) => size.to_pixels(rem_size),
-            DefiniteLength::Fraction(fraction) => match base_size {
-                AbsoluteLength::Pixels(px) => px * fraction,
-                AbsoluteLength::Rems(rems) => rems * rem_size * fraction,
-            },
+            DefiniteLength::Relative(relative) => relative.to_pixels(base_size, rem_size),
         }
     }
 }
@@ -3512,7 +3565,7 @@ impl Display for DefiniteLength {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DefiniteLength::Absolute(length) => write!(f, "{length}"),
-            DefiniteLength::Fraction(fraction) => write!(f, "{}%", (fraction * 100.0) as i32),
+            DefiniteLength::Relative(relative) => write!(f, "{relative}"),
         }
     }
 }
@@ -3523,11 +3576,11 @@ impl TryFrom<&'_ str> for DefiniteLength {
     type Error = anyhow::Error;
 
     fn try_from(value: &'_ str) -> Result<Self, Self::Error> {
-        if let Some(percentage) = value.strip_suffix('%') {
-            let fraction: f32 = percentage.parse::<f32>().with_context(|| {
+        if value.ends_with('%') {
+            let relative = Relative::try_from(value).with_context(|| {
                 format!("invalid DefiniteLength '{value}', expected {EXPECTED_DEFINITE_LENGTH}")
             })?;
-            Ok(DefiniteLength::Fraction(fraction / 100.0))
+            Ok(DefiniteLength::Relative(relative))
         } else if let Ok(absolute_length) = value.try_into() {
             Ok(DefiniteLength::Absolute(absolute_length))
         } else {
@@ -3589,6 +3642,12 @@ impl From<Pixels> for DefiniteLength {
 impl From<Rems> for DefiniteLength {
     fn from(rems: Rems) -> Self {
         Self::Absolute(rems.into())
+    }
+}
+
+impl From<Relative> for DefiniteLength {
+    fn from(relative: Relative) -> Self {
+        Self::Relative(relative)
     }
 }
 
@@ -3688,24 +3747,24 @@ impl Serialize for Length {
     }
 }
 
-/// Constructs a `DefiniteLength` representing a relative fraction of a parent size.
+/// Constructs a `Relative` value representing a fraction of another length.
 ///
-/// This function creates a `DefiniteLength` that is a specified fraction of a parent's dimension.
-/// The fraction should be a floating-point number between 0.0 and 1.0, where 1.0 represents 100% of the parent's size.
+/// A fraction of `1.0` represents the full reference length. Values outside the range from `0.0`
+/// to `1.0` represent lengths below zero or greater than the full reference length.
 ///
 /// # Arguments
 ///
-/// * `fraction` - The fraction of the parent's size, between 0.0 and 1.0.
+/// * `fraction` - The fraction of the reference length.
 ///
 /// # Returns
 ///
-/// A `DefiniteLength` representing the relative length as a fraction of the parent's size.
-pub const fn relative(fraction: f32) -> DefiniteLength {
-    DefiniteLength::Fraction(fraction)
+/// A `Relative` value that can be converted into a [`DefiniteLength`] or [`Length`].
+pub const fn relative(fraction: f32) -> Relative {
+    Relative(fraction)
 }
 
 /// Returns the Golden Ratio, i.e. `~(1.0 + sqrt(5.0)) / 2.0`.
-pub const fn phi() -> DefiniteLength {
+pub const fn phi() -> Relative {
     relative(1.618_034)
 }
 
@@ -3759,6 +3818,12 @@ impl From<Pixels> for Length {
 impl From<Rems> for Length {
     fn from(rems: Rems) -> Self {
         Self::Definite(rems.into())
+    }
+}
+
+impl From<Relative> for Length {
+    fn from(relative: Relative) -> Self {
+        Self::Definite(relative.into())
     }
 }
 
@@ -3867,6 +3932,12 @@ impl Half for Rems {
     }
 }
 
+impl Half for Relative {
+    fn half(&self) -> Self {
+        Self(self.0 / 2.)
+    }
+}
+
 /// A trait for checking if a value is zero.
 ///
 /// This trait provides a method to determine if a value is considered to be zero.
@@ -3906,6 +3977,12 @@ impl IsZero for Rems {
     }
 }
 
+impl IsZero for Relative {
+    fn is_zero(&self) -> bool {
+        self.0 == 0.
+    }
+}
+
 impl IsZero for AbsoluteLength {
     fn is_zero(&self) -> bool {
         match self {
@@ -3919,7 +3996,7 @@ impl IsZero for DefiniteLength {
     fn is_zero(&self) -> bool {
         match self {
             DefiniteLength::Absolute(length) => length.is_zero(),
-            DefiniteLength::Fraction(fraction) => *fraction == 0.,
+            DefiniteLength::Relative(relative) => relative.is_zero(),
         }
     }
 }

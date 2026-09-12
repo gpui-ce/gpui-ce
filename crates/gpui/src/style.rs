@@ -619,7 +619,7 @@ impl Default for TextStyle {
             font_features: FontFeatures::default(),
             font_fallbacks: None,
             font_size: rems(1.).into(),
-            line_height: phi(),
+            line_height: phi().into(),
             font_weight: FontWeight::default(),
             font_style: FontStyle::default(),
             background_color: None,
