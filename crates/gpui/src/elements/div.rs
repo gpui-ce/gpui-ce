@@ -2073,20 +2073,37 @@ impl Element for Div {
                     return hitbox;
                 }
 
-                window.with_image_cache(image_cache, |window| {
-                    window.with_element_offset(scroll_offset, |window| {
-                        if let Some(order_fn) = &self.prepaint_order_fn {
-                            let order = order_fn(window, cx);
-                            for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
-                                    child.prepaint(window, cx);
-                                }
-                            }
-                        } else {
-                            for child in &mut self.children {
+                #[inline]
+                fn prepaint_children(
+                    children: &mut [StackSafe<AnyElement>],
+                    order_fn: Option<&dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>,
+                    window: &mut Window,
+                    cx: &mut App,
+                ) {
+                    if let Some(order_fn) = order_fn {
+                        let order = order_fn(window, cx);
+                        for idx in order {
+                            if let Some(child) = children.get_mut(idx) {
                                 child.prepaint(window, cx);
                             }
                         }
+                    } else {
+                        for child in children {
+                            child.prepaint(window, cx);
+                        }
+                    }
+                }
+
+                window.with_image_cache(image_cache, |window| {
+                    window.with_style_transition_containing_bounds(bounds, |window| {
+                        window.with_element_offset(scroll_offset, |window| {
+                            prepaint_children(
+                                &mut self.children,
+                                self.prepaint_order_fn.as_deref(),
+                                window,
+                                cx,
+                            )
+                        });
                     });
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
@@ -3527,12 +3544,10 @@ impl Interactivity {
                     if let Some(group_hitbox_id) = GroupHitboxes::get(&group_hover.group, cx) {
                         !window.last_input_was_touch() && group_hitbox_id.is_hovered(window)
                     } else if let Some(element_state) = element_state.as_ref() {
-                        !window.last_input_was_touch()
-                            && element_state
-                                .hover_state
-                                .as_ref()
-                                .map(|state| state.borrow().group)
-                                .unwrap_or(false)
+                        element_state
+                            .hover_state
+                            .as_ref()
+                            .is_some_and(|state| state.borrow().group_is_active(window))
                     } else {
                         false
                     };
@@ -3546,12 +3561,10 @@ impl Interactivity {
                 let is_hovered = if let Some(hitbox) = hitbox {
                     !window.last_input_was_touch() && hitbox.is_hovered(window)
                 } else if let Some(element_state) = element_state.as_ref() {
-                    !window.last_input_was_touch()
-                        && element_state
-                            .hover_state
-                            .as_ref()
-                            .map(|state| state.borrow().element)
-                            .unwrap_or(false)
+                    element_state
+                        .hover_state
+                        .as_ref()
+                        .is_some_and(|state| state.borrow().element_is_active(window))
                 } else {
                     false
                 };
@@ -3618,7 +3631,8 @@ impl Interactivity {
                     element_state
                         .style_transitions
                         .get_or_insert_with(Default::default),
-                    StyleTransitionContext::new(bounds, window.rem_size()),
+                    StyleTransitionContext::new(bounds, window.rem_size())
+                        .with_containing_bounds(window.style_transition_containing_bounds()),
                     cx.background_executor().now(),
                     cx.reduce_motion(),
                 ) {
@@ -3755,6 +3769,16 @@ pub struct ElementHoverState {
 
     /// True if this element is hovered, false otherwise
     pub element: bool,
+}
+
+impl ElementHoverState {
+    fn group_is_active(&self, window: &Window) -> bool {
+        self.group && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
+
+    fn element_is_active(&self, window: &Window) -> bool {
+        self.element && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
 }
 
 pub(crate) enum ActiveTooltip {

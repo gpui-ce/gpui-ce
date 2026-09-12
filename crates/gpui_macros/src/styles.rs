@@ -67,6 +67,10 @@ struct CanonicalStyleTransitionField {
 enum StyleTransitionFieldKind {
     Required,
     Optional,
+    InsetTop,
+    InsetRight,
+    InsetBottom,
+    InsetLeft,
     AutoSizeWidth,
     AutoSizeHeight,
     CornerRadius,
@@ -87,10 +91,14 @@ impl StyleTransitionField {
         }
     }
 
-    fn required_or_auto_size(path: TokenStream2) -> Self {
+    fn required_or_special_length(path: TokenStream2) -> Self {
         let kind = match style_transition_key(&path).as_str() {
             "size.width" => StyleTransitionFieldKind::AutoSizeWidth,
             "size.height" => StyleTransitionFieldKind::AutoSizeHeight,
+            "inset.top" => StyleTransitionFieldKind::InsetTop,
+            "inset.right" => StyleTransitionFieldKind::InsetRight,
+            "inset.bottom" => StyleTransitionFieldKind::InsetBottom,
+            "inset.left" => StyleTransitionFieldKind::InsetLeft,
             _ => StyleTransitionFieldKind::Required,
         };
         Self { path, kind }
@@ -239,6 +247,29 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+        StyleTransitionFieldKind::InsetTop
+        | StyleTransitionFieldKind::InsetRight
+        | StyleTransitionFieldKind::InsetBottom
+        | StyleTransitionFieldKind::InsetLeft => {
+            let edge = match field.kind {
+                StyleTransitionFieldKind::InsetTop => quote! { StyleTransitionEdge::Top },
+                StyleTransitionFieldKind::InsetRight => quote! { StyleTransitionEdge::Right },
+                StyleTransitionFieldKind::InsetBottom => quote! { StyleTransitionEdge::Bottom },
+                StyleTransitionFieldKind::InsetLeft => quote! { StyleTransitionEdge::Left },
+                _ => unreachable!(),
+            };
+            quote! {
+            in_progress |= apply_inset(
+                &mut state.#path,
+                &mut style.#path,
+                #edge,
+                self.#motion_name.as_ref(),
+                context,
+                now,
+                reduce_motion,
+            );
+            }
+        }
         StyleTransitionFieldKind::AutoSizeWidth => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,
@@ -300,7 +331,7 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: prefix
                 .fields
                 .into_iter()
-                .map(StyleTransitionField::required_or_auto_size)
+                .map(StyleTransitionField::required_or_special_length)
                 .collect(),
         });
     }
@@ -355,6 +386,28 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
         StyleTransitionSpec {
             name: "border_color",
             fields: vec![StyleTransitionField::optional(quote! { border_color })],
+        },
+        StyleTransitionSpec {
+            name: "ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { ring.width }),
+                StyleTransitionField::required(quote! { ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "ring_color",
+            fields: vec![StyleTransitionField::required(quote! { ring.color })],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { inset_ring.width }),
+                StyleTransitionField::required(quote! { inset_ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring_color",
+            fields: vec![StyleTransitionField::required(quote! { inset_ring.color })],
         },
         StyleTransitionSpec {
             name: "text_color",
