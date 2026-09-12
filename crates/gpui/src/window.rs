@@ -17,13 +17,14 @@ use crate::{
     PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
     PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
     Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledFilter, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style,
-    SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
-    TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration, TextInputStateChange,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
-    Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowTextSystem, point, prelude::*, px, rems, size, transparent_black,
+    ScaledFilter, ScaledPixels, Scene, SelectorScope, SelectorState, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, StyleRefinement, SubpixelSprite, SubscriberSet, Subscription,
+    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
+    TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
+    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point,
+    prelude::*, px, rems, size, transparent_black,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -957,6 +958,7 @@ pub(crate) struct DeferredDraw {
     parent_node: DispatchNodeId,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
+    selector_scope_stack: Vec<SelectorScope>,
     content_mask: Option<ContentMask<Pixels>>,
     rem_size: Pixels,
     element: Option<AnyElement>,
@@ -1153,6 +1155,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    pub(crate) selector_scope_stack: Vec<SelectorScope>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1854,6 +1857,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            selector_scope_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -3355,6 +3359,8 @@ impl Window {
                         .clone_from(&deferred_draw.element_id_stack);
                     self.text_style_stack
                         .clone_from(&deferred_draw.text_style_stack);
+                    self.selector_scope_stack
+                        .clone_from(&deferred_draw.selector_scope_stack);
                     (
                         deferred_draw.priority,
                         deferred_draw.element.take(),
@@ -3389,6 +3395,7 @@ impl Window {
 
             self.element_id_stack.clear();
             self.text_style_stack.clear();
+            self.selector_scope_stack.clear();
             round_start = round_end;
         }
     }
@@ -3413,6 +3420,8 @@ impl Window {
             let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
+            self.selector_scope_stack
+                .clone_from(&deferred_draw.selector_scope_stack);
             self.next_frame
                 .dispatch_tree
                 .set_active_node(deferred_draw.parent_node);
@@ -3435,6 +3444,7 @@ impl Window {
         }
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
+        self.selector_scope_stack.clear();
     }
 
     fn deferred_draw_traversal_order(&mut self) -> SmallVec<[usize; 8]> {
@@ -3495,6 +3505,7 @@ impl Window {
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
+                    selector_scope_stack: deferred_draw.selector_scope_stack.clone(),
                     content_mask: deferred_draw.content_mask,
                     rem_size: deferred_draw.rem_size,
                     priority: deferred_draw.priority,
@@ -3572,6 +3583,148 @@ impl Window {
         } else {
             f(self)
         }
+    }
+
+    pub(crate) fn with_selector_scope<R>(
+        &mut self,
+        scope: Option<SelectorState>,
+        element_id: Option<&crate::ElementId>,
+        element_tag: &'static str,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(scope) = scope else {
+            return f(self);
+        };
+
+        self.selector_scope_stack.push(SelectorScope {
+            state: scope,
+            element_tag,
+        });
+
+        let mut nested_selectors = Vec::new();
+
+        self.for_each_matching_selector_refinement(element_id, |refinement| {
+            nested_selectors.push(refinement.selector_state().clone());
+        });
+
+        let current = self
+            .selector_scope_stack
+            .last_mut()
+            .expect("selector scope disappeared");
+
+        for selectors in nested_selectors {
+            Self::refine_selector_scope(current, &selectors, element_id);
+        }
+
+        let result = f(self);
+        self.selector_scope_stack.pop();
+        result
+    }
+
+    pub(crate) fn with_refined_selector_scope<R>(
+        &mut self,
+        refinement: &SelectorState,
+        element_id: Option<&crate::ElementId>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self
+            .selector_scope_stack
+            .last()
+            .map(|scope| scope.state.clone());
+
+        if let Some(scope) = self.selector_scope_stack.last_mut() {
+            Self::refine_selector_scope(scope, refinement, element_id);
+        }
+
+        let result = f(self);
+
+        if let Some(previous) = previous {
+            self.selector_scope_stack
+                .last_mut()
+                .expect("selector scope disappeared")
+                .state = previous;
+        }
+
+        result
+    }
+
+    fn refine_selector_scope(
+        scope: &mut SelectorScope,
+        refinement: &SelectorState,
+        element_id: Option<&crate::ElementId>,
+    ) {
+        scope.state.refine(refinement);
+
+        let nested_selectors = refinement
+            .matching_self_rules(element_id, scope.state.classes(), scope.element_tag)
+            .map(|refinement| refinement.selector_state().clone())
+            .collect::<Vec<_>>();
+        for selectors in nested_selectors {
+            Self::refine_selector_scope(scope, &selectors, element_id);
+        }
+    }
+
+    fn for_each_matching_selector_refinement(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        mut apply: impl FnMut(&StyleRefinement),
+    ) {
+        let Some((current, ancestors)) = self.selector_scope_stack.split_last() else {
+            return;
+        };
+        let classes = current.state.classes();
+
+        // Cascade from the broadest scope toward the element: descendant rules first,
+        // then immediate-child rules, then rules declared on the element itself.
+        for ancestor in ancestors {
+            for refinement in
+                ancestor
+                    .state
+                    .matching_descendant_rules(element_id, classes, current.element_tag)
+            {
+                apply(refinement);
+            }
+        }
+
+        if let Some(parent) = ancestors.last() {
+            for refinement in
+                parent
+                    .state
+                    .matching_child_rules(element_id, classes, current.element_tag)
+            {
+                apply(refinement);
+            }
+        }
+
+        for refinement in
+            current
+                .state
+                .matching_self_rules(element_id, classes, current.element_tag)
+        {
+            apply(refinement);
+        }
+    }
+
+    pub(crate) fn refine_base_style(
+        &self,
+        style: &mut Style,
+        refinement: &StyleRefinement,
+        element_id: Option<&crate::ElementId>,
+    ) {
+        style.refine(refinement);
+
+        if self.selector_scope_stack.is_empty() {
+            style.selectors = SelectorState::default();
+            return;
+        }
+
+        self.for_each_matching_selector_refinement(element_id, |refinement| {
+            style.refine(refinement);
+        });
+
+        // Selector metadata is only needed while resolving the cascade. Do not carry it into
+        // layout and paint styles, which are cloned and retained by the layout engine.
+        style.selectors = SelectorState::default();
     }
 
     /// Updates the cursor style at the platform level. This method should only be called
@@ -4017,6 +4170,18 @@ impl Window {
         }
     }
 
+    pub(crate) fn with_child_paint_context<R>(
+        &mut self,
+        text_style: Option<TextStyleRefinement>,
+        content_mask: Option<ContentMask<Pixels>>,
+        tab_group: Option<isize>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_text_style(text_style, |window| {
+            window.with_content_mask(content_mask, |window| window.with_tab_group(tab_group, f))
+        })
+    }
+
     /// Defers the drawing of the given element, scheduling it to be painted on top of the currently-drawn tree
     /// at a later time. The `priority` parameter determines the drawing order relative to other deferred elements,
     /// with higher values being drawn on top.
@@ -4039,6 +4204,7 @@ impl Window {
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
+            selector_scope_stack: self.selector_scope_stack.clone(),
             content_mask,
             rem_size: self.rem_size(),
             priority,

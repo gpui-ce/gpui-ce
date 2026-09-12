@@ -6,7 +6,6 @@ use crate::{
 };
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::CVPixelBuffer;
-use refineable::Refineable;
 
 /// A source of a surface's content.
 #[derive(Clone)]
@@ -138,6 +137,10 @@ impl Element for Surface {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _global_id: Option<&GlobalElementId>,
@@ -146,7 +149,7 @@ impl Element for Surface {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.refine(&self.style);
+        window.refine_base_style(&mut style, &self.style, None);
         let layout_id = window.request_layout(style, [], cx);
         (layout_id, ())
     }
@@ -175,7 +178,7 @@ impl Element for Surface {
         let new_bounds = self.object_fit.get_bounds(_bounds, self.source.size());
         // TODO: Add support for corner_radii.
         let mut style = Style::default();
-        style.refine(&self.style);
+        _window.refine_base_style(&mut style, &self.style, None);
         _window.with_element_opacity(style.opacity, |window| {
             window.paint_surface(new_bounds, self.source.clone());
         });

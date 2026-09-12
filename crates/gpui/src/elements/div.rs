@@ -1942,6 +1942,10 @@ impl Element for Div {
         self.interactivity.source_location()
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.interactivity.base_style.selectors)
+    }
+
     fn a11y_role(&self) -> Option<accesskit::Role> {
         // Nodes with `GenericContainer` should never be reported to accesskit.
         // Equivalent to an HTML div with no role.
@@ -2365,9 +2369,14 @@ impl Interactivity {
                     );
                 }
 
-                let style =
+                let mut style =
                     self.compute_style_internal(None, None, element_state.as_mut(), window, cx);
-                let layout_id = f(style, window, cx);
+                let selectors = mem::take(&mut style.selectors);
+                let layout_id = window.with_refined_selector_scope(
+                    &selectors,
+                    self.element_id.as_ref(),
+                    |window| f(style, window, cx),
+                );
                 (layout_id, element_state)
             },
         )
@@ -2441,13 +2450,14 @@ impl Interactivity {
             |element_state, window| {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
-                let style = self.compute_style_internal(
+                let mut style = self.compute_style_internal(
                     None,
                     Some(bounds),
                     element_state.as_mut(),
                     window,
                     cx,
                 );
+                let selectors = mem::take(&mut style.selectors);
 
                 if let Some(element_state) = element_state.as_mut() {
                     if let Some(clicked_state) = element_state.clicked_state.as_ref() {
@@ -2481,7 +2491,11 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+                            let result = window.with_refined_selector_scope(
+                                &selectors,
+                                self.element_id.as_ref(),
+                                |window| f(&style, scroll_offset, hitbox, window, cx),
+                            );
                             (result, element_state)
                         },
                     )
@@ -2606,13 +2620,14 @@ impl Interactivity {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
 
-                let style = self.compute_style_internal(
+                let mut style = self.compute_style_internal(
                     hitbox,
                     Some(bounds),
                     element_state.as_mut(),
                     window,
                     cx,
                 );
+                let selectors = mem::take(&mut style.selectors);
 
                 #[cfg(any(feature = "test-support", test))]
                 if let Some(debug_selector) = &self.debug_selector {
@@ -2633,95 +2648,83 @@ impl Interactivity {
                     tab_group = self.tab_index;
                 }
 
+                let text_style = style.text_style().cloned();
+                let content_mask = style.overflow_mask(bounds, window.rem_size());
                 window.with_element_opacity(style.opacity, |window| {
-                    style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
-                        window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
-                                style.overflow_mask(bounds, window.rem_size()),
-                                |window| {
-                                    window.with_tab_group(tab_group, |window| {
-                                        // Register the container's own focus handle *inside* its
-                                        // tab group, so that focusing the container and then
-                                        // calling `focus_next` descends into this group's first
-                                        // item. Inserting it before `with_tab_group` would give the
-                                        // container a shallower tab path than its children; with
-                                        // sibling groups every container would then sort ahead of
-                                        // every item, and `focus_next` from a container would jump
-                                        // to the first item in the whole window instead of its own.
-                                        if let Some(focus_handle) = &self.tracked_focus_handle {
-                                            window.next_frame.tab_stops.insert(focus_handle);
-                                        }
-                                        if let Some(hitbox) = hitbox {
-                                            #[cfg(debug_assertions)]
-                                            self.paint_debug_info(
-                                                global_id, hitbox, &style, window, cx,
-                                            );
+                    style.paint(bounds, window, cx, |window, cx| {
+                        window.with_child_paint_context(
+                            text_style,
+                            content_mask,
+                            tab_group,
+                            |window| {
+                                // Register the container's own focus handle *inside* its
+                                // tab group, so that focusing the container and then
+                                // calling `focus_next` descends into this group's first
+                                // item. Inserting it before `with_tab_group` would give the
+                                // container a shallower tab path than its children; with
+                                // sibling groups every container would then sort ahead of
+                                // every item, and `focus_next` from a container would jump
+                                // to the first item in the whole window instead of its own.
+                                if let Some(focus_handle) = &self.tracked_focus_handle {
+                                    window.next_frame.tab_stops.insert(focus_handle);
+                                }
+                                if let Some(hitbox) = hitbox {
+                                    #[cfg(debug_assertions)]
+                                    self.paint_debug_info(global_id, hitbox, &style, window, cx);
 
-                                            if let Some(drag) = cx.active_drag.as_ref() {
-                                                if let Some(mouse_cursor) = drag.cursor_style {
-                                                    window.set_window_cursor_style(mouse_cursor);
-                                                }
-                                            } else {
-                                                if let Some(mouse_cursor) = style.mouse_cursor {
-                                                    window.set_cursor_style(mouse_cursor, hitbox);
-                                                }
-                                            }
+                                    if let Some(mouse_cursor) =
+                                        cx.active_drag.as_ref().and_then(|drag| drag.cursor_style)
+                                    {
+                                        window.set_window_cursor_style(mouse_cursor);
+                                    } else if let Some(mouse_cursor) = style.mouse_cursor {
+                                        window.set_cursor_style(mouse_cursor, hitbox);
+                                    }
 
-                                            if let Some(group) = self.group.clone() {
-                                                GroupHitboxes::push(group, hitbox.id, cx);
-                                            }
+                                    if let Some(group) = self.group.clone() {
+                                        GroupHitboxes::push(group, hitbox.id, cx);
+                                    }
 
-                                            if let Some(area) = self.window_control {
-                                                window.insert_window_control_hitbox(
-                                                    area,
-                                                    hitbox.clone(),
-                                                );
-                                            }
+                                    if let Some(area) = self.window_control {
+                                        window.insert_window_control_hitbox(area, hitbox.clone());
+                                    }
 
-                                            self.paint_mouse_listeners(
-                                                hitbox,
-                                                element_state.as_mut(),
-                                                window,
-                                                cx,
-                                            );
-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
-                                        }
+                                    self.paint_mouse_listeners(
+                                        hitbox,
+                                        element_state.as_mut(),
+                                        window,
+                                        cx,
+                                    );
+                                    self.paint_scroll_listener(hitbox, &style, window, cx);
+                                }
 
-                                        self.paint_keyboard_listeners(window, cx);
+                                self.paint_keyboard_listeners(window, cx);
 
-                                        if window.a11y.is_active() {
-                                            if let Some(global_id) = global_id {
-                                                if !self.a11y_action_listeners.is_empty() {
-                                                    let node_id = global_id.accesskit_node_id();
-                                                    for (action, listener) in
-                                                        self.a11y_action_listeners.drain(..)
-                                                    {
-                                                        window.on_a11y_action(
-                                                            node_id, action, listener,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
+                                if window.a11y.is_active()
+                                    && let Some(global_id) = global_id
+                                    && !self.a11y_action_listeners.is_empty()
+                                {
+                                    let node_id = global_id.accesskit_node_id();
+                                    for (action, listener) in self.a11y_action_listeners.drain(..) {
+                                        window.on_a11y_action(node_id, action, listener);
+                                    }
+                                }
 
-                                        f(&style, window, cx);
+                                window.with_refined_selector_scope(
+                                    &selectors,
+                                    self.element_id.as_ref(),
+                                    |window| f(&style, window, cx),
+                                );
 
-                                        if let Some(_hitbox) = hitbox {
-                                            #[cfg(any(feature = "inspector", debug_assertions))]
-                                            window.insert_inspector_hitbox(
-                                                _hitbox.id,
-                                                _inspector_id,
-                                                cx,
-                                            );
+                                if let Some(_hitbox) = hitbox {
+                                    #[cfg(any(feature = "inspector", debug_assertions))]
+                                    window.insert_inspector_hitbox(_hitbox.id, _inspector_id, cx);
 
-                                            if let Some(group) = self.group.as_ref() {
-                                                GroupHitboxes::pop(group, cx);
-                                            }
-                                        }
-                                    })
-                                },
-                            );
-                        });
+                                    if let Some(group) = self.group.as_ref() {
+                                        GroupHitboxes::pop(group, cx);
+                                    }
+                                }
+                            },
+                        );
                     });
                 });
 
@@ -3498,7 +3501,7 @@ impl Interactivity {
         cx: &mut App,
     ) -> Style {
         let mut style = Style::default();
-        style.refine(&self.base_style);
+        window.refine_base_style(&mut style, &self.base_style, self.element_id.as_ref());
 
         if let Some(focus_handle) = self.tracked_focus_handle.as_ref() {
             if let Some(in_focus_style) = self.in_focus_style.as_ref()
@@ -4146,6 +4149,10 @@ where
         self.element.source_location()
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        self.element.selector_state()
+    }
+
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.element.a11y_role()
     }
@@ -4481,10 +4488,511 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, canvas,
+        AnyWindowHandle, Canvas, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
+        TestAppContext, canvas,
+        selectors::{any, class, id, not, tag},
         util::FluentBuilder as _,
     };
-    use std::{cell::Cell, rc::Weak};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+        rc::Weak,
+    };
+
+    #[derive(Clone, Default)]
+    struct WidthMeasurements(Rc<RefCell<BTreeMap<&'static str, Pixels>>>);
+
+    impl WidthMeasurements {
+        fn observe(&self, name: &'static str) -> Canvas<()> {
+            let measurements = self.0.clone();
+            canvas(
+                move |bounds, _, _| {
+                    measurements.borrow_mut().insert(name, bounds.size.width);
+                },
+                |_, _, _, _| {},
+            )
+        }
+
+        fn observe_paint(&self, name: &'static str, painted: Rc<Cell<bool>>) -> Canvas<()> {
+            let measurements = self.0.clone();
+            canvas(
+                move |bounds, _, _| {
+                    measurements.borrow_mut().insert(name, bounds.size.width);
+                },
+                move |_, _, _, _| painted.set(true),
+            )
+        }
+
+        fn assert_widths(&self, expected: &[(&'static str, Pixels)]) {
+            let expected = expected.iter().copied().collect::<BTreeMap<_, _>>();
+            assert_eq!(*self.0.borrow(), expected);
+        }
+    }
+
+    struct SelectorTestView {
+        measurements: WidthMeasurements,
+    }
+
+    #[derive(IntoElement)]
+    struct SelectorComponentTarget {
+        measurements: WidthMeasurements,
+    }
+
+    impl RenderOnce for SelectorComponentTarget {
+        fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+            self.measurements
+                .observe("component child")
+                .class("component-target")
+                .h(px(10.))
+        }
+    }
+
+    struct CachedSelectorTarget {
+        measurements: WidthMeasurements,
+    }
+
+    impl Render for CachedSelectorTarget {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .class("cached-selector-target")
+                .h(px(10.))
+                .child(self.measurements.observe("cached subtree").size_full())
+        }
+    }
+
+    struct CachedSelectorRoot {
+        target: Entity<CachedSelectorTarget>,
+        alternate: bool,
+    }
+
+    impl Render for CachedSelectorRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let root = div().class("cached-selector-root").size_full();
+            let root = if self.alternate {
+                root.select(class("cached-selector-root"), |style| {
+                    style.select_descendants(
+                        any([id("missing-cached-target"), class("cached-selector-target")]),
+                        |style| style.w(px(40.)),
+                    )
+                })
+            } else {
+                root.select(class("cached-selector-root"), |style| {
+                    style.select_descendants(
+                        any([id("missing-cached-target"), class("cached-selector-target")]),
+                        |style| style.w(px(20.)),
+                    )
+                })
+            };
+
+            root.child(
+                self.target
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+            )
+        }
+    }
+
+    struct ConditionalSelectorCachedTarget {
+        measurements: WidthMeasurements,
+        painted: Rc<Cell<bool>>,
+    }
+
+    impl Render for ConditionalSelectorCachedTarget {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let painted = self.painted.clone();
+
+            div()
+                .class("nested")
+                .w(px(10.))
+                .h(px(10.))
+                .invisible()
+                .child(
+                    self.measurements
+                        .observe_paint("nested", painted)
+                        .size_full(),
+                )
+        }
+    }
+
+    struct ConditionalSelectorTestView {
+        measurements: WidthMeasurements,
+        nested_target: Entity<ConditionalSelectorCachedTarget>,
+    }
+
+    impl Render for ConditionalSelectorTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .id("interactive-selector-parent")
+                    .class("interactive-selector-parent")
+                    .ml(px(20.))
+                    .mt(px(20.))
+                    .size(px(100.))
+                    .hover(|style| {
+                        style.select(class("interactive-selector-parent"), |style| {
+                            style
+                                .select_children(class("direct"), |style| style.w(px(20.)))
+                                .select_descendants(class("nested"), |style| {
+                                    style.w(px(30.)).visible()
+                                })
+                        })
+                    })
+                    .active(|style| {
+                        style.select(class("interactive-selector-parent"), |style| {
+                            style
+                                .select_children(class("direct"), |style| style.w(px(40.)))
+                                .select_descendants(class("nested"), |style| {
+                                    style.w(px(50.)).invisible()
+                                })
+                        })
+                    })
+                    .child(
+                        div()
+                            .class("direct")
+                            .w(px(10.))
+                            .h(px(10.))
+                            .child(self.measurements.observe("direct").size_full()),
+                    )
+                    .child(
+                        self.nested_target
+                            .clone()
+                            .cached(StyleRefinement::default().w(px(60.)).h(px(10.))),
+                    )
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .child(self.measurements.observe("unmatched control").size_full()),
+                    ),
+            )
+        }
+    }
+
+    impl Render for SelectorTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .select_descendants([tag::<Div>(), class("target")], |style| style.w(px(30.)))
+                .select_descendants(
+                    any((class("overlay"), (class("bob"), id("apple")))),
+                    |style| style.w(px(70.)),
+                )
+                .select_descendants(
+                    (
+                        class("candidate"),
+                        not(any([class("disabled"), class("loading")])),
+                    ),
+                    |style| style.w(px(80.)),
+                )
+                .select_descendants(class("nested-enabled"), |style| {
+                    style.select_children(id("nested-id-leaf"), |style| style.w(px(60.)))
+                })
+                .select_children(tag::<Canvas<()>>(), |style| style.w(px(60.)))
+                .select_children(tag::<Div>(), |style| style.w(px(15.)))
+                .select_children(class("target"), |style| style.w(px(20.)))
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .class("target")
+                        .child(self.measurements.observe("matching child").size_full()),
+                )
+                .child(
+                    div().child(
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .class("target")
+                            .child(self.measurements.observe("matching descendant").size_full()),
+                    ),
+                )
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .select((tag::<Div>(), class("local")), |style| style.w(px(40.)))
+                        .class("local")
+                        .child(self.measurements.observe("matching self").size_full()),
+                )
+                .child(
+                    div()
+                        .select_children(
+                            (tag::<Div>(), (class("target"), id("compound"))),
+                            |style| style.w(px(50.)),
+                        )
+                        .child(
+                            div()
+                                .id("compound")
+                                .class("target")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(
+                                    self.measurements
+                                        .observe("matching compound child")
+                                        .size_full(),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("other-id")
+                                .class("target")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(
+                                    self.measurements
+                                        .observe("non-matching compound child")
+                                        .size_full(),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .class("other")
+                        .child(self.measurements.observe("unmatched child").size_full()),
+                )
+                .child(SelectorComponentTarget {
+                    measurements: self.measurements.clone(),
+                })
+                .child(
+                    div()
+                        .class("nested-scope")
+                        .select(class("nested-scope"), |style| {
+                            style.select_children(class("nested-child"), |style| {
+                                style
+                                    .w(px(20.))
+                                    .select_children(class("nested-leaf"), |style| style.w(px(40.)))
+                            })
+                        })
+                        .child(
+                            div().class("nested-child").w(px(10.)).h(px(10.)).child(
+                                div().class("nested-leaf").w(px(10.)).h(px(10.)).child(
+                                    self.measurements
+                                        .observe("nested selector from matched child")
+                                        .size_full(),
+                                ),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .class("other-scope")
+                        .select(class("nested-scope"), |style| {
+                            style.select_descendants(class("blocked-target"), |style| {
+                                style.w(px(50.))
+                            })
+                        })
+                        .child(
+                            div().class("blocked-target").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("nested rules require outer match")
+                                    .size_full(),
+                            ),
+                        ),
+                )
+                .child(
+                    div().child(
+                        div().class("nested-enabled").child(
+                            div().id("nested-id-leaf").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("nested selector from matched descendant")
+                                    .size_full(),
+                            ),
+                        ),
+                    ),
+                )
+                .child(
+                    div()
+                        .child(
+                            div().class("overlay").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any first alternative")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div().id("apple").class("bob").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any compound alternative")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div().id("pear").class("bob").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any incomplete alternative")
+                                    .size_full(),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .child(
+                            div().class("candidate").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("not eligible descendant")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .class("candidate")
+                                .class("disabled")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(
+                                    self.measurements
+                                        .observe("not excluded descendant")
+                                        .size_full(),
+                                ),
+                        ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn selectors_match_cascade_and_compose_across_the_element_tree(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
+        let window = cx.add_window({
+            let measurements = measurements.clone();
+            move |_, _| SelectorTestView { measurements }
+        });
+        let window = AnyWindowHandle::from(window);
+
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+
+        measurements.assert_widths(&[
+            ("matching child", px(20.)),
+            ("matching descendant", px(30.)),
+            ("matching self", px(40.)),
+            ("matching compound child", px(50.)),
+            ("non-matching compound child", px(30.)),
+            ("unmatched child", px(15.)),
+            ("component child", px(60.)),
+            ("nested selector from matched child", px(40.)),
+            ("nested rules require outer match", px(10.)),
+            ("nested selector from matched descendant", px(60.)),
+            ("any first alternative", px(70.)),
+            ("any compound alternative", px(70.)),
+            ("any incomplete alternative", px(10.)),
+            ("not eligible descendant", px(80.)),
+            ("not excluded descendant", px(10.)),
+        ]);
+    }
+
+    #[gpui::test]
+    fn cached_subtrees_follow_selector_changes(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
+        let window = cx.add_window({
+            let measurements = measurements.clone();
+            move |_, cx| CachedSelectorRoot {
+                target: cx.new(|_| CachedSelectorTarget { measurements }),
+                alternate: false,
+            }
+        });
+
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        measurements.assert_widths(&[("cached subtree", px(20.))]);
+
+        let root = window.root(cx).unwrap();
+        cx.update_entity(&root, |root, _| root.alternate = true);
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        measurements.assert_widths(&[("cached subtree", px(40.))]);
+    }
+
+    #[gpui::test]
+    fn conditional_selectors_update_cached_and_uncached_descendants(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
+        let nested_painted = Rc::new(Cell::new(false));
+        let window = cx.add_window({
+            let measurements = measurements.clone();
+            let nested_painted = nested_painted.clone();
+            move |_, cx| {
+                let nested_measurements = measurements.clone();
+                ConditionalSelectorTestView {
+                    measurements,
+                    nested_target: cx.new(|_| ConditionalSelectorCachedTarget {
+                        measurements: nested_measurements,
+                        painted: nested_painted,
+                    }),
+                }
+            }
+        });
+        let window = AnyWindowHandle::from(window);
+
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        let move_mouse = |cx: &mut TestAppContext, position| {
+            cx.update_window(window, |_, window, cx| {
+                window.simulate_mouse_move(position, cx);
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        };
+        let assert_state =
+            |state, expected_direct, expected_nested, expected_control, expected_painted| {
+                measurements.assert_widths(&[
+                    ("direct", expected_direct),
+                    ("nested", expected_nested),
+                    ("unmatched control", expected_control),
+                ]);
+                assert_eq!(nested_painted.get(), expected_painted, "{state}: painted");
+            };
+        let inside = point(px(50.), px(50.));
+
+        draw(cx);
+        assert_state("idle", px(10.), px(10.), px(10.), false);
+
+        nested_painted.set(false);
+        move_mouse(cx, inside);
+        assert_state("hover", px(20.), px(30.), px(10.), true);
+
+        nested_painted.set(false);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    position: inside,
+                    button: MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        assert_state("mouse down", px(40.), px(50.), px(10.), false);
+
+        nested_painted.set(false);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    position: inside,
+                    button: MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        assert_state("mouse up", px(20.), px(30.), px(10.), true);
+
+        nested_painted.set(false);
+        move_mouse(cx, point(px(150.), px(150.)));
+        assert_state("mouse leave", px(10.), px(10.), px(10.), false);
+    }
 
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,
@@ -4520,10 +5028,12 @@ mod tests {
                     .child(
                         div()
                             .id("stateful-group-hover-target")
+                            .class("group-hover-target")
                             .absolute()
                             .top_0()
                             .left_0()
                             .size(px(10.))
+                            .select(class("group-hover-target"), |style| style.size(px(15.)))
                             .group_hover("hover-group", |style| style.size(px(20.)))
                             .child(canvas(
                                 move |bounds, _, _| stateful_width.set(bounds.size.width),
@@ -4554,7 +5064,7 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
         assert_eq!(anonymous_paint_count.get(), 0);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
 
         let move_mouse = |cx: &mut TestAppContext, position| {
             cx.update_window(window, |_, window, cx| {
@@ -4577,12 +5087,12 @@ mod tests {
         move_mouse(cx, point(px(5.), px(5.)));
         assert_eq!(render_count.get(), initial_render_count + 2);
         assert_eq!(anonymous_paint_count.get(), 1);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
 
         move_mouse(cx, point(px(10.), px(10.)));
         assert_eq!(render_count.get(), initial_render_count + 2);
         assert_eq!(anonymous_paint_count.get(), 1);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
     }
 
     struct HoverListenerLayoutTestView {

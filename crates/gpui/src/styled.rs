@@ -1,9 +1,10 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
+    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, IntoSelectorGroup,
+    JustifyContent, Length, Pixels, SelectorRuleKind, SharedString, StrikethroughStyle,
+    StyleRefinement, TextAlign, TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle,
+    WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -23,6 +24,63 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 pub trait Styled: Sized {
     /// Returns a reference to the style memory of this element.
     fn style(&mut self) -> &mut StyleRefinement;
+
+    /// Assigns this element to a class for selector matching.
+    fn class(mut self, class: impl Into<SharedString>) -> Self {
+        self.style().selectors.add_class(class.into());
+        self
+    }
+
+    /// Assigns this element to multiple classes for selector matching.
+    fn classes<T, const N: usize>(mut self, classes: [T; N]) -> Self
+    where
+        T: Into<SharedString>,
+    {
+        self.style().selectors.add_classes(classes.map(Into::into));
+        self
+    }
+
+    /// Applies a refinement when the selector matches this element.
+    fn select(
+        mut self,
+        selector: impl IntoSelectorGroup,
+        build: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Self_,
+            selector.into_selector_group(),
+            build(StyleRefinement::default()),
+        );
+        self
+    }
+
+    /// Applies a refinement to matching immediate children of this element.
+    fn select_children(
+        mut self,
+        selector: impl IntoSelectorGroup,
+        build: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Child,
+            selector.into_selector_group(),
+            build(StyleRefinement::default()),
+        );
+        self
+    }
+
+    /// Applies a refinement to matching descendants of this element.
+    fn select_descendants(
+        mut self,
+        selector: impl IntoSelectorGroup,
+        build: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Descendant,
+            selector.into_selector_group(),
+            build(StyleRefinement::default()),
+        );
+        self
+    }
 
     gpui_macros::style_helpers!();
     gpui_macros::visibility_style_methods!();

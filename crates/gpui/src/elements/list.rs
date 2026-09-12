@@ -14,7 +14,6 @@ use crate::{
     StyleRefinement, Styled, Window, point, px, size,
 };
 use collections::VecDeque;
-use refineable::Refineable as _;
 use std::{cell::RefCell, ops::Range, rc::Rc};
 use sum_tree::{Bias, Dimensions, SumTree};
 
@@ -1449,6 +1448,10 @@ impl Element for List {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -1460,7 +1463,7 @@ impl Element for List {
             ListSizingBehavior::Infer => {
                 let mut style = Style::default();
                 style.overflow.y = Overflow::Scroll;
-                style.refine(&self.style);
+                window.refine_base_style(&mut style, &self.style, None);
                 window.with_text_style(style.text_style().cloned(), |window| {
                     let state = &mut *self.state.0.borrow_mut();
 
@@ -1514,7 +1517,7 @@ impl Element for List {
             }
             ListSizingBehavior::Auto => {
                 let mut style = Style::default();
-                style.refine(&self.style);
+                window.refine_base_style(&mut style, &self.style, None);
                 window.with_text_style(style.text_style().cloned(), |window| {
                     window.request_layout(style, None, cx)
                 })
@@ -1536,7 +1539,7 @@ impl Element for List {
         state.reset = false;
 
         let mut style = Style::default();
-        style.refine(&self.style);
+        window.refine_base_style(&mut style, &self.style, None);
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 

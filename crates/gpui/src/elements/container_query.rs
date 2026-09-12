@@ -2,8 +2,6 @@
 //! The element's own size is determined solely by its style and the space
 //! offered by its parent.
 
-use refineable::Refineable as _;
-
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, Pixels, Size, Style, StyleRefinement, Styled,
@@ -66,6 +64,10 @@ impl Element for ContainerQuery {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -74,7 +76,7 @@ impl Element for ContainerQuery {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.refine(&self.style);
+        window.refine_base_style(&mut style, &self.style, None);
         let layout_id = window.request_layout(style, [], cx);
         (layout_id, ())
     }

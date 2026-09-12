@@ -263,6 +263,10 @@ impl Element for EditableTextElement {
         self.interactivity.source_location()
     }
 
+    fn selector_state(&self) -> Option<&gpui::SelectorState> {
+        Some(self.interactivity.base_style.selector_state())
+    }
+
     fn request_layout(
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,

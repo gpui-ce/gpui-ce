@@ -1,5 +1,3 @@
-use refineable::Refineable as _;
-
 use crate::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Pixels,
     Style, StyleRefinement, Styled, Window,
@@ -46,6 +44,10 @@ impl<T: 'static> Element for Canvas<T> {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -54,7 +56,7 @@ impl<T: 'static> Element for Canvas<T> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.refine(&self.style);
+        window.refine_base_style(&mut style, &self.style, None);
         let layout_id = window.request_layout(style.clone(), [], cx);
         (layout_id, style)
     }

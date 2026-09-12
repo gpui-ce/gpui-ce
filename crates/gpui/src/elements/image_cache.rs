@@ -6,7 +6,6 @@ use crate::{
 };
 
 use futures::{FutureExt, future::Shared};
-use refineable::Refineable;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, sync::Arc};
 
@@ -107,6 +106,10 @@ impl Element for ImageCacheElement {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -122,7 +125,7 @@ impl Element for ImageCacheElement {
                 .map(|child| child.request_layout(window, cx))
                 .collect::<SmallVec<_>>();
             let mut style = Style::default();
-            style.refine(&self.style);
+            window.refine_base_style(&mut style, &self.style, None);
             let layout_id = window.request_layout(style, child_layout_ids.iter().copied(), cx);
             (layout_id, child_layout_ids)
         })

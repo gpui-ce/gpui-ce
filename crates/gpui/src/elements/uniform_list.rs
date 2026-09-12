@@ -272,6 +272,10 @@ impl Element for UniformList {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.interactivity.base_style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,

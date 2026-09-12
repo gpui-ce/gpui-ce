@@ -10,7 +10,508 @@ use palette::{Hsla, IntoColor, rgb::Rgba};
 use refineable::Refineable;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{iter, mem, ops::Range};
+use std::{
+    iter, mem,
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
+
+/// A selector used to conditionally refine an element's style.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Selector(SelectorKind);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum SelectorKind {
+    /// Matches every element.
+    All,
+    /// Matches an element with the given named ID.
+    Id(SharedString),
+    /// Matches an element with the given class.
+    Class(SharedString),
+    /// Matches an element with the given concrete type.
+    Tag(SharedString),
+}
+
+impl Selector {
+    pub(crate) const fn all() -> Self {
+        Self(SelectorKind::All)
+    }
+
+    pub(crate) fn id(value: SharedString) -> Self {
+        Self(SelectorKind::Id(value))
+    }
+
+    pub(crate) fn class(value: SharedString) -> Self {
+        Self(SelectorKind::Class(value))
+    }
+
+    pub(crate) fn tag<E: crate::Element + crate::Styled>() -> Self {
+        Self(SelectorKind::Tag(std::any::type_name::<E>().into()))
+    }
+
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        match &self.0 {
+            SelectorKind::All => true,
+            SelectorKind::Id(selector_id) => matches!(
+                element_id,
+                Some(crate::ElementId::Name(element_id)) if element_id == selector_id
+            ),
+            SelectorKind::Class(class) => classes.contains(class),
+            SelectorKind::Tag(tag) => tag.as_ref() == element_tag,
+        }
+    }
+}
+
+/// Determines how the items in a [`SelectorGroup`] are matched.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelectorGroupBehavior {
+    /// Every item must match.
+    And,
+    /// At least one item must match.
+    Or,
+}
+
+/// A selector or nested selector group.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelectorGroupItem {
+    /// An individual selector.
+    Selector(Selector),
+    /// A nested selector group.
+    Group(SelectorGroup),
+    /// A nested selector group whose result is inverted.
+    Not(SelectorGroup),
+}
+
+impl SelectorGroupItem {
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        match self {
+            Self::Selector(selector) => selector.matches(element_id, classes, element_tag),
+            Self::Group(group) => group.matches(element_id, classes, element_tag),
+            Self::Not(group) => !group.matches(element_id, classes, element_tag),
+        }
+    }
+}
+
+/// A group of selectors with explicit matching behavior.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SelectorGroup {
+    behavior: SelectorGroupBehavior,
+    items: Vec<SelectorGroupItem>,
+}
+
+impl SelectorGroup {
+    fn new(
+        behavior: SelectorGroupBehavior,
+        items: impl IntoIterator<Item = SelectorGroupItem>,
+    ) -> Self {
+        fn push_item(
+            behavior: SelectorGroupBehavior,
+            items: &mut Vec<SelectorGroupItem>,
+            item: SelectorGroupItem,
+        ) {
+            match item {
+                SelectorGroupItem::Group(group) if group.behavior == behavior => {
+                    for item in group.items {
+                        push_item(behavior, items, item);
+                    }
+                }
+                item => items.push(item),
+            }
+        }
+
+        let mut flattened = Vec::new();
+        for item in items {
+            push_item(behavior, &mut flattened, item);
+        }
+        debug_assert!(!flattened.is_empty(), "selector groups must not be empty");
+
+        Self {
+            behavior,
+            items: flattened,
+        }
+    }
+
+    pub(crate) fn negated(self) -> Self {
+        Self::new(SelectorGroupBehavior::And, [SelectorGroupItem::Not(self)])
+    }
+
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        let matches = |item: &SelectorGroupItem| item.matches(element_id, classes, element_tag);
+
+        match self.behavior {
+            SelectorGroupBehavior::And => self.items.iter().all(matches),
+            SelectorGroupBehavior::Or => self.items.iter().any(matches),
+        }
+    }
+}
+
+/// Converts selectors, arrays, and tuples into a [`SelectorGroup`].
+///
+/// Arrays and tuples use `AND` behavior by default. Nested groups with the same behavior are
+/// flattened, while groups with different behavior retain their boundary.
+pub trait IntoSelectorGroup: Sized {
+    /// Converts this value into a selector group with `AND` behavior.
+    fn into_selector_group(self) -> SelectorGroup {
+        self.into_selector_group_with_behavior(SelectorGroupBehavior::And)
+    }
+
+    /// Converts this value into a selector group with the requested root behavior.
+    #[doc(hidden)]
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup;
+
+    /// Converts this value into an item in another selector group.
+    #[doc(hidden)]
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Group(self.into_selector_group())
+    }
+}
+
+impl IntoSelectorGroup for Selector {
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(behavior, [SelectorGroupItem::Selector(self)])
+    }
+
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Selector(self)
+    }
+}
+
+impl IntoSelectorGroup for SelectorGroup {
+    fn into_selector_group(self) -> SelectorGroup {
+        self
+    }
+
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(behavior, [SelectorGroupItem::Group(self)])
+    }
+
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Group(self)
+    }
+}
+
+impl<T, const N: usize> IntoSelectorGroup for [T; N]
+where
+    T: IntoSelectorGroup,
+{
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(
+            behavior,
+            self.into_iter()
+                .map(IntoSelectorGroup::into_selector_group_item),
+        )
+    }
+}
+
+macro_rules! impl_into_selector_group_for_tuples {
+    ($(($first_type:ident: $first_index:tt $(, $type:ident: $index:tt)*)),+ $(,)?) => {
+        $(
+            impl<$first_type $(, $type)*> IntoSelectorGroup for ($first_type, $($type,)*)
+            where
+                $first_type: IntoSelectorGroup,
+                $($type: IntoSelectorGroup,)*
+            {
+                fn into_selector_group_with_behavior(
+                    self,
+                    behavior: SelectorGroupBehavior,
+                ) -> SelectorGroup {
+                    SelectorGroup::new(
+                        behavior,
+                        [
+                            self.$first_index.into_selector_group_item(),
+                            $(self.$index.into_selector_group_item(),)*
+                        ],
+                    )
+                }
+            }
+        )+
+    };
+}
+
+impl_into_selector_group_for_tuples!(
+    (T0: 0),
+    (T0: 0, T1: 1),
+    (T0: 0, T1: 1, T2: 2),
+    (T0: 0, T1: 1, T2: 2, T3: 3),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10, T11: 11),
+);
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct SelectorData {
+    classes: HashSet<SharedString>,
+    self_rules: Vec<SelectorRule>,
+    child_rules: Vec<SelectorRule>,
+    descendant_rules: Vec<SelectorRule>,
+}
+
+impl SelectorData {
+    fn is_empty(&self) -> bool {
+        self.classes.is_empty()
+            && self.self_rules.is_empty()
+            && self.child_rules.is_empty()
+            && self.descendant_rules.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SelectorRule {
+    pub(crate) selectors: SelectorGroup,
+    pub(crate) refinement: Arc<StyleRefinement>,
+}
+
+pub(crate) enum SelectorRuleKind {
+    Self_,
+    Child,
+    Descendant,
+}
+
+impl SelectorRule {
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        self.selectors.matches(element_id, classes, element_tag)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SelectorScope {
+    pub(crate) state: SelectorState,
+    pub(crate) element_tag: &'static str,
+}
+
+/// Selector metadata attached to a styled element.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct SelectorState(Option<Arc<SelectorData>>);
+
+/// The selector state merges rather than replacing earlier declarations.
+pub type SelectorStateRefinement = SelectorState;
+
+impl SelectorState {
+    // Used by the generated `Debug` implementation for `StyleRefinement`.
+    pub(crate) fn is_some(&self) -> bool {
+        !refineable::IsEmpty::is_empty(self)
+    }
+
+    fn data(&self) -> &SelectorData {
+        static EMPTY: OnceLock<SelectorData> = OnceLock::new();
+        self.0
+            .as_deref()
+            .unwrap_or_else(|| EMPTY.get_or_init(SelectorData::default))
+    }
+
+    fn data_mut(&mut self) -> &mut SelectorData {
+        Arc::make_mut(
+            self.0
+                .get_or_insert_with(|| Arc::new(SelectorData::default())),
+        )
+    }
+
+    pub(crate) fn add_class(&mut self, class: SharedString) {
+        self.data_mut().classes.insert(class);
+    }
+
+    pub(crate) fn add_classes(&mut self, classes: impl IntoIterator<Item = SharedString>) {
+        self.data_mut().classes.extend(classes);
+    }
+
+    pub(crate) fn classes(&self) -> &HashSet<SharedString> {
+        &self.data().classes
+    }
+
+    pub(crate) fn push_rule(
+        &mut self,
+        kind: SelectorRuleKind,
+        selectors: SelectorGroup,
+        refinement: StyleRefinement,
+    ) {
+        let rule = SelectorRule {
+            selectors,
+            refinement: Arc::new(refinement),
+        };
+        match kind {
+            SelectorRuleKind::Self_ => self.data_mut().self_rules.push(rule),
+            SelectorRuleKind::Child => self.data_mut().child_rules.push(rule),
+            SelectorRuleKind::Descendant => self.data_mut().descendant_rules.push(rule),
+        }
+    }
+
+    pub(crate) fn matching_self_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
+        element_tag: &'a str,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.data()
+            .self_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
+            .map(|rule| rule.refinement.as_ref())
+    }
+
+    pub(crate) fn matching_child_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
+        element_tag: &'a str,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.data()
+            .child_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
+            .map(|rule| rule.refinement.as_ref())
+    }
+
+    pub(crate) fn matching_descendant_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
+        element_tag: &'a str,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.data()
+            .descendant_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
+            .map(|rule| rule.refinement.as_ref())
+    }
+}
+
+impl PartialEq for SelectorState {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right) || left == right,
+            _ => self.data() == other.data(),
+        }
+    }
+}
+
+impl Serialize for SelectorState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.data().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SelectorState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let data = SelectorData::deserialize(deserializer)?;
+        if data.is_empty() {
+            Ok(Self::default())
+        } else {
+            Ok(Self(Some(Arc::new(data))))
+        }
+    }
+}
+
+impl refineable::IsEmpty for SelectorState {
+    fn is_empty(&self) -> bool {
+        self.data().is_empty()
+    }
+}
+
+impl Refineable for SelectorState {
+    type Refinement = Self;
+
+    fn refine(&mut self, refinement: &Self::Refinement) {
+        if refineable::IsEmpty::is_empty(refinement) {
+            return;
+        }
+        if self.0.is_none() {
+            self.0 = refinement.0.clone();
+            return;
+        }
+
+        let refinement = refinement.data();
+        let data = self.data_mut();
+        data.classes.extend(refinement.classes.iter().cloned());
+        data.self_rules
+            .extend(refinement.self_rules.iter().cloned());
+        data.child_rules
+            .extend(refinement.child_rules.iter().cloned());
+        data.descendant_rules
+            .extend(refinement.descendant_rules.iter().cloned());
+    }
+
+    fn refined(mut self, refinement: Self::Refinement) -> Self {
+        if self.0.is_none() {
+            return refinement;
+        }
+        self.refine(&refinement);
+        self
+    }
+
+    fn is_superset_of(&self, refinement: &Self::Refinement) -> bool {
+        let data = self.data();
+        let refinement = refinement.data();
+        refinement.classes.is_subset(&data.classes)
+            && refinement
+                .self_rules
+                .iter()
+                .all(|rule| data.self_rules.contains(rule))
+            && refinement
+                .child_rules
+                .iter()
+                .all(|rule| data.child_rules.contains(rule))
+            && refinement
+                .descendant_rules
+                .iter()
+                .all(|rule| data.descendant_rules.contains(rule))
+    }
+
+    fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement {
+        if self.0.is_none() || refineable::IsEmpty::is_empty(refinement) {
+            return self.clone();
+        }
+
+        let mut result = self.clone();
+        let data = result.data_mut();
+        let refinement = refinement.data();
+        data.classes
+            .retain(|class| !refinement.classes.contains(class));
+        data.self_rules
+            .retain(|rule| !refinement.self_rules.contains(rule));
+        data.child_rules
+            .retain(|rule| !refinement.child_rules.contains(rule));
+        data.descendant_rules
+            .retain(|rule| !refinement.descendant_rules.contains(rule));
+        if data.is_empty() {
+            result.0 = None;
+        }
+        result
+    }
+}
 
 /// Use this struct for interfacing with the 'debug_below' styling from your own elements.
 /// If a parent element has this style set on it, then this struct will be set as a global in
@@ -213,6 +714,10 @@ impl RingStyle {
 #[derive(Clone, Refineable, Debug)]
 #[refineable(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
+    /// Selector metadata used while resolving this element's style.
+    #[refineable]
+    pub(crate) selectors: SelectorState,
+
     /// What layout strategy should be used?
     pub display: Display,
 
@@ -377,6 +882,12 @@ impl Styled for StyleRefinement {
 }
 
 impl StyleRefinement {
+    /// Returns the selector metadata carried by this refinement.
+    #[doc(hidden)]
+    pub fn selector_state(&self) -> &SelectorState {
+        &self.selectors
+    }
+
     /// The grid location of this element
     pub fn grid_location_mut(&mut self) -> &mut GridLocation {
         self.grid_location.get_or_insert_default()
@@ -914,6 +1425,7 @@ impl Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
+            selectors: SelectorState::default(),
             display: Display::Block,
             visibility: Visibility::Visible,
             overflow: Point {
@@ -1461,7 +1973,11 @@ impl From<Position> for taffy::style::Position {
 
 #[cfg(test)]
 mod tests {
-    use crate::{blue, green, hsla, px, red, yellow};
+    use crate::{
+        blue, green, hsla, px, red,
+        selectors::{any, class, id, not},
+        yellow,
+    };
     use palette::WithAlpha;
 
     use super::*;
@@ -1655,6 +2171,148 @@ mod tests {
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
         );
+    }
+
+    #[test]
+    fn selector_groups_flatten_only_groups_with_the_same_behavior() {
+        let flat_and = (class("a"), class("b"), class("c")).into_selector_group();
+        let nested_and = (class("a"), (class("b"), class("c"))).into_selector_group();
+        assert_eq!(nested_and, flat_and);
+
+        let flat_or = any((class("a"), class("b"), class("c")));
+        let nested_or = any((class("a"), any((class("b"), class("c")))));
+        assert_eq!(nested_or, flat_or);
+
+        let mixed = any((class("a"), (class("b"), class("c"))));
+        assert_ne!(mixed, flat_or);
+    }
+
+    #[test]
+    fn selector_groups_preserve_boolean_behavior() {
+        fn classes(values: &[&str]) -> HashSet<SharedString> {
+            values.iter().copied().map(SharedString::from).collect()
+        }
+
+        let alternatives = any((class("overlay"), (class("bob"), id("apple"))));
+        let apple = crate::ElementId::Name("apple".into());
+
+        let cases = [
+            (None, classes(&["overlay"]), true),
+            (Some(&apple), classes(&["bob"]), true),
+            (None, classes(&["bob"]), false),
+            (Some(&apple), classes(&[]), false),
+            (None, classes(&[]), false),
+        ];
+
+        for (element_id, classes, expected) in cases {
+            assert_eq!(
+                alternatives.matches(element_id, &classes, "test-tag"),
+                expected
+            );
+        }
+
+        let required = (class("enabled"), alternatives).into_selector_group();
+        assert!(required.matches(None, &classes(&["enabled", "overlay"]), "test-tag"));
+        assert!(!required.matches(None, &classes(&["overlay"]), "test-tag"));
+        assert!(!required.matches(None, &classes(&["enabled"]), "test-tag"));
+
+        let selectable = (
+            class("item"),
+            not(any([class("disabled"), class("loading")])),
+        )
+            .into_selector_group();
+        let cases = [
+            (classes(&["item"]), true),
+            (classes(&["item", "disabled"]), false),
+            (classes(&["item", "loading"]), false),
+            (classes(&["other"]), false),
+        ];
+
+        for (classes, expected) in cases {
+            assert_eq!(selectable.matches(None, &classes, "test-tag"), expected);
+        }
+
+        let not_both = not((class("selected"), class("focused")));
+        assert!(not_both.matches(None, &classes(&["selected"]), "test-tag"));
+        assert!(!not_both.matches(None, &classes(&["selected", "focused"]), "test-tag"));
+
+        let double_negated = not(not(class("active")));
+        assert!(double_negated.matches(None, &classes(&["active"]), "test-tag"));
+        assert!(!double_negated.matches(None, &classes(&[]), "test-tag"));
+    }
+
+    #[test]
+    fn selector_tuples_match_through_the_maximum_supported_arity() {
+        let selectors = (
+            class("0"),
+            [class("1"), class("2")],
+            (class("3"),),
+            (class("4"), class("5")),
+            class("6"),
+            class("7"),
+            class("8"),
+            class("9"),
+            class("10"),
+            class("11"),
+            class("12"),
+            class("13"),
+        )
+            .into_selector_group();
+
+        let mut classes = (0..14)
+            .map(|index| SharedString::from(index.to_string()))
+            .collect::<HashSet<_>>();
+        assert!(selectors.matches(None, &classes, "test-tag"));
+
+        classes.remove("13");
+        assert!(!selectors.matches(None, &classes, "test-tag"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "selector groups must not be empty")]
+    fn empty_selector_groups_debug_assert() {
+        let _ = ([] as [Selector; 0]).into_selector_group();
+    }
+
+    #[test]
+    fn selector_metadata_composes_when_style_refinements_are_merged() {
+        let mut refinement = StyleRefinement::default()
+            .class("first")
+            .select(class("first"), |style| style.w(px(10.)));
+        refinement.refine(
+            &StyleRefinement::default()
+                .class("second")
+                .select_children(class("second"), |style| style.w(px(20.)))
+                .select_descendants(id("named"), |style| style.w(px(30.))),
+        );
+
+        let selectors = refinement.selectors.data();
+        assert_eq!(selectors.classes.len(), 2);
+        assert_eq!(selectors.self_rules.len(), 1);
+        assert_eq!(selectors.child_rules.len(), 1);
+        assert_eq!(selectors.descendant_rules.len(), 1);
+    }
+
+    #[test]
+    fn classes_assigns_multiple_classes_for_selector_matching() {
+        let refinement = StyleRefinement::default()
+            .class("base")
+            .classes(["interactive", "primary", "primary"])
+            .classes([String::from("owned")])
+            .classes([] as [&str; 0]);
+        let classes = refinement.selectors.classes();
+
+        let required = (
+            class("base"),
+            class("interactive"),
+            class("primary"),
+            class("owned"),
+        )
+            .into_selector_group();
+
+        assert!(required.matches(None, classes, "test-tag"));
+        assert!(!class("missing").matches(None, classes, "test-tag"));
     }
 
     #[test]
