@@ -6132,6 +6132,14 @@ impl Window {
         self.platform_window.minimize();
     }
 
+    /// Show or hide the current window at the platform level.
+    ///
+    /// Call [`Window::activate_window`] separately when the window should also receive focus.
+    /// The window manager may still focus a window when it is shown.
+    pub fn set_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();
@@ -7507,6 +7515,31 @@ mod tests {
                 ));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_window_visibility_can_be_changed(cx: &mut TestAppContext) {
+        for show in [false, true] {
+            let window = cx.update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        show,
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| EmptyView),
+                )
+                .unwrap()
+            });
+            let platform_window = cx.test_window(window.into());
+            assert_eq!(platform_window.is_visible(), show);
+
+            for visible in [false, false, true, true, false, true] {
+                window
+                    .update(cx, |_, window, _| window.set_visible(visible))
+                    .unwrap();
+                assert_eq!(platform_window.is_visible(), visible);
+            }
+        }
     }
 
     #[gpui::test]

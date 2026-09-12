@@ -900,6 +900,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_appearance(&self) -> WindowBackgroundAppearance;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Show or hide the window without explicitly requesting focus.
+    ///
+    /// The default implementation does nothing for platforms that do not support
+    /// changing window visibility at runtime.
+    fn set_visible(&self, _visible: bool) {}
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
