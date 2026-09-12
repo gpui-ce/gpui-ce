@@ -1431,6 +1431,15 @@ fn mouse_position_in_element(event: &web_sys::MouseEvent) -> Point<Pixels> {
     point(px(event.offset_x() as f32), px(event.offset_y() as f32))
 }
 
+/// 229 == Windows `VK_PROCESSKEY` (0xE5), reported while an IME
+/// owns the keystroke.
+/// W3C UI Events §7.3.1: "If an Input Method Editor is processing
+/// key input and the event is keydown, return 229."
+/// https://www.w3.org/TR/uievents/#determine-keydown-keyup-keyCode
+/// https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+/// `key` is unreliable here ("Process" vs "Unidentified" per browser),
+/// so `keyCode` is the signal. First IME keydown can precede
+/// `compositionstart`, hence this fallback when both composing flags are false.
 fn is_ime_keydown(is_composing: bool, event_is_composing: bool, key_code: u32) -> bool {
     is_composing || event_is_composing || key_code == 229
 }
