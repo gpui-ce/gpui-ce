@@ -55,12 +55,13 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
+    opacities: &[f32],
     pass: &mut wgpu::RenderPass<'_>,
 ) -> frame::DrawResult {
     use core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
 
-    let mut keyed_surfaces = smallvec::SmallVec::<[(&PaintSurface, usize); 4]>::new();
-    for surface in surfaces {
+    let mut keyed_surfaces = smallvec::SmallVec::<[(&PaintSurface, usize, f32); 4]>::new();
+    for (index, surface) in surfaces.iter().enumerate() {
         let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {
             log::error!("surface source cannot be imported by the macOS renderer");
             return Err(frame::DrawError::ExternalSurface);
@@ -69,22 +70,27 @@ pub(super) fn draw_surfaces(
             log::error!("unsupported CoreVideo surface pixel format");
             return Err(frame::DrawError::ExternalSurface);
         }
-        keyed_surfaces.push((surface, core_video_surface_key(image_buffer)?));
+        keyed_surfaces.push((
+            surface,
+            core_video_surface_key(image_buffer)?,
+            opacities.get(index).copied().unwrap_or(1.0),
+        ));
     }
 
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
 
-    for (surface, key) in keyed_surfaces {
+    for (surface, key, opacity) in keyed_surfaces {
         let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {
             return Err(frame::DrawError::ExternalSurface);
         };
         let mut imported = cache.surfaces.remove(&key).map(Ok).unwrap_or_else(|| {
-            create_core_video_surface(renderer, &cache.texture_cache, image_buffer)
+            create_core_video_surface(renderer, &cache.texture_cache, &image_buffer)
         })?;
         renderer.draw_surface_binding(
             surface,
             SurfaceColorFormat::Yuv,
+            opacity,
             &mut imported.binding,
             pass,
         )?;

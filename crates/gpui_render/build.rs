@@ -350,7 +350,13 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
     .unwrap();
     writeln!(
         runtime,
-        "@group(1) @binding({DOWNLEVEL_RANGE_BINDING}) var<uniform> DATA_RANGE: vec2<u32>;"
+        "struct DataRange {{
+    base_texel: u32,
+    element_count: u32,
+    padding0: u32,
+    padding1: u32,
+}}
+@group(1) @binding({DOWNLEVEL_RANGE_BINDING}) var<uniform> DATA_RANGE: DataRange;"
     )
     .unwrap();
     writeln!(
@@ -380,7 +386,7 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
         writeln!(
             runtime,
             "fn dl_load_{array_name}(i: u32) -> {type_name} {{
-    return dl_load_{type_name}_impl({array_name}_DATA, DATA_RANGE.x * 4u + i * {words}u);
+    return dl_load_{type_name}_impl({array_name}_DATA, DATA_RANGE.base_texel * 4u + i * {words}u);
 }}",
             array_name = array.name,
             type_name = array.element_type,
@@ -772,8 +778,20 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
+            pipeline: &SMOOTHED_QUADS,
+            pipeline_path: "SMOOTHED_QUADS",
+            source: &shaders::quad::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
             pipeline: &SHADOWS,
             pipeline_path: "SHADOWS",
+            source: &shaders::shadow::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
+            pipeline: &SMOOTHED_SHADOWS,
+            pipeline_path: "SMOOTHED_SHADOWS",
             source: &shaders::shadow::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },
@@ -814,6 +832,12 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
         NativeShaderModule {
+            pipeline: &SMOOTHED_POLYCHROME_SPRITES,
+            pipeline_path: "SMOOTHED_POLYCHROME_SPRITES",
+            source: &shaders::polychrome_sprite::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
             pipeline: &SURFACES,
             pipeline_path: "SURFACES",
             source: &shaders::surface::WGSL_SOURCE,
@@ -840,6 +864,12 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         NativeShaderModule {
             pipeline: &BLUR_COMPOSITE,
             pipeline_path: "BLUR_COMPOSITE",
+            source: &shaders::blur::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
+            pipeline: &SMOOTHED_BLUR_COMPOSITE,
+            pipeline_path: "SMOOTHED_BLUR_COMPOSITE",
             source: &shaders::blur::WGSL_SOURCE,
             requires_dual_source_lowering: false,
         },

@@ -339,6 +339,17 @@ impl Interactivity {
             }));
     }
 
+    /// Bind the given callback to the mouse move event, triggering even if the mouse is outside the element's hitbox.
+    /// The imperative API equivalent to [`InteractiveElement::on_mouse_move_all`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_mouse_move_all(
+        &mut self,
+        listener: impl Fn(&MouseMoveEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
+    ) {
+        self.mouse_move_listeners.push(Box::new(listener));
+    }
+
     /// Bind the given callback to the mouse exit event, during the bubble phase.
     /// The imperative API equivalent to [`InteractiveElement::on_mouse_exit`].
     ///
@@ -1054,6 +1065,18 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Bind the given callback to the mouse move event, triggering even if the mouse is outside the element's hitbox.
+    /// The fluent API equivalent to [`Interactivity::on_mouse_move_all`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_mouse_move_all(
+        mut self,
+        listener: impl Fn(&MouseMoveEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_mouse_move_all(listener);
+        self
+    }
+
     /// Bind the given callback to the mouse exit event, during the bubble phase.
     /// The fluent API equivalent to [`Interactivity::on_mouse_exit`].
     ///
@@ -1379,6 +1402,15 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Hide this element and its descendants from assistive technology.
+    ///
+    /// This does not change rendering, focus, or input. Do not use it on an
+    /// element that can receive focus or contains focusable descendants.
+    fn aria_hidden(mut self) -> Self {
+        self.interactivity().aria.hidden = true;
+        self
+    }
+
     /// Report this element as the focused node in the accessibility tree,
     /// overriding the element that holds real keyboard focus — but only while
     /// one of its ancestors actually holds focus.
@@ -1403,9 +1435,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// to any element — as children of this element's a11y node. For example,
     /// text runs describing an editor's text content.
     ///
-    /// The closure is called after this element is prepainted, and only if it
-    /// contributed a node to the accessibility tree (i.e. it has an id and a
-    /// [`role`][StatefulInteractiveElement::role]).
+    /// GPUI calls the closure after prepaint. The element must have an id and
+    /// either a [`role`][StatefulInteractiveElement::role] or
+    /// [`aria_hidden()`][StatefulInteractiveElement::aria_hidden].
     ///
     /// See [`Element::a11y_synthetic_children`] for details.
     fn a11y_synthetic_children(
@@ -1949,6 +1981,10 @@ impl Element for Div {
             .filter(|role| *role != accesskit::Role::GenericContainer)
     }
 
+    fn is_a11y_hidden(&self) -> bool {
+        self.interactivity.aria.hidden
+    }
+
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.interactivity.write_a11y_info(node);
     }
@@ -2068,20 +2104,37 @@ impl Element for Div {
                     return hitbox;
                 }
 
-                window.with_image_cache(image_cache, |window| {
-                    window.with_element_offset(scroll_offset, |window| {
-                        if let Some(order_fn) = &self.prepaint_order_fn {
-                            let order = order_fn(window, cx);
-                            for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
-                                    child.prepaint(window, cx);
-                                }
-                            }
-                        } else {
-                            for child in &mut self.children {
+                #[inline]
+                fn prepaint_children(
+                    children: &mut [StackSafe<AnyElement>],
+                    order_fn: Option<&dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>,
+                    window: &mut Window,
+                    cx: &mut App,
+                ) {
+                    if let Some(order_fn) = order_fn {
+                        let order = order_fn(window, cx);
+                        for idx in order {
+                            if let Some(child) = children.get_mut(idx) {
                                 child.prepaint(window, cx);
                             }
                         }
+                    } else {
+                        for child in children {
+                            child.prepaint(window, cx);
+                        }
+                    }
+                }
+
+                window.with_image_cache(image_cache, |window| {
+                    window.with_style_transition_containing_bounds(bounds, |window| {
+                        window.with_element_offset(scroll_offset, |window| {
+                            prepaint_children(
+                                &mut self.children,
+                                self.prepaint_order_fn.as_deref(),
+                                window,
+                                cx,
+                            )
+                        });
                     });
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
@@ -2147,6 +2200,7 @@ pub(crate) struct AriaProperties {
     pub(crate) label: Option<SharedString>,
     pub(crate) description: Option<SharedString>,
     pub(crate) keyshortcuts: Option<SharedString>,
+    pub(crate) hidden: bool,
     pub(crate) selected: Option<bool>,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
@@ -3525,12 +3579,10 @@ impl Interactivity {
                     if let Some(group_hitbox_id) = GroupHitboxes::get(&group_hover.group, cx) {
                         !window.last_input_was_touch() && group_hitbox_id.is_hovered(window)
                     } else if let Some(element_state) = element_state.as_ref() {
-                        !window.last_input_was_touch()
-                            && element_state
-                                .hover_state
-                                .as_ref()
-                                .map(|state| state.borrow().group)
-                                .unwrap_or(false)
+                        element_state
+                            .hover_state
+                            .as_ref()
+                            .is_some_and(|state| state.borrow().group_is_active(window))
                     } else {
                         false
                     };
@@ -3544,12 +3596,10 @@ impl Interactivity {
                 let is_hovered = if let Some(hitbox) = hitbox {
                     !window.last_input_was_touch() && hitbox.is_hovered(window)
                 } else if let Some(element_state) = element_state.as_ref() {
-                    !window.last_input_was_touch()
-                        && element_state
-                            .hover_state
-                            .as_ref()
-                            .map(|state| state.borrow().element)
-                            .unwrap_or(false)
+                    element_state
+                        .hover_state
+                        .as_ref()
+                        .is_some_and(|state| state.borrow().element_is_active(window))
                 } else {
                     false
                 };
@@ -3616,7 +3666,8 @@ impl Interactivity {
                     element_state
                         .style_transitions
                         .get_or_insert_with(Default::default),
-                    StyleTransitionContext::new(bounds, window.rem_size()),
+                    StyleTransitionContext::new(bounds, window.rem_size())
+                        .with_containing_bounds(window.style_transition_containing_bounds()),
                     cx.background_executor().now(),
                     cx.reduce_motion(),
                 ) {
@@ -3777,6 +3828,16 @@ pub struct ElementHoverState {
 
     /// True if this element is hovered, false otherwise
     pub element: bool,
+}
+
+impl ElementHoverState {
+    fn group_is_active(&self, window: &Window) -> bool {
+        self.group && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
+
+    fn element_is_active(&self, window: &Window) -> bool {
+        self.element && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
 }
 
 pub(crate) enum ActiveTooltip {
@@ -4170,6 +4231,10 @@ where
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.element.a11y_role()
+    }
+
+    fn is_a11y_hidden(&self) -> bool {
+        self.element.is_a11y_hidden()
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {

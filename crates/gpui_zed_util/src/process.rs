@@ -210,26 +210,48 @@ mod windows_tests {
     /// returns the `Child` along with the pid of the grandchild (`ping`).
     fn spawn_process_tree(temp_dir: &std::path::Path) -> (Child, u32) {
         let pid_file = temp_dir.join("grandchild_pid");
+        // Single quotes don't escape themselves in PowerShell; double them so
+        // temp paths containing `'` can't break out of the literal.
+        let pid_file_literal = pid_file.display().to_string().replace('\'', "''");
         let mut command = std::process::Command::new("powershell.exe");
-        command.args(["-NoProfile", "-Command"]).arg(format!(
-            "$p = Start-Process -FilePath ping.exe -ArgumentList @('-n','60','127.0.0.1') -PassThru -WindowStyle Hidden; \
-             Set-Content -LiteralPath '{}' -Value $p.Id; \
-             Wait-Process -Id $p.Id",
-            pid_file.display()
-        ));
-        let child = Child::spawn(command, Stdio::null(), Stdio::null(), Stdio::null())
-            .expect("failed to spawn powershell");
+        // `-ExecutionPolicy Bypass` keeps locked-down CI images from refusing
+        // to run the snippet, and writing the pid with the .NET API (rather
+        // than `Set-Content`) pins the encoding to plain ASCII without a BOM
+        // on both Windows PowerShell 5.1 and PowerShell 7+.
+        command
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
+            .arg(format!(
+                "$ErrorActionPreference='Stop'; \
+                 $p = Start-Process -FilePath ping.exe -ArgumentList @('-n','60','127.0.0.1') -PassThru -WindowStyle Hidden; \
+                 [System.IO.File]::WriteAllText('{pid_file_literal}', \"$($p.Id)\", [System.Text.Encoding]::ASCII); \
+                 Wait-Process -Id $p.Id"
+            ));
+        // Capture powershell's stderr so a startup failure (missing binary,
+        // policy violation, bad path quoting, ...) is visible in the panic
+        // below instead of vanishing into the null device.
+        let stderr_log = std::fs::File::create(temp_dir.join("powershell-stderr.log"))
+            .expect("failed to create powershell stderr log");
+        let child = Child::spawn(
+            command,
+            Stdio::null(),
+            Stdio::null(),
+            Stdio::from(stderr_log),
+        )
+        .expect("failed to spawn powershell");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // PowerShell cold start (JIT + Defender scan) can take several seconds
+        // on CI, especially with sibling tests starting their own instances
+        // concurrently, so allow ample headroom before declaring the handoff
+        // lost.
+        let deadline = Instant::now() + Duration::from_secs(20);
         let grandchild_pid = loop {
-            if let Ok(contents) = std::fs::read_to_string(&pid_file)
-                && let Ok(pid) = contents.trim().parse::<u32>()
-            {
+            if let Some(pid) = read_grandchild_pid(&pid_file) {
                 break pid;
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for grandchild pid file"
+                "timed out waiting for grandchild pid file: {}",
+                describe_pid_handoff(temp_dir, &pid_file)
             );
             std::thread::sleep(Duration::from_millis(50));
         };
@@ -260,11 +282,61 @@ mod windows_tests {
         }
     }
 
+    /// Reads the grandchild pid without assuming an encoding: PowerShell
+    /// output may carry a BOM or trailing newlines depending on version and
+    /// host configuration, so decode lossily and parse the digit run.
+    fn read_grandchild_pid(pid_file: &std::path::Path) -> Option<u32> {
+        let bytes = std::fs::read(pid_file).ok()?;
+        let text = String::from_utf8_lossy(&bytes);
+        // Strip a UTF-8/UTF-16 BOM if one was emitted, then accept the pid
+        // surrounded by arbitrary whitespace/newlines.
+        let text = text.trim().trim_start_matches('\u{feff}').trim();
+        text.parse::<u32>().ok()
+    }
+
+    /// Builds a diagnostic summary for a pid-handoff timeout: whether the
+    /// file appeared (and what it contains), what else is in the temp dir,
+    /// and any stderr PowerShell left behind.
+    fn describe_pid_handoff(temp_dir: &std::path::Path, pid_file: &std::path::Path) -> String {
+        let pid_state = match std::fs::read(pid_file) {
+            Ok(bytes) => format!(
+                "pid file exists ({} bytes, contents: {:?})",
+                bytes.len(),
+                String::from_utf8_lossy(&bytes)
+            ),
+            Err(error) => format!("pid file missing ({error})"),
+        };
+        let dir_state = match std::fs::read_dir(temp_dir) {
+            Ok(entries) => {
+                let names: Vec<String> = entries
+                    .filter_map(|entry| {
+                        entry
+                            .ok()
+                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    })
+                    .collect();
+                format!("temp dir entries: {names:?}")
+            }
+            Err(error) => format!("temp dir unreadable ({error})"),
+        };
+        let stderr_state = match std::fs::read_to_string(temp_dir.join("powershell-stderr.log")) {
+            Ok(log) if log.trim().is_empty() => "powershell stderr: <empty>".to_string(),
+            Ok(log) => format!("powershell stderr: {log:?}"),
+            Err(error) => format!("powershell stderr log unreadable ({error})"),
+        };
+        format!(
+            "{pid_state}; {dir_state}; {stderr_state}; pid file: {}",
+            pid_file.display()
+        )
+    }
+
     fn assert_process_exits(pid: u32, message: &str) {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // Job-object termination is normally near-instant, but allow headroom
+        // for a loaded CI worker to reap the whole tree.
+        let deadline = Instant::now() + Duration::from_secs(10);
         while process_is_alive(pid) {
             assert!(Instant::now() < deadline, "{message} (pid {pid})");
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 

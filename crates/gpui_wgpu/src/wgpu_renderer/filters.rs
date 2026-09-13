@@ -18,7 +18,7 @@ pub(super) struct FrameUniformRequirements {
     pub(super) surface_count: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 96);
+const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 112);
 
 impl WgpuRenderer {
     fn make_blur_bind_group(
@@ -140,6 +140,7 @@ impl WgpuRenderer {
             composite_bounds,
             parameters.content_mask,
             parameters.corner_radii,
+            parameters.corner_smoothing,
             parameters.opacity,
             parameters.clip,
             blur_size,
@@ -147,9 +148,14 @@ impl WgpuRenderer {
         );
         let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, &horizontal_target);
         let resources = self.resources();
+        let pipeline = if uniforms.corner_smoothing > 0.0 {
+            &resources.pipelines.smoothed_blur_composite
+        } else {
+            &resources.pipelines.blur_composite
+        };
         let mut pass =
             begin_color_render_pass(encoder, "blur_composite", target, wgpu::LoadOp::Load);
-        pass.set_pipeline(&resources.pipelines.blur_composite);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(
             shader_interface::GLOBAL_BIND_GROUP,
             &resources.globals_bind_group,
@@ -160,10 +166,7 @@ impl WgpuRenderer {
             &bind_group,
             &[uniform_offset],
         );
-        pass.draw(
-            0..resources.pipelines.blur_composite.fixed_vertex_count(),
-            0..1,
-        );
+        pass.draw(0..pipeline.fixed_vertex_count(), 0..1);
     }
 
     pub(super) fn draw_backdrop_filter(
@@ -180,6 +183,7 @@ impl WgpuRenderer {
                 bounds: filter.bounds,
                 content_mask: filter.content_mask.bounds,
                 corner_radii: filter.corner_radii,
+                corner_smoothing: filter.corner_smoothing,
                 blur_radius: filter.max_blur_radius(),
                 opacity: filter.opacity,
                 clip: FilterCompositeClip::RoundedBounds,

@@ -18,8 +18,9 @@ workspace = true
 
 [features]
 default = ["font-kit", "wayland", "x11", "windows-manifest"]
-# Enables `SurfaceSource::Texture` and `gpu_context()` for standalone WGPU
-# surface integrations on Windows.
+# Enables the opt-in custom WGPU control API on platforms that support shared
+# texture surfaces.
+custom-gpu = []
 wgpu-surfaces = []
 test-support = [
   "leak-detection",
@@ -140,6 +141,7 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
+accesskit_consumer.workspace = true
 backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
@@ -225,6 +227,10 @@ path = "examples/learn/haptic_feedback.rs"
 [[example]]
 name = "blur"
 path = "examples/learn/blur.rs"
+
+[[example]]
+name = "corner_smoothing"
+path = "examples/learn/corner_smoothing.rs"
 
 [[example]]
 name = "keyring"

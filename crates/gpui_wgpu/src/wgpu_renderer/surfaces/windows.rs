@@ -42,11 +42,12 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
+    opacities: &[f32],
     pass: &mut wgpu::RenderPass<'_>,
 ) -> frame::DrawResult {
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
-    for surface in surfaces {
+    for (index, surface) in surfaces.iter().enumerate() {
         let Some(frame) = capture_frame(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");
             return Err(frame::DrawError::ExternalSurface);
@@ -91,6 +92,7 @@ pub(super) fn draw_surfaces(
         renderer.draw_surface_binding(
             surface,
             SurfaceColorFormat::Rgba,
+            opacities.get(index).copied().unwrap_or(1.0),
             &mut cached.binding,
             pass,
         )?;

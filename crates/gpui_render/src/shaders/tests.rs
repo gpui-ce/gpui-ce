@@ -55,6 +55,69 @@ fn shader_interface_matches_generated_sources() {
     assert_eq!(quad::QUADS.binding(), interface::DATA_BUFFER_BINDING);
 }
 
+fn vertex_output_shape(module: &naga::Module, entry_name: &str) -> (usize, u32) {
+    let entry = module
+        .entry_points
+        .iter()
+        .find(|entry| entry.name == entry_name)
+        .unwrap_or_else(|| panic!("missing shader entry point {entry_name}"));
+    let result = entry
+        .function
+        .result
+        .as_ref()
+        .unwrap_or_else(|| panic!("shader entry point {entry_name} has no output"));
+    let naga::TypeInner::Struct { members, .. } = &module.types[result.ty].inner else {
+        panic!("shader entry point {entry_name} must return a struct");
+    };
+
+    members
+        .iter()
+        .filter(|member| matches!(member.binding, Some(naga::Binding::Location { .. })))
+        .fold((0, 0), |(locations, components), member| {
+            let member_components = match module.types[member.ty].inner {
+                naga::TypeInner::Scalar(_) => 1,
+                naga::TypeInner::Vector { size, .. } => u32::from(size),
+                ref ty => panic!("unsupported stage output type {ty:?} in {entry_name}"),
+            };
+            (locations + 1, components + member_components)
+        })
+}
+
+#[test]
+fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
+    let module = naga::front::wgsl::parse_str(&base::WGSL_SOURCE.wgsl_source().unwrap()).unwrap();
+    for (entry, maximum_shape) in [
+        ("vertex_quad", (6, 21)),
+        ("vertex_shadow", (3, 9)),
+        ("vertex_polychrome_sprite", (3, 7)),
+        ("vertex_blur_composite", (2, 6)),
+    ] {
+        let actual_shape = vertex_output_shape(&module, entry);
+        assert!(
+            actual_shape.0 <= maximum_shape.0 && actual_shape.1 <= maximum_shape.1,
+            "{entry} uses {actual_shape:?}, exceeding {maximum_shape:?} (locations, components)"
+        );
+    }
+}
+
+#[test]
+fn scene_instance_storage_sizes_are_bounded() {
+    for (name, actual, maximum) in [
+        ("Quad", std::mem::size_of::<gpui::Quad>(), 168),
+        ("Shadow", std::mem::size_of::<gpui::Shadow>(), 112),
+        (
+            "PolychromeSprite",
+            std::mem::size_of::<gpui::PolychromeSprite>(),
+            96,
+        ),
+    ] {
+        assert!(
+            actual <= maximum,
+            "{name} is {actual} bytes, exceeding its {maximum}-byte storage budget"
+        );
+    }
+}
+
 #[test]
 fn shader_buffer_layouts_match_host_layouts() {
     let modules = [

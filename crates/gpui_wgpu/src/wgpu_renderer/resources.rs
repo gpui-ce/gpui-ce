@@ -39,6 +39,7 @@ pub(super) struct WgpuResources {
     pub(super) surface_uniforms: DynamicUniformBuffer<SurfaceUniforms>,
     #[cfg_attr(
         not(any(
+            all(target_family = "wasm", feature = "custom-gpu"),
             target_os = "macos",
             target_os = "linux",
             target_os = "freebsd",

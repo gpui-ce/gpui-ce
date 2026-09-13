@@ -553,6 +553,12 @@ mod source {
             corner_radius,
         )
     }
+
+    pub fn gaussian_signed_distance_coverage(distance: f32, standard_deviation: f32) -> f32 {
+        let normalized = distance / (sqrt(2.0) * standard_deviation);
+        saturate(0.5 - 0.5 * approximate_error_function(vec2f(normalized, normalized)).x)
+    }
+
     pub fn blend_color(color: Vec4f, alpha_factor: f32) -> Vec4f {
         let alpha = color.w * alpha_factor;
         let multiplier = select(1.0, alpha, is_enabled(get!(GLOBALS).premultiplied_alpha));

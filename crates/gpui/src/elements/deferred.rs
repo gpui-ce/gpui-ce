@@ -1,31 +1,27 @@
 use crate::{
-    AnyElement, App, Bounds, Element, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    Pixels, Window,
+    AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Window,
 };
 
 /// Builds a `Deferred` element, which delays the layout and paint of its child.
 pub fn deferred(child: impl IntoElement) -> Deferred {
     Deferred {
         child: Some(child.into_any_element()),
-        priority: 0,
+        priority: DeferredPriority::from(0),
+        content_mask: None,
     }
 }
 
 /// An element which delays the painting of its child until after all of
 /// its ancestors, while keeping its layout as part of the current element tree.
+///
+/// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
+/// should be constrained to limited circumstances and will stop processing after some depth
+/// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
 pub struct Deferred {
     child: Option<AnyElement>,
-    priority: usize,
-}
-
-impl Deferred {
-    /// Sets the `priority` value of the `deferred` element, which
-    /// determines the drawing order relative to other deferred elements,
-    /// with higher values being drawn on top.
-    pub fn with_priority(mut self, priority: usize) -> Self {
-        self.priority = priority;
-        self
-    }
+    priority: DeferredPriority,
+    content_mask: Option<ContentMask<Pixels>>,
 }
 
 impl Element for Deferred {
@@ -58,11 +54,12 @@ impl Element for Deferred {
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) {
         let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
-        window.defer_draw(child, element_offset, self.priority, None)
+        let priority = self.priority.evaluate(cx);
+        window.defer_draw(child, element_offset, priority, self.content_mask);
     }
 
     fn paint(
@@ -89,9 +86,71 @@ impl IntoElement for Deferred {
 impl Deferred {
     /// Sets a priority for the element. A higher priority conceptually means painting the element
     /// on top of deferred draws with a lower priority (i.e. closer to the viewer).
-    pub fn priority(mut self, priority: usize) -> Self {
-        self.priority = priority;
+    pub fn priority(mut self, priority: impl Into<DeferredPriority>) -> Self {
+        self.priority = priority.into();
         self
+    }
+
+    /// Configures the priority of the deferred element to be 1 greater than the previous
+    /// deferred element (when this element is caused by another deferred element, even if indirectly).
+    /// Defaults to 1 when this is a deferred element caused by non-deferred elements.
+    pub fn priority_auto(mut self) -> Self {
+        self.priority = DeferredPriority::Auto;
+        self
+    }
+
+    /// When a content mask is provided, the deferred element will be clipped to that region during
+    /// both prepaint and paint.
+    pub fn content_mask(mut self, mask: ContentMask<Pixels>) -> Self {
+        self.content_mask = Some(mask);
+        self
+    }
+}
+
+/// Describes how the priority for a [`Deferred`] element is calculated.
+pub enum DeferredPriority {
+    /// The priority is calculated based on whether the deferred element is a by-product of another deferred element.
+    /// If this is the first deferred element in a rendering stack, priority is 1.
+    /// Otherwise the priority is the previous priority + 1 (so this element renders in front of the previous in the stack).
+    Auto,
+    /// Takes an explicit priority value for the deferred element.
+    Value(usize),
+}
+impl From<usize> for DeferredPriority {
+    fn from(value: usize) -> Self {
+        Self::Value(value)
+    }
+}
+impl DeferredPriority {
+    /// Calculates the new priority based on the current value in the [`DeferredPriorityStackCache`].
+    /// Should only be called during prepaint of a [`Deferred`] element.
+    fn evaluate(&self, cx: &App) -> usize {
+        match self {
+            DeferredPriority::Value(value) => *value,
+            DeferredPriority::Auto => match DeferredPriorityStackCache::current_depth(cx) {
+                None => 1, // NOTE: functionality change. If using auto, we start at a priority of 1 instead of 0.
+                Some(prev_deferred_priority) => prev_deferred_priority.saturating_add(1),
+            },
+        }
+    }
+}
+
+/// Internal global to track the depth of deferred renders during prepaint.
+#[derive(Default)]
+pub(crate) struct DeferredPriorityStackCache(Vec<usize>);
+impl crate::Global for DeferredPriorityStackCache {}
+impl DeferredPriorityStackCache {
+    pub(crate) fn push(priority: usize, cx: &mut App) {
+        cx.default_global::<Self>().0.push(priority);
+    }
+
+    pub(crate) fn pop(cx: &mut App) {
+        cx.default_global::<Self>().0.pop();
+    }
+
+    fn current_depth(cx: &App) -> Option<usize> {
+        let cache = cx.try_global::<Self>()?;
+        cache.0.last().copied()
     }
 }
 
@@ -122,11 +181,11 @@ mod tests {
                                         .h(px(50.)),
                                 ),
                             )
-                            .with_priority(2),
+                            .priority(2),
                         ),
                     ),
                 )
-                .with_priority(1),
+                .priority(1),
             )
         }
     }

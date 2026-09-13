@@ -248,6 +248,212 @@ pub struct CompositorGpuHint {
     pub device_id: u32,
 }
 
+/// A typed view of the GPU resources shared with GPUI.
+///
+/// The device and queue are owned by GPUI and remain valid until
+/// [`Self::device_lost`] returns `true`. A control should drop its GPU
+/// resources and reacquire this handle after recovery.
+#[derive(Clone)]
+pub struct WgpuContextHandle {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    texture_format: wgpu::TextureFormat,
+    adapter_info: wgpu::AdapterInfo,
+    backend: WgpuBackend,
+    features: wgpu::Features,
+    limits: wgpu::Limits,
+    device_lost: Arc<AtomicBool>,
+}
+
+impl WgpuContextHandle {
+    pub(crate) fn from_resources(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        texture_format: wgpu::TextureFormat,
+        adapter_info: wgpu::AdapterInfo,
+        backend: WgpuBackend,
+        device_lost: Arc<AtomicBool>,
+    ) -> Self {
+        let features = device.features();
+        let limits = device.limits();
+        Self {
+            device,
+            queue,
+            texture_format,
+            adapter_info,
+            backend,
+            features,
+            limits,
+            device_lost,
+        }
+    }
+
+    /// Returns the shared device.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Returns the shared queue.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Returns whether two handles refer to the same device instance.
+    pub fn is_same_device(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.device, &other.device)
+    }
+
+    /// Returns the texture format used by GPUI's window surface.
+    pub fn texture_format(&self) -> wgpu::TextureFormat {
+        self.texture_format
+    }
+
+    /// Returns information about the selected adapter.
+    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+        &self.adapter_info
+    }
+
+    /// Returns the backend selected for this window.
+    pub fn backend(&self) -> WgpuBackend {
+        self.backend
+    }
+
+    /// Returns the features enabled on the shared device.
+    pub fn features(&self) -> wgpu::Features {
+        self.features
+    }
+
+    /// Returns the limits used when creating the shared device.
+    pub fn limits(&self) -> &wgpu::Limits {
+        &self.limits
+    }
+
+    /// Returns whether the device has been lost and custom resources must be
+    /// recreated after GPUI recovers.
+    pub fn device_lost(&self) -> bool {
+        self.device_lost.load(Ordering::Relaxed)
+    }
+
+    /// Returns the typed wgpu context associated with a GPUI window.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_family = "wasm", feature = "custom-gpu")
+    ))]
+    pub fn from_window(window: &gpui::Window) -> Option<Self> {
+        window
+            .gpu_context_info()?
+            .downcast::<Self>()
+            .ok()
+            .map(|context| *context)
+    }
+}
+
+/// A reusable offscreen render target suitable for [`gpui::Window::paint_surface`].
+pub struct WgpuRenderTarget {
+    texture: Arc<wgpu::Texture>,
+    view: wgpu::TextureView,
+    size: gpui::Size<gpui::DevicePixels>,
+    format: wgpu::TextureFormat,
+}
+
+impl WgpuRenderTarget {
+    /// Creates a render target using GPUI's surface format.
+    pub fn new(context: &WgpuContextHandle, size: gpui::Size<gpui::DevicePixels>) -> Self {
+        Self::with_format(context, size, context.texture_format())
+    }
+
+    /// Creates a render target with an explicit texture format.
+    pub fn with_format(
+        context: &WgpuContextHandle,
+        size: gpui::Size<gpui::DevicePixels>,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        let size = normalize_target_size(size);
+        let texture = create_render_target_texture(context.device(), size, format);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            texture: Arc::new(texture),
+            view,
+            size,
+            format,
+        }
+    }
+
+    /// Resizes the target, preserving its texture format.
+    pub fn resize(&mut self, context: &WgpuContextHandle, size: gpui::Size<gpui::DevicePixels>) {
+        let size = normalize_target_size(size);
+        if self.size == size {
+            return;
+        }
+        let texture = create_render_target_texture(context.device(), size, self.format);
+        self.view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.texture = Arc::new(texture);
+        self.size = size;
+    }
+
+    /// Returns the target texture for use as a GPUI surface.
+    pub fn texture(&self) -> Arc<wgpu::Texture> {
+        Arc::clone(&self.texture)
+    }
+
+    /// Creates a GPUI element that composites this target at its layout bounds.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_family = "wasm", feature = "custom-gpu")
+    ))]
+    pub fn surface(&self) -> gpui::Surface {
+        gpui::surface(gpui::SurfaceSource::Texture {
+            texture: self.texture(),
+            size: self.size,
+        })
+    }
+
+    /// Returns the target texture view for rendering.
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    /// Returns the target dimensions in device pixels.
+    pub fn size(&self) -> gpui::Size<gpui::DevicePixels> {
+        self.size
+    }
+
+    /// Returns the target texture format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+}
+
+fn normalize_target_size(size: gpui::Size<gpui::DevicePixels>) -> gpui::Size<gpui::DevicePixels> {
+    gpui::size(
+        gpui::DevicePixels(size.width.0.max(1)),
+        gpui::DevicePixels(size.height.0.max(1)),
+    )
+}
+
+fn create_render_target_texture(
+    device: &wgpu::Device,
+    size: gpui::Size<gpui::DevicePixels>,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gpui-custom-render-target"),
+        size: wgpu::Extent3d {
+            width: size.width.0 as u32,
+            height: size.height.0 as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
 /// Extra wgpu features and limits that an application can request on top of
 /// gpui's baseline.  Pass an instance to the platform via
 /// [`gpui::App::set_gpu_requirements`] *before* opening any windows.
@@ -263,6 +469,17 @@ pub struct WgpuDeviceRequirements {
 }
 
 impl WgpuContext {
+    pub(crate) fn handle(&self, texture_format: wgpu::TextureFormat) -> WgpuContextHandle {
+        WgpuContextHandle::from_resources(
+            Arc::clone(&self.device),
+            Arc::clone(&self.queue),
+            texture_format,
+            self.adapter.get_info(),
+            self.backend,
+            Arc::clone(&self.device_lost),
+        )
+    }
+
     /// Creates a native device without a presentation surface.
     #[cfg(not(target_family = "wasm"))]
     pub fn new_headless(

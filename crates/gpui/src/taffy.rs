@@ -642,8 +642,8 @@ impl ToTaffy<taffy::style::LengthPercentage> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentage {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => {
-                taffy::style::LengthPercentage::percent(*fraction)
+            DefiniteLength::Relative(relative) => {
+                taffy::style::LengthPercentage::percent(relative.0)
             }
         }
     }
@@ -653,8 +653,8 @@ impl ToTaffy<taffy::style::LengthPercentageAuto> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentageAuto {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => {
-                taffy::style::LengthPercentageAuto::percent(*fraction)
+            DefiniteLength::Relative(relative) => {
+                taffy::style::LengthPercentageAuto::percent(relative.0)
             }
         }
     }
@@ -664,7 +664,7 @@ impl ToTaffy<taffy::style::Dimension> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::Dimension {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => taffy::style::Dimension::percent(*fraction),
+            DefiniteLength::Relative(relative) => taffy::style::Dimension::percent(relative.0),
         }
     }
 }

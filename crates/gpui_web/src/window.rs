@@ -138,7 +138,7 @@ impl WebWindow {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         _handle: AnyWindowHandle,
-        _params: WindowParams,
+        params: WindowParams,
         context: &WgpuContext,
         canvas: web_sys::HtmlCanvasElement,
         surface: wgpu::Surface<'static>,
@@ -214,6 +214,14 @@ impl WebWindow {
             raf_id: Cell::new(None),
             raf_function: RefCell::new(None),
         });
+
+        if !params.show {
+            inner
+                .canvas
+                .style()
+                .set_property("display", "none")
+                .map_err(|error| anyhow::anyhow!("Failed to hide canvas: {error:?}"))?;
+        }
 
         let raf_closure = inner.create_raf_closure();
         inner.wake_frame_loop();
@@ -736,6 +744,14 @@ impl PlatformWindow for WebWindow {
 
     fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
 
+    fn set_visible(&self, visible: bool) {
+        self.inner
+            .canvas
+            .style()
+            .set_property("display", if visible { "block" } else { "none" })
+            .unwrap_or_else(|error| log::error!("Failed to update canvas visibility: {error:?}"));
+    }
+
     fn minimize(&self) {
         log::warn!("WebWindow::minimize is not supported in the browser");
     }
@@ -848,6 +864,15 @@ impl PlatformWindow for WebWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         Some(self.inner.state.borrow().renderer.gpu_specs())
+    }
+
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.inner
+            .state
+            .borrow()
+            .renderer
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}

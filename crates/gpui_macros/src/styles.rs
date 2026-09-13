@@ -67,6 +67,10 @@ struct CanonicalStyleTransitionField {
 enum StyleTransitionFieldKind {
     Required,
     Optional,
+    InsetTop,
+    InsetRight,
+    InsetBottom,
+    InsetLeft,
     AutoSizeWidth,
     AutoSizeHeight,
     CornerRadius,
@@ -87,10 +91,14 @@ impl StyleTransitionField {
         }
     }
 
-    fn required_or_auto_size(path: TokenStream2) -> Self {
+    fn required_or_special_length(path: TokenStream2) -> Self {
         let kind = match style_transition_key(&path).as_str() {
             "size.width" => StyleTransitionFieldKind::AutoSizeWidth,
             "size.height" => StyleTransitionFieldKind::AutoSizeHeight,
+            "inset.top" => StyleTransitionFieldKind::InsetTop,
+            "inset.right" => StyleTransitionFieldKind::InsetRight,
+            "inset.bottom" => StyleTransitionFieldKind::InsetBottom,
+            "inset.left" => StyleTransitionFieldKind::InsetLeft,
             _ => StyleTransitionFieldKind::Required,
         };
         Self { path, kind }
@@ -239,6 +247,29 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+        StyleTransitionFieldKind::InsetTop
+        | StyleTransitionFieldKind::InsetRight
+        | StyleTransitionFieldKind::InsetBottom
+        | StyleTransitionFieldKind::InsetLeft => {
+            let edge = match field.kind {
+                StyleTransitionFieldKind::InsetTop => quote! { StyleTransitionEdge::Top },
+                StyleTransitionFieldKind::InsetRight => quote! { StyleTransitionEdge::Right },
+                StyleTransitionFieldKind::InsetBottom => quote! { StyleTransitionEdge::Bottom },
+                StyleTransitionFieldKind::InsetLeft => quote! { StyleTransitionEdge::Left },
+                _ => unreachable!(),
+            };
+            quote! {
+            in_progress |= apply_inset(
+                &mut state.#path,
+                &mut style.#path,
+                #edge,
+                self.#motion_name.as_ref(),
+                context,
+                now,
+                reduce_motion,
+            );
+            }
+        }
         StyleTransitionFieldKind::AutoSizeWidth => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,
@@ -300,7 +331,7 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: prefix
                 .fields
                 .into_iter()
-                .map(StyleTransitionField::required_or_auto_size)
+                .map(StyleTransitionField::required_or_special_length)
                 .collect(),
         });
     }
@@ -357,6 +388,28 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: vec![StyleTransitionField::optional(quote! { border_color })],
         },
         StyleTransitionSpec {
+            name: "ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { ring.width }),
+                StyleTransitionField::required(quote! { ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "ring_color",
+            fields: vec![StyleTransitionField::required(quote! { ring.color })],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { inset_ring.width }),
+                StyleTransitionField::required(quote! { inset_ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring_color",
+            fields: vec![StyleTransitionField::required(quote! { inset_ring.color })],
+        },
+        StyleTransitionSpec {
             name: "text_color",
             fields: vec![StyleTransitionField::optional(quote! { text.color })],
         },
@@ -387,6 +440,10 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
         StyleTransitionSpec {
             name: "opacity",
             fields: vec![StyleTransitionField::optional(quote! { opacity })],
+        },
+        StyleTransitionSpec {
+            name: "rounded_smoothing",
+            fields: vec![StyleTransitionField::optional(quote! { corner_smoothing })],
         },
     ]);
 
@@ -922,6 +979,12 @@ struct CornerStyleSuffix {
     doc_string_suffix: &'static str,
 }
 
+struct CornerSmoothingStyleSuffix {
+    suffix: &'static str,
+    amount_tokens: TokenStream2,
+    doc_string: &'static str,
+}
+
 struct BorderStylePrefix {
     prefix: &'static str,
     fields: Vec<TokenStream2>,
@@ -1023,7 +1086,28 @@ fn generate_methods() -> Vec<TokenStream2> {
         }
     }
 
+    methods.extend(generate_corner_smoothing_methods(visibility));
+
     methods
+}
+
+fn generate_corner_smoothing_methods(visibility: Visibility) -> Vec<TokenStream2> {
+    corner_smoothing_suffixes()
+        .into_iter()
+        .map(|suffix| {
+            let method_name = format_ident!("rounded_smoothing_{}", suffix.suffix);
+            let amount_tokens = suffix.amount_tokens;
+            let doc_string = suffix.doc_string;
+
+            quote! {
+                #[doc = #doc_string]
+                #visibility fn #method_name(mut self) -> Self {
+                    self.style().corner_smoothing = Some(#amount_tokens);
+                    self
+                }
+            }
+        })
+        .collect()
 }
 
 fn generate_predefined_setter(
@@ -1677,6 +1761,66 @@ fn corner_suffixes() -> Vec<CornerStyleSuffix> {
             suffix: "full",
             radius_tokens: quote! {  px(9999.) },
             doc_string_suffix: "9999px",
+        },
+    ]
+}
+
+fn corner_smoothing_suffixes() -> Vec<CornerSmoothingStyleSuffix> {
+    vec![
+        CornerSmoothingStyleSuffix {
+            suffix: "0",
+            amount_tokens: quote! { 0.0 },
+            doc_string: "Keeps circular corners by setting rounded corner smoothing to `0.0`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p1",
+            amount_tokens: quote! { 0.1 },
+            doc_string: "Sets rounded corner smoothing to `0.1`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p2",
+            amount_tokens: quote! { 0.2 },
+            doc_string: "Sets rounded corner smoothing to `0.2`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p3",
+            amount_tokens: quote! { 0.3 },
+            doc_string: "Sets rounded corner smoothing to `0.3`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p4",
+            amount_tokens: quote! { 0.4 },
+            doc_string: "Sets rounded corner smoothing to `0.4`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p5",
+            amount_tokens: quote! { 0.5 },
+            doc_string: "Sets rounded corner smoothing to `0.5`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p6",
+            amount_tokens: quote! { 0.6 },
+            doc_string: "Sets rounded corner smoothing to `0.6`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p7",
+            amount_tokens: quote! { 0.7 },
+            doc_string: "Sets rounded corner smoothing to `0.7`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p8",
+            amount_tokens: quote! { 0.8 },
+            doc_string: "Sets rounded corner smoothing to `0.8`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "0p9",
+            amount_tokens: quote! { 0.9 },
+            doc_string: "Sets rounded corner smoothing to `0.9`.",
+        },
+        CornerSmoothingStyleSuffix {
+            suffix: "1",
+            amount_tokens: quote! { 1.0 },
+            doc_string: "Requests maximum rounded corner smoothing by setting it to `1.0`.",
         },
     ]
 }

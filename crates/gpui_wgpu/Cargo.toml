@@ -16,6 +16,7 @@ path = "src/gpui_wgpu.rs"
 default = []
 font-kit = ["dep:font-kit"]
 test-support = ["gpui/test-support", "dep:image"]
+custom-gpu = ["gpui/custom-gpu"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
@@ -74,8 +75,15 @@ web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
 js-sys.workspace = true
 
 [dev-dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 criterion.workspace = true
+env_logger.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
+
+[[example]]
+name = "custom_gpu"
+required-features = ["custom-gpu"]
 
 [[bench]]
 name = "layout_line"

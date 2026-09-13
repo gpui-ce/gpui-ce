@@ -217,6 +217,9 @@ impl InstanceUpload {
 }
 
 /// Mapped per-batch `DATA_RANGE` slots: batch base in texels plus element count.
+///
+/// The shader reads only the first two fields, but browser/WebGL downlevel
+/// backends require uniform binding sizes to be 16-byte aligned.
 struct RangeUpload {
     staging: wgpu::QueueWriteBufferView,
     stride: u64,
@@ -232,11 +235,11 @@ impl RangeUpload {
         }
         self.next_slot += 1;
         let offset = slot * self.stride;
-        let mut bytes = [0u8; 8];
+        let mut bytes = [0u8; 16];
         bytes[..4].copy_from_slice(&base_texel.to_le_bytes());
-        bytes[4..].copy_from_slice(&elements.to_le_bytes());
+        bytes[4..8].copy_from_slice(&elements.to_le_bytes());
         self.staging
-            .slice(offset as usize..(offset + 8) as usize)
+            .slice(offset as usize..(offset + 16) as usize)
             .copy_from_slice(&bytes);
         u32::try_from(offset).ok()
     }

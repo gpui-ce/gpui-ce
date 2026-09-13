@@ -15,10 +15,20 @@ pub enum SurfaceSource {
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
     /// A GPU texture handle (type-erased to avoid depending on wgpu)
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        all(target_family = "wasm", feature = "custom-gpu")
+    ))]
     Texture {
         /// The GPU texture, type-erased (expected to be `Arc<wgpu::Texture>`)
+        #[cfg(not(target_family = "wasm"))]
         texture: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+        /// The GPU texture, type-erased (expected to be `Arc<wgpu::Texture>`).
+        ///
+        /// WGPU handles are intentionally thread-local in browser builds.
+        #[cfg(target_family = "wasm")]
+        texture: std::sync::Arc<dyn std::any::Any>,
         /// Dimensions of the texture in device pixels
         size: Size<DevicePixels>,
     },
@@ -35,7 +45,11 @@ impl std::fmt::Debug for SurfaceSource {
         match *self {
             #[cfg(target_os = "macos")]
             SurfaceSource::Surface(ref buf) => _f.debug_tuple("Surface").field(buf).finish(),
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                all(target_family = "wasm", feature = "custom-gpu")
+            ))]
             SurfaceSource::Texture { size, .. } => _f
                 .debug_struct("Texture")
                 .field("size", &size)
@@ -54,7 +68,11 @@ impl SurfaceSource {
             SurfaceSource::Surface(buffer) => {
                 crate::size(buffer.get_width().into(), buffer.get_height().into())
             }
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                all(target_family = "wasm", feature = "custom-gpu")
+            ))]
             SurfaceSource::Texture { size, .. } => *size,
             #[cfg(target_os = "windows")]
             SurfaceSource::WindowsCapture(frame) => frame.size(),
@@ -156,7 +174,11 @@ impl Element for Surface {
     ) {
         let new_bounds = self.object_fit.get_bounds(_bounds, self.source.size());
         // TODO: Add support for corner_radii.
-        _window.paint_surface(new_bounds, self.source.clone());
+        let mut style = Style::default();
+        style.refine(&self.style);
+        _window.with_element_opacity(style.opacity, |window| {
+            window.paint_surface(new_bounds, self.source.clone());
+        });
     }
 }
 

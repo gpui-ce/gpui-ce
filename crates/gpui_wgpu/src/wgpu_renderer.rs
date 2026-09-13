@@ -1,4 +1,4 @@
-use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
+use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuContextHandle, WgpuDeviceRequirements};
 use gpui::{DevicePixels, GpuSpecs, Scene, Size};
 
 #[cfg(test)]
@@ -214,6 +214,31 @@ impl WgpuRenderer {
     pub fn gpu_context(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         let resources = self.resources();
         (resources.device.clone(), resources.queue.clone())
+    }
+
+    pub fn gpu_context_info(&self) -> Option<WgpuContextHandle> {
+        if let Some(context) = self.context.as_ref().and_then(|context| {
+            context
+                .borrow()
+                .as_ref()
+                .map(|context| context.handle(self.target.format()))
+        }) {
+            return Some(context);
+        }
+        self.resources.as_ref().map(|resources| {
+            WgpuContextHandle::from_resources(
+                resources.device.clone(),
+                resources.queue.clone(),
+                self.target.format(),
+                self.adapter_info.clone(),
+                match self.adapter_info.backend {
+                    wgpu::Backend::BrowserWebGpu => crate::WgpuBackend::BrowserWebGpu,
+                    wgpu::Backend::Gl => crate::WgpuBackend::Gl,
+                    backend => crate::WgpuBackend::Native(backend),
+                },
+                self.faults.device_lost.clone(),
+            )
+        })
     }
 
     pub fn gpu_specs(&self) -> GpuSpecs {

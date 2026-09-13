@@ -900,6 +900,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_appearance(&self) -> WindowBackgroundAppearance;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Show or hide the window without explicitly requesting focus.
+    ///
+    /// The default implementation does nothing for platforms that do not support
+    /// changing window visibility at runtime.
+    fn set_visible(&self, _visible: bool) {}
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
@@ -991,6 +996,14 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+
+    /// Returns typed backend-specific GPU context information for custom
+    /// controls. The value is intentionally type-erased in this crate so the
+    /// core UI crate does not depend on a rendering backend.
+    #[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
 

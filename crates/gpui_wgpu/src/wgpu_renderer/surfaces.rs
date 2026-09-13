@@ -1,5 +1,6 @@
 use gpui::PaintSurface;
 #[cfg(any(
+    all(target_family = "wasm", feature = "custom-gpu"),
     target_os = "macos",
     target_os = "linux",
     target_os = "freebsd",
@@ -14,8 +15,12 @@ use super::{WgpuRenderer, frame};
 #[cfg(target_os = "macos")]
 #[path = "surfaces/macos.rs"]
 mod platform;
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-#[path = "surfaces/linux.rs"]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    all(target_family = "wasm", feature = "custom-gpu")
+))]
+#[path = "surfaces/texture.rs"]
 mod platform;
 #[cfg(all(target_os = "windows", feature = "wgpu-surfaces"))]
 #[path = "surfaces/windows.rs"]
@@ -24,6 +29,7 @@ mod platform;
     target_os = "macos",
     target_os = "linux",
     target_os = "freebsd",
+    all(target_family = "wasm", feature = "custom-gpu"),
     all(target_os = "windows", feature = "wgpu-surfaces")
 )))]
 #[path = "surfaces/unsupported.rs"]
@@ -32,6 +38,7 @@ mod platform;
 pub(super) use platform::SurfaceCache;
 
 #[cfg(any(
+    all(target_family = "wasm", feature = "custom-gpu"),
     target_os = "macos",
     target_os = "linux",
     target_os = "freebsd",
@@ -45,6 +52,7 @@ struct SurfaceBinding {
 }
 
 #[cfg(any(
+    all(target_family = "wasm", feature = "custom-gpu"),
     target_os = "macos",
     target_os = "linux",
     target_os = "freebsd",
@@ -80,6 +88,7 @@ impl WgpuRenderer {
     }
 
     #[cfg(any(
+        all(target_family = "wasm", feature = "custom-gpu"),
         target_os = "macos",
         target_os = "linux",
         target_os = "freebsd",
@@ -105,6 +114,7 @@ impl WgpuRenderer {
     }
 
     #[cfg(any(
+        all(target_family = "wasm", feature = "custom-gpu"),
         target_os = "macos",
         target_os = "linux",
         target_os = "freebsd",
@@ -114,6 +124,7 @@ impl WgpuRenderer {
         &self,
         surface: &PaintSurface,
         color_format: SurfaceColorFormat,
+        opacity: f32,
         binding: &mut SurfaceBinding,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
@@ -122,9 +133,13 @@ impl WgpuRenderer {
             bounds: surface.bounds.into(),
             content_mask: surface.content_mask.bounds.into(),
             color_format,
+            opacity,
             padding0: 0,
             padding1: 0,
             padding2: 0,
+            padding3: 0,
+            padding4: 0,
+            padding5: 0,
         };
         let resources = self.resources();
         let uniform_offset = resources.surface_uniforms.write(&uniforms);
@@ -142,8 +157,9 @@ impl WgpuRenderer {
     pub(super) fn draw_surfaces(
         &self,
         surfaces: &[PaintSurface],
+        opacities: &[f32],
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
-        platform::draw_surfaces(self, surfaces, pass)
+        platform::draw_surfaces(self, surfaces, opacities, pass)
     }
 }

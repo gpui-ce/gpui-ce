@@ -1155,6 +1155,9 @@ pub struct Window {
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+    /// Bounds of the parent `Div` currently prepainting this element as one of its children.
+    /// Inset transitions use these bounds to resolve `auto` from the child's rendered position.
+    style_transition_containing_bounds: Option<Bounds<Pixels>>,
     pub(crate) element_opacity: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
@@ -1856,6 +1859,7 @@ impl Window {
             text_style_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
+            style_transition_containing_bounds: None,
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
             requested_autoscroll: None,
@@ -3341,13 +3345,22 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (
+                    priority,
+                    element,
+                    parent_node,
+                    current_view,
+                    rem_size,
+                    absolute_offset,
+                    prepaint_range,
+                ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
                     self.text_style_stack
                         .clone_from(&deferred_draw.text_style_stack);
                     (
+                        deferred_draw.priority,
                         deferred_draw.element.take(),
                         deferred_draw.parent_node,
                         deferred_draw.current_view,
@@ -3363,7 +3376,9 @@ impl Window {
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
+                                crate::DeferredPriorityStackCache::push(priority, cx);
                                 element.prepaint(window, cx);
+                                crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
                     });
@@ -3633,6 +3648,22 @@ impl Window {
 
         let abs_offset = self.element_offset() + offset;
         self.with_absolute_element_offset(abs_offset, f)
+    }
+
+    pub(crate) fn with_style_transition_containing_bounds<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_prepaint();
+        let previous_bounds = self.style_transition_containing_bounds.replace(bounds);
+        let result = f(self);
+        self.style_transition_containing_bounds = previous_bounds;
+        result
+    }
+
+    pub(crate) fn style_transition_containing_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.style_transition_containing_bounds
     }
 
     /// Updates the global element offset based on the given offset. This is used to implement
@@ -4074,6 +4105,18 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.paint_drop_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paints drop shadows with smoothed element and shadow corners.
+    /// Inset shadows in `shadows` are ignored.
+    pub fn paint_drop_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4081,6 +4124,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if shadow.inset {
                 continue;
@@ -4096,7 +4140,7 @@ impl Window {
                 element_bounds,
                 element_corner_radii,
                 inset: false.into(),
-                padding: 0,
+                corner_smoothing,
             });
         }
     }
@@ -4110,6 +4154,18 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.paint_inset_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paints inset shadows with smoothed element and shadow corners.
+    /// Drop shadows in `shadows` are ignored.
+    pub fn paint_inset_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4117,6 +4173,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if !shadow.inset {
                 continue;
@@ -4141,7 +4198,7 @@ impl Window {
                 element_bounds,
                 element_corner_radii,
                 inset: true.into(),
-                padding: 0,
+                corner_smoothing,
             });
         }
     }
@@ -4161,6 +4218,17 @@ impl Window {
         corner_radii: Corners<Pixels>,
         filters: &[Filter],
     ) {
+        self.paint_backdrop_filter_with_corner_smoothing(bounds, corner_radii, 0.0, filters);
+    }
+
+    /// Paints a backdrop filter clipped to smoothed corners.
+    pub fn paint_backdrop_filter_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        filters: &[Filter],
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4178,6 +4246,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: self.element_opacity(),
         });
@@ -4196,6 +4265,18 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
+        filters: &[Filter],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_filter_layer_with_corner_smoothing(bounds, corner_radii, 0.0, filters, f)
+    }
+
+    /// Runs `f` in a content-filter group clipped to smoothed corners.
+    pub fn with_filter_layer_with_corner_smoothing<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         filters: &[Filter],
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
@@ -4223,6 +4304,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
             is_start: true,
@@ -4241,11 +4323,12 @@ impl Window {
     fn largest_border_interior(quad: &Quad) -> Bounds<ScaledPixels> {
         let radii = &quad.corner_radii;
         let widths = &quad.border_widths;
-        let edge_radii = Edges {
-            top: radii.top_left.max(radii.top_right),
-            right: radii.top_right.max(radii.bottom_right),
-            bottom: radii.bottom_left.max(radii.bottom_right),
-            left: radii.top_left.max(radii.bottom_left),
+        let reach_factor = 1.0 + quad.corner_smoothing;
+        let edge_reaches = Edges {
+            top: radii.top_left.max(radii.top_right) * reach_factor,
+            right: radii.top_right.max(radii.bottom_right) * reach_factor,
+            bottom: radii.bottom_left.max(radii.bottom_right) * reach_factor,
+            left: radii.top_left.max(radii.bottom_left) * reach_factor,
         };
 
         let antialias_inset = point(ScaledPixels(1.0), ScaledPixels(1.0));
@@ -4259,12 +4342,12 @@ impl Window {
         // Rounded corners need only be excluded on one axis. Either candidate
         // is empty of border pixels, so use the larger interior.
         let horizontal_band = inset_bounds(
-            point(widths.left, widths.top.max(edge_radii.top)),
-            point(widths.right, widths.bottom.max(edge_radii.bottom)),
+            point(widths.left, widths.top.max(edge_reaches.top)),
+            point(widths.right, widths.bottom.max(edge_reaches.bottom)),
         );
         let vertical_band = inset_bounds(
-            point(widths.left.max(edge_radii.left), widths.top),
-            point(widths.right.max(edge_radii.right), widths.bottom),
+            point(widths.left.max(edge_reaches.left), widths.top),
+            point(widths.right.max(edge_reaches.right), widths.bottom),
         );
 
         let area = |bounds: &Bounds<ScaledPixels>| {
@@ -4287,6 +4370,11 @@ impl Window {
     /// where the circular arcs meet. This will not display well when combined with dashed borders.
     /// Use `Corners::clamp_radii_for_quad_size` if the radii should fit within the bounds.
     pub fn paint_quad(&mut self, quad: PaintQuad) {
+        self.paint_quad_with_corner_smoothing(quad, 0.0);
+    }
+
+    /// Paints `quad` with smoothed corners.
+    pub fn paint_quad_with_corner_smoothing(&mut self, quad: PaintQuad, corner_smoothing: f32) {
         self.invalidator.debug_assert_paint();
 
         let opacity = self.element_opacity();
@@ -4301,6 +4389,8 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
+            padding: 0,
         };
 
         if !quad.background.is_transparent() {
@@ -4595,8 +4685,8 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                padding: 0,
                 grayscale: false.into(),
+                corner_smoothing: 0.0,
                 bounds,
                 corner_radii: Default::default(),
                 content_mask,
@@ -4689,6 +4779,28 @@ impl Window {
         frame_index: usize,
         grayscale: bool,
     ) -> Result<()> {
+        self.paint_image_with_corner_smoothing(
+            bounds,
+            image_bounds,
+            corner_radii,
+            0.0,
+            data,
+            frame_index,
+            grayscale,
+        )
+    }
+
+    /// Paints an image with smoothed corners.
+    pub fn paint_image_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        image_bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let visible_bounds = bounds.intersect(&image_bounds);
@@ -4767,8 +4879,8 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            padding: 0,
             grayscale: grayscale.into(),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             bounds: visible_bounds_snapped,
             content_mask,
             corner_radii,
@@ -4792,12 +4904,15 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
-        self.next_frame.scene.insert_primitive(PaintSurface {
-            order: 0,
-            bounds,
-            content_mask,
-            source: source.into(),
-        });
+        self.next_frame.scene.insert_surface(
+            PaintSurface {
+                order: 0,
+                bounds,
+                content_mask,
+                source: source.into(),
+            },
+            self.element_opacity(),
+        );
     }
 
     /// Removes an image from the sprite atlas.
@@ -6118,6 +6233,14 @@ impl Window {
         self.platform_window.minimize();
     }
 
+    /// Show or hide the current window at the platform level.
+    ///
+    /// Call [`Window::activate_window`] separately when the window should also receive focus.
+    /// The window manager may still focus a window when it is shown.
+    pub fn set_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();
@@ -6414,6 +6537,14 @@ impl Window {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     pub fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context()
+    }
+
+    /// Returns backend-specific typed GPU context information for custom
+    /// controls. Use the rendering backend's context type to downcast the
+    /// returned value.
+    #[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+    pub fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.platform_window.gpu_context_info()
     }
 
     /// Whether the GPU device backing this window has been lost (recovery
@@ -7304,17 +7435,21 @@ mod tests {
         cell::{Cell, RefCell},
         path::PathBuf,
         rc::Rc,
+        sync::Arc,
         time::Duration,
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, Context, DispatchPhase, DragMoveEvent, Empty,
-        ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle,
-        InputEvent as _, InteractiveElement as _, IntoElement, LongPressEvent, MouseButton,
-        MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Render, RequestFrameOptions,
-        StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent, TouchEvent,
-        TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div, point, px, size,
+        AnyWindowHandle, AppContext as _, Bounds, BoxShadow, ColorExt as _, Context, DispatchPhase,
+        DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
+        FocusHandle, ImageSource, InputEvent as _, InteractiveElement as _, IntoElement,
+        LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point,
+        Render, RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement as _,
+        Styled, TestAppContext, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
+        WindowAppearance, WindowOptions, canvas, div, img, point, px, size,
     };
+    use image::{Frame as ImageFrame, ImageBuffer, Rgba};
+    use smallvec::smallvec;
 
     struct EmptyView;
 
@@ -7322,6 +7457,119 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
         }
+    }
+
+    struct CornerSmoothingSceneView {
+        image: Arc<RenderImage>,
+    }
+
+    fn assert_smoothing(name: &str, minimum_count: usize, values: impl IntoIterator<Item = f32>) {
+        let values = values.into_iter().collect::<Vec<_>>();
+        assert!(values.len() >= minimum_count, "missing {name}");
+        assert!(
+            values.iter().all(|&value| value == 1.0),
+            "{name}: {values:?}"
+        );
+    }
+
+    impl Render for CornerSmoothingSceneView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let mut image = img(ImageSource::Render(self.image.clone()))
+                .size(px(24.))
+                .rounded(px(8.));
+            image.style().corner_smoothing = Some(1.5);
+
+            let mut root = div()
+                .size(px(80.))
+                .rounded(px(24.))
+                .bg(crate::blue())
+                .border_t(px(2.))
+                .border_r(px(4.))
+                .border_b(px(6.))
+                .border_l(px(8.))
+                .border_color(crate::white())
+                .ring(px(3.))
+                .inset_ring(px(2.))
+                .shadow(vec![
+                    BoxShadow::new(px(2.), px(3.), crate::black().opacity(0.5))
+                        .blur_radius(px(5.))
+                        .spread_radius(px(1.)),
+                    BoxShadow::new(px(1.), px(1.), crate::white().opacity(0.4))
+                        .blur_radius(px(3.))
+                        .inset(),
+                ])
+                .backdrop_blur(px(4.))
+                .blur(px(2.))
+                .child(image);
+            root.style().corner_smoothing = Some(1.5);
+            root
+        }
+    }
+
+    #[gpui::test]
+    fn corner_smoothing_reaches_every_styled_scene_primitive(cx: &mut TestAppContext) {
+        let frame = ImageFrame::new(ImageBuffer::from_pixel(2, 2, Rgba([255, 255, 255, 255])));
+        let image = Arc::new(RenderImage::new(smallvec![frame]));
+        let window = cx.add_window(move |_, _| CornerSmoothingSceneView { image });
+
+        window
+            .update(cx, |_, window, _| {
+                let scene = &window.rendered_frame.scene;
+                assert_smoothing(
+                    "quads",
+                    2,
+                    scene.quads.iter().map(|quad| quad.corner_smoothing),
+                );
+                assert_smoothing(
+                    "shadows",
+                    4,
+                    scene.shadows.iter().map(|shadow| shadow.corner_smoothing),
+                );
+                assert_smoothing(
+                    "backdrop filters",
+                    1,
+                    scene
+                        .backdrop_filters
+                        .iter()
+                        .map(|filter| filter.corner_smoothing),
+                );
+                assert_smoothing(
+                    "filter boundaries",
+                    2,
+                    scene
+                        .filter_boundaries
+                        .iter()
+                        .map(|boundary| boundary.corner_smoothing),
+                );
+                assert_smoothing(
+                    "images",
+                    1,
+                    scene
+                        .polychrome_sprites
+                        .iter()
+                        .map(|image| image.corner_smoothing),
+                );
+                for inset in [ShaderBool::Disabled, ShaderBool::Enabled] {
+                    assert!(scene.shadows.iter().any(|shadow| shadow.inset == inset));
+                }
+
+                let border = scene
+                    .quads
+                    .iter()
+                    .find(|quad| quad.border_widths.top.0 > 0.0)
+                    .expect("border quad");
+                let scale = window.scale_factor();
+                assert_eq!(
+                    [
+                        border.border_widths.top.0,
+                        border.border_widths.right.0,
+                        border.border_widths.bottom.0,
+                        border.border_widths.left.0,
+                    ],
+                    [2.0, 4.0, 6.0, 8.0].map(|width| width * scale)
+                );
+            })
+            .unwrap();
     }
 
     struct OpensWindowOnPaint {
@@ -7485,6 +7733,31 @@ mod tests {
                 ));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_window_visibility_can_be_changed(cx: &mut TestAppContext) {
+        for show in [false, true] {
+            let window = cx.update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        show,
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| EmptyView),
+                )
+                .unwrap()
+            });
+            let platform_window = cx.test_window(window.into());
+            assert_eq!(platform_window.is_visible(), show);
+
+            for visible in [false, false, true, true, false, true] {
+                window
+                    .update(cx, |_, window, _| window.set_visible(visible))
+                    .unwrap();
+                assert_eq!(platform_window.is_visible(), visible);
+            }
+        }
     }
 
     #[gpui::test]

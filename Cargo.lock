@@ -2285,6 +2285,7 @@ name = "gpui-ce"
 version = "0.2.2"
 dependencies = [
  "accesskit",
+ "accesskit_consumer 0.38.0",
  "anyhow",
  "async-channel",
  "async-task",
@@ -2660,13 +2661,16 @@ name = "gpui_ce_wgpu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "core-foundation",
  "core-video",
  "cosmic-text",
  "criterion",
+ "env_logger",
  "etagere",
  "gpui-ce",
  "gpui_ce_collections",
+ "gpui_ce_platform",
  "gpui_ce_render",
  "gpui_ce_util",
  "image",

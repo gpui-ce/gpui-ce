@@ -35,6 +35,7 @@ pub struct FilterCompositeParameters {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: Bounds<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
+    pub corner_smoothing: f32,
     pub blur_radius: f32,
     pub opacity: f32,
     pub clip: FilterCompositeClip,
@@ -99,6 +100,7 @@ impl BlurUniforms {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
+        corner_smoothing: f32,
         opacity: f32,
         clip: FilterCompositeClip,
         source_size: [f32; 2],
@@ -108,6 +110,7 @@ impl BlurUniforms {
             bounds: bounds.into(),
             content_mask: content_mask.into(),
             corner_radii: corner_radii.into(),
+            corner_smoothing,
             opacity,
             composite_clip: match clip {
                 FilterCompositeClip::RoundedBounds => ShaderBlurCompositeClip::RoundedBounds,
@@ -222,6 +225,10 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         downsample_mode,
         source_size: vec2f(1.0, 1.0),
         target_size: vec2f(1.0, 1.0),
+        corner_smoothing: 0.0,
+        padding0: 0,
+        padding1: 0,
+        padding2: 0,
     }
 }
 
