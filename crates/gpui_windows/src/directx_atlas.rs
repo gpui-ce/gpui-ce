@@ -121,13 +121,28 @@ impl PlatformAtlas for DirectXAtlas {
         };
 
         if let Some(mut texture) = texture_slot.take() {
-            texture.allocator.deallocate(tile.tile_id.into());
+            // A panicking deallocate (etagere generation assertion) must not
+            // skip the refill below: the slot would stay None while sprites
+            // from the last presented frame still sample this page, and the
+            // renderer would unwrap the dangling slot on the next present.
+            let dealloc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                texture.allocator.deallocate(tile.tile_id.into());
+            }));
+            if dealloc.is_err() {
+                log::warn!("directx atlas: deallocate panicked; leaking tile, slot restored");
+            }
             texture.decrement_ref_count();
             if texture.is_unreferenced() {
                 textures.free_list.push(texture.id.index as usize);
-            } else {
-                *texture_slot = Some(texture);
             }
+            // Keep the texture object in its slot even when unreferenced: a
+            // frame currently being painted may still hold sprites pointing
+            // at this page, and `texture()` unwraps the slot. The page stays
+            // sampleable until `allocate()` recycles the slot from
+            // `free_list`, which happens on a later paint when no live
+            // primitives reference it anymore. Memory stays bounded: one
+            // page per free-listed slot, recycled on reuse.
+            *texture_slot = Some(texture);
         }
     }
 }
@@ -145,10 +160,19 @@ impl DirectXAtlasState {
                 AtlasTextureKind::Subpixel => &mut self.subpixel_textures,
             };
 
+            // Never hand out tiles from pages sitting in `free_list`: their
+            // slot is pending recycle and a later `push_texture` replaces it
+            // with a fresh allocator. A tile allocated into such a page would
+            // strand its `tiles_by_key` entry there, tripping etagere's
+            // generation assertion on a later `remove`.
+            let free_listed = textures.free_list.clone();
             if let Some(tile) = textures
+                .textures
                 .iter_mut()
+                .enumerate()
                 .rev()
-                .find_map(|texture| texture.allocate(size))
+                .filter(|(ix, texture)| texture.is_some() && !free_listed.contains(ix))
+                .find_map(|(_, texture)| texture.as_mut().unwrap().allocate(size))
             {
                 return Some(tile);
             }
