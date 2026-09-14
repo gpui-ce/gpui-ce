@@ -274,6 +274,10 @@ impl Element for Img {
         self.interactivity.source_location()
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.interactivity.base_style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,

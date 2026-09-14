@@ -160,6 +160,47 @@ pub use scene::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
+
+/// Selector types and helpers used by the [`Styled`] selector APIs.
+pub mod selectors {
+    pub use crate::style::{Selector, SelectorGroup};
+    use crate::{Element, IntoSelectorGroup, SelectorGroupBehavior, SharedString, Styled};
+
+    /// Creates a selector that matches every element.
+    pub const fn all() -> Selector {
+        Selector::all()
+    }
+
+    /// Creates an ID selector.
+    pub fn id(value: impl Into<SharedString>) -> Selector {
+        Selector::id(value.into())
+    }
+
+    /// Creates a class selector.
+    pub fn class(value: impl Into<SharedString>) -> Selector {
+        Selector::class(value.into())
+    }
+
+    /// Creates a selector group that matches when any top-level item matches.
+    ///
+    /// Nested arrays and tuples retain their default `AND` behavior.
+    pub fn any(selectors: impl IntoSelectorGroup) -> SelectorGroup {
+        selectors.into_selector_group_with_behavior(SelectorGroupBehavior::Or)
+    }
+
+    /// Creates a selector group that matches when the supplied group does not match.
+    ///
+    /// Arrays and tuples retain their default `AND` behavior. Use [`any`] inside `not` to reject
+    /// an element when any alternative matches.
+    pub fn not(selectors: impl IntoSelectorGroup) -> SelectorGroup {
+        selectors.into_selector_group().negated()
+    }
+
+    /// Creates a selector that matches styled elements with the concrete type `E`.
+    pub fn tag<E: Element + Styled>() -> Selector {
+        Selector::tag::<E>()
+    }
+}
 pub use style_transitions::*;
 pub use styled::*;
 pub use subscription::*;

@@ -6,7 +6,6 @@ use crate::{
 use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
-use refineable::Refineable;
 use std::mem;
 use std::{any::TypeId, fmt, ops::Range};
 
@@ -293,6 +292,7 @@ struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
+    selector_scope: Vec<crate::SelectorScope>,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -311,6 +311,10 @@ impl<V: View> Element for ViewElement<V> {
         return None;
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        self.cached_style.as_ref().map(|style| &style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -325,7 +329,7 @@ impl<V: View> Element for ViewElement<V> {
                 match self.cached_style.as_ref() {
                     Some(style) if !caching_disabled => {
                         let mut root_style = Style::default();
-                        root_style.refine(style);
+                        window.refine_base_style(&mut root_style, style, None);
                         let layout_id = window.request_layout(root_style, None, cx);
                         (layout_id, None)
                     }
@@ -382,11 +386,13 @@ impl<V: View> Element for ViewElement<V> {
                     |element_state, window| {
                         let content_mask = window.content_mask();
                         let text_style = window.text_style();
+                        let selector_scope = window.selector_scope_stack.clone();
 
                         if let Some(mut element_state) = element_state
                             && element_state.cache_key.bounds == bounds
                             && element_state.cache_key.content_mask == content_mask
                             && element_state.cache_key.text_style == text_style
+                            && element_state.cache_key.selector_scope == selector_scope
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
                         {
@@ -427,6 +433,7 @@ impl<V: View> Element for ViewElement<V> {
                                     bounds,
                                     content_mask,
                                     text_style,
+                                    selector_scope,
                                 },
                             },
                         )

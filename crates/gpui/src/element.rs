@@ -38,7 +38,7 @@ use crate::{
 };
 use derive_more::{Deref, DerefMut};
 use std::{
-    any::Any,
+    any::{Any, type_name},
     fmt::{self, Debug, Display},
     mem, panic,
     sync::Arc,
@@ -67,6 +67,11 @@ pub trait Element: 'static + IntoElement {
     /// Source location where this element was constructed, used to disambiguate elements in the
     /// inspector and navigate to their source code.
     fn source_location(&self) -> Option<&'static panic::Location<'static>>;
+
+    /// Returns selector metadata associated with this element.
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        None
+    }
 
     /// Before an element can be painted, we need to know where it's going to be and how big it is.
     /// Use this method to request a layout from Taffy and initialize the element's state.
@@ -358,11 +363,19 @@ impl<E: Element> Drawable<E> {
                     inspector_id = None;
                 }
 
-                let (layout_id, request_layout) = self.element.request_layout(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    window,
-                    cx,
+                let selector_scope = self.element.selector_state().cloned();
+                let (layout_id, request_layout) = window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
+                        self.element.request_layout(
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            window,
+                            cx,
+                        )
+                    },
                 );
 
                 if global_id.is_some() {
@@ -447,13 +460,21 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
-                let mut prepaint = self.element.prepaint(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    window,
-                    cx,
+                let selector_scope = self.element.selector_state().cloned();
+                let mut prepaint = window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
+                        self.element.prepaint(
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            bounds,
+                            &mut request_layout,
+                            window,
+                            cx,
+                        )
+                    },
                 );
                 window.next_frame.dispatch_tree.pop_node();
 
@@ -521,14 +542,22 @@ impl<E: Element> Drawable<E> {
                 }
 
                 window.next_frame.dispatch_tree.set_active_node(node_id);
-                self.element.paint(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    &mut prepaint,
-                    window,
-                    cx,
+                let selector_scope = self.element.selector_state().cloned();
+                window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
+                        self.element.paint(
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            bounds,
+                            &mut request_layout,
+                            &mut prepaint,
+                            window,
+                            cx,
+                        );
+                    },
                 );
 
                 if global_id.is_some() {
