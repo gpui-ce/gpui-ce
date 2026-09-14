@@ -73,7 +73,11 @@ impl VisualTestAppContext {
 
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
 
-        let mut app = App::new_app(platform.clone(), asset_source, http_client);
+        let mut app = App::new_app(
+            platform.clone(),
+            gpui::AssetRegistry::from(asset_source).into(),
+            http_client,
+        );
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {

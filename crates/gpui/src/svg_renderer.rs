@@ -1,5 +1,5 @@
 use crate::{
-    AssetSource, DevicePixels, IsZero, RenderImage, Result, SharedString, Size,
+    AssetRegistry, DevicePixels, IsZero, RenderImage, Result, SharedString, Size,
     swap_rgba_pa_to_bgra,
 };
 use image::Frame;
@@ -91,7 +91,7 @@ pub struct RenderSvgParams {
 #[derive(Clone)]
 /// A struct holding everything necessary to render SVGs.
 pub struct SvgRenderer {
-    asset_source: Arc<dyn AssetSource>,
+    asset_registry: Arc<AssetRegistry>,
     usvg_options: Arc<usvg::Options<'static>>,
 }
 
@@ -122,7 +122,7 @@ impl From<f32> for SvgSize {
 
 impl SvgRenderer {
     /// Creates a new SVG renderer with the provided asset source.
-    pub fn new(asset_source: Arc<dyn AssetSource>) -> Self {
+    pub fn new(asset_registry: Arc<AssetRegistry>) -> Self {
         static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
@@ -137,12 +137,12 @@ impl SvgRenderer {
 
         let default_font_resolver = usvg::FontResolver::default_font_selector();
         let font_resolver = Box::new({
-            let asset_source = asset_source.clone();
+            let asset_database = asset_registry.clone();
             move |font: &usvg::Font, db: &mut Arc<usvg::fontdb::Database>| {
                 if db.is_empty() {
                     let fontdb = enriched_fontdb.get_or_init(|| {
                         let mut db = (**SYSTEM_FONT_DB).clone();
-                        load_bundled_fonts(&*asset_source, &mut db);
+                        load_bundled_fonts(&asset_database, &mut db);
                         fix_generic_font_families(&mut db);
                         Arc::new(db)
                     });
@@ -182,7 +182,7 @@ impl SvgRenderer {
             ..Default::default()
         };
         Self {
-            asset_source,
+            asset_registry,
             usvg_options: Arc::new(options),
         }
     }
@@ -257,7 +257,7 @@ impl SvgRenderer {
 
         if let Some(bytes) = bytes {
             render_pixmap(bytes)
-        } else if let Some(bytes) = self.asset_source.load(&params.path)? {
+        } else if let Some(bytes) = self.asset_registry.load(&params.path) {
             render_pixmap(&bytes)
         } else {
             Ok(None)
@@ -309,16 +309,15 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
     Ok(pixmap)
 }
 
-fn load_bundled_fonts(asset_source: &dyn AssetSource, db: &mut usvg::fontdb::Database) {
+fn load_bundled_fonts(asset_database: &AssetRegistry, db: &mut usvg::fontdb::Database) {
     let font_paths = [
         "fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf",
         "fonts/lilex/Lilex-Regular.ttf",
     ];
     for path in font_paths {
-        match asset_source.load(path) {
-            Ok(Some(data)) => db.load_font_data(data.into_owned()),
-            Ok(None) => log::warn!("Bundled font not found: {path}"),
-            Err(error) => log::warn!("Failed to load bundled font {path}: {error}"),
+        match asset_database.load(path) {
+            Some(data) => db.load_font_data(data.into_owned()),
+            None => log::warn!("Bundled font not found: {path}"),
         }
     }
 }
@@ -367,7 +366,7 @@ mod tests {
 
     #[test]
     fn renders_parsed_svg_at_requested_size() -> Result<()> {
-        let renderer = SvgRenderer::new(Arc::new(()));
+        let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
@@ -380,7 +379,7 @@ mod tests {
 
     #[test]
     fn preserves_aspect_ratio_for_width_constrained_size() -> Result<()> {
-        let renderer = SvgRenderer::new(Arc::new(()));
+        let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
