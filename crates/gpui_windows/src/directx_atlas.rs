@@ -121,7 +121,19 @@ impl PlatformAtlas for DirectXAtlas {
         };
 
         if let Some(mut texture) = texture_slot.take() {
-            texture.allocator.deallocate(tile.tile_id.into());
+            // Defense in depth (Meliora): a panicking deallocate (etagere
+            // generation assertion on a stale id) must not skip the refill
+            // below — the slot would stay None while sprites from the last
+            // presented frame still sample this page. Callers that defer
+            // tile drops to between frames (image-cache eviction during
+            // paint is the usual trigger) make this path unreachable in
+            // practice; the guard only bounds the damage if that changes.
+            let dealloc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                texture.allocator.deallocate(tile.tile_id.into());
+            }));
+            if dealloc.is_err() {
+                log::warn!("directx atlas: deallocate panicked; tile leaked, slot restored");
+            }
             texture.decrement_ref_count();
             if texture.is_unreferenced() {
                 textures.free_list.push(texture.id.index as usize);
