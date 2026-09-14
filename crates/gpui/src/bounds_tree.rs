@@ -28,6 +28,10 @@ where
     root: Option<usize>,
     /// Index of the leaf with the highest ordering (for fast-path lookups).
     max_leaf: Option<usize>,
+    /// Minimum ordering assigned to any subsequent insert. Raised before painting deferred
+    /// draws so overlays always sort above the main scene (and their orders can't fall inside a
+    /// content-filter order range from the main scene). 0 means no floor.
+    order_floor: u32,
     /// Reusable stack for tree traversal during insertion.
     insert_path: Vec<usize>,
     /// Reusable stack for search operations.
@@ -109,8 +113,32 @@ where
         self.nodes.clear();
         self.root = None;
         self.max_leaf = None;
+        self.order_floor = 0;
         self.insert_path.clear();
         self.search_stack.clear();
+    }
+
+    /// Raise the minimum ordering for subsequent inserts to `floor`. Relative ordering above the
+    /// floor is preserved (overlapping inserts still step above one another).
+    pub fn set_order_floor(&mut self, floor: u32) {
+        self.order_floor = self.order_floor.max(floor);
+    }
+
+    /// The highest ordering assigned to any bounds so far (0 if empty).
+    pub fn max_order(&self) -> u32 {
+        self.max_leaf.map_or(0, |idx| self.nodes[idx].max_order)
+    }
+
+    /// Inserts bounds with an ordering strictly greater than *every* existing bounds (not just
+    /// intersecting ones), and returns that ordering. Used for content-filter group boundaries
+    /// (which must sort after all previously-painted content so their order range can't collide
+    /// with unrelated non-overlapping content that reuses low orderings) and to raise the order
+    /// floor before painting deferred draws (so overlays always sort above the main scene).
+    pub fn insert_above_all(&mut self, new_bounds: Bounds<U>) -> u32 {
+        let ordering = self.max_order() + 1;
+        let new_leaf_idx = self.insert_leaf(new_bounds, ordering);
+        self.max_leaf = Some(new_leaf_idx);
+        ordering
     }
 
     /// Inserts bounds into the tree and returns its assigned ordering.
@@ -120,7 +148,7 @@ where
     pub fn insert(&mut self, new_bounds: Bounds<U>) -> u32 {
         // Find maximum ordering among intersecting bounds
         let max_intersecting = self.find_max_ordering(&new_bounds);
-        let ordering = max_intersecting + 1;
+        let ordering = (max_intersecting + 1).max(self.order_floor);
 
         // Insert the new leaf
         let new_leaf_idx = self.insert_leaf(new_bounds, ordering);
@@ -365,6 +393,7 @@ where
             nodes: Vec::new(),
             root: None,
             max_leaf: None,
+            order_floor: 0,
             insert_path: Vec::new(),
             search_stack: Vec::new(),
         }

@@ -1,7 +1,14 @@
+#![cfg_attr(target_family = "wasm", no_main)]
+
+#[path = "../example_support/fonts.rs"]
+mod example_support;
+
 use gpui::{
     App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
+use gpui_platform::application;
+use palette::WithAlpha;
 
 struct PatternExample;
 
@@ -52,7 +59,7 @@ impl Render for PatternExample {
                     .flex_col()
                     .border_1()
                     .border_color(gpui::blue())
-                    .bg(gpui::green().opacity(0.16))
+                    .bg(gpui::green().with_alpha(0.16))
                     .child("Elements the same height should align")
                     .child(div().w(px(256.0)).h(px(56.0)).bg(pattern_slash(
                         gpui::red(),
@@ -98,8 +105,11 @@ impl Render for PatternExample {
     }
 }
 
-fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+fn run_example() {
+    application().run(|cx: &mut App| {
+        if !example_support::load_fonts(cx) {
+            return;
+        }
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -112,4 +122,17 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn main() {
+    env_logger::init();
+    run_example();
+}
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    gpui_platform::web_init();
+    run_example();
 }

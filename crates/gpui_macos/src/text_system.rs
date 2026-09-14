@@ -1,6 +1,5 @@
 use anyhow::anyhow;
-use cocoa::appkit::CGFloat;
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use core_foundation::{
     array::{CFArray, CFArrayRef},
     attributed_string::CFMutableAttributedString,
@@ -8,6 +7,7 @@ use core_foundation::{
     number::CFNumber,
     string::CFString,
 };
+use core_graphics::base::CGFloat;
 use core_graphics::{
     base::{CGGlyph, kCGImageAlphaPremultipliedLast},
     color_space::CGColorSpace,
@@ -22,7 +22,7 @@ use core_text::{
         kCTFontWidthTrait,
     },
     line::CTLine,
-    string_attributes::kCTFontAttributeName,
+    string_attributes::{kCTFontAttributeName, kCTKernAttributeName},
 };
 use font_kit::{
     font::Font as FontKitFont,
@@ -222,8 +222,9 @@ impl PlatformTextSystem for MacTextSystem {
         if !font_smoothing_allowed_by_user() {
             return 0;
         }
-        let rgba: Rgba = color.into();
-        let luminance = 0.2126 * rgba.r + 0.7152 * rgba.g + 0.0722 * rgba.b;
+        use palette::IntoColor;
+        let rgba: Rgba = color.into_color();
+        let luminance = 0.2126 * rgba.red + 0.7152 * rgba.green + 0.0722 * rgba.blue;
         let level = ((4.0 * luminance) + 0.5).floor() as i32;
         level.clamp(0, 4) as u8
     }
@@ -282,6 +283,7 @@ impl MacTextSystemState {
         let name = gpui::font_name_with_fallbacks(name, ".AppleSystemUIFont");
 
         let mut font_ids = SmallVec::new();
+        let mut postscript_names_seen = HashSet::default();
         let family = self
             .memory_source
             .select_family_by_name(name)
@@ -340,15 +342,38 @@ impl MacTextSystemState {
                         .is_some())
             } {
                 log::error!(
-                    "Failed to read traits for font {:?}",
-                    font.postscript_name().unwrap()
+                    "Failed to read traits for font {:?} (PostScript name {:?})",
+                    font.full_name(),
+                    font.postscript_name(),
                 );
                 continue;
             }
 
+            let Some(postscript_name) = font.postscript_name() else {
+                log::warn!(
+                    "font {:?} in family {:?} has no PostScript name; skipping",
+                    font.full_name(),
+                    name,
+                );
+                continue;
+            };
+            // Dedup is scoped to this single `load_family` call (issue #55472).
+            // The same family can be reloaded later under a different `FontKey`
+            // (different features/fallbacks); a global check against
+            // `font_ids_by_postscript_name` would skip every already-registered
+            // font and leave the second call's `font_ids` empty.
+            if !postscript_names_seen.insert(postscript_name.clone()) {
+                log::warn!(
+                    "skipping duplicate font {:?} with PostScript name {:?} \
+                     in family {:?}",
+                    font.full_name(),
+                    postscript_name,
+                    name,
+                );
+                continue;
+            }
             let font_id = FontId(self.fonts.len());
             font_ids.push(font_id);
-            let postscript_name = font.postscript_name().unwrap();
             self.font_ids_by_postscript_name
                 .insert(postscript_name.clone(), font_id);
             self.postscript_names_by_font_id
@@ -543,6 +568,13 @@ impl MacTextSystemState {
                         kCTFontAttributeName,
                         &font.native_font().clone_with_font_size(font_size.into()),
                     );
+                    if let Some(spacing) = run.letter_spacing {
+                        string.set_attribute(
+                            cf_range,
+                            kCTKernAttributeName,
+                            &CFNumber::from(f64::from(spacing.as_f32())),
+                        );
+                    }
                 }
                 break_ligature = !break_ligature;
             }
@@ -753,6 +785,7 @@ mod tests {
         let mut style = FontRun {
             font_id,
             len: line.len(),
+            letter_spacing: None,
         };
 
         let layout = fonts.layout_line(line, px(16.), &[style]);
@@ -774,10 +807,12 @@ mod tests {
             FontRun {
                 len: "\u{feff}".len(),
                 font_id,
+                letter_spacing: None,
             },
             FontRun {
                 len: "ab".len(),
                 font_id,
+                letter_spacing: None,
             },
         ];
         let layout = fonts.layout_line(line, px(16.), font_runs);
@@ -796,8 +831,16 @@ mod tests {
 
         let text = "hello world";
         let font_runs = &[
-            FontRun { font_id, len: 5 }, // "hello"
-            FontRun { font_id, len: 6 }, // " world"
+            FontRun {
+                font_id,
+                len: 5,
+                letter_spacing: None,
+            }, // "hello"
+            FontRun {
+                font_id,
+                len: 6,
+                letter_spacing: None,
+            }, // " world"
         ];
 
         let layout = fonts.layout_line(text, px(16.), font_runs);
@@ -817,11 +860,16 @@ mod tests {
         // Test with different font runs - should not insert ZWNJ
         let font_id2 = fonts.font_id(&font("Times")).unwrap_or(font_id);
         let font_runs_different = &[
-            FontRun { font_id, len: 5 }, // "hello"
+            FontRun {
+                font_id,
+                len: 5,
+                letter_spacing: None,
+            }, // "hello"
             // " world"
             FontRun {
                 font_id: font_id2,
                 len: 6,
+                letter_spacing: None,
             },
         ];
 
@@ -846,15 +894,31 @@ mod tests {
         let font_id = fonts.font_id(&font("Helvetica")).unwrap();
 
         let text = "hello";
-        let font_runs = &[FontRun { font_id, len: 5 }];
+        let font_runs = &[FontRun {
+            font_id,
+            len: 5,
+            letter_spacing: None,
+        }];
         let layout = fonts.layout_line(text, px(16.), font_runs);
         assert_eq!(layout.len, text.len());
 
         let text = "abc";
         let font_runs = &[
-            FontRun { font_id, len: 1 }, // "a"
-            FontRun { font_id, len: 1 }, // "b"
-            FontRun { font_id, len: 1 }, // "c"
+            FontRun {
+                font_id,
+                len: 1,
+                letter_spacing: None,
+            }, // "a"
+            FontRun {
+                font_id,
+                len: 1,
+                letter_spacing: None,
+            }, // "b"
+            FontRun {
+                font_id,
+                len: 1,
+                letter_spacing: None,
+            }, // "c"
         ];
         let layout = fonts.layout_line(text, px(16.), font_runs);
         assert_eq!(layout.len, text.len());

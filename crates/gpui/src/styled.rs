@@ -1,15 +1,16 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, Hsla, JustifyContent, Length, SharedString,
-    StrikethroughStyle, StyleRefinement, TemplateColumnMinSize, TextAlign, TextOverflow,
-    TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
+    DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
+    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
+    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
     overflow_style_methods, padding_style_methods, position_style_methods,
     visibility_style_methods,
 };
+use palette::{Hsla, IntoColor};
 const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
@@ -32,6 +33,53 @@ pub trait Styled: Sized {
     gpui_macros::cursor_style_methods!();
     gpui_macros::border_style_methods!();
     gpui_macros::box_shadow_style_methods!();
+
+    /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
+    ///
+    /// This isolates the element's subtree, blurs it as a group, and composites the
+    /// result back. To blur the content *behind* the element instead (frosted glass),
+    /// use [`Styled::backdrop_blur`].
+    ///
+    /// *Appends* to the element's filter chain, so it composes with other convenience
+    /// setters (`.blur(8.).<other_filter>()`). To replace the whole chain, use
+    /// [`Styled::filter`].
+    fn blur(mut self, radius: impl Into<Pixels>) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Blur(radius.into()));
+        self
+    }
+
+    /// Set (replacing any existing) the full list of filters applied to this element's own
+    /// content, like CSS `filter`. To add a single filter to the chain instead, use the
+    /// convenience setters such as [`Styled::blur`].
+    fn filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
+        self.style().filter = Some(filters.into());
+        self
+    }
+
+    /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
+    /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::bg`]
+    /// so the background tints the blurred backdrop.
+    ///
+    /// *Appends* to the element's backdrop-filter chain. To replace the whole chain, use
+    /// [`Styled::backdrop_filter`].
+    fn backdrop_blur(mut self, radius: impl Into<Pixels>) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Blur(radius.into()));
+        self
+    }
+
+    /// Set (replacing any existing) the full list of filters applied to the content behind this
+    /// element, like CSS `backdrop-filter`. To add a single filter to the chain instead, use the
+    /// convenience setters such as [`Styled::backdrop_blur`].
+    fn backdrop_filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
+        self.style().backdrop_filter = Some(filters.into());
+        self
+    }
 
     /// Sets the display type of the element to `block`.
     /// [Docs](https://tailwindcss.com/docs/display)
@@ -70,6 +118,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the whitespace of the element.
+    /// [Docs](https://tailwindcss.com/docs/whitespace)
+    fn whitespace(mut self, white_space: WhiteSpace) -> Self {
+        self.text_style().white_space = Some(white_space);
+        self
+    }
+
     /// Sets the whitespace of the element to `normal`.
     /// [Docs](https://tailwindcss.com/docs/whitespace#normal)
     fn whitespace_normal(mut self) -> Self {
@@ -96,6 +151,14 @@ pub trait Styled: Sized {
     /// Note: This doesn't exist in Tailwind CSS.
     fn text_ellipsis_start(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::TruncateStart(ELLIPSIS));
+        self
+    }
+
+    /// Sets the truncate overflowing text with an ellipsis (…) in the middle if needed.
+    /// Preserves the beginning and end of the text. Useful for filenames.
+    /// Note: This doesn't exist in Tailwind CSS.
+    fn text_ellipsis_middle(mut self) -> Self {
+        self.text_style().text_overflow = Some(TextOverflow::TruncateMiddle(ELLIPSIS));
         self
     }
 
@@ -126,6 +189,18 @@ pub trait Styled: Sized {
         self.text_align(TextAlign::Right)
     }
 
+    /// Sets the letter spacing for text in this element and its children.
+    fn letter_spacing(mut self, spacing: impl Into<Pixels>) -> Self {
+        self.text_style().letter_spacing = Some(spacing.into());
+        self
+    }
+
+    /// Sets the case transformation for text in this element and its children.
+    fn text_transform(mut self, transform: TextTransform) -> Self {
+        self.text_style().text_transform = Some(transform);
+        self
+    }
+
     /// Sets the truncate to prevent text from wrapping and truncate overflowing text with an ellipsis (…) if needed.
     /// [Docs](https://tailwindcss.com/docs/text-overflow#truncate)
     fn truncate(mut self) -> Self {
@@ -138,6 +213,13 @@ pub trait Styled: Sized {
         let mut text_style = self.text_style();
         text_style.line_clamp = Some(lines);
         self.overflow_hidden()
+    }
+
+    /// Sets the flex direction of the element.
+    /// [Docs](https://tailwindcss.com/docs/flex-direction)
+    fn flex_direction(mut self, direction: FlexDirection) -> Self {
+        self.style().flex_direction = Some(direction);
+        self
     }
 
     /// Sets the flex direction of the element to `column`.
@@ -200,6 +282,7 @@ pub trait Styled: Sized {
     fn flex_none(mut self) -> Self {
         self.style().flex_grow = Some(0.);
         self.style().flex_shrink = Some(0.);
+        self.style().flex_basis = Some(Length::Auto);
         self
     }
 
@@ -210,31 +293,45 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the element to allow a flex item to grow to fill any available space.
+    /// Sets the flex item's grow factor.
     /// [Docs](https://tailwindcss.com/docs/flex-grow)
-    fn flex_grow(mut self) -> Self {
-        self.style().flex_grow = Some(1.);
+    fn flex_grow(mut self, grow: f32) -> Self {
+        self.style().flex_grow = Some(grow);
         self
     }
 
-    /// Sets the element to prevent a flex item from growing.
+    /// Disables flex item growth (flex-grow: 0).
     /// [Docs](https://tailwindcss.com/docs/flex-grow#dont-grow)
     fn flex_grow_0(mut self) -> Self {
         self.style().flex_grow = Some(0.);
         self
     }
 
-    /// Sets the element to allow a flex item to shrink if needed.
-    /// [Docs](https://tailwindcss.com/docs/flex-shrink)
-    fn flex_shrink(mut self) -> Self {
-        self.style().flex_shrink = Some(1.);
+    /// Enables flex item growth (flex-grow: 1).
+    /// [Docs](https://tailwindcss.com/docs/flex-grow#grow-1)
+    fn flex_grow_1(mut self) -> Self {
+        self.style().flex_grow = Some(1.);
         self
     }
 
-    /// Sets the element to prevent a flex item from shrinking.
+    /// Sets the flex item's shrink factor.
+    /// [Docs](https://tailwindcss.com/docs/flex-shrink)
+    fn flex_shrink(mut self, shrink: f32) -> Self {
+        self.style().flex_shrink = Some(shrink);
+        self
+    }
+
+    /// Disables flex item shrinking (flex-shrink: 0).
     /// [Docs](https://tailwindcss.com/docs/flex-shrink#dont-shrink)
     fn flex_shrink_0(mut self) -> Self {
         self.style().flex_shrink = Some(0.);
+        self
+    }
+
+    /// Enables flex item shrinking (flex-shrink: 1).
+    /// [Docs](https://tailwindcss.com/docs/flex-shrink#shrink-1)
+    fn flex_shrink_1(mut self) -> Self {
+        self.style().flex_shrink = Some(1.);
         self
     }
 
@@ -488,8 +585,8 @@ pub trait Styled: Sized {
     /// Sets the text color of this element.
     ///
     /// This value cascades to its child elements.
-    fn text_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.text_style().color = Some(color.into());
+    fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
+        self.text_style().color = Some(color.into_color());
         self
     }
 
@@ -504,8 +601,8 @@ pub trait Styled: Sized {
     /// Sets the background color of this element.
     ///
     /// This value cascades to its child elements.
-    fn text_bg(mut self, bg: impl Into<Hsla>) -> Self {
-        self.text_style().background_color = Some(bg.into());
+    fn text_bg(mut self, bg: impl IntoColor<Hsla>) -> Self {
+        self.text_style().background_color = Some(bg.into_color());
         self
     }
 
@@ -611,10 +708,10 @@ pub trait Styled: Sized {
     }
 
     /// Sets the color for the underline on this element
-    fn text_decoration_color(mut self, color: impl Into<Hsla>) -> Self {
+    fn text_decoration_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
-        underline.color = Some(color.into());
+        underline.color = Some(color.into_color());
         self
     }
 
@@ -729,7 +826,7 @@ pub trait Styled: Sized {
     fn grid_cols(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
-            min_size: TemplateColumnMinSize::Zero,
+            min_size: GridTemplateMinSize::Zero,
         });
         self
     }
@@ -739,7 +836,7 @@ pub trait Styled: Sized {
     fn grid_cols_min_content(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
-            min_size: TemplateColumnMinSize::MinContent,
+            min_size: GridTemplateMinSize::MinContent,
         });
         self
     }
@@ -748,7 +845,7 @@ pub trait Styled: Sized {
     fn grid_cols_max_content(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
-            min_size: TemplateColumnMinSize::MaxContent,
+            min_size: GridTemplateMinSize::MaxContent,
         });
         self
     }
@@ -757,7 +854,26 @@ pub trait Styled: Sized {
     fn grid_rows(mut self, rows: u16) -> Self {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
-            min_size: TemplateColumnMinSize::Zero,
+            min_size: GridTemplateMinSize::Zero,
+        });
+        self
+    }
+
+    /// Sets the grid rows with min-content minimum sizing.
+    /// Unlike grid_rows, it won't shrink to height 0 in AvailableSpace::MinContent constraints.
+    fn grid_rows_min_content(mut self, rows: u16) -> Self {
+        self.style().grid_rows = Some(GridTemplate {
+            repeat: rows,
+            min_size: GridTemplateMinSize::MinContent,
+        });
+        self
+    }
+
+    /// Sets the grid rows with max-content maximum sizing for content-based row heights.
+    fn grid_rows_max_content(mut self, rows: u16) -> Self {
+        self.style().grid_rows = Some(GridTemplate {
+            repeat: rows,
+            min_size: GridTemplateMinSize::MaxContent,
         });
         self
     }
@@ -857,6 +973,23 @@ pub trait Styled: Sized {
     #[cfg(debug_assertions)]
     fn debug_below(mut self) -> Self {
         self.style().debug_below = Some(true);
+        self
+    }
+
+    /// Sets the amount of smoothing applied to rounded corners.
+    /// Use values from `0.0` for circular corners to `1.0` for maximum smoothing.
+    fn rounded_smoothing(mut self, amount: f32) -> Self {
+        debug_assert!(
+            (0.0..=1.0).contains(&amount),
+            "corner smoothing must be between 0 and 1"
+        );
+        self.style().corner_smoothing = Some(amount);
+        self
+    }
+
+    /// Sets corner smoothing to `0.6` for iOS-style corners.
+    fn rounded_smoothing_ios(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.6);
         self
     }
 }

@@ -88,7 +88,7 @@ impl TestApp {
             ),
             None => TestPlatform::new(background_executor.clone(), foreground_executor.clone()),
         };
-        let http_client = http_client::FakeHttpClient::with_404_response();
+        let http_client = crate::http_client::FakeHttpClient::with_404_response();
         let text_system = Arc::new(TextSystem::new(
             platform_text_system.unwrap_or_else(|| platform.text_system.clone()),
         ));
@@ -486,7 +486,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
         let mut app = self.app.borrow_mut();
         let any_handle: AnyWindowHandle = self.handle.into();
         app.update_window(any_handle, |_, window, cx| {
-            window.draw(cx).clear();
+            window.draw(cx).clear(cx);
         })
         .unwrap();
     }

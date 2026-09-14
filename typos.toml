@@ -2,23 +2,50 @@
 ignore-files = true
 ignore-hidden = false
 extend-exclude = [
-    ".git/",
+  ".git/",
 
-    # Windows likes its abbreviations.
-    "crates/gpui/src/platform/windows/directx_renderer.rs",
-    "crates/gpui/src/platform/windows/events.rs",
-    "crates/gpui/src/platform/windows/direct_write.rs",
-    "crates/gpui/src/platform/windows/window.rs",
+  # Windows likes its abbreviations.
+  "crates/gpui/src/platform/windows/directx_renderer.rs",
+  "crates/gpui/src/platform/windows/events.rs",
+  "crates/gpui/src/platform/windows/direct_write.rs",
+  "crates/gpui/src/platform/windows/window.rs",
 
-    # macOS APIs
-    "crates/gpui/src/platform/mac/dispatcher.rs",
+  # macOS APIs
+  "crates/gpui/src/platform/mac/dispatcher.rs",
+
 ]
 
 [default]
 extend-ignore-re = [
-    # macOS version
-    "Big Sur",
-    # Stripped version of reserved keyword `type`
-    "typ",
+  # macOS version
+  "Big Sur",
+  # Stripped version of reserved keyword `type`
+  "typ",
+  "\\\\u\\{[0-9A-Fa-f]+\\}",
 ]
 check-filename = true
+
+[default.extend-words]
+# Test key prefix used in sum_tree tests (keys starting with "ba")
+ba = "ba"
+# Screen capture library (zed-scap)
+scap = "scap"
+# Win32 FORMATETC struct field: Pointer to DVTARGETDEVICE
+ptd = "ptd"
+# Part of mach_timebase_info_data_t (numerator)
+numer = "numer"
+# AMD GPU Services library
+AGS = "AGS"
+ags = "ags"
+# Win32 TrackMouseEvent flags (e.g., TME_LEAVE)
+TME = "TME"
+# Level of Detail (DirectX/Graphics)
+LOD = "LOD"
+# Correct Italian singular of "command" in UI locales
+comando = "comando"
+# Deliberately misspelled manifest keys / error message test cases
+capabilites = "capabilites"
+backgrund = "backgrund"
+wtach = "wtach"
+netwrok = "netwrok"
+workspce = "workspce"

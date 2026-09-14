@@ -7,7 +7,6 @@ use crate::{
     },
 };
 use collections::{FxHashMap, FxHashSet};
-use stacksafe::{StackSafe, stacksafe};
 use std::{fmt::Debug, ops::Range};
 use taffy::{
     TaffyTree, TraversePartialTree as _,
@@ -17,16 +16,14 @@ use taffy::{
     tree::NodeId,
 };
 
-type NodeMeasureFn = StackSafe<
-    Box<
-        dyn FnMut(
-            Size<Option<Pixels>>,
-            Size<AvailableSpace>,
-            &mut Window,
-            &mut App,
-        ) -> Size<Pixels>,
-    >,
->;
+#[cfg(feature = "stacker")]
+type StackSafe<T> = stacksafe::StackSafe<T>;
+#[cfg(not(feature = "stacker"))]
+type StackSafe<T> = T;
+
+type MeasureFn =
+    dyn FnMut(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>;
+type NodeMeasureFn = StackSafe<Box<MeasureFn>>;
 
 struct NodeContext {
     measure: NodeMeasureFn,
@@ -99,16 +96,44 @@ impl TaffyLayoutEngine {
         + 'static,
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
+        let measure = Box::new(measure) as Box<MeasureFn>;
+        #[cfg(feature = "stacker")]
+        let measure = StackSafe::new(measure);
 
         self.taffy
-            .new_leaf_with_context(
-                taffy_style,
-                NodeContext {
-                    measure: StackSafe::new(Box::new(measure)),
-                },
-            )
+            .new_leaf_with_context(taffy_style, NodeContext { measure })
             .expect(EXPECT_MESSAGE)
             .into()
+    }
+
+    /// Treats any `auto` dimension of the given node's style as filling `size`.
+    ///
+    /// This is applied to window roots before layout so they behave like the
+    /// root element on the web, which stretches to fill the initial containing
+    /// block (the viewport) unless given an explicit size. Explicitly styled
+    /// dimensions are preserved.
+    pub fn stretch_auto_size_to_fill(
+        &mut self,
+        id: LayoutId,
+        size: Size<Pixels>,
+        scale_factor: f32,
+    ) {
+        let style = self.taffy.style(id.0).expect(EXPECT_MESSAGE);
+        let stretch_width = style.size.width.is_auto();
+        let stretch_height = style.size.height.is_auto();
+        if !stretch_width && !stretch_height {
+            return;
+        }
+        let mut style = style.clone();
+        if stretch_width {
+            style.size.width =
+                taffy::style::Dimension::length(round_to_device_pixel(size.width.0, scale_factor));
+        }
+        if stretch_height {
+            style.size.height =
+                taffy::style::Dimension::length(round_to_device_pixel(size.height.0, scale_factor));
+        }
+        self.taffy.set_style(id.0, style).expect(EXPECT_MESSAGE);
     }
 
     // Used to understand performance
@@ -158,7 +183,7 @@ impl TaffyLayoutEngine {
         Ok(edges)
     }
 
-    #[stacksafe]
+    #[cfg_attr(feature = "stacker", stacksafe::stacksafe)]
     pub fn compute_layout(
         &mut self,
         id: LayoutId,
@@ -407,6 +432,90 @@ fn border_widths_to_taffy(
     }
 }
 
+// Converts padding, snapping each auto-sized axis as a proportional pair.
+fn padding_to_taffy(
+    padding: &Edges<DefiniteLength>,
+    rem_size: Pixels,
+    scale_factor: f32,
+    proportional_horizontal: bool,
+    proportional_vertical: bool,
+) -> TaffyRect<taffy::style::LengthPercentage> {
+    // Snaps the combined length, then divides it by the authored ratio.
+    fn snap_absolute_pair(
+        first: AbsoluteLength,
+        second: AbsoluteLength,
+        rem_size: Pixels,
+        scale_factor: f32,
+    ) -> (f32, f32) {
+        let first = first.to_pixels(rem_size).0;
+        let second = second.to_pixels(rem_size).0;
+        let total = first + second;
+
+        if first < 0.0 || second < 0.0 || total == 0.0 {
+            return (
+                round_to_device_pixel(first, scale_factor),
+                round_to_device_pixel(second, scale_factor),
+            );
+        }
+
+        let snapped_total = round_to_device_pixel(total, scale_factor);
+        let snapped_first = snapped_total * (first / total);
+
+        (snapped_first, snapped_total - snapped_first)
+    }
+
+    // Keeps normal per-edge conversion for explicit axes and percentage padding.
+    fn convert_pair(
+        first: &DefiniteLength,
+        second: &DefiniteLength,
+        rem_size: Pixels,
+        scale_factor: f32,
+        proportional: bool,
+    ) -> (
+        taffy::style::LengthPercentage,
+        taffy::style::LengthPercentage,
+    ) {
+        if proportional
+            && let (DefiniteLength::Absolute(first), DefiniteLength::Absolute(second)) =
+                (*first, *second)
+        {
+            let (first, second) = snap_absolute_pair(first, second, rem_size, scale_factor);
+
+            (
+                taffy::style::LengthPercentage::length(first),
+                taffy::style::LengthPercentage::length(second),
+            )
+        } else {
+            (
+                first.to_taffy(rem_size, scale_factor),
+                second.to_taffy(rem_size, scale_factor),
+            )
+        }
+    }
+
+    let (left, right) = convert_pair(
+        &padding.left,
+        &padding.right,
+        rem_size,
+        scale_factor,
+        proportional_horizontal,
+    );
+    let (top, bottom) = convert_pair(
+        &padding.top,
+        &padding.bottom,
+        rem_size,
+        scale_factor,
+        proportional_vertical,
+    );
+
+    TaffyRect {
+        top,
+        right,
+        bottom,
+        left,
+    }
+}
+
 trait ToTaffy<Output> {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> Output;
 }
@@ -430,21 +539,21 @@ impl ToTaffy<taffy::style::Style> for Style {
             unit.map(|template| {
                 match template.min_size {
                     // grid-template-*: repeat(<number>, minmax(0, 1fr));
-                    crate::TemplateColumnMinSize::Zero => {
+                    crate::GridTemplateMinSize::Zero => {
                         vec![repeat(
                             template.repeat,
                             vec![minmax(length(0.0_f32), fr(1.0_f32))],
                         )]
                     }
                     // grid-template-*: repeat(<number>, minmax(min-content, 1fr));
-                    crate::TemplateColumnMinSize::MinContent => {
+                    crate::GridTemplateMinSize::MinContent => {
                         vec![repeat(
                             template.repeat,
                             vec![minmax(min_content(), fr(1.0_f32))],
                         )]
                     }
                     // grid-template-*: repeat(<number>, minmax(0, max-content))
-                    crate::TemplateColumnMinSize::MaxContent => {
+                    crate::GridTemplateMinSize::MaxContent => {
                         vec![repeat(
                             template.repeat,
                             vec![minmax(length(0.0_f32), max_content())],
@@ -466,7 +575,13 @@ impl ToTaffy<taffy::style::Style> for Style {
             max_size: self.max_size.to_taffy(rem_size, scale_factor),
             aspect_ratio: self.aspect_ratio,
             margin: self.margin.to_taffy(rem_size, scale_factor),
-            padding: self.padding.to_taffy(rem_size, scale_factor),
+            padding: padding_to_taffy(
+                &self.padding,
+                rem_size,
+                scale_factor,
+                self.size.width == Length::Auto,
+                self.size.height == Length::Auto,
+            ),
             border: border_widths_to_taffy(&self.border_widths, rem_size, scale_factor),
             align_items: self.align_items.map(|x| x.into()),
             align_self: self.align_self.map(|x| x.into()),
@@ -527,8 +642,8 @@ impl ToTaffy<taffy::style::LengthPercentage> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentage {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => {
-                taffy::style::LengthPercentage::percent(*fraction)
+            DefiniteLength::Relative(relative) => {
+                taffy::style::LengthPercentage::percent(relative.0)
             }
         }
     }
@@ -538,8 +653,8 @@ impl ToTaffy<taffy::style::LengthPercentageAuto> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentageAuto {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => {
-                taffy::style::LengthPercentageAuto::percent(*fraction)
+            DefiniteLength::Relative(relative) => {
+                taffy::style::LengthPercentageAuto::percent(relative.0)
             }
         }
     }
@@ -549,7 +664,7 @@ impl ToTaffy<taffy::style::Dimension> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::Dimension {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
-            DefiniteLength::Fraction(fraction) => taffy::style::Dimension::percent(*fraction),
+            DefiniteLength::Relative(relative) => taffy::style::Dimension::percent(relative.0),
         }
     }
 }
@@ -720,6 +835,42 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_sized_axes_snap_padding_proportionally() {
+        use taffy::style::LengthPercentage;
+
+        let mut style = Style {
+            padding: Edges {
+                top: Pixels(6.5).into(),
+                right: Pixels(5.0).into(),
+                bottom: Pixels(6.5).into(),
+                left: Pixels(2.5).into(),
+            },
+            ..Default::default()
+        };
+
+        let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
+        let expected_left = 7.0 * (2.5 / 7.5);
+        assert_eq!(padding.left, LengthPercentage::length(expected_left));
+        assert_eq!(padding.right, LengthPercentage::length(7.0 - expected_left));
+        assert_eq!(padding.top, LengthPercentage::length(6.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(6.5));
+
+        style.size.width = Length::Definite(Pixels(100.0).into());
+        let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
+        assert_eq!(padding.left, LengthPercentage::length(2.0));
+        assert_eq!(padding.right, LengthPercentage::length(5.0));
+        assert_eq!(padding.top, LengthPercentage::length(6.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(6.5));
+
+        style.size.width = Length::Auto;
+        style.padding.top = Pixels(6.75).into();
+        style.padding.bottom = Pixels(6.75).into();
+        let padding = style.to_taffy(Pixels(16.0), 2.0).padding;
+        assert_eq!(padding.top, LengthPercentage::length(13.5));
+        assert_eq!(padding.bottom, LengthPercentage::length(13.5));
+    }
 
     #[test]
     fn border_widths_to_taffy_use_stroke_snapping() {

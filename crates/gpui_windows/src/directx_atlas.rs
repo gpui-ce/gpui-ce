@@ -85,6 +85,13 @@ impl PlatformAtlas for DirectXAtlas {
             let Some((size, bytes)) = build()? else {
                 return Ok(None);
             };
+            // Validate before allocation: a rejected bitmap must never leave a cached,
+            // uninitialized tile that every later glyph/SVG lookup treats as successful.
+            key.texture_kind().validate_upload(size, &bytes)?;
+            anyhow::ensure!(
+                size.width.0 <= 16384 && size.height.0 <= 16384,
+                "atlas tile {size:?} exceeds the Direct3D 11 texture limit"
+            );
             let tile = lock
                 .allocate(size, key.texture_kind())
                 .ok_or_else(|| anyhow::anyhow!("failed to allocate"))?;
@@ -98,9 +105,10 @@ impl PlatformAtlas for DirectXAtlas {
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
 
-        let Some(id) = lock.tiles_by_key.remove(key).map(|tile| tile.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        let id = tile.texture_id;
 
         let textures = match id.kind {
             AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
@@ -113,6 +121,7 @@ impl PlatformAtlas for DirectXAtlas {
         };
 
         if let Some(mut texture) = texture_slot.take() {
+            texture.allocator.deallocate(tile.tile_id.into());
             texture.decrement_ref_count();
             if texture.is_unreferenced() {
                 textures.free_list.push(texture.id.index as usize);
@@ -280,6 +289,8 @@ impl DirectXAtlasTexture {
         bounds: Bounds<DevicePixels>,
         bytes: &[u8],
     ) {
+        // The insertion boundary validates the exact byte count before allocating this tile.
+        debug_assert!(self.id.kind.validate_upload(bounds.size, bytes).is_ok());
         unsafe {
             device_context.UpdateSubresource(
                 &self.texture,
@@ -316,5 +327,85 @@ fn etagere_point_to_device(value: etagere::Point) -> Point<DevicePixels> {
     Point {
         x: DevicePixels::from(value.x),
         y: DevicePixels::from(value.y),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{ImageId, RenderImageParams};
+    use std::borrow::Cow;
+    use windows::Win32::{
+        Foundation::HMODULE,
+        Graphics::{
+            Direct3D::D3D_DRIVER_TYPE_WARP,
+            Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice},
+        },
+    };
+
+    fn create_atlas() -> Option<DirectXAtlas> {
+        let mut device: Option<ID3D11Device> = None;
+        let mut device_context: Option<ID3D11DeviceContext> = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut device_context),
+            )
+        }
+        .ok()?;
+        Some(DirectXAtlas::new(&device?, &device_context?))
+    }
+
+    fn make_image_key(image_id: usize) -> AtlasKey {
+        AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(image_id),
+            frame_index: 0,
+        })
+    }
+
+    fn insert_tile(atlas: &DirectXAtlas, key: &AtlasKey, size: Size<DevicePixels>) -> AtlasTile {
+        atlas
+            .get_or_insert_with(key, &mut || {
+                let byte_count = (size.width.0 as usize) * (size.height.0 as usize) * 4;
+                Ok(Some((size, Cow::Owned(vec![0u8; byte_count]))))
+            })
+            .expect("allocation should succeed")
+            .expect("callback returns Some")
+    }
+
+    #[test]
+    fn test_remove_deallocates_tile_space_for_reuse() {
+        let Some(atlas) = create_atlas() else {
+            return;
+        };
+
+        let small = Size {
+            width: DevicePixels(64),
+            height: DevicePixels(64),
+        };
+        let big = Size {
+            width: DevicePixels(700),
+            height: DevicePixels(700),
+        };
+
+        let keeper_key = make_image_key(1);
+        let big_key_a = make_image_key(2);
+        let big_key_b = make_image_key(3);
+
+        let keeper_tile = insert_tile(&atlas, &keeper_key, small);
+        let tile_a = insert_tile(&atlas, &big_key_a, big);
+        assert_eq!(keeper_tile.texture_id, tile_a.texture_id);
+
+        atlas.remove(&big_key_a);
+
+        let tile_b = insert_tile(&atlas, &big_key_b, big);
+        assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
     }
 }

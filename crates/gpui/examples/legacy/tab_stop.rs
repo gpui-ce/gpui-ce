@@ -1,7 +1,14 @@
+#![cfg_attr(target_family = "wasm", no_main)]
+
+#[path = "../example_support/fonts.rs"]
+mod example_support;
+
 use gpui::{
     App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString, Stateful, Window,
     WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
+use gpui_platform::application;
+use palette::WithAlpha;
 
 actions!(example, [Tab, TabPrev]);
 
@@ -99,7 +106,7 @@ impl Render for Example {
                             )
                             .map(|this| match item_handle.tab_stop {
                                 true => this
-                                    .hover(|this| this.bg(gpui::black().opacity(0.1)))
+                                    .hover(|this| this.bg(gpui::black().with_alpha(0.1)))
                                     .child(format!("tab_index: {}", item_handle.tab_index)),
                                 false => this.opacity(0.4).child("tab_stop: false"),
                             })
@@ -133,8 +140,11 @@ impl Render for Example {
     }
 }
 
-fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+fn run_example() {
+    application().run(|cx: &mut App| {
+        if !example_support::load_fonts(cx) {
+            return;
+        }
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
@@ -152,4 +162,17 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn main() {
+    env_logger::init();
+    run_example();
+}
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    gpui_platform::web_init();
+    run_example();
 }

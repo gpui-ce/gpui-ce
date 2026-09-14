@@ -2,6 +2,8 @@ mod client;
 mod clipboard;
 mod cursor;
 mod display;
+mod popup;
+mod scroll;
 mod serial;
 mod window;
 

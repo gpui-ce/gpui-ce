@@ -1,3 +1,8 @@
+#![cfg_attr(target_family = "wasm", no_main)]
+
+#[path = "../example_support/fonts.rs"]
+mod example_support;
+
 use std::{ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
@@ -5,6 +10,7 @@ use gpui::{
     SharedString, UniformListScrollHandle, Window, WindowBounds, WindowOptions, canvas, div, point,
     prelude::*, px, rgb, size, uniform_list,
 };
+use gpui_platform::application;
 
 const TOTAL_ITEMS: usize = 10000;
 const SCROLLBAR_THUMB_WIDTH: Pixels = px(8.);
@@ -446,8 +452,11 @@ impl Render for DataTable {
     }
 }
 
-fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+fn run_example() {
+    application().run(|cx: &mut App| {
+        if !example_support::load_fonts(cx) {
+            return;
+        }
         cx.open_window(
             WindowOptions {
                 focus: true,
@@ -470,4 +479,17 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn main() {
+    env_logger::init();
+    run_example();
+}
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    gpui_platform::web_init();
+    run_example();
 }
