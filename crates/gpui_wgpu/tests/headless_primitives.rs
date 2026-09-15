@@ -18,6 +18,36 @@ const TARGET: Size<DevicePixels> = Size {
     height: DevicePixels(100),
 };
 
+#[test]
+fn filled_path_resolves_without_invalidating_the_frame() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    scene.insert_primitive(Quad {
+        bounds: bounds(0.0, 0.0, 200.0, 100.0),
+        content_mask: full_mask(),
+        background: solid_background(gpui::black()),
+        ..Default::default()
+    });
+    let mut builder = gpui::PathBuilder::fill();
+    builder.move_to(gpui::point(gpui::px(20.0), gpui::px(20.0)));
+    builder.line_to(gpui::point(gpui::px(80.0), gpui::px(20.0)));
+    builder.line_to(gpui::point(gpui::px(50.0), gpui::px(80.0)));
+    builder.close();
+    let mut path = builder.build().expect("triangle").scale(1.0);
+    path.content_mask = full_mask();
+    path.color = solid_background(gpui::white());
+    scene.insert_primitive(path);
+    scene.finish();
+
+    // The path uses an MSAA attachment when supported. Storing that transient
+    // attachment invalidates the command buffer, including the background quad.
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("valid path frame");
+    assert_eq!(image.get_pixel(50, 40).0, [255, 255, 255, 255]);
+    assert_eq!(image.get_pixel(150, 40).0, [0, 0, 0, 255]);
+}
+
 fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
     Bounds {
         origin: Point {

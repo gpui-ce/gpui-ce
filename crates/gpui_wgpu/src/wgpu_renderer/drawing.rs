@@ -243,7 +243,13 @@ impl WgpuRenderer {
                 resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
+                    // Only the resolved texture is sampled later. The MSAA
+                    // attachment is transient and cannot use StoreOp::Store.
+                    store: if resolve_target.is_some() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
                 },
                 depth_slice: None,
             })],
