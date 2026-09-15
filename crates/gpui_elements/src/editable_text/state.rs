@@ -1,62 +1,16 @@
 use crate::editable_text::{
-    StringStorage, TextBoundary, UnicodeTextStorage,
-    actions::EditableTextActionHandler,
-    caret::CaretNotify,
-    history::EditableTextHistory,
-    layout::{EditableTextLayoutResult, TextLineSegment},
+    StringStorage, TextBoundary, UnicodeTextStorage, actions::EditableTextActionHandler,
+    caret::CaretNotify, history::EditableTextHistory, layout::EditableTextLayoutResult,
 };
 use gpui::{
-    App, Bounds, ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
+    App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
+    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
+    Point, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine, point,
+    utf16_to_utf8_offset,
 };
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, cell::RefCell, ops::Range, sync::Arc};
 
 const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
-
-/// The utf-8 character range that is currently selected by the user.
-/// Valid both when start < end and start > end (which dictates the direction of the selection).
-/// Empty when start==end. The start of this range is always the current position of the caret (input cursor).
-/// Diverges from the semantics/expectations of the Range type (since `Range` is incoherent if start > end).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CaretSelection {
-    start: usize,
-    end: usize,
-}
-impl From<usize> for CaretSelection {
-    fn from(value: usize) -> Self {
-        Self {
-            start: value,
-            end: value,
-        }
-    }
-}
-impl From<(usize, usize)> for CaretSelection {
-    fn from((start, end): (usize, usize)) -> Self {
-        Self { start, end }
-    }
-}
-impl From<Range<usize>> for CaretSelection {
-    fn from(value: Range<usize>) -> Self {
-        Self {
-            start: value.start,
-            end: value.end,
-        }
-    }
-}
-impl Into<(usize, usize)> for CaretSelection {
-    fn into(self) -> (usize, usize) {
-        (self.start, self.end)
-    }
-}
-impl CaretSelection {
-    fn is_empty(&self) -> bool {
-        self.start == self.end
-    }
-
-    fn range(&self) -> Range<usize> {
-        self.start.min(self.end)..self.start.max(self.end)
-    }
-}
 
 /// Internal state for EditableText elements.
 pub struct EditableTextState {
@@ -64,22 +18,23 @@ pub struct EditableTextState {
     /// std String and other crates (e.g. long document text).
     storage: Box<dyn UnicodeTextStorage>,
 
-    /// The utf-8 character range that is currently selected by the user.
-    /// Valid both when start < end and start > end (which dictates the direction of the selection).
-    /// Empty when start==end. The start of this range is always the current position of the caret (input cursor).
-    /// This means it breaks the semantics/expectations of the Range type.
+    /// The affinity-aware selection currently active in this input.
+    /// Its focus is the input cursor and its anchor remains fixed while extending the selection.
     ///
     /// NOTE: because each input has its own selection state, its trivial for users to have
     /// multiple selections active across multiple inputs at the same time.
     /// This could be considered undesirable behavior, and could prompt the question of
     /// whether there should be a mechanism to clear selection when focus is lost.
     selected_range: CaretSelection,
+    preferred_x: Option<Pixels>,
 
     /// The utf-8 character range of `storage` which is being composed by IME
     marked_range: Option<Range<usize>>,
 
     /// True while the user is in the act of highlighting a section of the text (e.g. during mouse pressed & dragging).
     is_selecting: bool,
+    mouse_anchor: Option<CaretPosition>,
+    mouse_caret: Option<(CaretSelection, CaretPosition)>,
     /// The last ui location relative to the element that the user clicked. Used to filter when a user clicks multiple times in the same area.
     last_click_position: Option<Point<Pixels>>,
     /// The number of times the user has clicked `last_click_position`. Used to determine which click behavior to trigger, depending on single, double, or triple clicks.
@@ -87,6 +42,8 @@ pub struct EditableTextState {
 
     focus_handle: FocusHandle,
     history: Option<EditableTextHistory>,
+
+    accessibility_text: RefCell<Option<Arc<AccessibilityText>>>,
 
     pub(super) layout_data: EditableTextLayoutResult,
 }
@@ -165,15 +122,19 @@ impl EditableTextState {
             storage: Box::new(storage),
 
             selected_range: 0.into(),
+            preferred_x: None,
             marked_range: None,
 
             is_selecting: false,
+            mouse_anchor: None,
+            mouse_caret: None,
             last_click_position: None,
             click_count: 0,
 
             focus_handle: cx.focus_handle(),
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
+            accessibility_text: RefCell::default(),
 
             layout_data: EditableTextLayoutResult::default(),
         }
@@ -199,11 +160,16 @@ impl EditableTextState {
     /// Returns the utf-8 character range that is currently selected within the current state of the text.
     /// Internally converts the stored direction-aware range into a canonical range.
     pub(super) fn selected_range(&self) -> Range<usize> {
-        self.selected_range.range()
+        self.selected_range.byte_range()
     }
 
     pub(super) fn selection_direction(&self) -> Option<NavigationDirection> {
-        match self.selected_range.start.cmp(&self.selected_range.end) {
+        match self
+            .selected_range
+            .focus
+            .index
+            .cmp(&self.selected_range.anchor.index)
+        {
             std::cmp::Ordering::Less => Some(NavigationDirection::Forward),
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
@@ -212,13 +178,61 @@ impl EditableTextState {
 
     /// Returns the position of the caret in utf8 character space.
     pub(super) fn caret_pos(&self) -> usize {
-        self.selected_range.start
+        self.selected_range.focus.index
+    }
+
+    pub(super) fn caret(&self) -> CaretPosition {
+        self.selected_range.focus
+    }
+
+    pub(super) fn visible_caret(&self) -> CaretPosition {
+        match self.mouse_caret {
+            Some((selection, caret)) if selection == self.selected_range => caret,
+            _ => self.caret(),
+        }
     }
 
     /// Returns the IME marked range for character operations.
     pub(super) fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
+
+    pub(super) fn accessibility_text(&self) -> Arc<AccessibilityText> {
+        let version = self.storage.version();
+        if let Some(text) = self
+            .accessibility_text
+            .borrow()
+            .as_ref()
+            .filter(|text| text.version == version)
+        {
+            return text.clone();
+        }
+
+        let text = self.storage.content_utf8();
+        let mut byte_offsets = text
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .collect::<Vec<_>>();
+        byte_offsets.push(text.len());
+        let accessibility_text = Arc::new(AccessibilityText {
+            version,
+            text: text.to_owned(),
+            character_lengths: text
+                .chars()
+                .map(|character| character.len_utf8() as u8)
+                .collect(),
+            byte_offsets,
+        });
+        *self.accessibility_text.borrow_mut() = Some(accessibility_text.clone());
+        accessibility_text
+    }
+}
+
+pub(super) struct AccessibilityText {
+    version: u16,
+    pub(super) text: String,
+    pub(super) character_lengths: Vec<u8>,
+    pub(super) byte_offsets: Vec<usize>,
 }
 
 impl EditableTextState {
@@ -263,7 +277,16 @@ impl EditableTextState {
         let end_pos = range.start + text_to_insert.len();
         self.record_history(range.clone(), text_to_insert.len());
         self.storage.replace_range(range, text_to_insert);
-        self.selected_range = end_pos.into();
+        let affinity = if text_to_insert.is_empty()
+            || text_to_insert.ends_with(['\n', '\r', '\u{2028}', '\u{2029}'])
+        {
+            CaretAffinity::Downstream
+        } else {
+            CaretAffinity::Upstream
+        };
+
+        self.selected_range = CaretSelection::collapsed(CaretPosition::new(end_pos, affinity));
+        self.preferred_x = None;
         self.marked_range = None;
     }
 
@@ -272,117 +295,125 @@ impl EditableTextState {
     }
 }
 
-/// Parameters used to find a desired TextLineSegment from layout data.
-enum TextSegmentQuery {
-    /// Find the line containing a character at a position (relative to the document, not a given line).
-    CharacterPosition(usize),
-    /// Find the line that most closely contains the provided screen position.
-    ScreenPosition {
-        point: Point<Pixels>,
-        line_height: Pixels,
-    },
-    /// Find the line containing a visual row of text, which may be wrapped
-    /// (relative to the document, not a given line).
-    Row(usize),
-}
-
 // Screen space (text layout engine output) & String space transformers
 impl EditableTextState {
-    /// Attempts to find a text segment based on the provided query parameters.
-    /// If found, the returned tuple is the segment & the number of preceding visual rows.
-    /// If not found, the resulting "err" is the total number of visual rows of all line segments.
-    fn find_segment(&self, query: TextSegmentQuery) -> Result<(&TextLineSegment, usize), usize> {
-        let mut row_count = 0;
-        for segment in &self.layout_data.lines {
-            let found = match &query {
-                TextSegmentQuery::CharacterPosition(pos) => segment.contains_position(*pos, false),
-                TextSegmentQuery::ScreenPosition { point, line_height } => {
-                    let segment_start_pos_y = segment.pos_y * *line_height;
-                    let segment_height = *line_height * segment.row_count() as f32;
-                    point.y >= segment_start_pos_y && point.y < segment_start_pos_y + segment_height
-                }
-                TextSegmentQuery::Row(row_index) => *row_index < row_count + segment.row_count(),
-            };
-            if found {
-                return Ok((segment, row_count));
-            }
-            row_count += segment.row_count();
+    fn current_document(&self) -> Option<&WrappedLine> {
+        if self.layout_data.state.last_seen_storage_version != self.storage.version() {
+            return None;
         }
-        Err(row_count)
+
+        self.layout_data.document.as_deref()
+    }
+
+    fn point_for_caret(&self, caret: CaretPosition) -> Option<Point<Pixels>> {
+        self.current_document()?
+            .position_for_caret(caret, self.layout_data.line_height)
+    }
+
+    fn cluster_deletion_range(&self, direction: NavigationDirection) -> Option<Range<usize>> {
+        let range = match direction {
+            NavigationDirection::Back => self
+                .current_document()?
+                .logical_cluster_before(self.caret()),
+            NavigationDirection::Forward => {
+                self.current_document()?.logical_cluster_after(self.caret())
+            }
+        }?;
+
+        (!range.is_empty() && range.end <= self.as_str().len()).then_some(range)
     }
 
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
-    fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
+    fn caret_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> CaretPosition {
         let storage_len_utf8 = self.as_str().len();
         if storage_len_utf8 == 0 {
-            return 0;
+            return CaretPosition::default();
         }
 
-        let segment = self.find_segment(TextSegmentQuery::ScreenPosition { point, line_height });
-        let Ok((segment, _preceding_row_count)) = segment else {
-            return storage_len_utf8;
+        let Some(document) = self.current_document() else {
+            return CaretPosition::new(storage_len_utf8, CaretAffinity::Upstream);
         };
 
-        // the screen position of the caret relative to the text segment
-        let relative_point = point - gpui::point(Pixels::ZERO, segment.pos_y * line_height);
-
-        return segment.character_index_at_point(relative_point, line_height);
+        document
+            .closest_caret_for_position(point, line_height)
+            .unwrap_or_else(|closest| closest)
     }
 
-    fn find_position_in_vertical_direction(
+    fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
+        self.caret_for_pixel_point(point, line_height).index
+    }
+
+    fn mouse_selection_endpoint(
         &self,
-        direction: i32,
-        line_height: Pixels,
-    ) -> Option<usize> {
-        let (caret_line_index, caret_point) = self.line_index_and_point_at_caret(line_height);
-        let target_line_index = caret_line_index.saturating_add_signed(direction as isize);
-
-        let segment = self.find_segment(TextSegmentQuery::Row(target_line_index));
-        let Ok((segment, preceding_row_count)) = segment else {
-            return (direction > 0).then(|| self.as_str().len());
+        endpoint: CaretPosition,
+        opposite: CaretPosition,
+    ) -> CaretPosition {
+        let Some(document) = self.current_document() else {
+            return endpoint;
         };
 
-        // calculate the screen space position of the row we are navigating to,
-        // relative to the y-position of the segment.
-        let row_index = (target_line_index - preceding_row_count) as f32;
-        let relative_point = gpui::point(caret_point.x, row_index * line_height);
+        let line_height = self.layout_data.line_height;
+        let Some(endpoint_point) = document.position_for_caret(endpoint, line_height) else {
+            return endpoint;
+        };
+        let Some(opposite_point) = document.position_for_caret(opposite, line_height) else {
+            return endpoint;
+        };
 
-        Some(segment.character_index_at_point(relative_point, line_height))
-    }
+        let (edge, opposite_edge) = if opposite_point.y > endpoint_point.y {
+            (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
+        } else if opposite_point.y < endpoint_point.y {
+            (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
+        } else {
+            return endpoint;
+        };
 
-    fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
-        if self.layout_data.lines.is_empty() {
-            return (0, Point::default());
+        if document.move_caret(endpoint, edge, None).0.index != endpoint.index {
+            return endpoint;
         }
 
-        let caret_pos = self.caret_pos();
-        let segment = self.find_segment(TextSegmentQuery::CharacterPosition(caret_pos));
-        let (segment, preceding_row_count) = match segment {
-            Ok(segment) => segment,
-            Err(total_row_count) => return (total_row_count.saturating_sub(1), Point::default()),
-        };
-
-        // Find the screen position relative to this segment where the caret is at.
-        let relative_point = segment.position_for_index(caret_pos, line_height);
-
-        let point = relative_point.unwrap_or_default();
-        // the visual row offset from the start of the segment
-        let row_offset = (point.y / line_height).floor() as usize;
-        (preceding_row_count + row_offset, point)
+        document.move_caret(endpoint, opposite_edge, None).0
     }
 
-    fn find_point_for_character_position(&self, character_pos: usize) -> Point<Pixels> {
-        let segment = self.find_segment(TextSegmentQuery::CharacterPosition(character_pos));
-        let Ok((segment, preceding_row_count)) = segment else {
-            return Point::default();
+    fn find_point_for_caret(&self, caret: CaretPosition) -> Point<Pixels> {
+        self.point_for_caret(caret).unwrap_or_default()
+    }
+
+    fn line_range_for_cut(&self) -> Range<usize> {
+        let caret = self.caret();
+        let range = if let Some(document) = self.current_document() {
+            let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
+                .map(|movement| document.move_caret(caret, movement, None).0.index);
+            start.min(end)..start.max(end)
+        } else {
+            self.storage.offset_from_caret(
+                caret.index,
+                NavigationDirection::Back,
+                TextBoundary::Line,
+            )
+                ..self.storage.offset_from_caret(
+                    caret.index,
+                    NavigationDirection::Forward,
+                    TextBoundary::Line,
+                )
         };
-        let line_height = self.layout_data.line_height;
 
-        // Find the screen position relative to this segment where the caret is at.
-        let relative_point = segment.position_for_index(character_pos, line_height);
-
-        let line_origin = point(Pixels::ZERO, preceding_row_count as f32 * line_height);
-        return line_origin + relative_point.unwrap_or_default();
+        if range.end < self.as_str().len() {
+            range.start
+                ..self.storage.offset_from_caret(
+                    range.end,
+                    NavigationDirection::Forward,
+                    TextBoundary::Graphmeme,
+                )
+        } else if range.start > 0 {
+            self.storage.offset_from_caret(
+                range.start,
+                NavigationDirection::Back,
+                TextBoundary::Graphmeme,
+            )..range.end
+        } else {
+            range
+        }
     }
 }
 
@@ -397,7 +428,7 @@ impl EditableTextState {
         };
 
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
-        let point = self.find_point_for_character_position(self.caret_pos());
+        let point = self.find_point_for_caret(self.visible_caret());
 
         // this scroll_offset diverges from the rest of gpui, as it is stored in the
         // positive real number space (interactivity stores it in the negatives)
@@ -437,11 +468,16 @@ impl EditableTextState {
     /// Will cause the current scroll position/offset to update on the next frame,
     /// if the line the carent is on is out of view.
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        cx.emit(CaretNotify::PauseBlinking);
-        let caret_pos = caret_pos.min(self.storage.content_utf8().len());
-        self.selected_range = caret_pos.into();
+        self.move_to_caret(CaretPosition::new(caret_pos, CaretAffinity::Downstream), cx);
+    }
+
+    fn move_to_caret(&mut self, mut caret: CaretPosition, context: &mut Context<Self>) {
+        context.emit(CaretNotify::PauseBlinking);
+        caret.index = caret.index.min(self.storage.content_utf8().len());
+        self.selected_range = CaretSelection::collapsed(caret);
+        self.preferred_x = None;
         self.scroll_to_caret();
-        cx.notify();
+        context.notify();
     }
 
     /// Changes the current selection to extend to the provided position.
@@ -449,11 +485,16 @@ impl EditableTextState {
     /// Will cause the current scroll position/offset to update on the next frame,
     /// if the line the carent is on is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        cx.emit(CaretNotify::PauseBlinking);
-        let caret_pos = caret_pos.min(self.as_str().len());
-        self.selected_range.start = caret_pos;
+        self.select_to_caret(CaretPosition::new(caret_pos, CaretAffinity::Downstream), cx);
+    }
+
+    fn select_to_caret(&mut self, mut caret: CaretPosition, context: &mut Context<Self>) {
+        context.emit(CaretNotify::PauseBlinking);
+        caret.index = caret.index.min(self.as_str().len());
+        self.selected_range = self.selected_range.with_focus(caret);
+        self.preferred_x = None;
         self.scroll_to_caret();
-        cx.notify();
+        context.notify();
     }
 
     /// Removes a chunk of text at the cursor/selection.
@@ -481,6 +522,38 @@ impl EditableTextState {
         let range = self.selected_range();
         let range = match range.is_empty() {
             false => range,
+            true if matches!(boundary, TextBoundary::Graphmeme) => {
+                self.cluster_deletion_range(direction).unwrap_or_else(|| {
+                    self.storage
+                        .range_from_caret(self.caret_pos(), direction, boundary)
+                })
+            }
+            true if matches!(boundary, TextBoundary::Word | TextBoundary::Line) => self
+                .current_document()
+                .map(|document| {
+                    let movement = match (direction, boundary) {
+                        (NavigationDirection::Back, TextBoundary::Word) => {
+                            TextMovement::VisualWordLeft
+                        }
+                        (NavigationDirection::Forward, TextBoundary::Word) => {
+                            TextMovement::VisualWordRight
+                        }
+                        (NavigationDirection::Back, TextBoundary::Line) => {
+                            TextMovement::HardLineStart
+                        }
+                        (NavigationDirection::Forward, TextBoundary::Line) => {
+                            TextMovement::HardLineEnd
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let target = document.move_caret(self.caret(), movement, None).0.index;
+                    target.min(self.caret_pos())..target.max(self.caret_pos())
+                })
+                .unwrap_or_else(|| {
+                    self.storage
+                        .range_from_caret(self.caret_pos(), direction, boundary)
+                }),
             true => self
                 .storage
                 .range_from_caret(self.caret_pos(), direction, boundary),
@@ -512,8 +585,8 @@ impl EditableTextState {
     ) {
         let caret_pos = match self.selected_range.is_empty() {
             false => match direction {
-                NavigationDirection::Back => self.selected_range.start,
-                NavigationDirection::Forward => self.selected_range.end,
+                NavigationDirection::Back => self.selected_range.focus.index,
+                NavigationDirection::Forward => self.selected_range.anchor.index,
             },
             true => self
                 .storage
@@ -522,9 +595,107 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
+    fn move_visual(&mut self, forward: bool, extend: bool, context: &mut Context<Self>) {
+        self.move_semantic(
+            if forward {
+                TextMovement::VisualRight
+            } else {
+                TextMovement::VisualLeft
+            },
+            extend,
+            context,
+        );
+    }
+
+    fn move_semantic(&mut self, movement: TextMovement, extend: bool, context: &mut Context<Self>) {
+        if let Some(document) = self.current_document() {
+            let moved = document.move_selection(
+                self.selected_range,
+                movement,
+                extend,
+                self.preferred_x,
+                self.layout_data.line_height,
+            );
+            context.emit(CaretNotify::PauseBlinking);
+            let storage_len = self.storage.content_utf8().len();
+            let mut selection = moved.selection;
+            selection.focus.index = selection.focus.index.min(storage_len);
+            selection.anchor.index = selection.anchor.index.min(storage_len);
+            self.selected_range = selection;
+            self.preferred_x = moved.preferred_x;
+            self.scroll_to_caret();
+            context.notify();
+            return;
+        }
+
+        let direction = if matches!(
+            movement,
+            TextMovement::VisualLeft
+                | TextMovement::VisualWordLeft
+                | TextMovement::VisualUp
+                | TextMovement::VisualLineStart
+                | TextMovement::HardLineStart
+        ) {
+            NavigationDirection::Back
+        } else {
+            NavigationDirection::Forward
+        };
+
+        let boundary = match movement {
+            TextMovement::VisualLeft | TextMovement::VisualRight => TextBoundary::Graphmeme,
+            TextMovement::VisualWordLeft | TextMovement::VisualWordRight => TextBoundary::Word,
+            TextMovement::VisualUp
+            | TextMovement::VisualDown
+            | TextMovement::VisualLineStart
+            | TextMovement::VisualLineEnd
+            | TextMovement::HardLineStart
+            | TextMovement::HardLineEnd => TextBoundary::Line,
+        };
+
+        let horizontal = matches!(
+            movement,
+            TextMovement::VisualLeft
+                | TextMovement::VisualRight
+                | TextMovement::VisualWordLeft
+                | TextMovement::VisualWordRight
+        );
+        let collapse_selection = !extend && !self.selected_range.is_empty() && horizontal;
+        let base = if collapse_selection {
+            let idx = match direction {
+                NavigationDirection::Back => self
+                    .selected_range
+                    .focus
+                    .index
+                    .min(self.selected_range.anchor.index),
+                NavigationDirection::Forward => self
+                    .selected_range
+                    .focus
+                    .index
+                    .max(self.selected_range.anchor.index),
+            };
+
+            self.move_to_caret(CaretPosition::new(idx, CaretAffinity::Downstream), context);
+            return;
+        } else {
+            self.caret_pos()
+        };
+
+        let caret = CaretPosition::new(
+            self.storage.offset_from_caret(base, direction, boundary),
+            CaretAffinity::Downstream,
+        );
+
+        if extend {
+            self.select_to_caret(caret, context);
+        } else {
+            self.move_to_caret(caret, context);
+        }
+    }
+
     /// Sets the current selection to be the entire text in the storage medium
     pub fn select_document(&mut self, cx: &mut Context<Self>) {
         self.selected_range = (0, self.storage.content_utf8().len()).into();
+        self.preferred_x = None;
         cx.notify();
     }
 
@@ -569,6 +740,7 @@ impl EditableTextState {
 
     fn select_word_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.selected_range = self.storage.word_range_at(caret_pos).into();
+        self.preferred_x = None;
         cx.notify();
     }
 
@@ -579,12 +751,32 @@ impl EditableTextState {
         let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
         let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
         let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
-            line_end + 1
+            self.storage.offset_from_caret(line_end, Forward, Graphmeme)
         } else {
             line_end
         };
         self.selected_range = (line_start, line_end_with_newline).into();
+        self.preferred_x = None;
         cx.notify();
+    }
+
+    fn select_layout_at(
+        &mut self,
+        point: Point<Pixels>,
+        line_height: Pixels,
+        kind: TextSelectionKind,
+        context: &mut Context<Self>,
+    ) -> bool {
+        let Some(document) = self.current_document() else {
+            return false;
+        };
+
+        self.selected_range = document
+            .selection_from_point(point, line_height, kind)
+            .into();
+        self.preferred_x = None;
+        context.notify();
+        true
     }
 }
 
@@ -607,7 +799,7 @@ impl EditableTextState {
 
         // Capture the text that will be replaced
         let old_text = &self.storage.content_utf8()[range.clone()];
-        history.record(range, old_text, new_text_len, self.selected_range.into());
+        history.record(range, old_text, new_text_len, self.selected_range);
     }
 
     fn apply_from_history(&mut self, src: HistoryKind, dst: HistoryKind, cx: &mut Context<Self>) {
@@ -624,7 +816,8 @@ impl EditableTextState {
 
         // Replace the slice with the history value
         self.storage.replace_range(range, &entry.old_text);
-        self.selected_range = entry.selected_range.into();
+        self.selected_range = entry.selected_range;
+        self.preferred_x = None;
 
         // Push the entry onto the redo stack so the undo can be undone
         history.push(dst, entry.as_inverted(removed_text));
@@ -657,21 +850,22 @@ impl EditableTextState {
         &mut self,
         range_overwritten: &Range<usize>,
         new_selected_range_utf16: &Option<Range<usize>>,
-        text_len: usize,
+        inserted_text: &str,
     ) {
-        // NOTE: Differs from yororen-ui
-        // https://github.com/MeowLynxSea/yororen-ui/blob/346502ac654b77fdaff3be2d7444fca8783acfc9/crates/yororen-ui-core/src/headless/text_input_core.rs#L359-L371
         self.selected_range = {
             let new_range = new_selected_range_utf16.as_ref();
-            let new_range = new_range.map(|range_utf16| self.storage.utf_range_16to8(range_utf16));
-            let new_range = new_range.map(|new_range| {
-                new_range.start + range_overwritten.start..new_range.end + range_overwritten.start
+            let new_range = new_range.map(|range_utf16| {
+                utf16_to_utf8_offset(inserted_text, range_utf16.start) + range_overwritten.start
+                    ..utf16_to_utf8_offset(inserted_text, range_utf16.end) + range_overwritten.start
             });
             let new_range = new_range.unwrap_or_else(|| {
-                range_overwritten.start + text_len..range_overwritten.start + text_len
+                range_overwritten.start + inserted_text.len()
+                    ..range_overwritten.start + inserted_text.len()
             });
             new_range.into()
         };
+
+        self.preferred_x = None;
     }
 }
 
@@ -746,7 +940,7 @@ impl EntityInputHandler for EditableTextState {
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
         self.replace_text(range.clone(), text_to_insert.as_ref());
         self.ime_mark_text_in_range(&range, text_to_insert.len());
-        self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.len());
+        self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.as_ref());
         self.emit_text_changed(cx);
         cx.notify();
     }
@@ -761,53 +955,27 @@ impl EntityInputHandler for EditableTextState {
         let range = self.storage.utf_range_16to8(&range_utf16);
         let line_height = window.line_height();
 
-        for line in &self.layout_data.lines {
-            // The vertical offset of the text-segment from the start of the virtual box (which could be scrolled).
-            // Scrolling is not relevant here, so we are just operating on the internal virtualized space.
-            let y_offset = line.pos_y * line_height;
-            // The start of the line in screen space as if there was no scrolling.
-            let line_origin = bounds.origin + point(Pixels::ZERO, y_offset);
-            if line.text_range.is_empty() {
-                if range.start == line.text_range.start {
-                    return Some(Bounds::from_corners(
-                        line_origin,
-                        line_origin + point(CARET_PIXELS_EPSILON, line_height),
-                    ));
-                }
-            } else if line.text_range.contains(&range.start)
-                && let Some(wrapped) = &line.wrapped_line
-            {
-                let local_start = range.start - line.text_range.start;
-                let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
+        let document = self.current_document()?;
+        let start = range.start.min(document.text.len());
+        let end = range.end.min(document.text.len());
 
-                // The start of the line in screen-space pixels
-                let line_start_screen_pos = wrapped
-                    .position_for_index(local_start, line_height)
-                    .unwrap_or_default();
-                // The end of the line in screen-space pixels
-                let line_end_screen_pos = wrapped
-                    .position_for_index(local_end, line_height)
-                    .unwrap_or_else(|| {
-                        // the y-height/position of the last line
-                        let last_line_y = line_height * (line.row_count() - 1) as f32;
-                        point(wrapped.width(), last_line_y)
-                    });
-
-                // The number of rows this text-segment spans
-                let line_height_range = (line_start_screen_pos.y / line_height).floor() as usize
-                    ..(line_end_screen_pos.y / line_height).floor() as usize;
-                // The width of the line-segment that may span multiple rows
-                let width = match line_height_range.is_empty() {
-                    true => line_end_screen_pos.x,
-                    false => wrapped.width(),
-                };
-                return Some(Bounds::from_corners(
-                    line_origin + line_start_screen_pos,
-                    line_origin + point(width, line_start_screen_pos.y + line_height),
-                ));
-            }
+        if start == end {
+            let caret = CaretPosition::new(start, CaretAffinity::Downstream);
+            let position = document.position_for_caret(caret, line_height)?;
+            return Some(Bounds::from_corners(
+                bounds.origin + position,
+                bounds.origin + position + point(CARET_PIXELS_EPSILON, line_height),
+            ));
         }
-        None
+
+        let selection = document
+            .selection_bounds(start..end, line_height)
+            .into_iter()
+            .next()?;
+        Some(Bounds::new(
+            bounds.origin + selection.origin,
+            selection.size,
+        ))
     }
 
     fn character_index_for_point(
@@ -826,6 +994,7 @@ use super::{actions::*, history::HistoryKind};
 impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
         self.selected_range = 0.into();
+        self.preferred_x = None;
         cx.notify();
 
         window.blur(cx);
@@ -893,46 +1062,37 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+        self.move_visual(false, false, cx);
     }
 
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+        self.move_visual(true, false, cx);
     }
 
-    fn nav_up(&mut self, _: &NavUp, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_up(&mut self, _: &NavUp, _window: &mut Window, context: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            // semantically equivalent to line
-            self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+            self.move_semantic(TextMovement::VisualLineStart, false, context);
             return;
         }
 
-        if let Some(caret_pos) = self.find_position_in_vertical_direction(-1, window.line_height())
-        {
-            self.move_to(caret_pos, cx);
-        }
+        self.move_semantic(TextMovement::VisualUp, false, context);
     }
 
-    fn nav_down(&mut self, _: &NavDown, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_down(&mut self, _: &NavDown, _window: &mut Window, context: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            // semantically equivalent to line
-            self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+            self.move_semantic(TextMovement::VisualLineEnd, false, context);
             return;
         }
 
-        if let Some(caret_pos) = self.find_position_in_vertical_direction(1, window.line_height()) {
-            self.move_to(caret_pos, cx);
-        }
+        self.move_semantic(TextMovement::VisualDown, false, context);
     }
 
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        // [when not multiline] semantically equivalent to document
-        self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+        self.move_semantic(TextMovement::HardLineStart, false, cx);
     }
 
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        // [when not multiline] semantically equivalent to document
-        self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+        self.move_semantic(TextMovement::HardLineEnd, false, cx);
     }
 
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -944,11 +1104,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+        self.move_semantic(TextMovement::VisualWordLeft, false, cx);
     }
 
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+        self.move_semantic(TextMovement::VisualWordRight, false, cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -956,36 +1116,40 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.select_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+        self.move_visual(false, true, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.select_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+        self.move_visual(true, true, cx);
     }
 
-    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn select_up(&mut self, _: &SelectUp, _window: &mut Window, context: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+            self.select_linear(NavigationDirection::Back, TextBoundary::Document, context);
             return;
         }
 
-        if let Some(caret_pos) = self.find_position_in_vertical_direction(-1, window.line_height())
-        {
-            self.select_to(caret_pos, cx);
-        }
+        self.move_semantic(TextMovement::VisualUp, true, context);
     }
 
-    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn select_down(
+        &mut self,
+        _: &SelectDown,
+        _window: &mut Window,
+        context: &mut Context<'app, Self>,
+    ) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+            self.select_linear(
+                NavigationDirection::Forward,
+                TextBoundary::Document,
+                context,
+            );
             return;
         }
 
-        if let Some(caret_pos) = self.find_position_in_vertical_direction(1, window.line_height()) {
-            self.select_to(caret_pos, cx);
-        }
+        self.move_semantic(TextMovement::VisualDown, true, context);
     }
 
     fn select_start(
@@ -1007,7 +1171,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.select_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+        self.move_semantic(TextMovement::VisualWordLeft, true, cx);
     }
 
     fn select_right_word(
@@ -1016,7 +1180,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.select_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+        self.move_semantic(TextMovement::VisualWordRight, true, cx);
     }
 
     fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1026,36 +1190,9 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         let range_to_cut = match self.selected_range.is_empty() {
             // selection is more than a caret, use that range of text
-            false => self.selected_range.range(),
+            false => self.selected_range.byte_range(),
             // No selection: cut the entire current line (including newline)
-            true => {
-                use NavigationDirection::*;
-                use TextBoundary::*;
-
-                let caret = self.caret_pos();
-                let line_start = self.storage.offset_from_caret(caret, Back, Line);
-                let line_end = self.storage.offset_from_caret(caret, Forward, Line);
-                let storage_len_utf8 = self.as_str().len();
-
-                // Include the newline character if there is one after the line
-                let cut_end = if line_end < storage_len_utf8 {
-                    line_end + 1 // Include the newline
-                } else if line_start > 0 {
-                    // Last line with no trailing newline - include preceding newline instead
-                    line_end
-                } else {
-                    line_end
-                };
-
-                // For last line, also remove the preceding newline if it exists
-                let cut_start = if line_end >= storage_len_utf8 && line_start > 0 {
-                    line_start - 1 // Include preceding newline for last line
-                } else {
-                    line_start
-                };
-
-                cut_start..cut_end
-            }
+            true => self.line_range_for_cut(),
         };
 
         // Cut selected text
@@ -1069,7 +1206,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn copy(&mut self, _: &Copy, _w: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.selected_range.is_empty() {
-            let slice = &self.storage.content_utf8()[self.selected_range.range()];
+            let slice = &self.storage.content_utf8()[self.selected_range.byte_range()];
             cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
         }
     }
@@ -1102,23 +1239,41 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         &mut self,
         event: &gpui::MouseDownEvent,
         text_position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         const DOUBLE_CLICK: usize = 2;
         const TRIPLE_CLICK: usize = 3;
 
-        let caret_pos = self.index_for_pixel_point(text_position, window.line_height());
+        let line_height = self.layout_data.line_height;
+        let caret = self.caret_for_pixel_point(text_position, line_height);
 
         self.is_selecting = true;
+        self.mouse_caret = None;
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
-            DOUBLE_CLICK => self.select_word_at(caret_pos, cx),
-            TRIPLE_CLICK => self.select_line_at(caret_pos, cx),
-            _ if event.modifiers.shift => self.select_to(caret_pos, cx),
-            _ => self.move_to(caret_pos, cx),
+            DOUBLE_CLICK => {
+                if !self.select_layout_at(text_position, line_height, TextSelectionKind::Word, cx) {
+                    self.select_word_at(caret.index, cx);
+                }
+            }
+            TRIPLE_CLICK => {
+                if !self.select_layout_at(
+                    text_position,
+                    line_height,
+                    TextSelectionKind::HardLine,
+                    cx,
+                ) {
+                    self.select_line_at(caret.index, cx);
+                }
+            }
+            _ if event.modifiers.shift => self.select_to_caret(caret, cx),
+            _ => self.move_to_caret(caret, cx),
         }
+
+        self.mouse_anchor =
+            (self.click_count == 1 && !event.modifiers.shift).then_some(self.selected_range.anchor);
     }
 
     fn on_mouse_up(
@@ -1128,24 +1283,34 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _cx: &mut Context<'app, Self>,
     ) {
         self.is_selecting = false;
+        self.mouse_anchor = None;
     }
 
     fn on_mouse_move(
         &mut self,
         _event: &gpui::MouseMoveEvent,
         text_position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         if self.is_selecting && self.click_count == 1 {
-            let character_pos = self.index_for_pixel_point(text_position, window.line_height());
-            self.select_to(character_pos, cx);
+            let mouse_caret =
+                self.caret_for_pixel_point(text_position, self.layout_data.line_height);
+            let mut caret = mouse_caret;
+
+            if let Some(anchor) = self.mouse_anchor {
+                self.selected_range.anchor = self.mouse_selection_endpoint(anchor, caret);
+                caret = self.mouse_selection_endpoint(caret, anchor);
+            }
+
+            self.mouse_caret = Some((self.selected_range.with_focus(caret), mouse_caret));
+            self.select_to_caret(caret, cx);
         }
     }
 }
 
 /// Backlog:
-/// - tests for text layout (generating TextLineSegment and wrap-boundaries);
+/// - tests for document layout and wrap boundaries;
 ///     permutations of: single and multiline fields, wrap vs no-wrap, overflow scroll vs no scroll
 #[cfg(test)]
 mod tests {
@@ -1608,6 +1773,7 @@ mod tests {
                 input.insert_enter(&Enter, window, cx);
                 assert_eq!(input.as_str(), "hello\n world");
                 assert_eq!(input.selected_range, 6.into());
+                assert_eq!(input.caret().affinity, CaretAffinity::Downstream);
             });
         })
         .unwrap();
@@ -1670,7 +1836,10 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 EditableTextActionHandler::paste(input, &Paste, window, cx);
                 assert_eq!(input.as_str(), "hello there world");
-                assert_eq!(input.selected_range, 11.into());
+                assert_eq!(
+                    input.selected_range,
+                    CaretSelection::collapsed(CaretPosition::new(11, CaretAffinity::Upstream))
+                );
             });
         })
         .unwrap();
@@ -1792,7 +1961,10 @@ mod tests {
                 input.marked_range = Some(5..7);
                 input.replace_text_in_range(Some(0..11), "new content", window, cx);
                 assert_eq!(input.as_str(), "new content");
-                assert_eq!(input.selected_range, 11.into());
+                assert_eq!(
+                    input.selected_range,
+                    CaretSelection::collapsed(CaretPosition::new(11, CaretAffinity::Upstream))
+                );
                 assert_eq!(input.marked_range, None);
             });
         })
@@ -1872,20 +2044,20 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 // Move right through: a -> 😀 -> b
                 input.nav_right(&NavRight, window, cx);
-                assert_eq!(input.selected_range.start, 1); // after 'a'
+                assert_eq!(input.selected_range.focus.index, 1); // after 'a'
 
                 input.nav_right(&NavRight, window, cx);
-                assert_eq!(input.selected_range.start, 5); // after 😀 (1 + 4 bytes)
+                assert_eq!(input.selected_range.focus.index, 5); // after 😀 (1 + 4 bytes)
 
                 input.nav_right(&NavRight, window, cx);
-                assert_eq!(input.selected_range.start, 6); // after 'b'
+                assert_eq!(input.selected_range.focus.index, 6); // after 'b'
 
                 // Move left back
                 input.nav_left(&NavLeft, window, cx);
-                assert_eq!(input.selected_range.start, 5); // before 'b'
+                assert_eq!(input.selected_range.focus.index, 5); // before 'b'
 
                 input.nav_left(&NavLeft, window, cx);
-                assert_eq!(input.selected_range.start, 1); // before 😀
+                assert_eq!(input.selected_range.focus.index, 1); // before 😀
             });
         })
         .unwrap();
@@ -1901,13 +2073,13 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'a'
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
 
                 input.nav_right(&NavRight, window, cx); // past entire emoji with modifier
-                assert_eq!(input.selected_range.start, 9); // 1 + 8
+                assert_eq!(input.selected_range.focus.index, 9); // 1 + 8
 
                 input.nav_left(&NavLeft, window, cx); // back before emoji
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
             });
         })
         .unwrap();
@@ -1925,13 +2097,13 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'x'
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
 
                 input.nav_right(&NavRight, window, cx); // past entire ZWJ sequence
-                assert_eq!(input.selected_range.start, 19); // 1 + 18
+                assert_eq!(input.selected_range.focus.index, 19); // 1 + 18
 
                 input.nav_right(&NavRight, window, cx); // past 'y'
-                assert_eq!(input.selected_range.start, 20);
+                assert_eq!(input.selected_range.focus.index, 20);
             });
         })
         .unwrap();
@@ -1944,7 +2116,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.as_str(), "ab");
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
             });
         })
         .unwrap();
@@ -1961,7 +2133,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.as_str(), "ab");
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
             });
         })
         .unwrap();
@@ -1974,7 +2146,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.as_str(), "ab");
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
             });
         })
         .unwrap();
@@ -1991,7 +2163,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'x'
                 input.nav_right(&NavRight, window, cx); // past flag (should be single grapheme)
-                assert_eq!(input.selected_range.start, 9); // 1 + 8
+                assert_eq!(input.selected_range.focus.index, 9); // 1 + 8
             });
         })
         .unwrap();
@@ -2007,13 +2179,13 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'a'
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
 
                 input.nav_right(&NavRight, window, cx); // past e + combining mark (single grapheme)
-                assert_eq!(input.selected_range.start, 4); // 1 + 3
+                assert_eq!(input.selected_range.focus.index, 4); // 1 + 3
 
                 input.nav_left(&NavLeft, window, cx);
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
             });
         })
         .unwrap();
@@ -2030,7 +2202,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'x'
                 input.nav_right(&NavRight, window, cx); // past entire combined character
-                assert_eq!(input.selected_range.start, 6); // 1 + 5
+                assert_eq!(input.selected_range.focus.index, 6); // 1 + 5
             });
         })
         .unwrap();
@@ -2055,16 +2227,16 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'a'
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
 
                 input.nav_right(&NavRight, window, cx); // past 你
-                assert_eq!(input.selected_range.start, 4); // 1 + 3
+                assert_eq!(input.selected_range.focus.index, 4); // 1 + 3
 
                 input.nav_right(&NavRight, window, cx); // past 好
-                assert_eq!(input.selected_range.start, 7); // 4 + 3
+                assert_eq!(input.selected_range.focus.index, 7); // 4 + 3
 
                 input.nav_right(&NavRight, window, cx); // past 'b'
-                assert_eq!(input.selected_range.start, 8);
+                assert_eq!(input.selected_range.focus.index, 8);
             });
         })
         .unwrap();
@@ -2077,23 +2249,23 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'H'
-                assert_eq!(input.selected_range.start, 1);
+                assert_eq!(input.selected_range.focus.index, 1);
 
                 input.nav_right(&NavRight, window, cx); // past 'i'
-                assert_eq!(input.selected_range.start, 2);
+                assert_eq!(input.selected_range.focus.index, 2);
 
                 input.nav_right(&NavRight, window, cx); // past 你 (3 bytes)
-                assert_eq!(input.selected_range.start, 5);
+                assert_eq!(input.selected_range.focus.index, 5);
 
                 input.nav_right(&NavRight, window, cx); // past 😀 (4 bytes)
-                assert_eq!(input.selected_range.start, 9);
+                assert_eq!(input.selected_range.focus.index, 9);
 
                 // Now go back
                 input.nav_left(&NavLeft, window, cx);
-                assert_eq!(input.selected_range.start, 5);
+                assert_eq!(input.selected_range.focus.index, 5);
 
                 input.nav_left(&NavLeft, window, cx);
-                assert_eq!(input.selected_range.start, 2);
+                assert_eq!(input.selected_range.focus.index, 2);
             });
         })
         .unwrap();
@@ -2110,7 +2282,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.nav_right(&NavRight, window, cx); // past 'a'
                 input.nav_right(&NavRight, window, cx); // past emoji with variation selector
-                assert_eq!(input.selected_range.start, 7); // 1 + 6
+                assert_eq!(input.selected_range.focus.index, 7); // 1 + 6
             });
         })
         .unwrap();
@@ -2127,7 +2299,7 @@ mod tests {
                 input.nav_right(&NavRight, window, cx); // past 'x'
                 input.nav_right(&NavRight, window, cx); // past keycap sequence
                 let expected_pos = 1 + keycap.len();
-                assert_eq!(input.selected_range.start, expected_pos);
+                assert_eq!(input.selected_range.focus.index, expected_pos);
             });
         })
         .unwrap();
@@ -2286,6 +2458,8 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
+                input.selected_range.focus.affinity = CaretAffinity::Upstream;
+                input.selected_range.anchor.affinity = CaretAffinity::Downstream;
 
                 // Delete selection
                 input.replace_text_in_range(None, "", window, cx);
@@ -2295,7 +2469,13 @@ mod tests {
                 // Undo should restore content and selection
                 input.undo(&Undo, window, cx);
                 assert_eq!(input.as_str(), "hello world");
-                assert_eq!(input.selected_range, (0, 5).into());
+                assert_eq!(
+                    input.selected_range,
+                    CaretSelection::from_focus_anchor(
+                        CaretPosition::new(0, CaretAffinity::Upstream),
+                        CaretPosition::new(5, CaretAffinity::Downstream),
+                    )
+                );
             });
         })
         .unwrap();
@@ -2436,83 +2616,32 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_cut_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor in middle line, no selection - should cut entire line including newline
-        let view = create_test_input(cx, "line1\nline2\nline3", 8); // cursor in "line2"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline3");
-            });
-        })
-        .unwrap();
+    fn cut_without_selection_removes_complete_hard_line(context: &mut TestAppContext) {
+        for (name, text, caret, remaining, expected_clipboard) in [
+            (
+                "middle",
+                "line1\nline2\nline3",
+                8,
+                "line1\nline3",
+                "line2\n",
+            ),
+            ("first CRLF", "line1\r\nline2", 2, "line2", "line1\r\n"),
+            ("last", "line1\nline2", 8, "line1", "\nline2"),
+            ("empty", "line1\n\nline3", 6, "line1\nline3", "\n"),
+            ("only", "hello", 2, "", "hello"),
+        ] {
+            let view = create_test_input(context, text, caret);
+            view.update(context, |view, window, context| {
+                view.input.update(context, |input, context| {
+                    input.cut(&Cut, window, context);
+                    assert_eq!(input.as_str(), remaining, "{name}");
+                });
+            })
+            .unwrap();
 
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line2\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_first_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor on first line, no selection
-        let view = create_test_input(cx, "line1\nline2\nline3", 2); // cursor in "line1"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line2\nline3");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line1\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_last_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor on last line, no selection - should include preceding newline
-        let view = create_test_input(cx, "line1\nline2\nline3", 14); // cursor in "line3"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline2");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\nline3"));
-    }
-
-    #[gpui::test]
-    fn test_cut_empty_line(cx: &mut TestAppContext) {
-        // Cursor on empty line - should remove that line
-        let view = create_test_input(cx, "line1\n\nline3", 6); // cursor on empty line
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline3");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_only_line_with_no_selection(cx: &mut TestAppContext) {
-        // Single line content, no selection - should cut entire content
-        let view = create_test_input(cx, "hello", 2);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
+            let clipboard = context.read_from_clipboard().and_then(|item| item.text());
+            assert_eq!(clipboard.as_deref(), Some(expected_clipboard), "{name}");
+        }
     }
 
     #[gpui::test]
@@ -2784,6 +2913,60 @@ mod tests {
 
                 input.undo(&Undo, window, cx);
                 assert_eq!(input.as_str(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn ime_composition_uses_relative_utf16_ranges_around_surrogate_pairs(
+        context: &mut TestAppContext,
+    ) {
+        let view = create_test_input(context, "A😀B", 0);
+        view.update(context, |view, window, context| {
+            view.input.update(context, |input, context| {
+                input.replace_and_mark_text_in_range(
+                    Some(1..3),
+                    "にほん",
+                    Some(1..2),
+                    window,
+                    context,
+                );
+                assert_eq!(input.as_str(), "AにほんB");
+                assert_eq!(
+                    input.marked_text_range(window, context),
+                    Some(1..4),
+                    "marked ranges exposed to the platform use document UTF-16 offsets"
+                );
+                assert_eq!(
+                    input
+                        .selected_text_range(false, window, context)
+                        .unwrap()
+                        .range,
+                    2..3,
+                    "composition selections are relative to the inserted text"
+                );
+
+                input.replace_and_mark_text_in_range(None, "日本", None, window, context);
+                assert_eq!(input.as_str(), "A日本B");
+                assert_eq!(input.marked_text_range(window, context), Some(1..3));
+                assert_eq!(
+                    input
+                        .selected_text_range(false, window, context)
+                        .unwrap()
+                        .range,
+                    3..3
+                );
+
+                input.unmark_text(window, context);
+                assert_eq!(input.marked_text_range(window, context), None);
+                assert_eq!(
+                    input
+                        .selected_text_range(false, window, context)
+                        .unwrap()
+                        .range,
+                    3..3
+                );
             });
         })
         .unwrap();

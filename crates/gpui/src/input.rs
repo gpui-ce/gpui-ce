@@ -4,6 +4,34 @@ use crate::{
 };
 use std::ops::Range;
 
+/// Converts a UTF-8 byte offset into a UTF-16 code-unit offset.
+///
+/// Offsets past the end of `text` clamp to its UTF-16 length. An offset inside a UTF-8
+/// character snaps to the end of that character.
+pub fn utf8_to_utf16_offset(text: &str, utf8_offset: usize) -> usize {
+    text.char_indices()
+        .take_while(|(offset, _)| *offset < utf8_offset)
+        .map(|(_, character)| character.len_utf16())
+        .sum()
+}
+
+/// Converts a UTF-16 code-unit offset into a UTF-8 byte offset.
+///
+/// Offsets past the end of `text` clamp to its UTF-8 length. An offset inside a surrogate pair
+/// snaps to the end of the corresponding character.
+pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
+    let mut consumed_utf16 = 0;
+    for (utf8_offset, character) in text.char_indices() {
+        if consumed_utf16 >= utf16_offset {
+            return utf8_offset;
+        }
+
+        consumed_utf16 += character.len_utf16();
+    }
+
+    text.len()
+}
+
 /// Implement this trait to allow views to handle textual input when implementing an editor, field, etc.
 ///
 /// Once your view implements this trait, you can use it to construct an [`ElementInputHandler<V>`].
@@ -284,7 +312,7 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
 }
 
 #[cfg(test)]
-mod tests {
+mod configuration_tests {
     use super::*;
     use crate::{
         AnyWindowHandle, AppContext as _, FocusHandle, InteractiveElement as _, IntoElement,
@@ -481,5 +509,39 @@ mod tests {
         ) -> TextInputConfiguration {
             self.configuration.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_offsets_convert_across_unicode_encodings() {
+        let cases = [
+            ("", vec![(0, 0)]),
+            ("plain", vec![(0, 0), (1, 1), (5, 5)]),
+            (
+                "A😀日本e\u{301}",
+                vec![(0, 0), (1, 1), (5, 3), (8, 4), (11, 5), (12, 6), (14, 7)],
+            ),
+        ];
+
+        for (text, boundaries) in cases {
+            for (utf8, utf16) in boundaries {
+                assert_eq!(utf8_to_utf16_offset(text, utf8), utf16, "{text:?}");
+                assert_eq!(utf16_to_utf8_offset(text, utf16), utf8, "{text:?}");
+            }
+
+            assert_eq!(
+                utf8_to_utf16_offset(text, usize::MAX),
+                text.encode_utf16().count()
+            );
+            assert_eq!(utf16_to_utf8_offset(text, usize::MAX), text.len());
+        }
+
+        let text = "A😀B";
+        assert_eq!(utf16_to_utf8_offset(text, 2), 5);
+        assert_eq!(utf8_to_utf16_offset(text, 2), 3);
     }
 }

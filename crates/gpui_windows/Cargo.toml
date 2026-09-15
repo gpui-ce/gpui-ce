@@ -31,6 +31,7 @@ dunce.workspace = true
 etagere.workspace = true
 futures.workspace = true
 gpui_util.workspace = true
+gpui_parley = { workspace = true, features = ["system-fonts"] }
 image.workspace = true
 itertools.workspace = true
 log.workspace = true

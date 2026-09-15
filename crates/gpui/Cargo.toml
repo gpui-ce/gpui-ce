@@ -11,7 +11,7 @@ homepage = "https://gpui-ce.github.io/"
 readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
-rust-version = "1.95" # required for Vec::push_mut
+rust-version = "1.95"                                                  # required for Vec::push_mut
 
 [lints]
 workspace = true

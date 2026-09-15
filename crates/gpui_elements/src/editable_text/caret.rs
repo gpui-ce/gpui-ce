@@ -1,3 +1,6 @@
+#[cfg(test)]
+use gpui::{AppContext, TestAppContext};
+
 use gpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 use std::time::Duration;
@@ -11,7 +14,7 @@ pub enum CaretNotify {
     PauseBlinking,
 }
 
-/// State of an EditableText caret cursor, which supports features like blinking.
+/// Controls caret visibility and blinking; text layout owns position and geometry.
 /// Blinking is disabled by default.
 pub struct Caret {
     /// The frequency at which the caret blinks
@@ -22,12 +25,8 @@ pub struct Caret {
     /// Whether the caret's EditableText element is currently focused.
     /// Caret is only eligible to be blinking if currently focused.
     has_focus: bool,
-    /// true when blinking is active but paused for some number of frames
-    paused: bool,
     #[allow(dead_code)]
     subscriptions: SmallVec<[Subscription; 2]>,
-    /// Tracks whether we were focused on the last update.
-    was_focused: bool,
 }
 impl Default for Caret {
     fn default() -> Self {
@@ -36,9 +35,7 @@ impl Default for Caret {
             generation: Default::default(),
             visible: false,
             has_focus: false,
-            paused: false,
             subscriptions: SmallVec::new(),
-            was_focused: false,
         }
     }
 }
@@ -77,12 +74,8 @@ impl Caret {
                     return;
                 }
 
-                // Temporarily pauses blinking and leaves the caret visible. Blinking will resume after
-                // the pre-established interval elapses from the time this is called.
-                if !state.visible {
-                    state.visible = true;
-                }
-                state.paused = true;
+                // Leave the caret visible for one complete interval after user activity.
+                state.visible = true;
                 state.restart_blink_ticker(cx);
                 cx.notify();
             }
@@ -92,37 +85,20 @@ impl Caret {
 
     /// Processes updates during prepaint and returns whether the caret is currently visible.
     pub(super) fn update_focus(&mut self, is_focused: bool, cx: &mut Context<Self>) -> bool {
-        let was_focused = self.was_focused;
-        self.was_focused = is_focused;
+        if self.has_focus != is_focused {
+            self.has_focus = is_focused;
+            self.visible = is_focused;
 
-        // Caret has no blinking interval, it is always visible
-        if self.interval.is_zero() {
-            return is_focused;
-        }
-
-        match (was_focused, is_focused) {
-            // Caret has a blinking interval, and gained focused.
-            (false, true) => {
-                self.has_focus = true;
-                self.paused = false;
-
-                // Render in this frame and restart the blinking ticker.
-                self.visible = true;
+            if is_focused && !self.interval.is_zero() {
                 self.restart_blink_ticker(cx);
-                true
+            } else {
+                self.generation = self.generation.wrapping_add(1);
             }
-            // Caret has a blinking interval and lost focus
-            (true, false) => {
-                self.has_focus = false;
-                self.visible = false;
-                self.paused = false;
-                cx.notify();
-                false
-            }
-            // Has a blinking interval, but focus has not changed.
-            // Only render if currently visible (based on blink ticker).
-            _ => self.visible,
+
+            cx.notify();
         }
+
+        is_focused && (self.interval.is_zero() || self.visible)
     }
 
     fn restart_blink_ticker(&mut self, cx: &mut Context<Self>) {
@@ -135,28 +111,63 @@ impl Caret {
 
             let Some(this) = this.upgrade() else { return };
             this.update(cx, |this, cx| {
-                // If the generation has changed, that means a new task was spawned.
-                // This one should be no-op since a new task is owning the blinking state.
-                if this.generation == generation {
-                    // PauseBlinking increments the generation via restart_ticker,
-                    // so we can always unpause the blinking if the generation is unchanged.
-                    this.paused = false;
-
-                    // This was the last tick/blink before we lost focus.
-                    // Should now go inert until focus is regained.
-                    if !this.has_focus {
-                        return;
-                    }
-
-                    // We still have focus, toggle whether caret is visible and make sure the owning element re-renders.
-                    this.visible = !this.visible;
-                    cx.notify();
-
-                    // Start a fresh cycle by respawning the task.
-                    this.restart_blink_ticker(cx);
+                if this.generation != generation || !this.has_focus || this.interval.is_zero() {
+                    return;
                 }
+
+                this.visible = !this.visible;
+                cx.notify();
+                this.restart_blink_ticker(cx);
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CaretEventEmitter;
+    impl EventEmitter<CaretNotify> for CaretEventEmitter {}
+
+    #[gpui::test]
+    fn visibility_tracks_focus_activity_and_blur(context: &mut TestAppContext) {
+        let interval = Duration::from_millis(10);
+        let emitter = context.new(|_| CaretEventEmitter);
+        let caret = context.new(|context| {
+            let mut caret = Caret::default().with_blink_interval(interval);
+            caret.subscribe_to(&emitter, context);
+            caret
+        });
+
+        caret.update(context, |caret, context| {
+            assert!(caret.update_focus(true, context))
+        });
+
+        context.run_until_parked();
+
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
+
+        emitter.update(context, |_, context| {
+            context.emit(CaretNotify::PauseBlinking)
+        });
+
+        context.run_until_parked();
+        assert!(context.read(|context| caret.read(context).visible));
+
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
+
+        caret.update(context, |caret, context| {
+            assert!(!caret.update_focus(false, context))
+        });
+
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
     }
 }

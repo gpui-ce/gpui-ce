@@ -124,10 +124,14 @@ impl WindowsPlatform {
                 Some(dw_text_system),
             )
         } else {
+            let dw_text_system = Arc::new(
+                DirectWriteTextSystem::new_headless()
+                    .context("Error creating headless DirectWriteTextSystem")?,
+            );
             (
                 None,
-                Arc::new(gpui::NoopTextSystem::new()) as Arc<dyn PlatformTextSystem>,
-                None,
+                dw_text_system.clone() as Arc<dyn PlatformTextSystem>,
+                Some(dw_text_system),
             )
         };
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();

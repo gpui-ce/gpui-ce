@@ -1,3 +1,18 @@
+#[cfg(test)]
+use crate::{
+    DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, Font, FontMetrics,
+    InlineLayout, InlineLayoutRequest, InputEvent, InteractiveElement, LineLayout, LongPressEvent,
+    MouseDownEvent, ParentElement, PlatformTextSystem, RasterizedGlyph, RequestFrameOptions,
+    StatefulInteractiveElement, Styled, TestApp, TestAppContext, TestTextSystem, TextLayoutRequest,
+    TouchDragEvent, TouchId, TouchPhase, canvas, div, hsla,
+};
+
+#[cfg(test)]
+use proptest::prelude::*;
+
+#[cfg(test)]
+use std::path::PathBuf;
+
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -10,20 +25,21 @@ use crate::{
     BoxShadow, Capslock, ColorExt, Context, Corners, CursorHideMode, CursorStyle, Decorations,
     DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
     Entity, EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global,
-    GlobalElementId, GlyphId, GpuSpecs, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
-    KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
-    ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
-    MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledFilter, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style,
-    SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
-    TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration, TextInputStateChange,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
-    Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowTextSystem, point, prelude::*, px, rems, size, transparent_black,
+    GlobalElementId, GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero,
+    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp,
+    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton,
+    MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority,
+    PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
+    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
+    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
+    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
+    TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
+    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point, px,
+    rems, size, transparent_black, white,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -77,6 +93,26 @@ use crate::util::{
     round_half_toward_zero_f64, round_stroke_to_device_pixel, round_to_device_pixel,
 };
 pub use prompts::*;
+
+fn quantize_glyph_origin(origin: Point<ScaledPixels>) -> (Point<ScaledPixels>, Point<u8>) {
+    fn axis(value: ScaledPixels, variants: u8) -> (ScaledPixels, u8) {
+        let quantized = round_half_toward_zero(value.0 * variants as f32) / variants as f32;
+        let integer = quantized.floor();
+        let variant = ((quantized - integer) * variants as f32).round() as u8;
+        (ScaledPixels(integer), variant.min(variants - 1))
+    }
+
+    let (integer_x, variant_x) = axis(origin.x, SUBPIXEL_VARIANTS_X);
+    let (integer_y, variant_y) = axis(origin.y, SUBPIXEL_VARIANTS_Y);
+    (point(integer_x, integer_y), point(variant_x, variant_y))
+}
+
+fn quantize_color_glyph_origin(origin: Point<ScaledPixels>) -> (Point<ScaledPixels>, Point<u8>) {
+    (
+        origin.map(|coordinate| ScaledPixels(round_half_toward_zero(coordinate.0))),
+        Point::default(),
+    )
+}
 
 /// Default window size used when no explicit size is provided.
 pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
@@ -763,8 +799,7 @@ impl HitTest {
                 continue;
             }
 
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if !bounds.contains(&position) {
+            if !hitbox.contains(&position) {
                 continue;
             }
 
@@ -917,11 +952,22 @@ pub struct Hitbox {
     pub content_mask: ContentMask<Pixels>,
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
-    /// Additional user-provided tags to extend behavior of the hitbox
+    /// Disjoint regions of an inline element. `bounds` is their union.
+    pub fragments: Option<Arc<[Bounds<Pixels>]>>,
+    /// Additional user-provided tags to extend behavior of the hitbox.
     pub tags: Vec<SharedString>,
 }
 
 impl Hitbox {
+    /// Tests the actual regions, including the content mask, without occlusion checks.
+    pub fn contains(&self, point: &Point<Pixels>) -> bool {
+        self.content_mask.bounds.contains(point)
+            && self.fragments.as_ref().map_or_else(
+                || self.bounds.contains(point),
+                |fragments| fragments.iter().any(|bounds| bounds.contains(point)),
+            )
+    }
+
     /// Checks if the hitbox is currently hovered. Returns `false` during keyboard input modality
     /// so that keyboard navigation suppresses hover highlights. Except when handling
     /// `ScrollWheelEvent`, this is typically what you want when determining whether to handle mouse
@@ -1231,6 +1277,8 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    pub(crate) collecting_inline: bool,
+    pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
@@ -1936,6 +1984,8 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            collecting_inline: false,
+            current_inline_fragments: None,
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
@@ -2556,6 +2606,18 @@ impl Window {
     pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
         self.platform_window
             .render_to_image(&self.rendered_frame.scene)
+    }
+
+    /// Returns the current frame's quad and glyph sprite counts.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn rendered_primitive_counts(&self) -> (usize, usize, usize, usize) {
+        let scene = &self.rendered_frame.scene;
+        (
+            scene.quads.len(),
+            scene.monochrome_sprites.len(),
+            scene.subpixel_sprites.len(),
+            scene.polychrome_sprites.len(),
+        )
     }
 
     /// Returns the quads in the most recently rendered frame's scene, so tests can assert on
@@ -4636,64 +4698,84 @@ impl Window {
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
 
-        let quantized_origin = Point::new(
-            round_half_toward_zero(glyph_origin.x.0 * SUBPIXEL_VARIANTS_X as f32)
-                / SUBPIXEL_VARIANTS_X as f32,
-            round_half_toward_zero(glyph_origin.y.0 * SUBPIXEL_VARIANTS_Y as f32)
-                / SUBPIXEL_VARIANTS_Y as f32,
-        );
-        let subpixel_variant = Point::new(
-            (quantized_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
-            (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
-        );
-        let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
-        let dilation = self.text_system().glyph_dilation_for_color(color);
+        let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
+        let requested_mode = if self.should_use_subpixel_rendering(font_id, font_size) {
+            GlyphRenderMode::Subpixel
+        } else {
+            GlyphRenderMode::Grayscale
+        };
+
+        let raster_style =
+            self.text_system()
+                .prepare_raster_style(font_id, glyph_id, color, requested_mode);
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
             font_size,
             subpixel_variant,
             scale_factor,
-            is_emoji: false,
-            subpixel_rendering,
-            dilation,
+            raster_style,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
-            let bounds = Bounds {
-                origin: integer_origin + raster_bounds.origin.map(Into::into),
-                size: tile.bounds.size.map(Into::into),
-            };
-            let content_mask = self.snapped_content_mask();
+        self.paint_glyph_from_atlas(integer_origin, params, color, element_opacity)
+    }
 
-            if subpixel_rendering {
-                self.next_frame.scene.insert_primitive(SubpixelSprite {
-                    order: 0,
-                    padding: 0,
-                    bounds,
-                    content_mask,
-                    color: color.opacity(element_opacity).into(),
-                    tile,
-                    transformation: TransformationMatrix::unit(),
-                });
-            } else {
+    fn paint_glyph_from_atlas(
+        &mut self,
+        integer_origin: Point<ScaledPixels>,
+        params: RenderGlyphParams,
+        mask_color: Hsla,
+        opacity: f32,
+    ) -> Result<()> {
+        let text_system = self.text_system().clone();
+        let entry = self
+            .sprite_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))?;
+        let Some(tile) = entry.tile else {
+            return Ok(());
+        };
+
+        debug_assert_eq!(entry.bounds.size, tile.bounds.size.map(Into::into));
+        let bounds = Bounds {
+            origin: integer_origin + entry.bounds.origin.map(Into::into),
+            size: tile.bounds.size.map(Into::into),
+        };
+
+        let content_mask = self.snapped_content_mask();
+
+        match entry.format {
+            RasterizedGlyphFormat::AlphaMask => {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
                     padding: 0,
                     bounds,
                     content_mask,
-                    color: color.opacity(element_opacity).into(),
+                    color: mask_color.opacity(opacity).into(),
                     tile,
                     transformation: TransformationMatrix::unit(),
+                });
+            }
+            RasterizedGlyphFormat::BgraSubpixelMask => {
+                self.next_frame.scene.insert_primitive(SubpixelSprite {
+                    order: 0,
+                    padding: 0,
+                    bounds,
+                    content_mask,
+                    color: mask_color.opacity(opacity).into(),
+                    tile,
+                    transformation: TransformationMatrix::unit(),
+                });
+            }
+            RasterizedGlyphFormat::BgraColor => {
+                self.next_frame.scene.insert_primitive(PolychromeSprite {
+                    order: 0,
+                    grayscale: false.into(),
+                    corner_smoothing: 0.0,
+                    bounds,
+                    corner_radii: Default::default(),
+                    content_mask,
+                    tile,
+                    opacity,
                 });
             }
         }
@@ -4734,51 +4816,39 @@ impl Window {
         glyph_id: GlyphId,
         font_size: Pixels,
     ) -> Result<()> {
+        self.paint_emoji_with_color(origin, font_id, glyph_id, font_size, white())
+    }
+
+    /// Paints a color glyph with an application foreground for `currentColor` layers.
+    pub fn paint_emoji_with_color(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
-        let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));
+        let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
+        let raster_style = self.text_system().prepare_raster_style(
+            font_id,
+            glyph_id,
+            color,
+            GlyphRenderMode::Color,
+        );
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
             font_size,
-            subpixel_variant: Default::default(),
+            subpixel_variant,
             scale_factor,
-            is_emoji: true,
-            subpixel_rendering: false,
-            dilation: 0,
+            raster_style,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
-
-            let bounds = Bounds {
-                origin: integer_origin + raster_bounds.origin.map(Into::into),
-                size: tile.bounds.size.map(Into::into),
-            };
-            let content_mask = self.snapped_content_mask();
-            let opacity = self.element_opacity();
-
-            self.next_frame.scene.insert_primitive(PolychromeSprite {
-                order: 0,
-                grayscale: false.into(),
-                corner_smoothing: 0.0,
-                bounds,
-                corner_radii: Default::default(),
-                content_mask,
-                tile,
-                opacity,
-            });
-        }
-        Ok(())
+        self.paint_glyph_from_atlas(integer_origin, params, color, self.element_opacity())
     }
 
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
@@ -5115,6 +5185,110 @@ impl Window {
         bounds
     }
 
+    /// Obtain layout bounds snapped within the coordinate space of their parent.
+    ///
+    /// This is useful for text-bearing elements whose position within their parent must remain
+    /// stable while that parent moves across the device-pixel grid.
+    pub fn parent_relative_layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
+        self.invalidator.debug_assert_prepaint();
+
+        let scale_factor = self.scale_factor();
+        let mut bounds = self
+            .layout_engine
+            .as_mut()
+            .unwrap()
+            .parent_relative_layout_bounds(layout_id, scale_factor);
+        bounds.origin += self.pixel_snap_point(self.element_offset());
+        bounds
+    }
+
+    pub(crate) fn publish_inline_content(
+        &mut self,
+        node_id: LayoutId,
+        content: crate::InlineContent,
+    ) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .inline_content
+            .insert(node_id, Arc::new(content));
+    }
+
+    pub(crate) fn inline_content(&self, node_id: LayoutId) -> Option<Arc<crate::InlineContent>> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .inline_content
+            .get(&node_id)
+            .cloned()
+    }
+
+    pub(crate) fn layout_display_and_position(
+        &self,
+        node_id: LayoutId,
+    ) -> (crate::Display, crate::Position) {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .display_and_position(node_id)
+    }
+
+    pub(crate) fn inline_fragments(&self, node_id: LayoutId) -> Option<Arc<[Bounds<Pixels>]>> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .inline_fragments
+            .get(&node_id)
+            .map(|fragments| {
+                let offset = self.pixel_snap_point(self.element_offset());
+                if offset == Point::default() {
+                    return fragments.clone();
+                }
+
+                fragments
+                    .iter()
+                    .map(|bounds| Bounds::new(bounds.origin + offset, bounds.size))
+                    .collect()
+            })
+    }
+
+    pub(crate) fn place_inline(
+        &mut self,
+        node_id: LayoutId,
+        mut bounds: Bounds<Pixels>,
+        fragments: Option<Vec<Bounds<Pixels>>>,
+    ) {
+        let offset = self.pixel_snap_point(self.element_offset());
+        bounds.origin -= offset;
+
+        let scale = self.scale_factor();
+        let engine = self.layout_engine.as_mut().unwrap();
+
+        engine.place_inline(node_id, bounds, scale);
+
+        if let Some(fragments) = fragments {
+            let fragments = if offset == Point::default() {
+                fragments.into()
+            } else {
+                fragments
+                    .into_iter()
+                    .map(|mut right| {
+                        right.origin -= offset;
+                        right
+                    })
+                    .collect()
+            };
+            engine.inline_fragments.insert(node_id, fragments);
+        }
+    }
+
+    pub(crate) fn layout_vertical_align(&self, layout_id: LayoutId) -> crate::VerticalAlign {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .vertical_align(layout_id)
+    }
+
     /// This method should be called during `prepaint`. You can use the returned [Hitbox]
     /// during `paint` or in an event handler to determine whether the inserted hitbox was the topmost.
     ///
@@ -5137,15 +5311,17 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let content_mask = self.content_mask();
-        let mut id = self.next_hitbox_id;
+        let hitbox_id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
         let hitbox = Hitbox {
-            id,
+            id: hitbox_id,
             bounds,
             content_mask,
             behavior,
+            fragments: self.current_inline_fragments.clone(),
             tags: Vec::default(),
         };
+
         self.next_frame.hitboxes.push_mut(hitbox)
     }
 
@@ -7559,26 +7735,358 @@ pub fn outline(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::{Cell, RefCell},
-        path::PathBuf,
-        rc::Rc,
-        sync::Arc,
-        time::Duration,
-    };
-
+    use super::*;
     use crate::{
-        AnyWindowHandle, AppContext as _, Background, Bounds, BoxShadow, ColorExt as _, Context,
-        DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
-        FileDropEvent, FocusHandle, ImageSource, InputEvent as _, InteractiveElement as _,
-        IntoElement, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-        Pixels, Point, Render, RenderImage, RequestFrameOptions, ShaderBool,
-        StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent, TouchEvent,
-        TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div, hsla, img,
-        linear_color_stop, linear_gradient, point, px, size, white,
+        FocusHandle, ImageSource, PreparedRasterStyle, RasterColorEffect, RasterStyleRequest,
+        ShaderBool, hsla_to_rgba, img, linear_color_stop, linear_gradient,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
+    use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn hit_test_preserves_inline_regions_occlusion_and_metadata() {
+        let bounds = Bounds::new(Point::default(), size(px(100.), px(80.)));
+        let background = Hitbox {
+            id: HitboxId(1),
+            bounds,
+            content_mask: ContentMask { bounds },
+            behavior: HitboxBehavior::Normal,
+            fragments: None,
+            tags: vec!["background".into()],
+        };
+        let mut inline = Hitbox {
+            id: HitboxId(2),
+            bounds,
+            content_mask: ContentMask {
+                bounds: Bounds::new(Point::default(), size(px(80.), px(80.))),
+            },
+            behavior: HitboxBehavior::Normal,
+            fragments: Some(Arc::from([
+                Bounds::new(point(px(60.), px(0.)), size(px(40.), px(40.))),
+                Bounds::new(point(px(0.), px(40.)), size(px(40.), px(40.))),
+            ])),
+            tags: vec!["inline".into()],
+        };
+
+        for behavior in [
+            HitboxBehavior::Normal,
+            HitboxBehavior::BlockMouseExceptScroll,
+            HitboxBehavior::BlockMouse,
+        ] {
+            inline.behavior = behavior;
+
+            for (position, inside_inline, inside_background) in [
+                (point(px(70.), px(20.)), true, true),
+                (point(px(20.), px(60.)), true, true),
+                (point(px(20.), px(20.)), false, true),
+                (point(px(90.), px(20.)), false, true),
+                (point(px(120.), px(20.)), false, false),
+            ] {
+                let hit_test = HitTest::new([&inline, &background].into_iter(), position);
+                let mut hovered = Vec::new();
+                let mut scrollable = Vec::new();
+
+                if inside_inline {
+                    hovered.push(inline.id);
+                    scrollable.push(inline.id);
+                }
+
+                if inside_background && (!inside_inline || behavior == HitboxBehavior::Normal) {
+                    hovered.push(background.id);
+                }
+
+                if inside_background && (!inside_inline || behavior != HitboxBehavior::BlockMouse) {
+                    scrollable.push(background.id);
+                }
+
+                assert_eq!(
+                    hit_test.iter_hovered().copied().collect::<Vec<_>>(),
+                    hovered
+                );
+                assert_eq!(
+                    hit_test.iter_scrollable().copied().collect::<Vec<_>>(),
+                    scrollable
+                );
+
+                for (depth, hitbox) in [&inline, &background].into_iter().enumerate() {
+                    let entry = hit_test.entry(&hitbox.id).unwrap();
+                    assert_eq!(entry.depth(), depth);
+                    assert_eq!(entry.tags(), &hitbox.tags);
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn glyph_origin_quantization_preserves_position_with_bounded_error(
+            x in -10_000.0f32..10_000.0,
+            y in -10_000.0f32..10_000.0,
+        ) {
+            let (integer, variant) =
+                quantize_glyph_origin(point(ScaledPixels(x), ScaledPixels(y)));
+            let reconstructed_x =
+                integer.x.0 + f32::from(variant.x) / f32::from(SUBPIXEL_VARIANTS_X);
+            let reconstructed_y =
+                integer.y.0 + f32::from(variant.y) / f32::from(SUBPIXEL_VARIANTS_Y);
+            let maximum_error_x = 0.5 / f32::from(SUBPIXEL_VARIANTS_X) + 0.001;
+            let maximum_error_y = 0.5 / f32::from(SUBPIXEL_VARIANTS_Y) + 0.001;
+
+            prop_assert!(variant.x < SUBPIXEL_VARIANTS_X);
+            prop_assert!(variant.y < SUBPIXEL_VARIANTS_Y);
+            prop_assert_eq!(variant.y, 0, "vertical glyph variants change baseline snapping");
+            prop_assert!((reconstructed_x - x).abs() <= maximum_error_x);
+            prop_assert!((reconstructed_y - y).abs() <= maximum_error_y);
+
+            let (color_origin, color_variant) =
+                quantize_color_glyph_origin(point(ScaledPixels(x), ScaledPixels(y)));
+            prop_assert_eq!(color_variant, Point::default());
+            prop_assert!((color_origin.x.0 - x).abs() <= 0.501);
+            prop_assert!((color_origin.y.0 - y).abs() <= 0.501);
+        }
+    }
+
+    #[derive(Default)]
+    struct RasterFormatTextSystem {
+        rasterized: StdMutex<Vec<RenderGlyphParams>>,
+        fail_next: AtomicBool,
+    }
+
+    impl PlatformTextSystem for RasterFormatTextSystem {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId> {
+            PlatformTextSystem::font_id(&TestTextSystem, descriptor)
+        }
+
+        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+            PlatformTextSystem::font_metrics(&TestTextSystem, font_id)
+        }
+
+        fn typographic_bounds(
+            &self,
+            font_id: FontId,
+            glyph_id: GlyphId,
+        ) -> anyhow::Result<Bounds<f32>> {
+            PlatformTextSystem::typographic_bounds(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> anyhow::Result<Size<f32>> {
+            PlatformTextSystem::advance(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
+            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, character)
+        }
+
+        fn rasterize_glyph(&self, params: &RenderGlyphParams) -> anyhow::Result<RasterizedGlyph> {
+            self.rasterized.lock().unwrap().push(params.clone());
+            if self.fail_next.swap(false, SeqCst) {
+                anyhow::bail!("injected glyph rasterization failure");
+            }
+
+            let (format, pixels) = match params.glyph_id.0 {
+                1 => (RasterizedGlyphFormat::AlphaMask, vec![0, 255]),
+                2 => (
+                    RasterizedGlyphFormat::BgraSubpixelMask,
+                    vec![1, 2, 3, 0, 4, 5, 6, 0],
+                ),
+                3 | 5 => (
+                    RasterizedGlyphFormat::BgraColor,
+                    vec![10, 20, 30, 128, 40, 50, 60, 255],
+                ),
+                node_id => anyhow::bail!("unexpected scripted glyph {node_id}"),
+            };
+
+            let size = size(DevicePixels(2), DevicePixels(1));
+            Ok(RasterizedGlyph {
+                bounds: Bounds {
+                    origin: point(DevicePixels(-1), DevicePixels(-2)),
+                    size,
+                },
+                size,
+                format,
+                pixels,
+            })
+        }
+
+        fn prepare_raster_style(&self, mut request: RasterStyleRequest) -> PreparedRasterStyle {
+            if request.requested_mode == GlyphRenderMode::Color {
+                if request.glyph_id == GlyphId(3) {
+                    request.foreground_dependency = crate::ForegroundDependency::AlphaOnly;
+                }
+
+                return PreparedRasterStyle::preblend(request);
+            }
+
+            PreparedRasterStyle::independent(request.requested_mode)
+        }
+
+        fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
+            PlatformTextSystem::layout_text(&TestTextSystem, request)
+        }
+
+        fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
+            PlatformTextSystem::layout_inline(&TestTextSystem, request)
+        }
+    }
+
+    struct RasterFormatView;
+
+    impl Render for RasterFormatView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
+            let color = hsla(0.6, 0.7, 0.4, 0.8);
+            let alternate_color = hsla(0.1, 0.6, 0.3, 0.8);
+            div().size_full().opacity(0.5).child(
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        for (glyph_id, origin) in [
+                            (GlyphId(1), point(px(5.13), px(10.245))),
+                            (GlyphId(2), point(px(10.0), px(15.0))),
+                        ] {
+                            window
+                                .paint_glyph(origin, FontId(7), glyph_id, px(16.0), color)
+                                .unwrap();
+                        }
+
+                        for (glyph_id, origin, foreground) in [
+                            (GlyphId(3), point(px(15.0), px(20.0)), color),
+                            (GlyphId(3), point(px(20.0), px(25.0)), alternate_color),
+                            (GlyphId(5), point(px(25.0), px(30.0)), color),
+                            (GlyphId(5), point(px(30.0), px(35.0)), alternate_color),
+                        ] {
+                            window
+                                .paint_emoji_with_color(
+                                    origin,
+                                    FontId(7),
+                                    glyph_id,
+                                    px(16.0),
+                                    foreground,
+                                )
+                                .unwrap();
+                        }
+                    },
+                )
+                .size_full(),
+            )
+        }
+    }
+
+    #[test]
+    fn returned_raster_format_drives_atlas_and_scene_behavior() {
+        let text_system = Arc::new(RasterFormatTextSystem::default());
+        let mut app = TestApp::with_text_system(text_system.clone());
+        let mut test_window = app.open_window(|_, _| RasterFormatView);
+        test_window.draw();
+
+        test_window.update(|_, window, _| {
+            assert_eq!(window.rendered_primitive_counts(), (0, 1, 1, 4));
+            let scene = &window.rendered_frame.scene;
+            let expected_color = hsla(0.6, 0.7, 0.4, 0.8).opacity(0.5).into();
+
+            assert_eq!(scene.monochrome_sprites[0].color, expected_color);
+            assert_eq!(scene.subpixel_sprites[0].color, expected_color);
+            assert!(
+                scene
+                    .polychrome_sprites
+                    .iter()
+                    .all(|sprite| sprite.opacity == 0.5)
+            );
+            assert_eq!(
+                scene.monochrome_sprites[0].bounds.origin,
+                point(ScaledPixels(9.0), ScaledPixels(18.0))
+            );
+            assert_eq!(
+                scene.monochrome_sprites[0].tile.texture_id.kind,
+                crate::AtlasTextureKind::Monochrome
+            );
+            assert_eq!(
+                scene.subpixel_sprites[0].tile.texture_id.kind,
+                crate::AtlasTextureKind::Subpixel
+            );
+            assert_eq!(
+                scene.polychrome_sprites[0].tile.texture_id.kind,
+                crate::AtlasTextureKind::Polychrome
+            );
+            let first_tile = scene.polychrome_sprites[0].tile;
+            let second_tile = scene.polychrome_sprites[1].tile;
+            let third_tile = scene.polychrome_sprites[2].tile;
+            let fourth_tile = scene.polychrome_sprites[3].tile;
+            assert_eq!(first_tile, second_tile);
+            assert_ne!(third_tile, fourth_tile);
+        });
+
+        let rasterized = text_system.rasterized.lock().unwrap();
+        let color_styles = rasterized
+            .iter()
+            .filter(|params| params.raster_style.mode == GlyphRenderMode::Color)
+            .map(|params| params.raster_style.color_effect)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            color_styles,
+            [
+                RasterColorEffect::Preblend(crate::Rgba8 {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 204,
+                }),
+                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.6, 0.7, 0.4, 0.8)).into()),
+                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.1, 0.6, 0.3, 0.8)).into()),
+            ]
+        );
+    }
+
+    struct FragmentFailureView;
+
+    impl Render for FragmentFailureView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().child("x😀")
+        }
+    }
+
+    #[test]
+    fn a_failed_glyph_does_not_hide_the_rest_of_its_fragment() {
+        let text_system = Arc::new(RasterFormatTextSystem {
+            rasterized: StdMutex::default(),
+            fail_next: AtomicBool::new(true),
+        });
+        let mut app = TestApp::with_text_system(text_system.clone());
+        let mut test_window = app.open_window(|_, _| FragmentFailureView);
+        test_window.draw();
+
+        test_window.update(|_, window, _| {
+            assert!(!window.rendered_frame.scene.subpixel_sprites.is_empty());
+        });
+
+        let glyph_ids = text_system
+            .rasterized
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|params| params.glyph_id)
+            .collect::<Vec<_>>();
+        assert!(
+            glyph_ids.starts_with(&[GlyphId(1), GlyphId(2)]),
+            "unexpected rasterization sequence: {glyph_ids:?}"
+        );
+    }
 
     struct EmptyView;
 

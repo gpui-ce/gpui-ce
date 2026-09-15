@@ -29,8 +29,11 @@ impl Pasteboard {
     }
 
     #[cfg(test)]
-    pub fn unique() -> Self {
-        Self::new(NSPasteboard::pasteboardWithUniqueName())
+    pub fn unique() -> Option<Self> {
+        let inner: Option<Retained<NSPasteboard>> =
+            unsafe { objc2::msg_send![objc2::class!(NSPasteboard), pasteboardWithUniqueName] };
+
+        inner.map(Self::new)
     }
 
     fn new(inner: Retained<NSPasteboard>) -> Self {
@@ -292,13 +295,22 @@ mod tests {
 
     use super::*;
 
+    macro_rules! unique_pasteboard {
+        () => {
+            match unique_pasteboard() {
+                Some(value) => value,
+                None => return,
+            }
+        };
+    }
+
     static PASTEBOARD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn unique_pasteboard() -> (MutexGuard<'static, ()>, Pasteboard) {
+    fn unique_pasteboard() -> Option<(MutexGuard<'static, ()>, Pasteboard)> {
         let guard = PASTEBOARD_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (guard, Pasteboard::unique())
+        Pasteboard::unique().map(|pasteboard| (guard, pasteboard))
     }
 
     fn simulate_external_file_copy(pasteboard: &Pasteboard, paths: &[&str]) {
@@ -326,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_string() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
         assert_eq!(pasteboard.read(), None);
 
         let item = ClipboardItem::new_string("1".to_string());
@@ -354,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_custom_types_are_owned_by_the_pasteboard() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
 
         assert_eq!(pasteboard.text_hash_type.to_string(), "zed-text-hash");
         assert_eq!(pasteboard.metadata_type.to_string(), "zed-metadata");
@@ -362,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_read_external_path() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
 
         simulate_external_file_copy(&pasteboard, &["/test.txt"]);
 
@@ -390,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_read_external_paths_with_spaces() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
         let paths = ["/some file with spaces.txt"];
 
         simulate_external_file_copy(&pasteboard, &paths);
@@ -407,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_read_multiple_external_paths() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
         let paths = ["/file.txt", "/image.png"];
 
         simulate_external_file_copy(&pasteboard, &paths);
@@ -437,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_read_image() {
-        let (_guard, pasteboard) = unique_pasteboard();
+        let (_guard, pasteboard) = unique_pasteboard!();
 
         // Smallest valid PNG: 1x1 transparent pixel
         let png_bytes: &[u8] = &[

@@ -1,3 +1,4 @@
+use gpui::CaretSelection;
 use std::{
     ops::Range,
     time::{Duration, Instant},
@@ -39,7 +40,7 @@ pub struct HistoryEntry {
     /// The length of the new text that replaced old_text (to know how much to remove on undo).
     pub new_text_len: usize,
     /// The selection range before the edit.
-    pub selected_range: (usize, usize),
+    pub selected_range: CaretSelection,
     /// Timestamp for grouping consecutive edits.
     pub timestamp: Instant,
 }
@@ -60,7 +61,7 @@ impl EditableTextHistory {
         range: Range<usize>,
         old_text: &str,
         new_text_len: usize,
-        selected_range: (usize, usize),
+        selected_range: CaretSelection,
     ) {
         let now = Instant::now();
 

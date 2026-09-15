@@ -3,7 +3,8 @@ use crate::{
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
     SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
+    TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace, px, relative,
+    rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -100,6 +101,45 @@ pub trait Styled: Sized {
     fn grid(mut self) -> Self {
         self.style().display = Some(Display::Grid);
         self
+    }
+
+    /// Contributes this element's contents to a block parent's paragraph.
+    /// Nested inline elements wrap together without adding whitespace or breaks.
+    fn inline(mut self) -> Self {
+        self.style().display = Some(Display::Inline);
+        self
+    }
+
+    /// Places this element in a paragraph as one atomic box with flex layout inside.
+    fn inline_flex(mut self) -> Self {
+        self.style().display = Some(Display::InlineFlex);
+        self
+    }
+
+    /// Sets the vertical alignment of this element when it is placed in an inline layout.
+    fn vertical_align(mut self, align: VerticalAlign) -> Self {
+        self.style().vertical_align = Some(align);
+        self
+    }
+
+    /// Aligns this inline element box with the surrounding text baseline.
+    fn align_baseline(self) -> Self {
+        self.vertical_align(VerticalAlign::Baseline)
+    }
+
+    /// Aligns the middle of this inline element box with the surrounding text.
+    fn align_middle(self) -> Self {
+        self.vertical_align(VerticalAlign::Middle)
+    }
+
+    /// Aligns this inline element box with the top of its line.
+    fn align_top(self) -> Self {
+        self.vertical_align(VerticalAlign::Top)
+    }
+
+    /// Aligns this inline element box with the bottom of its line.
+    fn align_bottom(self) -> Self {
+        self.vertical_align(VerticalAlign::Bottom)
     }
 
     /// Sets the display type of the element to `none`.
