@@ -541,7 +541,7 @@ impl Drop for Scope<'_> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{App, TestDispatcher, TestPlatform};
+    use crate::{App, AssetRegistry, TestDispatcher, TestPlatform};
     use std::cell::RefCell;
 
     /// Helper to create test infrastructure.
@@ -553,10 +553,9 @@ mod test {
         let foreground_executor = ForegroundExecutor::new(arc_dispatcher);
 
         let platform = TestPlatform::new(background_executor.clone(), foreground_executor);
-        let asset_source = Arc::new(());
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
 
-        let app = App::new_app(platform, asset_source, http_client);
+        let app = App::new_app(platform, AssetRegistry::default().into(), http_client);
         (dispatcher, background_executor, app)
     }
 
