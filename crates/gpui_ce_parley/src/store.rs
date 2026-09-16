@@ -1,3 +1,6 @@
+#[cfg(test)]
+use gpui::{RasterColorEffect, px, rgba};
+
 use anyhow::{Context as _, Result, bail, ensure};
 use fontique::{Blob, Synthesis};
 use gpui::{
@@ -198,12 +201,14 @@ impl ColorGlyphClassifier<'_> {
     /// Returns the artwork format used by this glyph.
     pub(crate) fn kind(&self, glyph_id: GlyphId) -> Option<ColorGlyphKind> {
         let skrifa_id = skrifa::GlyphId::new(glyph_id.0);
+
         if let Some(glyph) = self.colr.get(skrifa_id) {
             return Some(match glyph.format() {
                 skrifa::color::ColorGlyphFormat::ColrV0 => ColorGlyphKind::ColrV0,
                 skrifa::color::ColorGlyphFormat::ColrV1 => ColorGlyphKind::ColrV1,
             });
         }
+
         let has_color_bitmap = matches!(
             self.bitmap_strikes.format(),
             Some(skrifa::bitmap::BitmapFormat::Sbix | skrifa::bitmap::BitmapFormat::Cbdt)
@@ -211,9 +216,11 @@ impl ColorGlyphClassifier<'_> {
             .bitmap_strikes
             .iter()
             .any(|strike| strike.get(skrifa_id).is_some());
+
         if has_color_bitmap {
             return Some(ColorGlyphKind::Bitmap);
         }
+
         self.svg_ranges
             .iter()
             .any(|&(start, end)| (start..=end).contains(&glyph_id.0))
@@ -310,6 +317,7 @@ impl LoadedFont {
         let Some(bounds) = bounds else {
             return Ok(Bounds::default());
         };
+
         Ok(Bounds {
             origin: point(bounds.x_min, bounds.y_min),
             size: size(bounds.x_max - bounds.x_min, bounds.y_max - bounds.y_min),
@@ -329,43 +337,47 @@ impl FontStore {
     pub(crate) fn intern_synthesized(
         &mut self,
         data: Blob<u8>,
-        index: u32,
+        idx: u32,
         synthesis: Synthesis,
     ) -> Result<FontId> {
         let normalized_coords = {
-            let font = FontRef::from_index(data.as_ref(), index)
+            let font = FontRef::from_index(data.as_ref(), idx)
                 .context("cannot intern a font face Skrifa cannot parse")?;
             font.axes()
                 .location(synthesis.variation_settings().iter().copied())
                 .coords()
                 .to_vec()
         };
-        self.intern(data, index, &normalized_coords, synthesis)
+
+        self.intern(data, idx, &normalized_coords, synthesis)
     }
 
     /// Interns a selected font instance and returns its canonical GPUI ID.
     pub(crate) fn intern(
         &mut self,
         data: Blob<u8>,
-        index: u32,
+        idx: u32,
         normalized_coords: &[NormalizedCoord],
         synthesis: Synthesis,
     ) -> Result<FontId> {
-        let font = FontRef::from_index(data.as_ref(), index)
+        let font = FontRef::from_index(data.as_ref(), idx)
             .context("cannot intern a font face Skrifa cannot parse")?;
         let key = FontKey {
             source_identity: SourceIdentity::of(&data),
-            face_index: index,
+            face_index: idx,
             normalized_coords: normalized_coords.to_vec(),
             synthesis: synthesis.into(),
         };
-        if let Some(id) = self.ids_by_key.get(&key) {
-            return Ok(*id);
+
+        if let Some(font_id) = self.ids_by_key.get(&key) {
+            return Ok(*font_id);
         }
+
         if self.fonts.len() >= CANONICAL_FONT_ID_BIT {
             bail!("canonical font store exhausted its FontId namespace");
         }
-        let id = FontId(CANONICAL_FONT_ID_BIT | self.fonts.len());
+
+        let font_id = FontId(CANONICAL_FONT_ID_BIT | self.fonts.len());
         let variations = design_variations(&font, normalized_coords);
         let has_color_glyphs = [*b"CBDT", *b"sbix", *b"COLR", *b"SVG "]
             .into_iter()
@@ -373,20 +385,21 @@ impl FontStore {
         let source_identity = SourceIdentity::of(&data);
         self.fonts.push(LoadedFont {
             data,
-            index,
+            index: idx,
             normalized_coords: normalized_coords.to_vec(),
             variations,
             synthesis,
             has_color_glyphs,
             source_identity,
         });
-        self.ids_by_key.insert(key, id);
-        Ok(id)
+
+        self.ids_by_key.insert(key, font_id);
+        Ok(font_id)
     }
 
     /// Returns the stored font for a canonical ID.
-    pub(crate) fn get(&self, id: FontId) -> Option<&LoadedFont> {
-        canonical_index(id).and_then(|index| self.fonts.get(index))
+    pub(crate) fn get(&self, font_id: FontId) -> Option<&LoadedFont> {
+        canonical_index(font_id).and_then(|idx| self.fonts.get(idx))
     }
 }
 
@@ -406,16 +419,16 @@ fn design_variations(
     // Revisit every axis so version 2 `avar` mappings which couple axes converge as well as the
     // ordinary per-axis segment maps. Native APIs will apply the same mapping to these values.
     for _ in 0..4 {
-        for (axis_index, axis) in axis_records.iter().enumerate() {
+        for (axis_idx, axis) in axis_records.iter().enumerate() {
             let target = normalized_coords
-                .get(axis_index)
+                .get(axis_idx)
                 .copied()
                 .unwrap_or_default()
                 .to_f32();
             let mut low = axis.min_value();
             let mut high = axis.max_value();
             for _ in 0..24 {
-                values[axis_index] = (low + high) * 0.5;
+                values[axis_idx] = (low + high) * 0.5;
                 let normalized = axes
                     .location(
                         axis_records
@@ -424,17 +437,19 @@ fn design_variations(
                             .map(|(axis, value)| (axis.tag(), *value)),
                     )
                     .coords()
-                    .get(axis_index)
+                    .get(axis_idx)
                     .copied()
                     .unwrap_or_default()
                     .to_f32();
+
                 if normalized < target {
-                    low = values[axis_index];
+                    low = values[axis_idx];
                 } else {
-                    high = values[axis_index];
+                    high = values[axis_idx];
                 }
             }
-            values[axis_index] = (low + high) * 0.5;
+
+            values[axis_idx] = (low + high) * 0.5;
         }
     }
 
@@ -448,8 +463,8 @@ fn design_variations(
         .collect()
 }
 
-fn canonical_index(id: FontId) -> Option<usize> {
-    (id.0 & CANONICAL_FONT_ID_BIT != 0).then_some(id.0 & !CANONICAL_FONT_ID_BIT)
+fn canonical_index(font_id: FontId) -> Option<usize> {
+    (font_id.0 & CANONICAL_FONT_ID_BIT != 0).then_some(font_id.0 & !CANONICAL_FONT_ID_BIT)
 }
 
 /// Swash raster state used by Linux, web, and explicit fallback construction.
@@ -488,18 +503,26 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
         face: RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
-        let Some(mut image) = self.render_glyph_image(&face, params)? else {
+        // Empty outlines, including spaces at fractional origins, may have one zero
+        // dimension. GPUI represents every empty raster with both dimensions zero.
+        let Some(mut image) = self
+            .render_glyph_image(&face, params)?
+            .filter(|image| image.placement.width != 0 && image.placement.height != 0)
+        else {
             let format = match params.raster_style.mode {
                 GlyphRenderMode::Subpixel => RasterizedGlyphFormat::BgraSubpixelMask,
                 GlyphRenderMode::Color => RasterizedGlyphFormat::BgraColor,
                 GlyphRenderMode::Grayscale => RasterizedGlyphFormat::AlphaMask,
             };
+
             return Ok(RasterizedGlyph::empty(format));
         };
+
         let bounds = Bounds {
             origin: point(image.placement.left.into(), (-image.placement.top).into()),
             size: size(image.placement.width.into(), image.placement.height.into()),
         };
+
         let (format, pixels) = match image.content {
             swash::scale::image::Content::Color => {
                 let premultiplied = matches!(image.source, Source::ColorOutline(_));
@@ -510,6 +533,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                         pixel.swap(0, 2);
                     }
                 }
+
                 (RasterizedGlyphFormat::BgraColor, image.data)
             }
             swash::scale::image::Content::SubpixelMask => {
@@ -542,6 +566,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                         bail!("color glyph rasterization cannot use a dilation style")
                     }
                 };
+
                 let pixels = image
                     .data
                     .into_iter()
@@ -555,6 +580,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
             }
             swash::scale::image::Content::Mask => (RasterizedGlyphFormat::AlphaMask, image.data),
         };
+
         Ok(RasterizedGlyph {
             bounds,
             size: bounds.size,
@@ -603,25 +629,32 @@ impl SwashGlyphRasterizer {
         } else {
             &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
         };
+
         let mut renderer = Render::new(sources);
+
         if params.raster_style.mode == GlyphRenderMode::Subpixel {
             renderer.format(Format::subpixel_bgra());
         } else {
             renderer.format(Format::Alpha);
         }
+
         if let gpui::RasterColorEffect::Preblend(color) = params.raster_style.color_effect {
             renderer.default_color([color.red, color.green, color.blue, color.alpha]);
         }
+
         renderer.offset(subpixel_offset);
+
         if face.synthesis.embolden {
             renderer.embolden(f32::from(params.font_size) * params.scale_factor / 48.0);
         }
+
         if let Some(degrees) = face.synthesis.skew_degrees {
             renderer.transform(Some(Transform::skew(
                 Angle::from_degrees(degrees),
                 Angle::ZERO,
             )));
         }
+
         let glyph_id: u16 = params.glyph_id.0.try_into()?;
         Ok(renderer.render(&mut scaler, glyph_id))
     }
@@ -637,7 +670,6 @@ fn subpixel_offset(params: &RenderGlyphParams) -> Vector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{RasterColorEffect, point, px, rgba};
 
     const IBM_PLEX: &[u8] =
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
@@ -679,6 +711,7 @@ mod tests {
             scene_color: rgba(0xe02010cc),
             requested_mode: GlyphRenderMode::Color,
         });
+
         assert_eq!(style.mode, GlyphRenderMode::Color);
         assert_eq!(
             style.color_effect,
@@ -694,6 +727,7 @@ mod tests {
                 scale_factor,
                 raster_style: style,
             };
+
             assert_eq!(subpixel_offset(&params), Vector::new(0.75, 0.0));
         }
     }

@@ -310,6 +310,8 @@ pub struct Style {
     pub align_items: Option<AlignItems>,
     /// How this node should be aligned in the cross/block axis. Falls back to the parents [`AlignItems`] if not set
     pub align_self: Option<AlignSelf>,
+    /// How this element aligns vertically when it participates in an inline formatting context.
+    pub vertical_align: VerticalAlign,
     /// How should content contained within this item be aligned in the cross/block axis
     pub align_content: Option<AlignContent>,
     /// How should contained within this item be aligned in the main/inline axis
@@ -842,13 +844,33 @@ impl Style {
         cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
+        if let Some(fragments) = window.current_inline_fragments.clone() {
+            for fragment in fragments.iter() {
+                self.paint_box(*fragment, window, cx, |_, _| {});
+            }
+
+            continuation(window, cx);
+
+            return;
+        }
+
+        self.paint_box(bounds, window, cx, continuation);
+    }
+
+    fn paint_box(
+        &self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        context: &mut App,
+        continuation: impl FnOnce(&mut Window, &mut App),
+    ) {
         #[cfg(debug_assertions)]
         if self.debug_below {
-            cx.set_global(DebugBelow)
+            context.set_global(DebugBelow)
         }
 
         #[cfg(debug_assertions)]
-        if self.debug || cx.has_global::<DebugBelow>() {
+        if self.debug || context.has_global::<DebugBelow>() {
             window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
         }
 
@@ -885,7 +907,7 @@ impl Style {
         // The element's own box — background, inset shadows, children, and border — painted as a
         // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
         // and its children together as one group; without a filter it paints directly.
-        let paint_box = |window: &mut Window, cx: &mut App| {
+        let paint_box = |window: &mut Window, context: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
@@ -917,7 +939,7 @@ impl Style {
                 &self.box_shadow,
             );
 
-            continuation(window, cx);
+            continuation(window, context);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
@@ -939,7 +961,7 @@ impl Style {
         };
 
         if self.filter.is_empty() {
-            paint_box(window, cx);
+            paint_box(window, context);
         } else {
             window.with_filter_layer_with_corner_smoothing(
                 bounds,
@@ -947,14 +969,14 @@ impl Style {
                 corner_smoothing,
                 &self.filter,
                 |window| {
-                    paint_box(window, cx);
+                    paint_box(window, context);
                 },
             );
         }
 
         #[cfg(debug_assertions)]
         if self.debug_below {
-            cx.remove_global::<DebugBelow>();
+            context.remove_global::<DebugBelow>();
         }
     }
 
@@ -968,7 +990,7 @@ impl Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
-            display: Display::Block,
+            display: Display::Flex,
             visibility: Visibility::Visible,
             overflow: Point {
                 x: Overflow::Visible,
@@ -990,6 +1012,7 @@ impl Default for Style {
             // Alignment
             align_items: None,
             align_self: None,
+            vertical_align: VerticalAlign::Baseline,
             align_content: None,
             justify_content: None,
             // Flexbox
@@ -1267,6 +1290,24 @@ pub type AlignSelf = AlignItems;
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/justify-self)
 pub type JustifySelf = AlignItems;
 
+/// Controls the vertical position of an element box in an inline formatting context.
+///
+/// This property has no effect on ordinary block, flex, or grid layout.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub enum VerticalAlign {
+    /// Align the bottom of the box with the text baseline.
+    #[default]
+    Baseline,
+    /// Align the box midpoint with the parent baseline plus half the parent font's x-height.
+    /// This is CSS text-metric alignment. Use `self_center` or `items_center` for flex or grid
+    /// container centering.
+    Middle,
+    /// Align the top of the box with the top of its line.
+    Top,
+    /// Align the bottom of the box with the bottom of its line.
+    Bottom,
+}
+
 /// Sets the distribution of space between and around content items
 /// For Flexbox it controls alignment in the cross axis
 /// For Grid it controls alignment in the block axis
@@ -1313,9 +1354,9 @@ pub type JustifyContent = AlignContent;
 
 /// Sets the layout used for the children of this node
 ///
-/// The default values depends on on which feature flags are enabled. The order of precedence is: Flex, Grid, Block, None.
+/// Defaults to flex layout. Block containers arrange text and inline children in paragraphs.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
-// Copy of taffy::style type of the same name, to derive JsonSchema.
+// Inline participation is handled by GPUI before independent box layout in Taffy.
 pub enum Display {
     /// The children will follow the block layout algorithm
     Block,
@@ -1324,7 +1365,15 @@ pub enum Display {
     Flex,
     /// The children will follow the CSS Grid layout algorithm
     Grid,
-    /// The children will not be laid out, and will follow absolute positioning
+
+    /// Contributes its contents to the surrounding paragraph, wrapping across lines.
+    /// As a root or flex/grid item, lays out its contents independently using block flow.
+    Inline,
+
+    /// An atomic inline box whose children use flex layout.
+    InlineFlex,
+
+    /// The element and its children are hidden and occupy no space.
     None,
 }
 
@@ -1467,8 +1516,8 @@ impl From<AlignContent> for taffy::style::AlignContent {
 impl From<Display> for taffy::style::Display {
     fn from(value: Display) -> Self {
         match value {
-            Display::Block => Self::Block,
-            Display::Flex => Self::Flex,
+            Display::Block | Display::Inline => Self::Block,
+            Display::Flex | Display::InlineFlex => Self::Flex,
             Display::Grid => Self::Grid,
             Display::None => Self::None,
         }

@@ -25,8 +25,10 @@ pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
         if consumed_utf16 >= utf16_offset {
             return utf8_offset;
         }
+
         consumed_utf16 += character.len_utf16();
     }
+
     text.len()
 }
 
