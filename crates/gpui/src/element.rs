@@ -33,10 +33,10 @@
 
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
-    FocusHandle, InlineTextContent, InspectorElementId, LayoutId, Pixels, Point, SharedString,
-    Size, Style, StyledText, Text, TextStyle, VerticalAlign, Window, inline_text_content,
+    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
     util::FluentBuilder, window::with_element_arena,
 };
+
 use derive_more::{Deref, DerefMut};
 use std::{
     any::Any,
@@ -289,18 +289,6 @@ trait ElementObject {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels>;
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement;
-}
-
-pub(crate) struct InlineBoxMeasurement {
-    pub size: Size<Pixels>,
-    pub vertical_align: VerticalAlign,
 }
 
 /// A wrapper around an implementer of [`Element`] that allows it to be drawn in a window.
@@ -334,7 +322,9 @@ enum ElementDrawPhase<RequestLayoutState, PrepaintState> {
         bounds: Bounds<Pixels>,
         request_layout: RequestLayoutState,
         prepaint: PrepaintState,
+        inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     },
+
     Painted,
 }
 
@@ -460,6 +450,11 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
+                let inline_fragments = window.inline_fragments(layout_id);
+                let previous_fragments = std::mem::replace(
+                    &mut window.current_inline_fragments,
+                    inline_fragments.clone(),
+                );
                 let mut prepaint = self.element.prepaint(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
@@ -468,6 +463,8 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
+
+                window.current_inline_fragments = previous_fragments;
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {
@@ -507,8 +504,10 @@ impl<E: Element> Drawable<E> {
                     bounds,
                     request_layout,
                     prepaint,
+                    inline_fragments,
                 };
             }
+
             _ => panic!("must call request_layout before prepaint"),
         }
     }
@@ -526,6 +525,7 @@ impl<E: Element> Drawable<E> {
                 bounds,
                 mut request_layout,
                 mut prepaint,
+                inline_fragments,
                 ..
             } => {
                 if let Some(element_id) = self.element.id() {
@@ -534,6 +534,9 @@ impl<E: Element> Drawable<E> {
                 }
 
                 window.next_frame.dispatch_tree.set_active_node(node_id);
+                let previous_fragments =
+                    std::mem::replace(&mut window.current_inline_fragments, inline_fragments);
+
                 self.element.paint(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
@@ -548,9 +551,12 @@ impl<E: Element> Drawable<E> {
                     window.element_id_stack.pop();
                 }
 
+                window.current_inline_fragments = previous_fragments;
+
                 self.phase = ElementDrawPhase::Painted;
                 (request_layout, prepaint)
             }
+
             _ => panic!("must call prepaint before paint"),
         }
     }
@@ -611,22 +617,10 @@ impl<E: Element> Drawable<E> {
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
-        cx: &mut App,
+        context: &mut App,
     ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, cx).1
-    }
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        let (layout_id, size) = self.compute_layout_as_root(available_space, window, cx);
-        InlineBoxMeasurement {
-            size,
-            vertical_align: window.layout_vertical_align(layout_id),
-        }
+        self.compute_layout_as_root(available_space, window, context)
+            .1
     }
 }
 
@@ -663,15 +657,6 @@ where
     ) -> Size<Pixels> {
         Drawable::layout_as_root(self, available_space, window, cx)
     }
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        Drawable::layout_as_inline_box(self, available_space, window, cx)
-    }
 }
 
 /// A dynamically typed element that can be used to store any element type.
@@ -691,20 +676,6 @@ impl AnyElement {
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.0.inner_element().downcast_mut::<T>()
-    }
-
-    pub(crate) fn take_inline_text(&mut self, text_style: &TextStyle) -> Option<InlineTextContent> {
-        if let Some(text) = self.downcast_mut::<&'static str>() {
-            return Some(inline_text_content(SharedString::from(*text), text_style));
-        }
-        if let Some(text) = self.downcast_mut::<SharedString>() {
-            return Some(inline_text_content(text.clone(), text_style));
-        }
-        if let Some(text) = self.downcast_mut::<Text>() {
-            return Some(inline_text_content(text.text().clone(), text_style));
-        }
-        self.downcast_mut::<StyledText>()
-            .map(|text| text.take_inline_content(text_style))
     }
 
     /// Request the layout ID of the element stored in this `AnyElement`.
@@ -740,15 +711,6 @@ impl AnyElement {
         cx: &mut App,
     ) -> Size<Pixels> {
         self.0.layout_as_root(available_space, window, cx)
-    }
-
-    pub(crate) fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        self.0.layout_as_inline_box(available_space, window, cx)
     }
 
     /// Prepaints this element at the given absolute origin.

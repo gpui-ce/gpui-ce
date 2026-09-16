@@ -1,10 +1,11 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn main() {
-    use gpui::{
-        AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
-        VisualTestAppContext, Window, div, px, rgb, white,
-    };
+use gpui::{
+    AppContext, Context, IntoElement, ParentElement, Render, Styled, VisualTestAppContext, Window,
+    div, px, rgb, white,
+};
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn main() {
     if std::env::var_os("GPUI_RUN_RENDERING_TESTS").is_none() {
         return;
     }
@@ -54,14 +55,14 @@ fn main() {
         }
     }
 
-    let mut cx = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
-    let window = cx
-        .open_offscreen_window_default(|_, cx| cx.new(|_| ParleyRenderingFixture))
+    let mut context = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
+    let window = context
+        .open_offscreen_window_default(|_, context| context.new(|_| ParleyRenderingFixture))
         .expect("failed to create offscreen text window");
     let window = window.into();
-    cx.run_until_parked();
+    context.run_until_parked();
 
-    let primitive_counts = cx
+    let primitive_counts = context
         .update_window(window, |_, window, _| window.rendered_primitive_counts())
         .expect("failed to inspect rendered text");
     let (_, monochrome, subpixel, polychrome) = primitive_counts;
@@ -76,7 +77,7 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     {
-        let image = cx
+        let image = context
             .capture_screenshot(window)
             .expect("failed to capture rendered text");
         let background = *image.get_pixel(0, 0);

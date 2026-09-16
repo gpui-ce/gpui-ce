@@ -7,7 +7,7 @@ struct InlineLayoutExample;
 
 fn inline_badge(label: &'static str, color: u32) -> impl IntoElement {
     div()
-        .flex()
+        .inline_flex()
         .items_center()
         .gap_1()
         .px_2()
@@ -23,7 +23,7 @@ fn inline_badge(label: &'static str, color: u32) -> impl IntoElement {
 }
 
 impl Render for InlineLayoutExample {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _context: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -48,7 +48,7 @@ impl Render for InlineLayoutExample {
                     )
                     .child(
                         div()
-                            .inline()
+                            .block()
                             .w_full()
                             .p_5()
                             .rounded_lg()
@@ -60,7 +60,10 @@ impl Render for InlineLayoutExample {
                             .text_center()
                             .child("Parley keeps ")
                             .child(inline_badge("GPUI elements", 0x0f766e))
-                            .child(" in the text flow, so they share lines and wrap with the surrounding words. A second ")
+                            .child(div().inline().text_color(rgb(0xfbbf24))
+                                .child(" in the text flow, so ")
+                                .child(div().inline().font_weight(FontWeight::BOLD).child("nested spans wrap"))
+                                .child(" with the surrounding words. A second "))
                             .child(inline_badge("inline box", 0x7c3aed))
                             .child(" continues naturally onto the next available line."),
                     )
@@ -75,16 +78,17 @@ impl Render for InlineLayoutExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(720.), px(440.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| InlineLayoutExample),
-        )
-        .unwrap();
-        cx.activate(true);
+    gpui_platform::application().run(|context: &mut App| {
+        let bounds = Bounds::centered(None, size(px(720.), px(440.)), context);
+        context
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_, context| context.new(|_| InlineLayoutExample),
+            )
+            .unwrap();
+        context.activate(true);
     });
 }

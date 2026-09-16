@@ -34,7 +34,7 @@ struct FontReport {
 }
 
 impl Render for FontReport {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _context: &mut Context<Self>) -> impl IntoElement {
         let passed = self.checks.iter().filter(|check| check.passed).count();
         let total = self.checks.len();
 
@@ -64,6 +64,7 @@ impl Render for FontReport {
                 } else {
                     rgb(0xf87171)
                 };
+
                 div()
                     .flex()
                     .flex_col()
@@ -133,8 +134,8 @@ fn selected_font(family: &str, weight: FontWeight, style: FontStyle) -> Font {
 }
 
 fn main() {
-    gpui_platform::application().run(move |cx: &mut App| {
-        let text_system = cx.text_system();
+    gpui_platform::application().run(move |context: &mut App| {
+        let text_system = context.text_system();
         text_system
             .add_fonts(vec![
                 Cow::Borrowed(IBM_PLEX_REGULAR),
@@ -195,19 +196,20 @@ fn main() {
             ),
         ];
 
-        let bounds = Bounds::centered(None, size(px(760.0), px(680.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            move |_, cx| {
-                cx.new(|_| FontReport {
-                    checks: checks.clone(),
-                })
-            },
-        )
-        .unwrap();
-        cx.activate(true);
+        let bounds = Bounds::centered(None, size(px(760.0), px(680.0)), context);
+        context
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |_, context| {
+                    context.new(|_| FontReport {
+                        checks: checks.clone(),
+                    })
+                },
+            )
+            .unwrap();
+        context.activate(true);
     });
 }

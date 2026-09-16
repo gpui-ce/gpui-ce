@@ -111,11 +111,13 @@ impl WindowsPlatform {
         unsafe {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
+
         let directx_devices = if !headless {
             Some(DirectXDevices::new().context("Creating DirectX devices")?)
         } else {
             None
         };
+
         let text_system = Arc::new(
             gpui_parley::ParleyTextSystem::new_with_rasterizer(
                 gpui_parley::SystemFonts::Load,

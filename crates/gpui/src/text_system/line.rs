@@ -161,14 +161,19 @@ impl InlineLayout {
         &self,
         origin: Point<Pixels>,
         window: &mut Window,
-        cx: &mut App,
+        context: &mut App,
     ) -> Result<()> {
-        paint_inline_layout(self, origin, TextPaintPass::Background, window, cx)
+        paint_inline_layout(self, origin, TextPaintPass::Background, window, context)
     }
 
     /// Paint the glyphs and foreground decorations in this inline layout.
-    pub fn paint(&self, origin: Point<Pixels>, window: &mut Window, cx: &mut App) -> Result<()> {
-        paint_inline_layout(self, origin, TextPaintPass::Foreground, window, cx)
+    pub fn paint(
+        &self,
+        origin: Point<Pixels>,
+        window: &mut Window,
+        context: &mut App,
+    ) -> Result<()> {
+        paint_inline_layout(self, origin, TextPaintPass::Foreground, window, context)
     }
 }
 
@@ -192,13 +197,13 @@ fn paint_inline_layout(
     origin: Point<Pixels>,
     pass: TextPaintPass,
     window: &mut Window,
-    cx: &mut App,
+    context: &mut App,
 ) -> Result<()> {
     if inline.lines.is_empty() {
         return Ok(());
     }
 
-    let text_system = cx.text_system().clone();
+    let text_system = context.text_system().clone();
     let placement = place_inline_layout(origin, inline.alignment_offset, window);
     window.paint_layer(Bounds::new(placement.origin, inline.size), |window| {
         for (line, visual_line) in inline.lines.iter().zip(&inline.layout.visual_lines) {
@@ -214,6 +219,7 @@ fn paint_inline_layout(
                 window,
             )?;
         }
+
         Ok(())
     })
 }
@@ -256,9 +262,11 @@ fn paint_visual_line(
         pass,
         text_system,
     };
+
     for fragment in &layout.paint_fragments[visual_line.fragment_range.clone()] {
         paint_text_fragment(fragment, &context, window)?;
     }
+
     Ok(())
 }
 
@@ -276,19 +284,22 @@ fn paint_text_fragment(
         window,
         context.pass == TextPaintPass::Foreground,
     );
+
     if context.pass == TextPaintPass::Background {
         return Ok(());
     }
 
     let max_glyph_size = context
         .text_system
-        .bounding_box(fragment.font_id, context.layout.font_size)
+        .bounding_box(fragment.font_id, fragment.font_size)
         .size;
+
     for glyph in &fragment.glyphs {
         let cull_origin = point(
             context.line_origin.x + glyph.position.x,
             context.line_origin.y,
         );
+
         if !Bounds::new(cull_origin, max_glyph_size).intersects(&window.content_mask().bounds) {
             continue;
         }
@@ -297,23 +308,20 @@ fn paint_text_fragment(
             context.line_origin.x + glyph.position.x,
             context.baseline_y + glyph.position.y,
         );
+
         if glyph.is_emoji {
-            window.paint_emoji(
-                glyph_origin,
-                fragment.font_id,
-                glyph.id,
-                context.layout.font_size,
-            )?;
+            window.paint_emoji(glyph_origin, fragment.font_id, glyph.id, fragment.font_size)?;
         } else {
             window.paint_glyph(
                 glyph_origin,
                 fragment.font_id,
                 glyph.id,
-                context.layout.font_size,
+                fragment.font_size,
                 fragment.style.color,
             )?;
         }
     }
+
     Ok(())
 }
 
@@ -343,7 +351,7 @@ fn paint_visual_text(
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let text_system = cx.text_system().clone();
 
-        for (line_ix, line) in visual_lines.iter().enumerate() {
+        for (line_idx, line) in visual_lines.iter().enumerate() {
             let line_origin = point(
                 aligned_visual_origin_x(
                     origin.x,
@@ -351,7 +359,7 @@ fn paint_visual_text(
                     line.advance,
                     align,
                 ),
-                origin.y + line_ix as f32 * line_height,
+                origin.y + line_idx as f32 * line_height,
             );
             paint_visual_line(
                 layout,
@@ -381,6 +389,7 @@ fn paint_visual_background(
     if visual_lines.is_empty() {
         return Ok(());
     }
+
     let paint_width = visual_lines
         .iter()
         .map(|line| line.advance)
@@ -392,7 +401,7 @@ fn paint_visual_background(
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let text_system = cx.text_system().clone();
-        for (line_ix, line) in visual_lines.iter().enumerate() {
+        for (line_idx, line) in visual_lines.iter().enumerate() {
             let line_origin = point(
                 aligned_visual_origin_x(
                     origin.x,
@@ -400,7 +409,7 @@ fn paint_visual_background(
                     line.advance,
                     align,
                 ),
-                origin.y + line_ix as f32 * line_height,
+                origin.y + line_idx as f32 * line_height,
             );
             paint_visual_line(
                 layout,
@@ -427,6 +436,7 @@ fn paint_fragment_decorations_at(
     foreground: bool,
 ) {
     let range = line_origin.x + fragment.x_range.start..line_origin.x + fragment.x_range.end;
+
     if foreground {
         if let Some(mut underline) = fragment.style.underline {
             underline.color = Some(underline.color.unwrap_or(fragment.style.color));
@@ -439,6 +449,7 @@ fn paint_fragment_decorations_at(
                 &underline,
             );
         }
+
         if let Some(mut strike) = fragment.style.strikethrough {
             strike.color = Some(strike.color.unwrap_or(fragment.style.color));
             let strike_y = baseline_y

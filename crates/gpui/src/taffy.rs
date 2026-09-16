@@ -1,13 +1,14 @@
 use crate::{
-    AbsoluteLength, App, Bounds, DefiniteLength, Edges, GridTemplate, Length, Pixels, Point, Size,
-    Style, VerticalAlign, Window, size,
+    AbsoluteLength, App, Bounds, DefiniteLength, Display, Edges, GridTemplate, InlineContent,
+    Length, Pixels, Point, Position, Size, Style, VerticalAlign, Window, size,
     util::{
         ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
         round_to_device_pixel,
     },
 };
+
 use collections::{FxHashMap, FxHashSet};
-use std::{fmt::Debug, ops::Range};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 use taffy::{
     TaffyTree, TraversePartialTree as _,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -35,6 +36,9 @@ pub struct TaffyLayoutEngine {
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
     computed_layouts: FxHashSet<LayoutId>,
     vertical_alignments: FxHashMap<LayoutId, VerticalAlign>,
+    pub(crate) inline_content: FxHashMap<LayoutId, Arc<InlineContent>>,
+    pub(crate) inline_fragments: FxHashMap<LayoutId, Arc<[Bounds<Pixels>]>>,
+    display_and_position: FxHashMap<LayoutId, (Display, Position)>,
     layout_bounds_scratch_space: Vec<LayoutId>,
 }
 
@@ -50,6 +54,9 @@ impl TaffyLayoutEngine {
             absolute_outer_origins: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
             vertical_alignments: FxHashMap::default(),
+            inline_content: FxHashMap::default(),
+            inline_fragments: FxHashMap::default(),
+            display_and_position: FxHashMap::default(),
             layout_bounds_scratch_space: Vec::new(),
         }
     }
@@ -60,6 +67,9 @@ impl TaffyLayoutEngine {
         self.absolute_outer_origins.clear();
         self.computed_layouts.clear();
         self.vertical_alignments.clear();
+        self.inline_content.clear();
+        self.inline_fragments.clear();
+        self.display_and_position.clear();
     }
 
     pub fn request_layout(
@@ -72,7 +82,7 @@ impl TaffyLayoutEngine {
         let vertical_align = style.vertical_align;
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        let id = if children.is_empty() {
+        let node_id = if children.is_empty() {
             self.taffy
                 .new_leaf(taffy_style)
                 .expect(EXPECT_MESSAGE)
@@ -84,8 +94,11 @@ impl TaffyLayoutEngine {
                 .expect(EXPECT_MESSAGE)
                 .into()
         };
-        self.record_vertical_align(id, vertical_align);
-        id
+
+        self.record_vertical_align(node_id, vertical_align);
+        self.display_and_position
+            .insert(node_id, (style.display, style.position));
+        node_id
     }
 
     pub fn request_measured_layout(
@@ -107,26 +120,55 @@ impl TaffyLayoutEngine {
         #[cfg(feature = "stacker")]
         let measure = StackSafe::new(measure);
 
-        let id = self
+        let node_id = self
             .taffy
             .new_leaf_with_context(taffy_style, NodeContext { measure })
             .expect(EXPECT_MESSAGE)
             .into();
-        self.record_vertical_align(id, vertical_align);
-        id
+        self.record_vertical_align(node_id, vertical_align);
+        self.display_and_position
+            .insert(node_id, (style.display, style.position));
+        node_id
     }
 
-    fn record_vertical_align(&mut self, id: LayoutId, vertical_align: VerticalAlign) {
+    fn record_vertical_align(&mut self, node_id: LayoutId, vertical_align: VerticalAlign) {
         if vertical_align != VerticalAlign::Baseline {
-            self.vertical_alignments.insert(id, vertical_align);
+            self.vertical_alignments.insert(node_id, vertical_align);
         }
     }
 
-    pub(crate) fn vertical_align(&self, id: LayoutId) -> VerticalAlign {
+    pub(crate) fn vertical_align(&self, node_id: LayoutId) -> VerticalAlign {
         self.vertical_alignments
-            .get(&id)
+            .get(&node_id)
             .copied()
             .unwrap_or_default()
+    }
+
+    pub(crate) fn display_and_position(&self, node_id: LayoutId) -> (Display, Position) {
+        self.display_and_position[&node_id]
+    }
+
+    /// Places a detached inline box, invalidating cached positions of its descendants.
+    pub(crate) fn place_inline(&mut self, node_id: LayoutId, bounds: Bounds<Pixels>, scale: f32) {
+        let mut stack = vec![node_id];
+
+        while let Some(child) = stack.pop() {
+            self.absolute_layout_bounds.remove(&child);
+            self.absolute_outer_origins.remove(&child);
+            stack.extend(
+                self.taffy
+                    .children(child.into())
+                    .expect(EXPECT_MESSAGE)
+                    .into_iter()
+                    .map(LayoutId::from),
+            );
+        }
+
+        self.absolute_layout_bounds.insert(node_id, bounds);
+        self.absolute_outer_origins.insert(
+            node_id,
+            bounds.origin.map(|position| f32::from(position) * scale),
+        );
     }
 
     /// Treats any `auto` dimension of the given node's style as filling `size`.
@@ -408,14 +450,19 @@ impl TaffyLayoutEngine {
     /// snapping through [`Self::layout_bounds`] so coincident edges still close.
     pub(crate) fn parent_relative_layout_bounds(
         &mut self,
-        id: LayoutId,
+        node_id: LayoutId,
         scale_factor: f32,
     ) -> Bounds<Pixels> {
-        let Some(parent_id) = self.taffy.parent(id.0).map(LayoutId::from) else {
-            return self.layout_bounds(id, scale_factor);
+        if self.inline_fragments.contains_key(&node_id) {
+            return self.layout_bounds(node_id, scale_factor);
+        }
+
+        let Some(parent_id) = self.taffy.parent(node_id.0).map(LayoutId::from) else {
+            return self.layout_bounds(node_id, scale_factor);
         };
+
         let parent_bounds = self.layout_bounds(parent_id, scale_factor);
-        let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
+        let layout = self.taffy.layout(node_id.into()).expect(EXPECT_MESSAGE);
         let local_origin = Point::from(layout.location).map(round_half_toward_zero);
         let local_size = Size::from(layout.size).map(round_half_toward_zero);
 
