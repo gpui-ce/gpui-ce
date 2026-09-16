@@ -1,7 +1,3 @@
-#[cfg(any(test, feature = "test-support"))]
-use crate::NoopTextSystem;
-#[cfg(any(test, feature = "test-support"))]
-use crate::PathPromptOptions;
 use crate::{
     AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DevicePixels,
     DummyKeyboardMapper, ForegroundExecutor, Keymap, Platform, PlatformDisplay,
@@ -10,6 +6,8 @@ use crate::{
     SourceMetadata, SystemNotification, SystemNotificationResponse, Task, TestDisplay, TestWindow,
     ThermalState, WindowAppearance, WindowParams, size,
 };
+#[cfg(any(test, feature = "test-support"))]
+use crate::{PathPromptOptions, TestTextSystem};
 use anyhow::Result;
 #[cfg(any(test, feature = "test-support"))]
 use collections::VecDeque;
@@ -117,7 +115,7 @@ impl TestPlatform {
         Self::with_platform(
             executor,
             foreground_executor,
-            Arc::new(NoopTextSystem),
+            Arc::new(TestTextSystem),
             None,
         )
     }

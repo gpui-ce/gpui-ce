@@ -2,7 +2,7 @@
 //!
 //! This replaces the macOS-only `HeadlessMetalAppContext` with a platform-neutral
 //! implementation backed by `TestPlatform`. Tests supply a real `PlatformTextSystem`
-//! (e.g. `CosmicTextSystem` on Windows, `MacTextSystem` on macOS) for accurate glyphs.
+//! to get accurate glyph measurements while keeping everything else deterministic.
 //!
 //! Optionally, a renderer factory can be provided to enable real GPU rendering
 //! and screenshot capture via [`HeadlessAppContext::capture_screenshot`].
@@ -10,8 +10,9 @@
 use crate::{
     AnyView, AnyWindowHandle, App, AppCell, AppContext, AssetRegistry, AssetSource,
     BackgroundExecutor, Bounds, Context, Entity, EntityId, EventEmitter, ForegroundExecutor,
-    Global, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Size, Task,
-    TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds, WindowHandle, WindowOptions,
+    Global, Hsla, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation,
+    ScaledPixels, Size, Task, TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds,
+    WindowHandle, WindowOptions,
     app::{GpuiBorrow, GpuiMode},
 };
 use anyhow::Result;
@@ -27,7 +28,9 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 /// # Usage
 ///
 /// ```ignore
-/// let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new("fallback"));
+/// let text_system = Arc::new(gpui_parley::ParleyTextSystem::new(
+///     gpui_parley::SystemFonts::Load,
+/// ));
 /// let mut cx = HeadlessAppContext::with_platform(
 ///     text_system,
 ///     Arc::new(Assets),
@@ -162,6 +165,36 @@ impl HeadlessAppContext {
     ) -> Result<R> {
         let mut app = self.app.borrow_mut();
         app.update_window(window, f)
+    }
+
+    /// Returns the most recently rendered bounds for an element's debug selector.
+    pub fn debug_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        selector: &str,
+    ) -> Result<Option<Bounds<Pixels>>> {
+        self.update_window(window, |_, window, _| {
+            window.rendered_frame.debug_bounds.get(selector).copied()
+        })
+    }
+
+    /// Returns the device-pixel bounds of rendered solid quads with the requested color.
+    pub fn solid_quad_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        color: Hsla,
+    ) -> Result<Vec<Bounds<ScaledPixels>>> {
+        let color = color.into();
+        self.update_window(window, |_, window, _| {
+            window
+                .rendered_frame
+                .scene
+                .quads
+                .iter()
+                .filter(|quad| quad.background.solid == color)
+                .map(|quad| quad.bounds)
+                .collect()
+        })
     }
 
     /// Captures a screenshot from a window.

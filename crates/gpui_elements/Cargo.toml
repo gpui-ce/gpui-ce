@@ -20,7 +20,7 @@ smallvec.workspace = true
 
 [dev-dependencies]
 gpui = { path = "../gpui", package = "gpui-ce", features = ["test-support"] }
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { workspace = true, features = ["wayland", "x11"] }
 
 [[example]]
 name = "editable_text"

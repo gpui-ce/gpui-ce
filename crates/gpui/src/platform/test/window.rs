@@ -536,7 +536,7 @@ impl PlatformAtlas for TestAtlas {
             crate::AtlasTile {
                 texture_id: AtlasTextureId {
                     index: texture_id,
-                    kind: crate::AtlasTextureKind::Monochrome,
+                    kind: key.texture_kind(),
                 },
                 tile_id: TileId(tile_id),
                 padding: 0,

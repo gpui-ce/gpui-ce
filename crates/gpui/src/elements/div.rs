@@ -44,6 +44,8 @@ use std::{
 
 use super::ImageCacheProvider;
 
+mod inline;
+use inline::InlineDivFrameState;
 #[cfg(feature = "stacker")]
 type StackSafe<T> = stacksafe::StackSafe<T>;
 #[cfg(not(feature = "stacker"))]
@@ -2175,6 +2177,7 @@ impl Div {
 /// bounds of the children after the layout phase is complete.
 pub struct DivFrameState {
     child_layout_ids: SmallVec<[LayoutId; 2]>,
+    inline: Option<InlineDivFrameState>,
 }
 
 /// Interactivity state displayed an manipulated in the inspector.
@@ -2260,6 +2263,7 @@ impl Element for Div {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut child_layout_ids = SmallVec::new();
+        let mut inline = None;
         let image_cache = self
             .image_cache
             .as_mut()
@@ -2273,18 +2277,39 @@ impl Element for Div {
                 cx,
                 |style, window, cx| {
                     window.with_text_style(style.text_style().cloned(), |window| {
-                        child_layout_ids = self
-                            .children
-                            .iter_mut()
-                            .map(|child| child.request_layout(window, cx))
-                            .collect::<SmallVec<_>>();
-                        window.request_layout(style, child_layout_ids.iter().copied(), cx)
+                        if style.display != Display::Inline {
+                            child_layout_ids = self
+                                .children
+                                .iter_mut()
+                                .map(|child| child.request_layout(window, cx))
+                                .collect::<SmallVec<_>>();
+                            return window.request_layout(
+                                style,
+                                child_layout_ids.iter().copied(),
+                                cx,
+                            );
+                        }
+
+                        let (layout_id, inline_state) = InlineDivFrameState::request_layout(
+                            &style,
+                            &mut self.children,
+                            window,
+                            cx,
+                        );
+                        inline = Some(inline_state);
+                        layout_id
                     })
                 },
             )
         });
 
-        (layout_id, DivFrameState { child_layout_ids })
+        (
+            layout_id,
+            DivFrameState {
+                child_layout_ids,
+                inline,
+            },
+        )
     }
 
     #[cfg_attr(feature = "stacker", stacksafe::stacksafe)]
@@ -2304,7 +2329,10 @@ impl Element for Div {
 
         let has_prepaint_listener = self.prepaint_listener.is_some();
         let mut children_bounds = Vec::with_capacity(if has_prepaint_listener {
-            request_layout.child_layout_ids.len()
+            request_layout.inline.as_ref().map_or_else(
+                || request_layout.child_layout_ids.len(),
+                InlineDivFrameState::box_count,
+            )
         } else {
             0
         });
@@ -2314,7 +2342,13 @@ impl Element for Div {
         if let Some(handle) = self.interactivity.scroll_anchor.as_ref() {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
-        let content_size = if request_layout.child_layout_ids.is_empty() {
+        let content_size = if let Some(inline) = request_layout.inline.as_ref() {
+            inline.prepare_layout(
+                bounds,
+                self.interactivity.tracked_scroll_handle.as_ref(),
+                window,
+            )
+        } else if request_layout.child_layout_ids.is_empty() {
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
@@ -2356,42 +2390,50 @@ impl Element for Div {
                     return hitbox;
                 }
 
-                #[inline]
-                fn prepaint_children(
-                    children: &mut [StackSafe<AnyElement>],
-                    order_fn: Option<&dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>,
-                    window: &mut Window,
-                    cx: &mut App,
-                ) {
-                    if let Some(order_fn) = order_fn {
-                        let order = order_fn(window, cx);
-                        for idx in order {
-                            if let Some(child) = children.get_mut(idx) {
-                                child.prepaint(window, cx);
-                            }
-                        }
-                    } else {
-                        for child in children {
-                            child.prepaint(window, cx);
-                        }
-                    }
-                }
-
                 window.with_image_cache(image_cache, |window| {
                     window.with_style_transition_containing_bounds(bounds, |window| {
-                        window.with_element_offset(scroll_offset, |window| {
-                            prepaint_children(
+                        if let Some(inline) = request_layout.inline.as_mut() {
+                            let order = self
+                                .prepaint_order_fn
+                                .as_ref()
+                                .map(|order_fn| order_fn(window, cx));
+                            let inline_bounds = inline.prepaint_children(
                                 &mut self.children,
-                                self.prepaint_order_fn.as_deref(),
+                                bounds,
+                                style,
+                                scroll_offset,
+                                order.as_deref(),
                                 window,
                                 cx,
-                            )
-                        });
-                    });
+                            );
 
-                    if let Some(listener) = self.prepaint_listener.as_ref() {
-                        listener(children_bounds, window, cx);
-                    }
+                            if let Some(listener) = self.prepaint_listener.as_ref() {
+                                children_bounds.extend(inline_bounds);
+                                listener(children_bounds, window, cx);
+                            }
+
+                            return;
+                        }
+
+                        window.with_element_offset(scroll_offset, |window| {
+                            if let Some(order_fn) = &self.prepaint_order_fn {
+                                let order = order_fn(window, cx);
+                                for idx in order {
+                                    if let Some(child) = self.children.get_mut(idx) {
+                                        child.prepaint(window, cx);
+                                    }
+                                }
+                            } else {
+                                for child in &mut self.children {
+                                    child.prepaint(window, cx);
+                                }
+                            }
+                        });
+
+                        if let Some(listener) = self.prepaint_listener.as_ref() {
+                            listener(children_bounds, window, cx);
+                        }
+                    });
                 });
 
                 hitbox
@@ -2405,7 +2447,7 @@ impl Element for Div {
         global_id: Option<&GlobalElementId>,
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
+        request_layout: &mut Self::RequestLayoutState,
         hitbox: &mut Option<Hitbox>,
         window: &mut Window,
         cx: &mut App,
@@ -2426,6 +2468,11 @@ impl Element for Div {
                 |style, window, cx| {
                     // skip children
                     if style.display == Display::None {
+                        return;
+                    }
+
+                    if let Some(inline) = request_layout.inline.as_ref() {
+                        inline.paint_children(&mut self.children, bounds, style, window, cx);
                         return;
                     }
 
@@ -3067,7 +3114,6 @@ impl Interactivity {
                         None,
                     )
                     .ok()
-                    .and_then(|mut text| text.pop())
                 {
                     text.paint(hitbox.origin, FONT_SIZE, TextAlign::Left, None, window, cx)
                         .ok();
@@ -4859,10 +4905,66 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, canvas,
-        util::FluentBuilder as _,
+        AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, MouseMoveEvent,
+        StyledText, TestAppContext, canvas, hsla, util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
+
+    #[gpui::test]
+    fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
+        let placed_children = Rc::new(RefCell::new(Vec::new()));
+        let captured_bounds = placed_children.clone();
+        let window = cx.add_empty_window();
+        let highlight_color = hsla(0.4, 0.6, 0.5, 1.0);
+
+        window.draw(
+            point(px(10.), px(20.)),
+            size(px(160.), px(80.)),
+            move |_, _| {
+                div()
+                    .inline()
+                    .w(px(160.))
+                    .child(StyledText::new("prefix ").with_highlights([(
+                        0.."prefix ".len(),
+                        HighlightStyle {
+                            background_color: Some(highlight_color),
+                            ..Default::default()
+                        },
+                    )]))
+                    .child(div().size(px(18.)).align_baseline())
+                    .child(div().size(px(18.)).align_middle())
+                    .child(" suffix")
+                    .on_children_prepainted(move |bounds, _, _| {
+                        *captured_bounds.borrow_mut() = bounds;
+                    })
+                    .into_any_element()
+            },
+        );
+
+        let placed_children = placed_children.borrow();
+        assert_eq!(placed_children.len(), 2);
+        let baseline_box = placed_children[0];
+        let middle_box = placed_children[1];
+        assert_eq!(baseline_box.size, size(px(18.), px(18.)));
+        assert_eq!(middle_box.size, baseline_box.size);
+        assert!(baseline_box.origin.x > px(10.));
+        assert!(middle_box.origin.x >= baseline_box.right());
+        assert!(middle_box.right() <= px(170.));
+        assert!(baseline_box.origin.y >= px(20.));
+        assert!(middle_box.origin.y > baseline_box.origin.y);
+        assert!(middle_box.bottom() > baseline_box.bottom());
+        assert!(
+            window.update(|window, _| {
+                window
+                    .rendered_frame
+                    .scene
+                    .quads
+                    .iter()
+                    .any(|quad| quad.background.solid == highlight_color.into())
+            }),
+            "the highlighted inline text did not paint its background"
+        );
+    }
 
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,
