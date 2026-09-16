@@ -352,8 +352,8 @@ impl WindowTextSystem {
     }
 
     /// Layout text and atomic element boxes in one inline formatting context.
-    pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        self.text_system.platform_text_system.layout_inline(request)
+    pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
+        self.line_layout_cache.layout_inline(request)
     }
 
     /// Layout the given line of text, at the given font_size.
@@ -507,7 +507,7 @@ pub struct TextLayoutRequest<'a> {
 }
 
 /// An atomic element inserted at a UTF-8 boundary in an inline document.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct InlineBoxRequest {
     /// Identifier returned with the positioned box.
     pub id: u64,
@@ -520,7 +520,7 @@ pub struct InlineBoxRequest {
 }
 
 /// Resolved font size and line height for part of an inline document.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InlineTextStyle {
     /// UTF-8 range receiving these resolved metrics.
     pub range: Range<usize>,
@@ -973,6 +973,83 @@ impl FontMetrics {
     /// Returns the outer limits of the area that the font covers in pixels.
     pub fn bounding_box(&self, font_size: Pixels) -> Bounds<Pixels> {
         (self.bounding_box / self.units_per_em as f32 * font_size.0).map(px)
+    }
+}
+
+#[cfg(test)]
+mod layout_cache_tests {
+    use super::*;
+
+    fn window_text_system() -> WindowTextSystem {
+        WindowTextSystem::new(Arc::new(TextSystem::new(Arc::new(TestTextSystem))))
+    }
+
+    #[test]
+    fn paint_changes_reuse_shaped_geometry() {
+        let system = window_text_system();
+        let text = SharedString::from("paint cache");
+        let mut run = TextRun {
+            len: text.len(),
+            color: hsla(0.0, 0.8, 0.4, 1.0),
+            ..Default::default()
+        };
+        let first = system
+            .shape_text(text.clone(), px(16.0), &[run.clone()], None, None)
+            .unwrap();
+
+        run.color = hsla(0.6, 0.8, 0.4, 1.0);
+        run.underline = Some(crate::UnderlineStyle {
+            thickness: px(1.5),
+            color: None,
+            wavy: false,
+        });
+        let second = system
+            .shape_text(text, px(16.0), std::slice::from_ref(&run), None, None)
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&first.platform_layout, &second.platform_layout));
+        assert_eq!(second.paint_fragments[0].style, PaintStyle::from(&run));
+        assert!(second.paint_fragments[0].underline_offset.is_some());
+    }
+
+    #[test]
+    fn inline_layouts_reuse_all_valid_widths_across_frames() {
+        let system = window_text_system();
+        let text = "cached inline paragraph";
+        let runs = [TextRun {
+            len: text.len(),
+            ..Default::default()
+        }];
+        let request = |wrap_width| InlineLayoutRequest {
+            text,
+            runs: &runs,
+            text_styles: &[],
+            boxes: &[],
+            font_size: px(16.0),
+            line_height: px(20.0),
+            text_metrics: InlineTextMetrics::default(),
+            wrap_width: Some(wrap_width),
+            line_clamp: None,
+            text_align: TextAlign::Left,
+        };
+
+        let wide = system.layout_inline(request(px(200.0)));
+        let narrow = system.layout_inline(request(px(80.0)));
+        assert!(!Arc::ptr_eq(&wide, &narrow));
+        assert!(Arc::ptr_eq(
+            &wide,
+            &system.layout_inline(request(px(200.0)))
+        ));
+
+        system.finish_frame();
+        assert!(Arc::ptr_eq(
+            &wide,
+            &system.layout_inline(request(px(200.0)))
+        ));
+        assert!(Arc::ptr_eq(
+            &narrow,
+            &system.layout_inline(request(px(80.0)))
+        ));
     }
 }
 

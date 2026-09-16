@@ -7,9 +7,10 @@ use std::collections::HashSet;
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size,
-    TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace, Window, WrappedLine,
-    WrappedLineLayout, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
+    LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    SharedString, Size, TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace,
+    Window, WrappedLine, WrappedLineLayout, px, register_tooltip_mouse_handlers,
+    set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
@@ -843,14 +844,9 @@ impl TextLayout {
     ) -> TextLayoutTruncation {
         match text_style.text_overflow.clone() {
             Some(text_overflow) => {
-                // Calculate the desired width, prioritizing the calculated dimensions,
-                // falling back on calculating a width from the available space and
-                // number of lines to clamp to via text style.
+                // Overflow is checked against each visual row's available width.
                 let width = known_dimensions.width.or(match available_space.width {
-                    crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
-                        Some(max_lines) => Some(x * max_lines),
-                        None => Some(x),
-                    },
+                    crate::AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
 
@@ -1196,26 +1192,17 @@ fn truncate_to_shaped_layout<'a>(
     direction: TruncateFrom,
     window: &mut Window,
 ) -> (SharedString, Cow<'a, [TextRun]>) {
-    let fits = |candidate: &str, candidate_runs: &[TextRun], window: &mut Window| {
-        let Ok(document) = window.text_system().shape_text(
-            SharedString::from(candidate.to_owned()),
-            font_size,
-            candidate_runs,
-            wrap_width,
-            None,
-        ) else {
-            return false;
-        };
-
-        let width = wrap_width.unwrap_or(truncate_width);
-        max_lines.is_none_or(|max_lines| document.line_count() <= max_lines.max(1))
-            && document
-                .visual_lines()
-                .iter()
-                .all(|visual| visual.advance <= width + px(0.01))
+    let Ok(document) =
+        window
+            .text_system()
+            .shape_text(text.clone(), font_size, runs, wrap_width, None)
+    else {
+        return (text, Cow::Borrowed(runs));
     };
+    let width = wrap_width.unwrap_or(truncate_width);
+    let fits = text_layout_fits(&document.layout.layout, width, max_lines);
 
-    if fits(&text, runs, window) {
+    if fits {
         return (text, Cow::Borrowed(runs));
     }
 
@@ -1225,24 +1212,189 @@ fn truncate_to_shaped_layout<'a>(
         .collect::<Vec<_>>();
     boundaries.push(text.len());
     let grapheme_count = boundaries.len().saturating_sub(1);
-    let candidate =
-        |keep| make_truncation_candidate(&text, &boundaries, keep, affix, runs, direction);
-
-    let mut low = 0usize;
-    let mut high = grapheme_count.saturating_sub(1);
-    while low < high {
-        let middle = low + (high - low).div_ceil(2);
-        let (candidate_text, candidate_runs) = candidate(middle);
-
-        if fits(&candidate_text, &candidate_runs, window) {
-            low = middle;
-        } else {
-            high = middle - 1;
-        }
+    let grapheme_ranges = boundaries
+        .windows(2)
+        .map(|boundary| boundary[0]..boundary[1])
+        .collect::<Vec<_>>();
+    let grapheme_widths = document
+        .platform_layout
+        .inline_geometry_for_ranges(&grapheme_ranges)
+        .into_iter()
+        .map(|regions| {
+            regions
+                .into_iter()
+                .map(|(bounds, _line_idx)| bounds.size.width)
+                .sum::<Pixels>()
+        })
+        .collect::<Vec<_>>();
+    let mut prefix_widths = Vec::with_capacity(grapheme_widths.len() + 1);
+    prefix_widths.push(Pixels::ZERO);
+    for width in &grapheme_widths {
+        prefix_widths.push(prefix_widths.last().copied().unwrap_or_default() + *width);
     }
 
-    let (result, result_runs) = candidate(low);
-    (result, Cow::Owned(result_runs))
+    let affix_width = if affix.is_empty() {
+        Pixels::ZERO
+    } else {
+        let candidate = make_truncation_candidate(&text, &boundaries, 0, affix, runs, direction);
+
+        window
+            .text_system()
+            .shape_text(
+                SharedString::from(affix),
+                font_size,
+                &candidate.runs,
+                None,
+                None,
+            )
+            .map_or(Pixels::ZERO, |layout| layout.width())
+    };
+    let available_width = (width - affix_width).max(Pixels::ZERO);
+
+    let keep = if direction == TruncateFrom::End
+        && let (Some(wrap_width), Some(max_lines)) = (wrap_width, max_lines)
+    {
+        let last_line_idx = max_lines.max(1).saturating_sub(1);
+        let line_start = document
+            .visual_lines()
+            .get(last_line_idx)
+            .map_or(0, |line| line.text_range.start);
+        let fixed_count = grapheme_ranges.partition_point(|range| range.end <= line_start);
+        fixed_count
+            + grapheme_widths[fixed_count..]
+                .iter()
+                .scan(Pixels::ZERO, |used, advance| {
+                    *used += *advance;
+                    Some(*used <= (wrap_width - affix_width).max(Pixels::ZERO))
+                })
+                .take_while(|fits| *fits)
+                .count()
+    } else {
+        (0..grapheme_count)
+            .take_while(|keep| {
+                let candidate_count = keep + 1;
+                let width: Pixels = match direction {
+                    TruncateFrom::End => prefix_widths[candidate_count],
+                    TruncateFrom::Start => {
+                        prefix_widths[grapheme_count]
+                            - prefix_widths[grapheme_count - candidate_count]
+                    }
+                    TruncateFrom::Middle => {
+                        let front_count = candidate_count.saturating_mul(2).div_ceil(3);
+                        let back_count = candidate_count - front_count;
+                        prefix_widths[front_count] + prefix_widths[grapheme_count]
+                            - prefix_widths[grapheme_count - back_count]
+                    }
+                };
+
+                width <= available_width
+            })
+            .count()
+    };
+
+    let (candidate, ()) = truncate_with_measured_candidates(
+        &text,
+        &boundaries,
+        keep,
+        affix,
+        runs,
+        direction,
+        |candidate| {
+            let fits = window
+                .text_system()
+                .shape_text(
+                    candidate.text.clone(),
+                    font_size,
+                    &candidate.runs,
+                    wrap_width,
+                    None,
+                )
+                .is_ok_and(|document| text_layout_fits(&document.layout.layout, width, max_lines));
+
+            ((), fits)
+        },
+    );
+
+    (candidate.text, Cow::Owned(candidate.runs))
+}
+
+pub(crate) fn text_layout_fits(
+    layout: &LineLayout,
+    width: Pixels,
+    max_lines: Option<usize>,
+) -> bool {
+    max_lines.is_none_or(|count| layout.platform_layout.line_count() <= count.max(1))
+        && layout.platform_layout.size().width <= width + px(0.01)
+}
+
+pub(crate) struct TruncationCandidate {
+    pub text: SharedString,
+    pub runs: Vec<TextRun>,
+    retained: SmallVec<[(Range<usize>, usize); 2]>,
+    affix_range: Range<usize>,
+    affix_source: usize,
+}
+
+impl TruncationCandidate {
+    pub(crate) fn display_ranges(&self, source: &Range<usize>) -> SmallVec<[Range<usize>; 3]> {
+        let mut ranges: SmallVec<[Range<usize>; 3]> = SmallVec::new();
+
+        for (retained, display_start) in &self.retained {
+            let start = source.start.max(retained.start);
+            let end = source.end.min(retained.end);
+
+            if start < end {
+                ranges.push(
+                    start - retained.start + display_start..end - retained.start + display_start,
+                );
+            }
+        }
+
+        if source.contains(&self.affix_source) && !self.affix_range.is_empty() {
+            ranges.push(self.affix_range.clone());
+        }
+
+        ranges.sort_by_key(|range| range.start);
+
+        ranges
+    }
+}
+
+/// Keeps the measured candidate with its output. Even an estimated starting point must fit.
+pub(crate) fn truncate_with_measured_candidates<Layout>(
+    text: &str,
+    boundaries: &[usize],
+    initial_keep: usize,
+    affix: &str,
+    runs: &[TextRun],
+    direction: TruncateFrom,
+    mut measure: impl FnMut(&TruncationCandidate) -> (Layout, bool),
+) -> (TruncationCandidate, Layout) {
+    let mut lower = 0;
+    let mut upper = boundaries.len().saturating_sub(2);
+    let mut keep = initial_keep.min(upper);
+    let mut best = None;
+
+    loop {
+        let candidate = make_truncation_candidate(text, boundaries, keep, affix, runs, direction);
+        let (layout, fits) = measure(&candidate);
+
+        if fits {
+            best = Some((candidate, layout));
+            lower = keep + 1;
+        } else if keep == 0 {
+            // Preserve the requested marker when even the marker alone is too wide.
+            return best.unwrap_or((candidate, layout));
+        } else {
+            upper = keep - 1;
+        }
+
+        if lower > upper {
+            return best.expect("a fitting candidate was measured");
+        }
+
+        keep = lower + (upper - lower) / 2;
+    }
 }
 
 fn make_truncation_candidate(
@@ -1252,120 +1404,68 @@ fn make_truncation_candidate(
     affix: &str,
     runs: &[TextRun],
     direction: TruncateFrom,
-) -> (SharedString, Vec<TextRun>) {
+) -> TruncationCandidate {
     let grapheme_count = boundaries.len().saturating_sub(1);
     let keep = keep.min(grapheme_count);
-    let mut candidate_runs = runs.to_vec();
-    match direction {
+    let (front_end, back_start, affix_source) = match direction {
         TruncateFrom::End => {
-            let end = boundaries[keep];
-            let prefix = text[..end].trim_end_matches(|character: char| {
+            let prefix = text[..boundaries[keep]].trim_end_matches(|character: char| {
                 character.is_whitespace() || character.is_ascii_punctuation()
             });
+            let end = prefix.len();
 
-            let result = SharedString::from(format!("{prefix}{affix}"));
-            update_runs_after_truncation(&result, affix, &mut candidate_runs, direction);
-            (result, candidate_runs)
+            (end, text.len(), end.min(text.len().saturating_sub(1)))
         }
         TruncateFrom::Start => {
             let start = boundaries[grapheme_count - keep];
-            let result = SharedString::from(format!("{affix}{}", &text[start..]));
-            update_runs_after_truncation(&result, affix, &mut candidate_runs, direction);
-            (result, candidate_runs)
+
+            (0, start, start.saturating_sub(1))
         }
         TruncateFrom::Middle => {
             let front_count = keep.saturating_mul(2).div_ceil(3);
             let back_count = keep - front_count;
-            let front_end = boundaries[front_count];
-            let back_start = boundaries[grapheme_count - back_count];
-            let result = SharedString::from(format!(
-                "{}{affix}{}",
-                &text[..front_end],
-                &text[back_start..]
+            let end = boundaries[front_count];
+
+            (
+                end,
+                boundaries[grapheme_count - back_count],
+                end.saturating_sub(1),
+            )
+        }
+    };
+
+    let mut candidate = TruncationCandidate {
+        text: format!("{}{affix}{}", &text[..front_end], &text[back_start..]).into(),
+        runs: Vec::new(),
+        retained: SmallVec::from_buf([
+            (0..front_end, 0),
+            (back_start..text.len(), front_end + affix.len()),
+        ]),
+        affix_range: front_end..front_end + affix.len(),
+        affix_source,
+    };
+    let mut offset = 0;
+    let mut display_runs = Vec::new();
+
+    for run in runs {
+        let source = offset..offset + run.len;
+        offset = source.end;
+
+        for range in candidate.display_ranges(&source) {
+            display_runs.push((
+                range.start,
+                TextRun {
+                    len: range.len(),
+                    ..run.clone()
+                },
             ));
-            update_runs_after_middle_truncation(affix, &mut candidate_runs, front_end, back_start);
-            (result, candidate_runs)
         }
     }
-}
 
-fn update_runs_after_truncation(
-    result: &str,
-    affix: &str,
-    runs: &mut Vec<TextRun>,
-    direction: TruncateFrom,
-) {
-    let mut retained = result.len().saturating_sub(affix.len());
-    match direction {
-        TruncateFrom::Start => {
-            for run_idx in (0..runs.len()).rev() {
-                if runs[run_idx].len <= retained {
-                    retained -= runs[run_idx].len;
-                } else {
-                    runs[run_idx].len = retained + affix.len();
-                    runs.drain(..run_idx);
-                    break;
-                }
-            }
-        }
-        TruncateFrom::End => {
-            for run_idx in 0..runs.len() {
-                if runs[run_idx].len <= retained {
-                    retained -= runs[run_idx].len;
-                } else {
-                    runs[run_idx].len = retained + affix.len();
-                    runs.truncate(run_idx + 1);
-                    break;
-                }
-            }
-        }
-        TruncateFrom::Middle => unreachable!(),
-    }
-}
+    display_runs.sort_by_key(|(start, _run)| *start);
+    candidate.runs = display_runs.into_iter().map(|(_start, run)| run).collect();
 
-fn update_runs_after_middle_truncation(
-    affix: &str,
-    runs: &mut Vec<TextRun>,
-    front_end: usize,
-    back_start: usize,
-) {
-    let original = mem::take(runs);
-    let mut result = Vec::with_capacity(original.len());
-    let mut byte_offset = 0usize;
-    for run in &original {
-        let run_end = byte_offset + run.len;
-
-        if byte_offset < front_end {
-            let mut retained = run.clone();
-            retained.len = run_end.min(front_end) - byte_offset;
-            result.push(retained);
-        }
-
-        byte_offset = run_end;
-    }
-
-    if let Some(last) = result.last_mut() {
-        last.len += affix.len();
-    } else if let Some(first) = original.first() {
-        let mut affix_run = first.clone();
-        affix_run.len = affix.len();
-        result.push(affix_run);
-    }
-
-    byte_offset = 0;
-    for run in &original {
-        let run_end = byte_offset + run.len;
-
-        if run_end > back_start {
-            let mut retained = run.clone();
-            retained.len = run_end - back_start.max(byte_offset);
-            result.push(retained);
-        }
-
-        byte_offset = run_end;
-    }
-
-    *runs = result;
+    candidate
 }
 
 /// A text element that can be interacted with.
@@ -1702,13 +1802,14 @@ mod tests {
             (TruncateFrom::End, 2, "Ae\u{301}…".to_owned()),
             (TruncateFrom::Middle, 3, "Ae\u{301}…Z".to_owned()),
         ] {
-            let (candidate, candidate_runs) =
+            let candidate =
                 make_truncation_candidate(&text, &boundaries, keep, "…", &runs, direction);
-            assert_eq!(candidate.as_ref(), expected, "{direction:?}");
+            assert_eq!(candidate.text.as_ref(), expected, "{direction:?}");
             assert_eq!(
-                candidate_runs.iter().map(|run| run.len).sum::<usize>(),
-                candidate.len(),
-                "style runs must cover {candidate:?} after {direction:?} truncation"
+                candidate.runs.iter().map(|run| run.len).sum::<usize>(),
+                candidate.text.len(),
+                "style runs must cover {:?} after {direction:?} truncation",
+                candidate.text
             );
         }
     }

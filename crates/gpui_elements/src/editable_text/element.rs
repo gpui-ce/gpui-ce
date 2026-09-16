@@ -18,6 +18,7 @@ use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState},
+    state::AccessibilityText,
 };
 use gpui::{
     A11ySubtreeBuilder, App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element,
@@ -273,7 +274,7 @@ pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
     elements: PrepaintElements,
-    accessible_text: String,
+    accessible_text: Option<Arc<AccessibilityText>>,
     accessible_anchor: usize,
     accessible_focus: usize,
 }
@@ -309,15 +310,13 @@ impl Element for EditableTextElement {
         prepaint: &mut Self::PrepaintState,
         builder: &mut A11ySubtreeBuilder,
     ) {
+        let accessible_text = prepaint
+            .accessible_text
+            .as_ref()
+            .expect("accessibility data was prepared while building the tree");
         let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
-        text_run.set_value(prepaint.accessible_text.clone());
-        text_run.set_character_lengths(
-            prepaint
-                .accessible_text
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
+        text_run.set_value(accessible_text.text.clone());
+        text_run.set_character_lengths(accessible_text.character_lengths.clone());
         let text_run_id = builder.synthetic_node_id("text");
         builder.push_child(text_run_id, text_run);
         builder
@@ -471,12 +470,15 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let accessible_text = state.as_str().to_string();
-        let (accessible_anchor, accessible_focus) = accessible_selection(
-            &accessible_text,
-            state.selected_range(),
-            state.selection_direction(),
-        );
+        let accessible_text = window.is_a11y_active().then(|| state.accessibility_text());
+        let (accessible_anchor, accessible_focus) =
+            accessible_text.as_ref().map_or((0, 0), |text| {
+                accessible_selection(
+                    &text.byte_offsets,
+                    state.selected_range(),
+                    state.selection_direction(),
+                )
+            });
         let elements = PrepaintElements::build_elements(
             state,
             &prepaint,
@@ -554,11 +556,15 @@ impl Element for EditableTextElement {
 }
 
 fn accessible_selection(
-    text: &str,
+    byte_offsets: &[usize],
     selection: Range<usize>,
     direction: Option<NavigationDirection>,
 ) -> (usize, usize) {
-    let byte_to_character = |offset: usize| text[..offset.min(text.len())].chars().count();
+    let byte_to_character = |offset: usize| {
+        byte_offsets
+            .partition_point(|byte_offset| *byte_offset <= offset)
+            .saturating_sub(1)
+    };
     match direction {
         Some(NavigationDirection::Forward) => (
             byte_to_character(selection.end),
@@ -1328,17 +1334,26 @@ mod tests {
     #[test]
     fn accessibility_selection_uses_character_offsets_and_preserves_direction() {
         let text = "A😀日本B";
+        let mut byte_offsets = text
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .collect::<Vec<_>>();
+        byte_offsets.push(text.len());
         let selection = 1.."A😀日本".len();
 
         assert_eq!(
-            accessible_selection(text, selection.clone(), Some(NavigationDirection::Forward)),
+            accessible_selection(
+                &byte_offsets,
+                selection.clone(),
+                Some(NavigationDirection::Forward),
+            ),
             (4, 1)
         );
         assert_eq!(
-            accessible_selection(text, selection, Some(NavigationDirection::Back)),
+            accessible_selection(&byte_offsets, selection, Some(NavigationDirection::Back)),
             (1, 4)
         );
-        assert_eq!(accessible_selection(text, 5..5, None), (2, 2));
+        assert_eq!(accessible_selection(&byte_offsets, 5..5, None), (2, 2));
     }
 
     #[test]
