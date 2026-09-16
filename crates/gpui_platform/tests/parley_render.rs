@@ -5,6 +5,10 @@ use gpui::{
 };
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+const BIDI_SAMPLE: &str =
+    "שלום עולם\nمرحبا بالعالم\nabc אבג def\nx (مرحبا) y\nEnglish ثم عربي ثم English";
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() {
     if std::env::var_os("GPUI_RUN_RENDERING_TESTS").is_none() {
         return;
@@ -47,6 +51,15 @@ fn main() {
                     div()
                         .absolute()
                         .left(px(32.0))
+                        .top(px(300.0))
+                        .w(px(600.0))
+                        .line_height(px(40.0))
+                        .child(BIDI_SAMPLE),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(32.0))
                         .bottom(px(-20.0))
                         .h(px(40.0))
                         .line_height(px(40.0))
@@ -80,6 +93,11 @@ fn main() {
         let image = context
             .capture_screenshot(window)
             .expect("failed to capture rendered text");
+
+        if let Some(output) = std::env::var_os("GPUI_RENDERING_TEST_OUTPUT") {
+            image.save(output).expect("failed to save rendered text");
+        }
+
         let background = *image.get_pixel(0, 0);
         let scale_x = image.width() as f32 / 1280.0;
         let scale_y = image.height() as f32 / 800.0;
@@ -98,6 +116,7 @@ fn main() {
             ("multiscript text", (24.0, 24.0, 1200.0, 72.0), 100),
             ("emoji text", (24.0, 72.0, 1200.0, 120.0), 50),
             ("wrapped text", (24.0, 120.0, 320.0, 260.0), 100),
+            ("bidi paragraphs", (24.0, 292.0, 650.0, 510.0), 100),
             ("bottom-clipped text", (24.0, 780.0, 700.0, 800.0), 20),
         ] {
             let (left, top, right, bottom) = bounds;
