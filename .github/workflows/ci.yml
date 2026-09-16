@@ -199,8 +199,6 @@ jobs:
       - run: just build
       - run: just test
       - run: just test-doc
-      - name: Test Parley rendering invariants
-        run: GPUI_RUN_RENDERING_TESTS=1 cargo test -p gpui_ce_platform --test parley_render
 
   # Windows build + test
   test-windows:

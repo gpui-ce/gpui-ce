@@ -245,6 +245,483 @@ fn headless() -> HeadlessAppContext {
     HeadlessAppContext::new(Arc::new(system))
 }
 
+type CapturedParagraphs = Rc<RefCell<Vec<(gpui::SharedString, Arc<InlineLayout>)>>>;
+
+struct ParagraphProbe {
+    element: gpui::Div,
+    painted: CapturedParagraphs,
+    measurements: CapturedParagraphs,
+    remeasure: bool,
+}
+
+impl IntoElement for ParagraphProbe {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for ParagraphProbe {
+    type RequestLayoutState = gpui::DivFrameState;
+    type PrepaintState = <gpui::Div as gpui::Element>::PrepaintState;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        global_id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        context: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        let (layout_id, state) =
+            self.element
+                .request_layout(global_id, inspector_id, window, context);
+
+        if self.remeasure {
+            self.measurements.borrow_mut().clear();
+
+            for width in [80., 200., 2000., 80.] {
+                window.compute_layout(
+                    layout_id,
+                    size(
+                        gpui::AvailableSpace::Definite(px(width)),
+                        gpui::AvailableSpace::MaxContent,
+                    ),
+                    context,
+                );
+                self.measurements
+                    .borrow_mut()
+                    .extend(state.measured_inline_paragraphs());
+            }
+        }
+
+        (layout_id, state)
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        state: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        context: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        self.element
+            .prepaint(global_id, inspector_id, bounds, state, window, context)
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        state: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        context: &mut gpui::App,
+    ) {
+        *self.painted.borrow_mut() = state.measured_inline_paragraphs();
+        self.element.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            state,
+            prepaint,
+            window,
+            context,
+        );
+    }
+}
+
+const OVERFLOW_TEXT: &str =
+    "Begin café e\u{301} 👩‍👩‍👧‍👦 and several words that need room before the ending";
+const OVERFLOW_MIDDLE: &str = "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW";
+const LINE_CLAMP_TEXT: &str = "A paragraph can wrap at word boundaries while keeping styled text, punctuation, and spacing together. Resize the window and this sample will follow the available width.";
+
+struct OverflowParagraph {
+    text: &'static str,
+    width: f32,
+    direction: gpui::TruncateFrom,
+    max_lines: Option<usize>,
+    styled: bool,
+    marker: bool,
+    remeasure: bool,
+    painted: CapturedParagraphs,
+    measurements: CapturedParagraphs,
+}
+
+impl OverflowParagraph {
+    fn new(direction: gpui::TruncateFrom) -> Self {
+        Self {
+            text: OVERFLOW_TEXT,
+            width: 180.,
+            direction,
+            max_lines: None,
+            styled: false,
+            marker: true,
+            remeasure: false,
+            painted: Rc::default(),
+            measurements: Rc::default(),
+        }
+    }
+}
+
+impl Render for OverflowParagraph {
+    fn render(&mut self, _window: &mut Window, _context: &mut Context<Self>) -> impl IntoElement {
+        let mut paragraph = div()
+            .block()
+            .w_full()
+            .min_w_0()
+            .font_family("IBM Plex Sans")
+            .text_size(px(14.))
+            .line_height(px(24.))
+            .text_color(first_group_color());
+
+        if self.marker {
+            paragraph = match self.direction {
+                gpui::TruncateFrom::End => paragraph.text_ellipsis(),
+                gpui::TruncateFrom::Start => paragraph.text_ellipsis_start(),
+                gpui::TruncateFrom::Middle => paragraph.text_ellipsis_middle(),
+            };
+        }
+
+        paragraph = if let Some(count) = self.max_lines {
+            paragraph.line_clamp(count)
+        } else {
+            paragraph.whitespace_nowrap()
+        };
+
+        paragraph = if self.styled {
+            paragraph.child(
+                div()
+                    .inline()
+                    .bg(first_group_color())
+                    .child("begin ")
+                    .child(
+                        div()
+                            .inline()
+                            .text_size(px(30.))
+                            .line_height(px(46.))
+                            .text_color(second_group_color())
+                            .bg(second_group_color())
+                            .child(OVERFLOW_MIDDLE),
+                    )
+                    .child(" end"),
+            )
+        } else {
+            paragraph.child(self.text)
+        };
+
+        div()
+            .size_full()
+            .items_start()
+            .child(div().w(px(self.width)).child(ParagraphProbe {
+                element: paragraph,
+                painted: self.painted.clone(),
+                measurements: self.measurements.clone(),
+                remeasure: self.remeasure,
+            }))
+    }
+}
+
+fn assert_paragraph_fits(text: &str, layout: &InlineLayout, width: f32, max_lines: usize) {
+    assert_eq!(layout.layout.len, text.len());
+    assert!(
+        layout.lines.len() <= max_lines,
+        "{text:?}: {:?}",
+        layout.lines
+    );
+    assert!(
+        layout.layout.platform_layout.size().width <= px(width + 0.01),
+        "{text:?}: {:?}",
+        layout.layout.visual_lines
+    );
+}
+
+#[test]
+fn block_paragraph_paints_grapheme_safe_end_start_and_middle_ellipsis() {
+    let mut context = headless();
+
+    for direction in [
+        gpui::TruncateFrom::End,
+        gpui::TruncateFrom::Start,
+        gpui::TruncateFrom::Middle,
+    ] {
+        let view = OverflowParagraph::new(direction);
+        let painted = view.painted.clone();
+        let window = context
+            .open_window(size(px(360.), px(180.)), |window, context| {
+                window.set_scale_factor(SCALE_FACTOR);
+
+                context.new(|_context| view)
+            })
+            .unwrap();
+        context.run_until_parked();
+
+        let captured = painted.borrow();
+        assert_eq!(captured.len(), 1);
+        let (text, layout) = &captured[0];
+        assert_paragraph_fits(text, layout, 180., 1);
+        let (prefix, suffix) = text
+            .split_once('…')
+            .expect("paragraph must paint the marker");
+        assert!(OVERFLOW_TEXT.starts_with(prefix) && OVERFLOW_TEXT.ends_with(suffix));
+        let boundaries: Vec<_> = OVERFLOW_TEXT
+            .grapheme_indices(true)
+            .map(|(idx, _grapheme)| idx)
+            .chain([OVERFLOW_TEXT.len()])
+            .collect();
+        assert!(boundaries.contains(&prefix.len()));
+        assert!(boundaries.contains(&(OVERFLOW_TEXT.len() - suffix.len())));
+
+        match direction {
+            gpui::TruncateFrom::End => assert!(suffix.is_empty() && !prefix.is_empty()),
+            gpui::TruncateFrom::Start => assert!(prefix.is_empty() && !suffix.is_empty()),
+            gpui::TruncateFrom::Middle => assert!(!prefix.is_empty() && !suffix.is_empty()),
+        }
+
+        assert!(
+            !context
+                .glyph_bounds(window.into(), first_group_color())
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn block_paragraph_places_requested_marker_on_second_clamped_line() {
+    let mut context = headless();
+    let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
+    view.max_lines = Some(2);
+    view.width = 140.;
+    let painted = view.painted.clone();
+    let window = context
+        .open_window(size(px(360.), px(180.)), |_window, context| {
+            context.new(|_context| view)
+        })
+        .unwrap();
+    context.run_until_parked();
+
+    {
+        let captured = painted.borrow();
+        let (text, layout) = &captured[0];
+        assert_paragraph_fits(text, layout, 140., 2);
+        assert_eq!(layout.lines.len(), 2);
+        assert!(text.ends_with('…'));
+        assert!(
+            layout.layout.visual_lines[1]
+                .text_range
+                .contains(&(text.len() - '…'.len_utf8()))
+        );
+        let geometry = layout
+            .layout
+            .platform_layout
+            .inline_geometry_for_ranges(&[text.len() - '…'.len_utf8()..text.len()]);
+        assert!(!geometry[0].is_empty());
+        assert!(
+            geometry[0]
+                .iter()
+                .all(|geometry| geometry.visual_line_index == 1)
+        );
+    }
+
+    window
+        .update(&mut context, |view, _window, context| {
+            view.marker = false;
+            context.notify();
+        })
+        .unwrap();
+    context.run_until_parked();
+
+    let captured = painted.borrow();
+    assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
+    assert_eq!(captured[0].1.lines.len(), 2);
+}
+
+#[test]
+fn block_line_clamp_ignores_wrapped_trailing_whitespace() {
+    let system = test_system();
+    let runs = [text_run(LINE_CLAMP_TEXT, "IBM Plex Sans")];
+    let width = (300..800)
+        .map(|width| px(width as f32))
+        .find(|width| {
+            let layout = system.layout_text(TextLayoutRequest {
+                text: LINE_CLAMP_TEXT,
+                font_size: px(14.),
+                runs: &runs,
+                wrap_width: Some(*width),
+                line_clamp: None,
+            });
+
+            layout.visual_lines.len() == 2
+                && layout.platform_layout.size().width <= *width + px(0.01)
+                && layout
+                    .visual_lines
+                    .iter()
+                    .any(|line| line.advance_width > *width + px(0.01))
+        })
+        .expect("sample text should have a two-line width with hanging whitespace");
+    let mut context = headless();
+    let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
+    view.text = LINE_CLAMP_TEXT;
+    view.max_lines = Some(2);
+    view.width = f32::from(width);
+    let painted = view.painted.clone();
+    context
+        .open_window(size(px(900.), px(180.)), |_window, context| {
+            context.new(|_context| view)
+        })
+        .unwrap();
+    context.run_until_parked();
+
+    let captured = painted.borrow();
+    let (text, layout) = &captured[0];
+    assert_eq!(text.as_ref(), LINE_CLAMP_TEXT);
+    assert_paragraph_fits(text, layout, f32::from(width), 2);
+}
+
+#[test]
+fn block_paragraph_remeasures_nowrap_overflow_and_restores_original_text() {
+    let mut context = headless();
+    let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
+    view.remeasure = true;
+    let painted = view.painted.clone();
+    let measurements = view.measurements.clone();
+    let window = context
+        .open_window(size(px(2200.), px(180.)), |_window, context| {
+            context.new(|_context| view)
+        })
+        .unwrap();
+    context.run_until_parked();
+
+    {
+        let measured = measurements.borrow();
+        assert_eq!(measured.len(), 4);
+        assert!(measured[0].0.len() < measured[1].0.len());
+        assert_eq!(measured[2].0.as_ref(), OVERFLOW_TEXT);
+        assert_eq!(measured[0].0, measured[3].0);
+
+        for ((text, layout), width) in measured.iter().zip([80., 200., 2000., 80.]) {
+            assert_paragraph_fits(text, layout, width, 1);
+        }
+    }
+
+    let initial = painted.borrow()[0].0.clone();
+
+    for width in [90., 2000., 180.] {
+        window
+            .update(&mut context, |view, _window, context| {
+                view.width = width;
+                context.notify();
+            })
+            .unwrap();
+        context.run_until_parked();
+        let captured = painted.borrow();
+        assert_paragraph_fits(&captured[0].0, &captured[0].1, width, 1);
+
+        if width == 2000. {
+            assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
+        }
+    }
+
+    assert_eq!(painted.borrow()[0].0, initial);
+}
+
+#[test]
+fn block_ellipsis_preserves_span_metrics_and_only_places_display_ranges() {
+    let mut context = headless();
+    let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
+    view.styled = true;
+    view.width = 260.;
+    let painted = view.painted.clone();
+    let window = context
+        .open_window(size(px(360.), px(180.)), |window, context| {
+            window.set_scale_factor(SCALE_FACTOR);
+
+            context.new(|_context| view)
+        })
+        .unwrap();
+    context.run_until_parked();
+
+    for width in [260., 100., 260.] {
+        window
+            .update(&mut context, |view, _window, context| {
+                view.width = width;
+                context.notify();
+            })
+            .unwrap();
+        context.run_until_parked();
+
+        let captured = painted.borrow();
+        let (text, layout) = &captured[0];
+        assert_paragraph_fits(text, layout, width, 1);
+        assert!(text.contains('…') && text.ends_with("end"));
+        let spans = quads(&mut context, window.into(), first_group_color());
+        assert_eq!(spans.len(), 1);
+        assert_close(
+            spans[0].size.width,
+            px((f32::from(layout.size.width) * SCALE_FACTOR).round() / SCALE_FACTOR),
+            "outer span covers the displayed prefix and suffix",
+        );
+        assert_close(
+            spans[0].size.height,
+            px((f32::from(layout.size.height) * SCALE_FACTOR).round() / SCALE_FACTOR),
+            "outer span uses the displayed line height",
+        );
+
+        if width == 100. {
+            assert!(!text.contains('W'));
+            assert!(quads(&mut context, window.into(), second_group_color()).is_empty());
+            assert!(
+                context
+                    .glyph_bounds(window.into(), second_group_color())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(layout.size.height < px(46.));
+        } else {
+            assert!(layout.size.height >= px(46.));
+            assert!(
+                layout
+                    .layout
+                    .paint_fragments
+                    .iter()
+                    .any(|fragment| fragment.font_size == px(30.))
+            );
+            assert!(
+                layout
+                    .layout
+                    .paint_fragments
+                    .iter()
+                    .any(|fragment| fragment.font_size == px(14.))
+            );
+            let backgrounds = quads(&mut context, window.into(), second_group_color());
+            assert!(!backgrounds.is_empty());
+
+            for glyph in context
+                .glyph_bounds(window.into(), second_group_color())
+                .unwrap()
+            {
+                assert!(
+                    backgrounds
+                        .iter()
+                        .any(|bounds| bounds.contains(&logical_bounds(glyph).center()))
+                );
+            }
+        }
+    }
+}
+
 fn quads(
     context: &mut HeadlessAppContext,
     window: gpui::AnyWindowHandle,
@@ -459,13 +936,13 @@ fn inline_sizing_depends_on_parent_context() {
             .unwrap();
 
         match parent_context {
-            ParentContext::Block => {
+            ParentContext::Block | ParentContext::Default => {
                 assert!(span.size.width > px(80.));
                 assert!(span.size.height >= px(48.));
                 assert!(badge.origin.y > span.origin.y);
             }
 
-            _ => {
+            ParentContext::Flex | ParentContext::Grid => {
                 assert_close(span.size.width, px(80.), "independent inline width");
                 assert!((span.size.height - px(31.)).abs() < px(1.));
                 assert!(badge.origin.x >= span.right());
