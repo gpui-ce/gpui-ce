@@ -2340,6 +2340,7 @@ name = "gpui_ce_elements"
 version = "0.1.0"
 dependencies = [
  "gpui-ce",
+ "gpui_ce_parley",
  "gpui_ce_platform",
  "palette",
  "smallvec",

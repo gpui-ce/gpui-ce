@@ -67,6 +67,7 @@ impl InlineParagraph {
     }
 }
 
+#[derive(Default)]
 pub(super) struct InlineDivFrameState {
     paragraphs: Vec<InlineParagraph>,
     /// Text and inline containers whose bounds come from paragraph fragments.
@@ -199,7 +200,6 @@ impl InlineParagraphCollector<'_> {
 
     fn finish_paragraph(&mut self) {
         if self.current_document.text.is_empty() && self.current_document.boxes.is_empty() {
-            self.current_document = InlineDocument::default();
             return;
         }
 
@@ -284,12 +284,7 @@ impl InlineDivFrameState {
         context: &mut App,
     ) -> (LayoutId, Self) {
         let mut paragraph_collector = InlineParagraphCollector {
-            frame_state: Self {
-                paragraphs: Vec::new(),
-                span_layout_ids: Vec::new(),
-                flow_child_layout_ids: Vec::new(),
-            },
-
+            frame_state: Self::default(),
             current_document: InlineDocument::default(),
             open_span_layout_ids: Vec::new(),
             text_style: window.text_style(),
