@@ -98,8 +98,8 @@ gpui::actions!(
 /// | NavRight              | 🡆          |                           |                  |
 /// | NavUp                 | 🡅          |                           |                  |
 /// | NavDown               | 🡇          |                           |                  |
-/// | NavLineStart          |             | home                      | cmd + 🡄         |
-/// | NavLineEnd            |             | end                       | cmd + 🡆         |
+/// | NavLineStart          | shift + home | home                      | cmd + 🡄, cmd + shift + 🡄 |
+/// | NavLineEnd            | shift + end  | end                       | cmd + 🡆, cmd + shift + 🡆 |
 /// | NavDocumentStart      |             | ctrl + home               | cmd + 🡅         |
 /// | NavDocumentEnd        |             | ctrl + end                | cmd + 🡇         |
 /// | NavWordLeft           |             | ctrl + 🡄                 | alt + 🡄         |
@@ -136,6 +136,10 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
         .with::<SelectRight>("shift-right")
         .with::<SelectUp>("shift-up")
         .with::<SelectDown>("shift-down")
+        // Shift+Home and Shift+End intentionally use navigation actions so they collapse the
+        // selection at the requested line boundary.
+        .with::<NavLineStart>("shift-home")
+        .with::<NavLineEnd>("shift-end")
         .with::<Copy>("secondary-c")
         .with::<Cut>("secondary-x")
         .with::<Paste>("secondary-v")
@@ -156,6 +160,8 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
             .with::<NavLineEnd>("cmd-right")
             .with::<NavDocumentStart>("cmd-up")
             .with::<NavDocumentEnd>("cmd-down")
+            .with::<NavLineStart>("cmd-shift-left")
+            .with::<NavLineEnd>("cmd-shift-right")
             .with::<SelectDocumentStart>("cmd-shift-up")
             .with::<SelectDocumentEnd>("cmd-shift-down")
             .with::<NavWordLeft>("alt-left")

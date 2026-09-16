@@ -1,6 +1,7 @@
 use gpui::{
-    Bounds, CaretPosition, Pixels, PlatformTextLayout, Point, Size, TextMovement,
-    TextSelectionKind, VisualDirection, point, px,
+    Bounds, CaretMovement, CaretPosition, Pixels, PlatformTextLayout, Point, Size,
+    TextBoundary as Boundary, TextDirection as Direction, TextMovement, TextSelectionKind,
+    VisualDirection, point, px,
 };
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -69,7 +70,6 @@ pub(super) struct ParagraphLayout {
     pub block_offset: Pixels,
     pub native: Arc<dyn PlatformTextLayout>,
     pub newline: Range<Pixels>,
-    pub is_rtl: bool,
 }
 
 impl ParagraphLayout {
@@ -341,34 +341,44 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             .cloned()
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let caret = self.refresh_caret(caret);
-        let direction = match movement {
-            TextMovement::VisualLeft | TextMovement::VisualWordLeft => Some(VisualDirection::Left),
-            TextMovement::VisualRight | TextMovement::VisualWordRight => {
-                Some(VisualDirection::Right)
-            }
+        let direction = match movement.direction {
+            Direction::Left => Some(VisualDirection::Left),
+            Direction::Right => Some(VisualDirection::Right),
             _ => None,
         };
 
-        if matches!(
-            movement,
-            TextMovement::VisualLeft | TextMovement::VisualRight
-        ) {
-            return (
-                self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
-                None,
-            );
+        if movement.boundary == Boundary::Cluster && direction.is_some() {
+            return CaretMovement {
+                caret: self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
+                preferred_x: None,
+            };
         }
 
-        if matches!(movement, TextMovement::VisualUp | TextMovement::VisualDown) {
+        if movement.boundary == Boundary::Document {
+            let caret = match movement.direction {
+                Direction::Start => CaretPosition::attached_to_next_cluster(0),
+                Direction::End => CaretPosition::attached_to_previous_cluster(self.len()),
+                _ => caret,
+            };
+
+            return CaretMovement {
+                caret: self.refresh_caret(caret),
+                preferred_x: None,
+            };
+        }
+
+        if movement.boundary == Boundary::VisualLine
+            && matches!(movement.direction, Direction::Up | Direction::Down)
+        {
             let geometry = self.caret_geometry(caret, px(1.0)).unwrap();
-            let delta = if movement == TextMovement::VisualUp {
+            let delta = if movement.direction == Direction::Up {
                 -1
             } else {
                 1
@@ -379,33 +389,47 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             let Some(target_idx) = target_idx else {
                 let idx = if delta < 0 { 0 } else { self.len() };
 
-                return (
-                    self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
+                return CaretMovement {
+                    caret: self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
                     preferred_x,
-                );
+                };
             };
             let x = preferred_x.unwrap_or(geometry.origin.x);
             let moved = self
                 .caret_from_point(point(x, px(target_idx as f32 + 0.5)), px(1.0))
                 .unwrap_or_else(|caret| caret);
 
-            return (moved, Some(x));
+            return CaretMovement {
+                caret: moved,
+                preferred_x: Some(x),
+            };
         }
 
         let paragraph_idx = self.paragraph_for_index(caret.index);
         let paragraph = &self.paragraphs[paragraph_idx];
         let local = paragraph.local_caret(caret);
-        let (moved, preferred_x) = paragraph.native.move_caret(local, movement, preferred_x);
+        let CaretMovement {
+            caret: moved,
+            preferred_x,
+        } = paragraph
+            .native
+            .caret_movement(local, movement, preferred_x);
 
         if let Some(direction) = direction
             && paragraph.native.caret_geometry(moved, px(1.0))
                 == paragraph.native.caret_geometry(local, px(1.0))
             && let Some(edge) = self.adjacent_edge(paragraph_idx, direction)
         {
-            return (edge, preferred_x);
+            return CaretMovement {
+                caret: edge,
+                preferred_x,
+            };
         }
 
-        (paragraph.global_caret(moved), preferred_x)
+        CaretMovement {
+            caret: paragraph.global_caret(moved),
+            preferred_x,
+        }
     }
 
     fn selection_from_point(

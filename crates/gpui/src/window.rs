@@ -31,15 +31,15 @@ use crate::{
     MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority,
     PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
-    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
-    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, ResolvedDirection,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
+    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
+    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
     TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
-    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point, px,
-    rems, size, transparent_black, white,
+    Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, px, rems, size, transparent_black, white,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -799,8 +799,7 @@ impl HitTest {
                 continue;
             }
 
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if !bounds.contains(&position) {
+            if !hitbox.contains(&position) {
                 continue;
             }
 
@@ -953,10 +952,10 @@ pub struct Hitbox {
     pub content_mask: ContentMask<Pixels>,
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
-    /// Additional user-provided tags to extend behavior of the hitbox
-    pub tags: Vec<SharedString>,
     /// Disjoint regions of an inline element. `bounds` is their union.
     pub fragments: Option<Arc<[Bounds<Pixels>]>>,
+    /// Additional user-provided tags to extend behavior of the hitbox.
+    pub tags: Vec<SharedString>,
 }
 
 impl Hitbox {
@@ -1283,6 +1282,8 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    pub(crate) measurement_direction: ResolvedDirection,
+    pub(crate) measurement_unicode_bidi: UnicodeBidi,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     /// Bounds of the parent `Div` currently prepainting this element as one of its children.
@@ -1990,6 +1991,8 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            measurement_direction: ResolvedDirection::LeftToRight,
+            measurement_unicode_bidi: UnicodeBidi::Normal,
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             style_transition_containing_bounds: None,
@@ -2272,6 +2275,20 @@ impl Window {
             style.refine(refinement);
         }
         style
+    }
+
+    /// Returns the resolved direction of the current measured or prepainted layout node.
+    ///
+    /// Custom elements can use this when direction changes intrinsic measurement or a detached
+    /// sublayout created during prepaint.
+    pub fn resolved_direction(&self) -> ResolvedDirection {
+        self.measurement_direction
+    }
+
+    /// Returns the bidirectional formatting mode of the measured layout node.
+    #[doc(hidden)]
+    pub fn resolved_unicode_bidi(&self) -> UnicodeBidi {
+        self.measurement_unicode_bidi
     }
 
     /// Check if the platform window is maximized.
@@ -4681,7 +4698,7 @@ impl Window {
     ///
     /// The y component of the origin is the baseline of the glyph.
     /// You should generally prefer to use the [`ShapedLine::paint`](crate::ShapedLine::paint) or
-    /// [`WrappedLine::paint`](crate::WrappedLine::paint) methods in the [`TextSystem`](crate::TextSystem).
+    /// [`ShapedText::paint`](crate::ShapedText::paint) methods in the [`TextSystem`](crate::TextSystem).
     /// This method is only useful if you need to paint a single glyph that has already been shaped.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -4806,7 +4823,7 @@ impl Window {
     ///
     /// The y component of the origin is the baseline of the glyph.
     /// You should generally prefer to use the [`ShapedLine::paint`](crate::ShapedLine::paint) or
-    /// [`WrappedLine::paint`](crate::WrappedLine::paint) methods in the [`TextSystem`](crate::TextSystem).
+    /// [`ShapedText::paint`](crate::ShapedText::paint) methods in the [`TextSystem`](crate::TextSystem).
     /// This method is only useful if you need to paint a single emoji that has already been shaped.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -5163,7 +5180,13 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let mut layout_engine = self.layout_engine.take().unwrap();
-        layout_engine.compute_layout(layout_id, available_space, self, cx);
+        layout_engine.compute_layout(
+            layout_id,
+            available_space,
+            self.measurement_direction,
+            self,
+            cx,
+        );
         self.layout_engine = Some(layout_engine);
     }
 
@@ -5208,11 +5231,89 @@ impl Window {
         node_id: LayoutId,
         content: crate::InlineContent,
     ) {
+        if let crate::InlineContent::Text { text, .. } = &content {
+            self.layout_engine
+                .as_mut()
+                .unwrap()
+                .set_direction_text(node_id, text.clone());
+        }
+
         self.layout_engine
             .as_mut()
             .unwrap()
             .inline_content
             .insert(node_id, Arc::new(content));
+    }
+
+    pub(crate) fn set_layout_logical_children(&mut self, node_id: LayoutId, children: &[LayoutId]) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_logical_children(node_id, children);
+    }
+
+    pub(crate) fn set_layout_auto_direction_hint(
+        &mut self,
+        node_id: LayoutId,
+        direction: Option<ResolvedDirection>,
+    ) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_auto_direction_hint(node_id, direction);
+    }
+
+    pub(crate) fn layout_auto_direction_contribution(
+        &self,
+        node_id: LayoutId,
+    ) -> Option<ResolvedDirection> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .auto_direction_contribution(node_id)
+    }
+
+    pub(crate) fn layout_direction_handle(
+        &self,
+        node_id: LayoutId,
+    ) -> crate::taffy::LayoutDirectionHandle {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .direction_handle(node_id)
+    }
+
+    pub(crate) fn layout_directionality(
+        &self,
+        node_id: LayoutId,
+    ) -> (ResolvedDirection, UnicodeBidi) {
+        self.layout_engine.as_ref().unwrap().directionality(node_id)
+    }
+
+    pub(crate) fn with_layout_direction_context<R>(
+        &mut self,
+        node_id: LayoutId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let (direction, unicode_bidi) = self.layout_directionality(node_id);
+        let previous_direction = std::mem::replace(&mut self.measurement_direction, direction);
+        let previous_unicode_bidi =
+            std::mem::replace(&mut self.measurement_unicode_bidi, unicode_bidi);
+        let result = f(self);
+        self.measurement_direction = previous_direction;
+        self.measurement_unicode_bidi = previous_unicode_bidi;
+        result
+    }
+
+    /// Supplies source text used by `Direction::Auto` for a custom layout node.
+    ///
+    /// Built-in text elements register their content automatically. Call this during
+    /// `request_layout` after obtaining the node's [`LayoutId`].
+    pub fn set_layout_direction_text(&mut self, node_id: LayoutId, text: impl Into<SharedString>) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_direction_text(node_id, text.into());
     }
 
     pub(crate) fn inline_content(&self, node_id: LayoutId) -> Option<Arc<crate::InlineContent>> {
@@ -5290,9 +5391,8 @@ impl Window {
             .vertical_align(layout_id)
     }
 
-    /// This method should be called during `prepaint`. You can use
-    /// the returned [Hitbox] during `paint` or in an event handler
-    /// to determine whether the inserted hitbox was the topmost.
+    /// This method should be called during `prepaint`. You can use the returned [Hitbox]
+    /// during `paint` or in an event handler to determine whether the inserted hitbox was the topmost.
     ///
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn insert_hitbox(&mut self, bounds: Bounds<Pixels>, behavior: HitboxBehavior) -> Hitbox {
@@ -5313,16 +5413,17 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let content_mask = self.content_mask();
-        let mut id = self.next_hitbox_id;
+        let hitbox_id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
         let hitbox = Hitbox {
-            id,
+            id: hitbox_id,
             bounds,
             content_mask,
             behavior,
-            tags: Vec::default(),
             fragments: self.current_inline_fragments.clone(),
+            tags: Vec::default(),
         };
+
         self.next_frame.hitboxes.push_mut(hitbox)
     }
 
@@ -7744,7 +7845,80 @@ mod tests {
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
     use std::sync::Mutex as StdMutex;
-    use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn hit_test_preserves_inline_regions_occlusion_and_metadata() {
+        let bounds = Bounds::new(Point::default(), size(px(100.), px(80.)));
+        let background = Hitbox {
+            id: HitboxId(1),
+            bounds,
+            content_mask: ContentMask { bounds },
+            behavior: HitboxBehavior::Normal,
+            fragments: None,
+            tags: vec!["background".into()],
+        };
+        let mut inline = Hitbox {
+            id: HitboxId(2),
+            bounds,
+            content_mask: ContentMask {
+                bounds: Bounds::new(Point::default(), size(px(80.), px(80.))),
+            },
+            behavior: HitboxBehavior::Normal,
+            fragments: Some(Arc::from([
+                Bounds::new(point(px(60.), px(0.)), size(px(40.), px(40.))),
+                Bounds::new(point(px(0.), px(40.)), size(px(40.), px(40.))),
+            ])),
+            tags: vec!["inline".into()],
+        };
+
+        for behavior in [
+            HitboxBehavior::Normal,
+            HitboxBehavior::BlockMouseExceptScroll,
+            HitboxBehavior::BlockMouse,
+        ] {
+            inline.behavior = behavior;
+
+            for (position, inside_inline, inside_background) in [
+                (point(px(70.), px(20.)), true, true),
+                (point(px(20.), px(60.)), true, true),
+                (point(px(20.), px(20.)), false, true),
+                (point(px(90.), px(20.)), false, true),
+                (point(px(120.), px(20.)), false, false),
+            ] {
+                let hit_test = HitTest::new([&inline, &background].into_iter(), position);
+                let mut hovered = Vec::new();
+                let mut scrollable = Vec::new();
+
+                if inside_inline {
+                    hovered.push(inline.id);
+                    scrollable.push(inline.id);
+                }
+
+                if inside_background && (!inside_inline || behavior == HitboxBehavior::Normal) {
+                    hovered.push(background.id);
+                }
+
+                if inside_background && (!inside_inline || behavior != HitboxBehavior::BlockMouse) {
+                    scrollable.push(background.id);
+                }
+
+                assert_eq!(
+                    hit_test.iter_hovered().copied().collect::<Vec<_>>(),
+                    hovered
+                );
+                assert_eq!(
+                    hit_test.iter_scrollable().copied().collect::<Vec<_>>(),
+                    scrollable
+                );
+
+                for (depth, hitbox) in [&inline, &background].into_iter().enumerate() {
+                    let entry = hit_test.entry(&hitbox.id).unwrap();
+                    assert_eq!(entry.depth(), depth);
+                    assert_eq!(entry.tags(), &hitbox.tags);
+                }
+            }
+        }
+    }
 
     proptest! {
         #[test]
@@ -7869,11 +8043,7 @@ mod tests {
     struct RasterFormatView;
 
     impl Render for RasterFormatView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
             let alternate_color = hsla(0.1, 0.6, 0.3, 0.8);
             div().size_full().opacity(0.5).child(
@@ -7980,11 +8150,7 @@ mod tests {
     struct FragmentFailureView;
 
     impl Render for FragmentFailureView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div().size_full().child("x😀")
         }
     }

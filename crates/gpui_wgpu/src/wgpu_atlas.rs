@@ -3,7 +3,8 @@ use collections::FxHashMap;
 use etagere::{BucketedAtlasAllocator, size2};
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams, Size,
+    GlyphAtlasCache, GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams,
+    Size,
 };
 use parking_lot::Mutex;
 use std::{borrow::Cow, ops, sync::Arc};
@@ -40,7 +41,7 @@ struct WgpuAtlasState {
     color_texture_format: wgpu::TextureFormat,
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
-    glyph_entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
+    glyph_cache: GlyphAtlasCache,
     pending_uploads: Vec<PendingUpload>,
     next_texture_identity: u64,
 }
@@ -65,7 +66,7 @@ impl WgpuAtlas {
             color_texture_format,
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
-            glyph_entries: Default::default(),
+            glyph_cache: Default::default(),
             pending_uploads: Vec::new(),
             next_texture_identity: 0,
         }))
@@ -99,7 +100,7 @@ impl WgpuAtlas {
         let mut lock = self.0.lock();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
-        lock.glyph_entries.clear();
+        lock.glyph_cache.clear();
         lock.pending_uploads.clear();
     }
 
@@ -112,7 +113,7 @@ impl WgpuAtlas {
         lock.color_texture_format = context.color_texture_format();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
-        lock.glyph_entries.clear();
+        lock.glyph_cache.clear();
         lock.pending_uploads.clear();
     }
 }
@@ -125,26 +126,17 @@ impl PlatformAtlas for WgpuAtlas {
     ) -> Result<Option<AtlasTile>> {
         let mut lock = self.0.lock();
         if let Some(tile) = lock.tiles_by_key.get(key) {
-            Ok(Some(*tile))
-        } else {
-            profiling::scope!("new tile");
-            let Some((size, bytes)) = build()? else {
-                return Ok(None);
-            };
-            key.texture_kind().validate_upload(size, &bytes)?;
-            anyhow::ensure!(
-                size.width.0 as u32 <= lock.max_texture_size
-                    && size.height.0 as u32 <= lock.max_texture_size,
-                "atlas tile {size:?} exceeds the device texture limit {}",
-                lock.max_texture_size
-            );
-            let tile = lock
-                .allocate(size, key.texture_kind())
-                .context("failed to allocate")?;
-            lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
-            lock.tiles_by_key.insert(key.clone(), tile);
-            Ok(Some(tile))
+            return Ok(Some(*tile));
         }
+
+        profiling::scope!("new tile");
+        let Some((size, bytes)) = build()? else {
+            return Ok(None);
+        };
+        key.texture_kind().validate_upload(size, &bytes)?;
+        let tile = lock.insert_tile(key.clone(), size, &bytes)?;
+
+        Ok(Some(tile))
     }
 
     fn get_or_insert_glyph_with(
@@ -153,8 +145,8 @@ impl PlatformAtlas for WgpuAtlas {
         build: &mut dyn FnMut() -> Result<RasterizedGlyph>,
     ) -> Result<GlyphAtlasEntry> {
         let mut lock = self.0.lock();
-        if let Some(entry) = lock.glyph_entries.get(params) {
-            return Ok(*entry);
+        if let Some(entry) = lock.glyph_cache.get(params) {
+            return Ok(entry);
         }
 
         let glyph = build()?;
@@ -163,44 +155,15 @@ impl PlatformAtlas for WgpuAtlas {
             None
         } else {
             let key = AtlasKey::from((params.clone(), glyph.format));
-            let kind = key.texture_kind();
-            kind.validate_upload(glyph.size, &glyph.pixels)?;
-            anyhow::ensure!(
-                glyph.size.width.0 as u32 <= lock.max_texture_size
-                    && glyph.size.height.0 as u32 <= lock.max_texture_size,
-                "atlas tile {:?} exceeds the device texture limit {}",
-                glyph.size,
-                lock.max_texture_size
-            );
-            let tile = lock
-                .allocate(glyph.size, kind)
-                .context("failed to allocate")?;
-            lock.upload_texture(tile.texture_id, tile.bounds, &glyph.pixels);
-            lock.tiles_by_key.insert(key, tile);
-
-            Some(tile)
+            Some(lock.insert_tile(key, glyph.size, &glyph.pixels)?)
         };
-        let entry = GlyphAtlasEntry {
-            tile,
-            bounds: glyph.bounds,
-            format: glyph.format,
-        };
-        lock.glyph_entries.insert(params.clone(), entry);
-
-        Ok(entry)
+        Ok(lock.glyph_cache.insert(params, &glyph, tile))
     }
 
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
 
-        if let AtlasKey::Glyph { params, format } = key
-            && lock
-                .glyph_entries
-                .get(params)
-                .is_some_and(|entry| entry.format == *format)
-        {
-            lock.glyph_entries.remove(params);
-        }
+        lock.glyph_cache.remove(key);
 
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
@@ -228,6 +191,27 @@ impl PlatformAtlas for WgpuAtlas {
 }
 
 impl WgpuAtlasState {
+    fn insert_tile(
+        &mut self,
+        key: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<AtlasTile> {
+        anyhow::ensure!(
+            size.width.0 as u32 <= self.max_texture_size
+                && size.height.0 as u32 <= self.max_texture_size,
+            "atlas tile {size:?} exceeds the device texture limit {}",
+            self.max_texture_size
+        );
+        let tile = self
+            .allocate(size, key.texture_kind())
+            .context("failed to allocate")?;
+        self.upload_texture(tile.texture_id, tile.bounds, bytes);
+        self.tiles_by_key.insert(key, tile);
+
+        Ok(tile)
+    }
+
     fn allocate(
         &mut self,
         size: Size<DevicePixels>,
@@ -406,15 +390,9 @@ impl WgpuAtlasStorage {
 
 impl ops::Index<AtlasTextureId> for WgpuAtlasStorage {
     type Output = WgpuAtlasTexture;
+
     fn index(&self, id: AtlasTextureId) -> &Self::Output {
-        let textures = match id.kind {
-            AtlasTextureKind::Monochrome => &self.monochrome_textures,
-            AtlasTextureKind::Subpixel => &self.subpixel_textures,
-            AtlasTextureKind::Polychrome => &self.polychrome_textures,
-        };
-        textures[id.index as usize]
-            .as_ref()
-            .expect("texture must exist")
+        self.get(id).expect("texture must exist")
     }
 }
 

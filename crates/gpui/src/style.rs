@@ -239,6 +239,16 @@ pub struct Style {
     /// Should the element be painted on screen?
     pub visibility: Visibility,
 
+    /// The inline direction of this element and its descendants.
+    pub direction: Direction,
+
+    /// How this element participates in Unicode bidirectional text formatting.
+    pub unicode_bidi: UnicodeBidi,
+
+    /// Whether `unicode_bidi` was authored rather than supplied by its initial value.
+    #[doc(hidden)]
+    pub unicode_bidi_explicit: bool,
+
     // Overflow properties
     /// How children overflowing their container should affect layout
     #[refineable]
@@ -425,6 +435,67 @@ pub enum Visibility {
     Hidden,
 }
 
+/// The inline direction established by an element.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Direction {
+    /// Use the resolved direction of the logical parent.
+    #[default]
+    Inherit,
+    /// Establish left-to-right directionality.
+    LeftToRight,
+    /// Establish right-to-left directionality.
+    RightToLeft,
+    /// Determine direction from eligible source text.
+    Auto,
+}
+
+/// An element direction after inheritance and automatic detection have been resolved.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum ResolvedDirection {
+    /// Left-to-right inline direction.
+    #[default]
+    LeftToRight,
+    /// Right-to-left inline direction.
+    RightToLeft,
+}
+
+impl ResolvedDirection {
+    /// Returns whether this direction is right-to-left.
+    pub fn is_rtl(self) -> bool {
+        self == Self::RightToLeft
+    }
+
+    pub(crate) fn from_first_strong(text: &str) -> Option<Self> {
+        use unicode_bidi::BidiClass;
+
+        text.chars()
+            .find_map(|character| match unicode_bidi::bidi_class(character) {
+                BidiClass::L => Some(Self::LeftToRight),
+                BidiClass::R | BidiClass::AL => Some(Self::RightToLeft),
+                _ => None,
+            })
+    }
+}
+
+/// Controls the Unicode bidirectional scope established by an element.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum UnicodeBidi {
+    /// Apply ordinary bidirectional processing without another scope.
+    #[default]
+    Normal,
+    /// Establish a directional embedding.
+    Embed,
+    /// Isolate the element's inline content from surrounding content.
+    Isolate,
+    /// Override the ordering of inline content with the element direction.
+    BidiOverride,
+    /// Isolate the content and override its ordering.
+    IsolateOverride,
+    /// Determine each paragraph's direction from its own content.
+    Plaintext,
+}
+
 /// The possible values of the box-shadow property
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoxShadow {
@@ -546,8 +617,14 @@ pub enum TextOverflow {
 /// How to align text within the element
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum TextAlign {
-    /// Align the text to the left of the element
+    /// Align text to the start edge for the line's direction.
     #[default]
+    Start,
+
+    /// Align text to the end edge for the line's direction.
+    End,
+
+    /// Align the text to the physical left edge of the element.
     Left,
 
     /// Center the text within the element
@@ -769,6 +846,18 @@ pub struct HighlightStyle {
 }
 
 impl Style {
+    /// Resolves the initial Unicode bidi behavior against this style's direction.
+    #[doc(hidden)]
+    pub fn effective_unicode_bidi(&self) -> UnicodeBidi {
+        if self.unicode_bidi_explicit {
+            self.unicode_bidi
+        } else if self.direction == Direction::Inherit {
+            UnicodeBidi::Normal
+        } else {
+            UnicodeBidi::Isolate
+        }
+    }
+
     /// Returns true if the style is visible and the background is opaque.
     pub fn has_opaque_background(&self) -> bool {
         self.background
@@ -861,16 +950,16 @@ impl Style {
         &self,
         bounds: Bounds<Pixels>,
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
         #[cfg(debug_assertions)]
         if self.debug_below {
-            context.set_global(DebugBelow)
+            cx.set_global(DebugBelow)
         }
 
         #[cfg(debug_assertions)]
-        if self.debug || context.has_global::<DebugBelow>() {
+        if self.debug || cx.has_global::<DebugBelow>() {
             window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
         }
 
@@ -907,7 +996,7 @@ impl Style {
         // The element's own box — background, inset shadows, children, and border — painted as a
         // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
         // and its children together as one group; without a filter it paints directly.
-        let paint_box = |window: &mut Window, context: &mut App| {
+        let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
@@ -939,7 +1028,7 @@ impl Style {
                 &self.box_shadow,
             );
 
-            continuation(window, context);
+            continuation(window, cx);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
@@ -961,7 +1050,7 @@ impl Style {
         };
 
         if self.filter.is_empty() {
-            paint_box(window, context);
+            paint_box(window, cx);
         } else {
             window.with_filter_layer_with_corner_smoothing(
                 bounds,
@@ -969,14 +1058,14 @@ impl Style {
                 corner_smoothing,
                 &self.filter,
                 |window| {
-                    paint_box(window, context);
+                    paint_box(window, cx);
                 },
             );
         }
 
         #[cfg(debug_assertions)]
         if self.debug_below {
-            context.remove_global::<DebugBelow>();
+            cx.remove_global::<DebugBelow>();
         }
     }
 
@@ -992,6 +1081,9 @@ impl Default for Style {
         Style {
             display: Display::Block,
             visibility: Visibility::Visible,
+            direction: Direction::Inherit,
+            unicode_bidi: UnicodeBidi::Normal,
+            unicode_bidi_explicit: false,
             overflow: Point {
                 x: Overflow::Visible,
                 y: Overflow::Visible,

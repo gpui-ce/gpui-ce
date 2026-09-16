@@ -3,7 +3,7 @@ use crate::editable_text::StringStorage;
 
 #[cfg(test)]
 use gpui::{
-    AppContext, CaretAffinity, CaretPosition, Context, EntityInputHandler, HeadlessAppContext,
+    AppContext, Context, Direction, EntityInputHandler, HeadlessAppContext, NavigationDirection,
     PlatformInput, PlatformTextSystem, Render, ScaledPixels, TestTextSystem, WindowHandle, div,
     hsla, prelude::*,
 };
@@ -18,15 +18,15 @@ use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState},
-    state::AccessibilityText,
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element,
-    ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad, Pixels, Point, SharedString,
-    Size, StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
-    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
+    A11ySubtreeBuilder, App, Bounds, CaretPosition, CaretSelection, CursorStyle, DefiniteLength,
+    DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle,
+    Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    ParagraphDirection, Pixels, Point, ShapedText, SharedString, Size, StatefulInteractiveElement,
+    Style, StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi,
+    WeakEntity, Window, accesskit, fill, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -257,13 +257,14 @@ pub struct LayoutState {
 struct InteractivityPrepaint {
     hitbox: Option<Hitbox>,
     scroll_offset: Point<Pixels>,
+    document_offset: Point<Pixels>,
     inner_bounds: Bounds<Pixels>,
     caret_visible: bool,
 }
 
 impl InteractivityPrepaint {
     fn document_origin(&self) -> Point<Pixels> {
-        self.inner_bounds.origin + self.scroll_offset
+        self.inner_bounds.origin + self.scroll_offset + self.document_offset
     }
 }
 
@@ -274,7 +275,7 @@ pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
     elements: PrepaintElements,
-    accessible_text: Option<Arc<AccessibilityText>>,
+    accessible_text_run: Option<accesskit::Node>,
     accessible_anchor: usize,
     accessible_focus: usize,
 }
@@ -310,13 +311,10 @@ impl Element for EditableTextElement {
         prepaint: &mut Self::PrepaintState,
         builder: &mut A11ySubtreeBuilder,
     ) {
-        let accessible_text = prepaint
-            .accessible_text
-            .as_ref()
+        let text_run = prepaint
+            .accessible_text_run
+            .take()
             .expect("accessibility data was prepared while building the tree");
-        let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
-        text_run.set_value(accessible_text.text.clone());
-        text_run.set_character_lengths(accessible_text.character_lengths.clone());
         let text_run_id = builder.synthetic_node_id("text");
         builder.push_child(text_run_id, text_run);
         builder
@@ -341,6 +339,7 @@ impl Element for EditableTextElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
+        entity.update(cx, |state, cx| state.observe_blur(window, cx));
         let caret = self.find_or_create_caret(&entity, window, cx);
 
         if let Some(duration) = self.caret_blink_interval.take()
@@ -351,11 +350,12 @@ impl Element for EditableTextElement {
 
         // Read new state information from the underlying entity.
         // Block-wrapped so that the state being read is dropped before continuing.
-        let (prelayout, next_scroll_offset) = {
+        let (prelayout, next_scroll_offset, direction_text) = {
             let state = entity.read(cx);
             let show_placeholder = state.as_str().is_empty();
+            let direction_text = SharedString::from(state.as_str());
             let text = match show_placeholder {
-                false => Some(SharedString::from(state.as_str())),
+                false => Some(direction_text.clone()),
                 true => self.placeholder.clone(),
             };
 
@@ -369,7 +369,11 @@ impl Element for EditableTextElement {
                 supports_multiline: self.supports_multiline,
                 accepts_input: self.accepts_input,
             };
-            (prelayout, state.layout_data.next_scroll_offset)
+            (
+                prelayout,
+                state.layout_data.next_scroll_offset,
+                direction_text,
+            )
         };
 
         // Update the scroll offset of the element when the user's caret goes out of scope.
@@ -391,11 +395,13 @@ impl Element for EditableTextElement {
             cx,
             |style, window, cx| {
                 window.with_text_style(style.text_style().cloned(), move |window| {
-                    let text_layout_id = prelayout.perform_text_layout(window);
+                    let text_layout_id =
+                        prelayout.perform_text_layout(style.effective_unicode_bidi(), window);
                     window.request_layout(style.clone(), Some(text_layout_id), cx)
                 })
             },
         );
+        window.set_layout_direction_text(layout_id, direction_text);
 
         (
             layout_id,
@@ -460,9 +466,11 @@ impl Element for EditableTextElement {
                     state.layout_data.scroll_bounds =
                         Bounds::new(-scroll_offset, inner_bounds.size);
                 });
+                let document_offset = request_layout.state.read(cx).layout_data.document_offset;
                 InteractivityPrepaint {
                     hitbox,
                     scroll_offset,
+                    document_offset,
                     inner_bounds,
                     caret_visible,
                 }
@@ -470,15 +478,19 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let accessible_text = window.is_a11y_active().then(|| state.accessibility_text());
-        let (accessible_anchor, accessible_focus) =
-            accessible_text.as_ref().map_or((0, 0), |text| {
-                accessible_selection(
-                    &text.byte_offsets,
-                    state.selected_range(),
-                    state.selection_direction(),
-                )
-            });
+        let (accessible_text_run, accessible_anchor, accessible_focus) = if window.is_a11y_active()
+        {
+            let metrics = state.accessibility_text_metrics();
+            let (anchor, focus) =
+                accessible_selection(&metrics.byte_offsets, state.caret_selection());
+            let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
+            text_run.set_value(state.as_str());
+            text_run.set_character_lengths(metrics.character_lengths.clone());
+
+            (Some(text_run), anchor, focus)
+        } else {
+            (None, 0, 0)
+        };
         let elements = PrepaintElements::build_elements(
             state,
             &prepaint,
@@ -493,7 +505,7 @@ impl Element for EditableTextElement {
             interactivity: prepaint,
             focus_handle,
             elements,
-            accessible_text,
+            accessible_text_run,
             accessible_anchor,
             accessible_focus,
         }
@@ -529,15 +541,25 @@ impl Element for EditableTextElement {
             }
 
             // Actually draw the elements we constructed during prepaint
-            for PrepaintLine { line, point, align } in prepaint.elements.lines.drain(..) {
-                let _ = line.paint(point, line_height, align, Some(bounds), window, cx);
+            if let Some(document) = prepaint.elements.document.take() {
+                let _ = document.paint(
+                    prepaint.interactivity.document_origin(),
+                    line_height,
+                    TextAlign::Left,
+                    Some(bounds),
+                    window,
+                    cx,
+                );
             }
+
             for quad in prepaint.elements.ime_marked.drain(..) {
                 window.paint_quad(quad);
             }
+
             for quad in prepaint.elements.selection.drain(..) {
                 window.paint_quad(quad);
             }
+
             if let Some(quad) = prepaint.elements.caret.take() {
                 window.paint_quad(quad);
             }
@@ -555,30 +577,17 @@ impl Element for EditableTextElement {
     }
 }
 
-fn accessible_selection(
-    byte_offsets: &[usize],
-    selection: Range<usize>,
-    direction: Option<NavigationDirection>,
-) -> (usize, usize) {
+fn accessible_selection(byte_offsets: &[usize], selection: CaretSelection) -> (usize, usize) {
     let byte_to_character = |offset: usize| {
         byte_offsets
             .partition_point(|byte_offset| *byte_offset <= offset)
             .saturating_sub(1)
     };
-    match direction {
-        Some(NavigationDirection::Forward) => (
-            byte_to_character(selection.end),
-            byte_to_character(selection.start),
-        ),
-        Some(NavigationDirection::Back) => (
-            byte_to_character(selection.start),
-            byte_to_character(selection.end),
-        ),
-        None => {
-            let caret = byte_to_character(selection.start);
-            (caret, caret)
-        }
-    }
+
+    (
+        byte_to_character(selection.anchor.index),
+        byte_to_character(selection.focus.index),
+    )
 }
 
 impl EditableTextElement {
@@ -681,7 +690,7 @@ impl EditableTextElement {
 }
 
 impl PrelayoutState {
-    fn perform_text_layout(self, window: &mut Window) -> LayoutId {
+    fn perform_text_layout(self, unicode_bidi: UnicodeBidi, window: &mut Window) -> LayoutId {
         // NOTE: Loosely mirrors TextLayout::layout
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
@@ -721,11 +730,27 @@ impl PrelayoutState {
 
                 let truncation =
                     TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+                let alignment_width =
+                    TextLayout::evaluate_alignment_width(known_dimensions, available_space);
+                let element_direction = window.resolved_direction();
+                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
+                    ParagraphDirection::Auto
+                } else {
+                    element_direction.into()
+                };
+                let options = TextLayoutOptions {
+                    wrap_width,
+                    line_clamp: text_style.line_clamp,
+                    alignment_width,
+                    text_align: text_style.text_align,
+                    direction,
+                    unicode_bidi,
+                };
 
                 if let Some(size) = self.prev_layout_state.size
-                    && (wrap_width.is_none() || wrap_width == self.prev_layout_state.wrap_width)
                     && truncation.width.is_none()
                     && self.storage_version == self.prev_layout_state.last_seen_storage_version
+                    && self.prev_layout_state.options == options
                 {
                     return size;
                 }
@@ -738,17 +763,33 @@ impl PrelayoutState {
                     wrap_width,
                     &truncation,
                     &runs,
+                    options.direction,
+                    options.unicode_bidi,
                     window,
                     cx,
                 );
                 let document = window
                     .text_system()
-                    .shape_text(text, font_size, &runs, wrap_width, text_style.line_clamp)
+                    .shape_text_with_options(text, font_size, &runs, options)
                     .ok()
                     .map(Arc::new);
                 let size = document
                     .as_ref()
                     .map_or_else(Size::default, |document| document.size(line_height));
+                let document_offset = if element_direction.is_rtl() {
+                    document.as_deref().map_or_else(Point::default, |document| {
+                        editable_document_offset(document, line_height)
+                    })
+                } else {
+                    Point::default()
+                };
+                let initial_scroll = self
+                    .prev_layout_state
+                    .size
+                    .is_none()
+                    .then_some(document_offset)
+                    .filter(|offset| offset.x > Pixels::ZERO);
+                let refresh_for_initial_scroll = initial_scroll.is_some();
 
                 let layout_data = EditableTextLayoutResult {
                     supports_multiline: self.supports_multiline,
@@ -756,21 +797,31 @@ impl PrelayoutState {
                     // updated during prepaint
                     scroll_bounds: Bounds::default(),
                     state: EditableTextLayoutState {
-                        wrap_width,
                         size: Some(size),
                         last_seen_storage_version: self.storage_version,
+                        options,
                     },
                     document,
                     line_height,
-                    next_scroll_offset: None,
+                    document_offset,
+                    next_scroll_offset: initial_scroll,
                 };
 
                 // Update the state for use in prepaint, paint, and action handlers.
                 // request_measured_layout caches this scope for processing later
                 // between layout and prepaint, so we cant just copy/move these values to the outer scope.
-                self.state.update(cx, move |state, _cx| {
+                self.state.update(cx, move |state, cx| {
                     state.layout_data = layout_data;
+                    if state.layout_data.next_scroll_offset.is_some() {
+                        cx.notify();
+                    }
                 });
+                if refresh_for_initial_scroll {
+                    let state = self.state.clone();
+                    cx.defer(move |cx| {
+                        state.update(cx, |_state, cx| cx.notify());
+                    });
+                }
 
                 size
             },
@@ -778,38 +829,15 @@ impl PrelayoutState {
     }
 }
 
-struct PrepaintLine {
-    line: Arc<WrappedLine>,
-    point: Point<Pixels>,
-    align: TextAlign,
-}
-
-const STACK_ALLOCATED_LINES: usize = 100usize;
-const STACK_ALLOCATED_QUADS_SELECTION: usize = 20usize;
-const STACK_ALLOCATED_QUADS_IME_MARKED: usize = 2usize;
-
 #[derive(Default)]
 struct PrepaintElements {
-    lines: SmallVec<[PrepaintLine; STACK_ALLOCATED_LINES]>,
-    selection: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_SELECTION]>,
-    ime_marked: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_IME_MARKED]>,
+    document: Option<Arc<ShapedText>>,
+    selection: SmallVec<[PaintQuad; 20]>,
+    ime_marked: SmallVec<[PaintQuad; 2]>,
     caret: Option<PaintQuad>,
 }
 
 impl PrepaintElements {
-    fn build_quads(
-        offset_corners: Vec<(Point<Pixels>, Point<Pixels>)>,
-        origin: Point<Pixels>,
-        color: Hsla,
-    ) -> impl Iterator<Item = PaintQuad> {
-        offset_corners
-            .into_iter()
-            .map(move |(offset_start, offset_end)| {
-                let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
-                fill(bounds, color)
-            })
-    }
-
     fn build_elements(
         state: &EditableTextState,
         prepaint: &InteractivityPrepaint,
@@ -818,108 +846,96 @@ impl PrepaintElements {
         caret_height: DefiniteLength,
         window: &mut Window,
     ) -> PrepaintElements {
-        let InteractivityPrepaint {
-            hitbox: _,
-            scroll_offset,
-            inner_bounds,
-            caret_visible,
-        } = prepaint;
-
-        let caret = state.visible_caret();
-        let selection = state.selected_range();
-        let ime_range = state.marked_range();
-
         let mut elements = PrepaintElements::default();
+        let Some(document) = &state.layout_data.document else {
+            return elements;
+        };
 
         let line_height = state.layout_data.line_height;
-        let mut caret_point = None::<Point<Pixels>>;
+        let document_top = prepaint.scroll_offset.y;
+        let document_bottom = document_top + line_height * document.line_count() as f32;
 
-        if let Some(document) = &state.layout_data.document {
-            let line_y = scroll_offset.y;
-            let line_bottom = line_y + line_height * document.line_count() as f32;
-            let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
-
-            if line_visible {
-                let document_origin = prepaint.document_origin();
-                elements.lines.push(PrepaintLine {
-                    line: document.clone(),
-                    point: document_origin,
-                    align: TextAlign::Left,
-                });
-
-                if !selection.is_empty() {
-                    let offset_corners =
-                        build_quad_over_text(&selection, document, line_height, Pixels::ZERO);
-                    elements.selection.extend(PrepaintElements::build_quads(
-                        offset_corners,
-                        document_origin,
-                        colors.selection,
-                    ));
-                }
-
-                if let Some(ime_range) = &ime_range
-                    && !ime_range.is_empty()
-                {
-                    const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
-                    let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-                    let underline_offset = line_height - underline_thickness;
-
-                    let offset_corners =
-                        build_quad_over_text(&ime_range, document, line_height, underline_offset);
-                    elements.ime_marked.extend(PrepaintElements::build_quads(
-                        offset_corners,
-                        document_origin,
-                        colors.ime_underline,
-                    ));
-                }
-
-                let caret_px = document
-                    .position_for_caret(caret, line_height)
-                    .unwrap_or_default();
-                caret_point = Some(document_origin + caret_px);
-            }
+        if document_bottom < Pixels::ZERO || document_top > prepaint.inner_bounds.size.height {
+            return elements;
         }
 
-        if *caret_visible && let Some(caret_point) = caret_point {
+        let document_origin = prepaint.document_origin();
+        let quads = |range: Range<usize>, color, offset_y| {
+            let start = range.start.min(document.text.len());
+            let end = range.end.min(document.text.len());
+
+            document
+                .selection_bounds(start..end, line_height)
+                .into_iter()
+                .map(move |bounds| {
+                    fill(
+                        Bounds::from_corners(
+                            document_origin + bounds.origin + point(Pixels::ZERO, offset_y),
+                            document_origin + bounds.bottom_right(),
+                        ),
+                        color,
+                    )
+                })
+        };
+
+        elements.document = Some(document.clone());
+
+        elements.selection.extend(quads(
+            state.selected_range(),
+            colors.selection,
+            Pixels::ZERO,
+        ));
+
+        if let Some(range) = state.marked_range() {
+            elements
+                .ime_marked
+                .extend(quads(range, colors.ime_underline, line_height - px(2.)));
+        }
+
+        if prepaint.caret_visible {
+            let caret_point = document_origin
+                + document
+                    .visual_position_for_caret(state.visible_caret(), line_height)
+                    .unwrap_or_default();
             let caret_height = caret_height.to_pixels(line_height.into(), window.rem_size());
             let vertical_offset = (line_height - caret_height) / 2.;
-            let quad = fill(
+            elements.caret = Some(fill(
                 Bounds::new(
                     caret_point + point(Pixels::ZERO, vertical_offset),
                     size(caret_width, caret_height),
                 ),
                 colors.caret,
-            );
-            elements.caret = Some(quad);
+            ));
         }
 
         elements
     }
 }
 
-fn build_quad_over_text(
-    containing_range: &Range<usize>,
-    document: &WrappedLine,
-    line_height: Pixels,
-    offset_y: Pixels,
-) -> Vec<(Point<Pixels>, Point<Pixels>)> {
-    let start = containing_range.start.min(document.text.len());
-    let end = containing_range.end.min(document.text.len());
-    document
-        .selection_bounds(start..end, line_height)
-        .into_iter()
-        .map(|bounds| {
-            (
-                point(bounds.left(), bounds.top() + offset_y),
-                point(bounds.right(), bounds.bottom()),
-            )
-        })
-        .collect()
+fn editable_document_offset(document: &ShapedText, line_height: Pixels) -> Point<Pixels> {
+    let mut left = Pixels::ZERO;
+
+    for caret in [
+        CaretPosition::attached_to_next_cluster(0),
+        CaretPosition::attached_to_previous_cluster(document.text.len()),
+    ] {
+        if let Some(visual_position) = document.visual_position_for_caret(caret, line_height) {
+            left = left.min(visual_position.x);
+        }
+    }
+
+    for bounds in document.selection_bounds(0..document.text.len(), line_height) {
+        left = left.min(bounds.left());
+    }
+
+    point(-left, Pixels::ZERO)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editable_text::actions::default_bindings;
+    use gpui::{KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent};
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
     const INPUT_COLOR: Hsla = hsla(0.08, 0.55, 0.28, 1.0);
@@ -933,14 +949,13 @@ mod tests {
         padding: Pixels,
         width: Pixels,
         wrap: bool,
+        direction: Direction,
+        unicode_bidi: Option<UnicodeBidi>,
+        placeholder: Option<&'static str>,
     }
 
     impl Render for BidiInputView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div().p(px(24.)).child(
                 editable_text("bidi-input")
                     .state(self.input.downgrade())
@@ -956,6 +971,14 @@ mod tests {
                     .marked_color(MARKED_COLOR)
                     .text_size(px(20.))
                     .line_height(px(if self.wrap { 27.5 } else { 28. }))
+                    .direction(self.direction)
+                    .text_start()
+                    .when_some(self.unicode_bidi, |input, unicode_bidi| {
+                        input.unicode_bidi(unicode_bidi)
+                    })
+                    .when_some(self.placeholder, |input, placeholder| {
+                        input.placeholder(placeholder)
+                    })
                     .when(self.wrap, |input| {
                         input.flex_col().whitespace_normal().overflow_y_scroll()
                     })
@@ -971,11 +994,35 @@ mod tests {
         window: WindowHandle<BidiInputView>,
         padding: Pixels,
         scale: f32,
-        context: HeadlessAppContext,
+        cx: HeadlessAppContext,
     }
 
     impl BidiInputFixture {
         fn new(text: &str, padding: f32, width: f32, wrap: bool, scale: f32) -> Self {
+            Self::new_with_direction(text, padding, width, wrap, scale, Direction::Auto)
+        }
+
+        fn new_with_direction(
+            text: &str,
+            padding: f32,
+            width: f32,
+            wrap: bool,
+            scale: f32,
+            direction: Direction,
+        ) -> Self {
+            Self::new_with_configuration(text, padding, width, wrap, scale, direction, None, None)
+        }
+
+        fn new_with_configuration(
+            text: &str,
+            padding: f32,
+            width: f32,
+            wrap: bool,
+            scale: f32,
+            direction: Direction,
+            unicode_bidi: Option<UnicodeBidi>,
+            placeholder: Option<&'static str>,
+        ) -> Self {
             let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
                 .with_fallback_families(["IBM Plex Sans", "Noto Sans Hebrew", "Noto Sans Arabic"]);
             system
@@ -992,94 +1039,144 @@ mod tests {
                 ])
                 .unwrap();
 
-            let mut context = HeadlessAppContext::new(Arc::new(system));
-            let input = context.update(|context| {
-                context.new(|context| EditableTextState::new(StringStorage::from(text), context))
-            });
+            let mut cx = HeadlessAppContext::new(Arc::new(system));
+            let input =
+                cx.update(|cx| cx.new(|cx| EditableTextState::new(StringStorage::from(text), cx)));
 
-            let window = context
-                .open_window(size(px(500.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(500.), px(240.)), |window, cx| {
                     window.set_scale_factor(scale);
 
-                    context.new(|_context| BidiInputView {
+                    cx.new(|_cx| BidiInputView {
                         input: input.clone(),
                         padding: px(padding),
                         width: px(width),
                         wrap,
+                        direction,
+                        unicode_bidi,
+                        placeholder,
                     })
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             Self {
                 input,
                 window,
                 padding: px(padding),
                 scale,
-                context,
+                cx,
             }
         }
 
         fn origin(&mut self) -> Point<Pixels> {
-            let bounds = only_quad(&mut self.context, self.window.into(), INPUT_COLOR)
+            let bounds = only_quad(&mut self.cx, self.window.into(), INPUT_COLOR)
                 .map(|value| px(value.as_f32() / self.scale));
-            let scroll = self
-                .context
-                .update(|context| self.input.read(context).layout_data.scroll_bounds.origin);
+            let (scroll, document_offset) = self.cx.update(|cx| {
+                let layout = &self.input.read(cx).layout_data;
+                (layout.scroll_bounds.origin, layout.document_offset)
+            });
 
-            bounds.origin + point(self.padding, self.padding) - scroll
+            bounds.origin + point(self.padding, self.padding) - scroll + document_offset
         }
 
-        fn document(&mut self) -> Arc<WrappedLine> {
-            self.context.update(|context| {
-                self.input
-                    .read(context)
-                    .layout_data
-                    .document
-                    .clone()
-                    .unwrap()
-            })
+        fn document(&mut self) -> Arc<ShapedText> {
+            self.cx
+                .update(|cx| self.input.read(cx).layout_data.document.clone().unwrap())
         }
 
         fn line_height(&mut self) -> Pixels {
-            self.context
-                .update(|context| self.input.read(context).layout_data.line_height)
+            self.cx
+                .update(|cx| self.input.read(cx).layout_data.line_height)
         }
 
         fn scroll(&mut self, offset: Point<Pixels>) {
-            self.context.update(|context| {
-                self.input.update(context, |state, context| {
+            self.cx.update(|cx| {
+                self.input.update(cx, |state, cx| {
                     state.layout_data.next_scroll_offset = Some(offset);
-                    context.notify();
+                    cx.notify();
                 })
             });
-            self.context.run_until_parked();
-            self.context.update(|context| {
-                assert_eq!(
-                    self.input.read(context).layout_data.scroll_bounds.origin,
-                    offset
-                );
+            self.cx.run_until_parked();
+            self.cx.update(|cx| {
+                assert_eq!(self.input.read(cx).layout_data.scroll_bounds.origin, offset);
             });
         }
 
-        fn point(&mut self, idx: usize) -> Point<Pixels> {
-            let caret = CaretPosition::new(idx, CaretAffinity::Downstream);
+        fn point_for_caret(&mut self, caret: CaretPosition) -> Point<Pixels> {
             let line_height = self.line_height();
             let local = self
                 .document()
-                .position_for_caret(caret, line_height)
+                .visual_position_for_caret(caret, line_height)
                 .unwrap();
 
             self.origin() + local + point(px(0.), line_height / 2.)
         }
 
-        fn dispatch(&mut self, event: PlatformInput) {
-            self.context
-                .update_window(self.window.into(), |_view, window, context| {
-                    window.dispatch_event(event, context);
+        fn point(&mut self, idx: usize) -> Point<Pixels> {
+            self.point_for_caret(CaretPosition::attached_to_next_cluster(idx))
+        }
+
+        fn update_input(
+            &mut self,
+            update: impl FnOnce(&mut EditableTextState, &mut Context<EditableTextState>),
+        ) {
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    let focus_handle = self.input.read(cx).focus_handle(cx);
+                    window.focus(&focus_handle, cx);
+                    self.input.update(cx, update);
                 })
                 .unwrap();
-            self.context.run_until_parked();
+            self.cx.run_until_parked();
+        }
+
+        fn activate(&mut self) {
+            self.cx
+                .update_window(self.window.into(), |_view, window, _cx| {
+                    window.activate_window();
+                })
+                .unwrap();
+            self.cx.run_until_parked();
+        }
+
+        fn blur(&mut self) {
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    window.blur(cx);
+                })
+                .unwrap();
+            self.cx.run_until_parked();
+        }
+
+        fn dispatch(&mut self, event: PlatformInput) {
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    window.dispatch_event(event, cx);
+                })
+                .unwrap();
+            self.cx.run_until_parked();
+        }
+
+        fn key_down(&mut self, keystroke: &str) {
+            let keystroke = Keystroke::parse(keystroke).unwrap();
+            self.dispatch(PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            }));
+        }
+
+        fn key_up(&mut self, keystroke: &str) {
+            let keystroke = Keystroke::parse(keystroke).unwrap();
+            self.dispatch(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
+        }
+
+        fn change_modifiers(&mut self, modifiers: Modifiers) {
+            self.dispatch(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                modifiers,
+                ..Default::default()
+            }));
         }
 
         fn down(&mut self, position: Point<Pixels>) {
@@ -1093,6 +1190,10 @@ mod tests {
 
         fn drag(&mut self, idx: usize) {
             let position = self.point(idx);
+            self.drag_to(position);
+        }
+
+        fn drag_to(&mut self, position: Point<Pixels>) {
             self.dispatch(PlatformInput::MouseMove(MouseMoveEvent {
                 position,
                 pressed_button: Some(MouseButton::Left),
@@ -1111,11 +1212,18 @@ mod tests {
         }
 
         fn assert_selection(&mut self, anchor: usize, focus: usize) {
-            let range = anchor.min(focus)..anchor.max(focus);
-            let caret = self.context.update(|context| {
-                let state = self.input.read(context);
+            let caret = self.cx.update(|cx| self.input.read(cx).caret());
+            assert_eq!(caret.index, focus);
+            self.assert_caret_selection(anchor, caret);
+        }
+
+        fn assert_caret_selection(&mut self, anchor: usize, focus: CaretPosition) {
+            let focus_idx = focus.index;
+            let range = anchor.min(focus_idx)..anchor.max(focus_idx);
+            let caret = self.cx.update(|cx| {
+                let state = self.input.read(cx);
                 assert_eq!(state.selected_range(), range);
-                assert_eq!(state.caret().index, focus);
+                assert_eq!(state.caret(), focus);
 
                 state.caret()
             });
@@ -1123,10 +1231,15 @@ mod tests {
             let origin = self.origin();
             let document = self.document();
             let line_height = self.line_height();
-            let caret_point = document.position_for_caret(caret, line_height).unwrap();
+            let caret_visual_position = document
+                .visual_position_for_caret(caret, line_height)
+                .unwrap();
             self.assert_quads(
                 CARET_COLOR,
-                vec![Bounds::new(origin + caret_point, size(px(2.), line_height))],
+                vec![Bounds::new(
+                    origin + caret_visual_position,
+                    size(px(2.), line_height),
+                )],
             );
 
             let expected = document
@@ -1139,7 +1252,7 @@ mod tests {
 
         fn assert_quads(&mut self, color: Hsla, expected: Vec<Bounds<Pixels>>) {
             let actual = self
-                .context
+                .cx
                 .solid_quad_bounds(self.window.into(), color)
                 .unwrap();
             assert_eq!(actual.len(), expected.len(), "quad count for {color:?}");
@@ -1154,6 +1267,28 @@ mod tests {
                 assert!((actual.size.height - expected.size.height).abs() <= px(1.));
             }
         }
+    }
+
+    #[test]
+    fn editable_text_clears_selection_when_blurred() {
+        let text = "selected text";
+        let mut fixture = BidiInputFixture::new(text, 8.0, 300.0, false, 1.0);
+        fixture.activate();
+        fixture.update_input(|state, cx| state.select_to(text.len(), cx));
+        fixture.cx.update(|cx| {
+            assert_eq!(fixture.input.read(cx).selected_range(), 0..text.len());
+        });
+
+        fixture.blur();
+
+        fixture.cx.update(|cx| {
+            assert_eq!(
+                fixture.input.read(cx).caret_selection(),
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(text.len()))
+            );
+        });
+        fixture.assert_quads(SELECTION_COLOR, Vec::new());
+        fixture.assert_quads(CARET_COLOR, Vec::new());
     }
 
     #[test]
@@ -1198,10 +1333,72 @@ mod tests {
     }
 
     #[test]
+    fn shift_home_and_end_move_without_selecting() {
+        for (text, direction, line_start, middle, line_end, outer_start, outer_end) in [
+            (
+                "first\nsecond\nthird",
+                Direction::LeftToRight,
+                6,
+                9,
+                12,
+                2,
+                15,
+            ),
+            (
+                "first\nabc אבגד def\nthird",
+                Direction::LeftToRight,
+                6,
+                14,
+                22,
+                2,
+                25,
+            ),
+            ("אבגד\nהוזח\nטיכל", Direction::RightToLeft, 9, 13, 17, 4, 22),
+        ] {
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+            fixture.cx.update(|cx| {
+                cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+            });
+            fixture.cx.run_until_parked();
+            fixture.update_input(|input, cx| input.move_to(middle, cx));
+
+            fixture.change_modifiers(Modifiers::shift());
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_start, line_start);
+            fixture.key_up("shift-home");
+
+            fixture.key_down("shift-end");
+            fixture.assert_selection(line_end, line_end);
+            fixture.key_up("shift-end");
+
+            fixture.update_input(|input, cx| input.move_to(middle, cx));
+            fixture.key_down("shift-end");
+            fixture.assert_selection(line_end, line_end);
+            fixture.key_up("shift-end");
+
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_start, line_start);
+            fixture.key_up("shift-home");
+
+            fixture.update_input(|input, cx| {
+                input.move_to(outer_start, cx);
+                input.select_to(outer_end, cx);
+            });
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_end + 1, line_end + 1);
+            fixture.key_up("shift-home");
+
+            fixture.key_down("shift-end");
+            fixture.assert_selection(text.len(), text.len());
+        }
+    }
+
+    #[test]
     fn parley_hebrew_click_uses_the_painted_gap() {
         let mut fixture = BidiInputFixture::new("שלום עולם", 8., 320., false, 1.5);
         let mut glyphs = fixture
-            .context
+            .cx
             .glyph_bounds(fixture.window.into(), TEXT_COLOR)
             .unwrap();
         glyphs.sort_by(|left, right| left.origin.x.partial_cmp(&right.origin.x).unwrap());
@@ -1214,6 +1411,207 @@ mod tests {
         fixture.assert_selection(15, 15);
         fixture.drag(13);
         fixture.assert_selection(15, 13);
+    }
+
+    #[test]
+    fn explicit_rtl_aligns_editable_ltr_text_and_keeps_interaction_geometry() {
+        let mut fixture = BidiInputFixture::new_with_direction(
+            "English 123",
+            8.0,
+            320.0,
+            false,
+            1.0,
+            Direction::RightToLeft,
+        );
+        let document = fixture.document();
+        assert_eq!(
+            document.visual_lines()[0].direction,
+            gpui::ResolvedDirection::RightToLeft
+        );
+        assert!(document.selection_bounds(0..7, px(28.0))[0].origin.x > px(150.0));
+
+        let position = fixture.point(3);
+        fixture.down(position);
+        fixture.assert_selection(3, 3);
+        fixture.drag(7);
+        fixture.assert_selection(3, 7);
+        fixture.up(7);
+    }
+
+    #[test]
+    fn directional_text_clicks_and_drags_preserve_endpoint_affinity() {
+        for (text, anchor, direction) in [
+            ("English 123", 3, Direction::RightToLeft),
+            ("مرحبا", "مر".len(), Direction::LeftToRight),
+            ("English 123", 3, Direction::LeftToRight),
+            ("مرحبا", "مر".len(), Direction::RightToLeft),
+        ] {
+            let start = CaretPosition::attached_to_next_cluster(0);
+            let end = CaretPosition::attached_to_previous_cluster(text.len());
+            for (endpoint, opposite) in [(start, end), (end, start)] {
+                let mut fixture =
+                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+                let opposite_point = fixture.point_for_caret(opposite);
+                let mut endpoint_point = fixture.point_for_caret(endpoint);
+                endpoint_point.x += if endpoint_point.x < opposite_point.x {
+                    px(-1.0)
+                } else {
+                    px(1.0)
+                };
+
+                fixture.down(endpoint_point);
+                fixture.assert_caret_selection(endpoint.index, endpoint);
+
+                for drag_anchor in [CaretPosition::attached_to_next_cluster(anchor), opposite] {
+                    let mut fixture = BidiInputFixture::new_with_direction(
+                        text, 8.0, 320.0, false, 1.0, direction,
+                    );
+                    let anchor_point = fixture.point_for_caret(drag_anchor);
+                    fixture.down(anchor_point);
+                    fixture.drag_to(endpoint_point);
+                    fixture.assert_caret_selection(drag_anchor.index, endpoint);
+                }
+            }
+
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+            fixture.update_input(|state, cx| {
+                state.move_to(anchor, cx);
+                state.select_linear(
+                    NavigationDirection::Forward,
+                    crate::editable_text::TextBoundary::Document,
+                    cx,
+                );
+            });
+            fixture.assert_caret_selection(
+                anchor,
+                CaretPosition::attached_to_previous_cluster(text.len()),
+            );
+        }
+    }
+
+    #[test]
+    fn backspace_keeps_caret_at_text_end_when_direction_opposes_the_text() {
+        for (text, remaining, direction) in [
+            ("abc", "ab", Direction::RightToLeft),
+            ("مرحبا", "مرحب", Direction::LeftToRight),
+        ] {
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+
+            fixture.update_input(|state, cx| {
+                state.move_to(text.len(), cx);
+                state.delete_linear(
+                    NavigationDirection::Back,
+                    crate::editable_text::TextBoundary::Cluster,
+                    cx,
+                );
+            });
+
+            let caret = fixture.cx.update(|cx| {
+                let state = fixture.input.read(cx);
+                assert_eq!(state.as_str(), remaining);
+                state.caret()
+            });
+            assert_eq!(
+                caret,
+                CaretPosition::attached_to_previous_cluster(remaining.len())
+            );
+
+            let document = fixture.document();
+            let line_height = fixture.line_height();
+            let downstream = document
+                .visual_position_for_caret(
+                    CaretPosition::attached_to_next_cluster(caret.index),
+                    line_height,
+                )
+                .unwrap();
+            let upstream = document
+                .visual_position_for_caret(caret, line_height)
+                .unwrap();
+            assert_ne!(upstream.x, downstream.x);
+
+            fixture.assert_selection(caret.index, caret.index);
+        }
+    }
+
+    #[test]
+    fn auto_editable_direction_ignores_placeholder_text() {
+        let mut fixture = BidiInputFixture::new_with_configuration(
+            "",
+            8.0,
+            320.0,
+            false,
+            1.0,
+            Direction::Auto,
+            None,
+            Some("مرحبا"),
+        );
+
+        assert_eq!(
+            fixture.document().visual_lines()[0].direction,
+            gpui::ResolvedDirection::LeftToRight
+        );
+    }
+
+    #[test]
+    fn rtl_editable_overflow_starts_at_the_right_and_remains_reachable() {
+        let mut fixture = BidiInputFixture::new_with_direction(
+            "English text that is much wider than the input",
+            8.0,
+            120.0,
+            false,
+            1.0,
+            Direction::RightToLeft,
+        );
+        let (scroll, document_offset, next_scroll, content_size) = fixture.cx.update(|cx| {
+            let layout = &fixture.input.read(cx).layout_data;
+            (
+                layout.scroll_bounds.origin,
+                layout.document_offset,
+                layout.next_scroll_offset,
+                layout.state.size,
+            )
+        });
+        assert!(document_offset.x > Pixels::ZERO);
+        assert!(
+            scroll.x > Pixels::ZERO
+                && scroll.x <= document_offset.x
+                && document_offset.x - scroll.x <= px(2.01),
+            "scroll={scroll:?}, offset={document_offset:?}, next={next_scroll:?}, content={content_size:?}"
+        );
+
+        fixture.scroll(Point::default());
+        let position = fixture.point(3);
+        fixture.down(position);
+        fixture.assert_selection(3, 3);
+        fixture.up(3);
+    }
+
+    #[test]
+    fn plaintext_paragraph_direction_does_not_change_ltr_scrolling_direction() {
+        let mut fixture = BidiInputFixture::new_with_configuration(
+            "اسماء.شبكة/%20/test/",
+            8.0,
+            120.0,
+            false,
+            1.0,
+            Direction::LeftToRight,
+            Some(UnicodeBidi::Plaintext),
+            None,
+        );
+        let document = fixture.document();
+        let (scroll, document_offset) = fixture.cx.update(|cx| {
+            let layout = &fixture.input.read(cx).layout_data;
+            (layout.scroll_bounds.origin, layout.document_offset)
+        });
+
+        assert_eq!(
+            document.visual_lines()[0].direction,
+            gpui::ResolvedDirection::RightToLeft
+        );
+        assert_eq!(document_offset, Point::default());
+        assert_eq!(scroll.x, Pixels::ZERO);
     }
 
     #[test]
@@ -1232,20 +1630,20 @@ mod tests {
 
         let marked_start = text[..focus].encode_utf16().count();
         fixture
-            .context
-            .update_window(fixture.window.into(), |_view, window, context| {
-                fixture.input.update(context, |state, context| {
+            .cx
+            .update_window(fixture.window.into(), |_view, window, cx| {
+                fixture.input.update(cx, |state, cx| {
                     state.replace_and_mark_text_in_range(
                         Some(marked_start..marked_start + 1),
                         "ל",
                         None,
                         window,
-                        context,
+                        cx,
                     );
                 });
             })
             .unwrap();
-        fixture.context.run_until_parked();
+        fixture.cx.run_until_parked();
         fixture.scroll(point(px(45.), px(0.)));
 
         let origin = fixture.origin();
@@ -1285,17 +1683,38 @@ mod tests {
         fixture.up(0);
     }
 
+    #[test]
+    fn wrapped_opposite_direction_drag_reaches_the_document_end() {
+        let text = "English text wraps here";
+        let anchor = 3;
+        let end = CaretPosition::attached_to_previous_cluster(text.len());
+        let mut fixture = BidiInputFixture::new_with_direction(
+            text,
+            8.0,
+            120.0,
+            true,
+            1.0,
+            Direction::RightToLeft,
+        );
+        assert!(fixture.document().line_count() > 1);
+
+        let anchor_point = fixture.point(anchor);
+        let mut end_point = fixture.point_for_caret(end);
+        assert!(end_point.y > anchor_point.y);
+        end_point.x += px(1.0);
+
+        fixture.down(anchor_point);
+        fixture.drag_to(end_point);
+        fixture.assert_caret_selection(anchor, end);
+    }
+
     struct CenteredEditableTextView {
         extent: f32,
         input: Entity<EditableTextState>,
     }
 
     impl Render for CenteredEditableTextView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
@@ -1322,11 +1741,11 @@ mod tests {
     }
 
     fn only_quad(
-        context: &mut HeadlessAppContext,
+        cx: &mut HeadlessAppContext,
         window: gpui::AnyWindowHandle,
         color: Hsla,
     ) -> Bounds<ScaledPixels> {
-        let bounds = context.solid_quad_bounds(window, color).unwrap();
+        let bounds = cx.solid_quad_bounds(window, color).unwrap();
         assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
         bounds[0]
     }
@@ -1339,45 +1758,41 @@ mod tests {
             .map(|(offset, _)| offset)
             .collect::<Vec<_>>();
         byte_offsets.push(text.len());
-        let selection = 1.."A😀日本".len();
+        let selection = CaretSelection::from(1.."A😀日本".len());
 
+        assert_eq!(accessible_selection(&byte_offsets, selection), (4, 1));
         assert_eq!(
             accessible_selection(
                 &byte_offsets,
-                selection.clone(),
-                Some(NavigationDirection::Forward),
+                CaretSelection::new(selection.focus, selection.anchor),
             ),
-            (4, 1)
-        );
-        assert_eq!(
-            accessible_selection(&byte_offsets, selection, Some(NavigationDirection::Back)),
             (1, 4)
         );
-        assert_eq!(accessible_selection(&byte_offsets, 5..5, None), (2, 2));
+        assert_eq!(accessible_selection(&byte_offsets, 5.into()), (2, 2));
     }
 
     #[test]
     fn editable_text_keeps_its_device_pixel_offset_when_its_parent_moves() {
         for scale_factor in [1.0, 1.5] {
-            let mut context = HeadlessAppContext::new(Arc::new(TestTextSystem));
-            let window = context
-                .open_window(size(px(420.0), px(260.0)), |window, context| {
+            let mut cx = HeadlessAppContext::new(Arc::new(TestTextSystem));
+            let window = cx
+                .open_window(size(px(420.0), px(260.0)), |window, cx| {
                     window.set_scale_factor(scale_factor);
-                    let input = context.new(|context| {
-                        let mut state = EditableTextState::new(StringStorage::from("x"), context);
-                        state.select_document(context);
+                    let input = cx.new(|cx| {
+                        let mut state = EditableTextState::new(StringStorage::from("x"), cx);
+                        state.select_document(cx);
                         state
                     });
 
-                    context.new(|_| CenteredEditableTextView { extent: 0.0, input })
+                    cx.new(|_| CenteredEditableTextView { extent: 0.0, input })
                 })
                 .unwrap();
 
-            context.run_until_parked();
+            cx.run_until_parked();
             let any_window = window.into();
-            let initial_container = only_quad(&mut context, any_window, CONTAINER_COLOR);
-            let initial_input = only_quad(&mut context, any_window, INPUT_COLOR);
-            let initial_selection = only_quad(&mut context, any_window, SELECTION_COLOR);
+            let initial_container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+            let initial_input = only_quad(&mut cx, any_window, INPUT_COLOR);
+            let initial_selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
             let expected_input_offset = initial_input.origin - initial_container.origin;
             let expected_selection_offset = initial_selection.origin - initial_input.origin;
             let mut container_origins = HashSet::from([(
@@ -1387,16 +1802,16 @@ mod tests {
 
             for step in 1..=32 {
                 window
-                    .update(&mut context, |view, _, context| {
+                    .update(&mut cx, |view, _, cx| {
                         view.extent = step as f32;
-                        context.notify();
+                        cx.notify();
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
-                let container = only_quad(&mut context, any_window, CONTAINER_COLOR);
-                let input = only_quad(&mut context, any_window, INPUT_COLOR);
-                let selection = only_quad(&mut context, any_window, SELECTION_COLOR);
+                let container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+                let input = only_quad(&mut cx, any_window, INPUT_COLOR);
+                let selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
                 assert_eq!(
                     input.origin - container.origin,
                     expected_input_offset,
