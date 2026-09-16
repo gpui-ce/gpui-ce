@@ -284,10 +284,6 @@ name = "on_window_close_quit"
 path = "examples/legacy/on_window_close_quit.rs"
 
 [[example]]
-name = "parley_fontique"
-path = "examples/legacy/parley_fontique.rs"
-
-[[example]]
 name = "opacity"
 path = "examples/legacy/opacity.rs"
 
