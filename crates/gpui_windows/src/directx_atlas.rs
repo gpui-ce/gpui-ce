@@ -11,7 +11,7 @@ use windows::Win32::Graphics::{
 
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams, Size,
 };
 
 pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
@@ -23,6 +23,7 @@ struct DirectXAtlasState {
     polychrome_textures: AtlasTextureList<DirectXAtlasTexture>,
     subpixel_textures: AtlasTextureList<DirectXAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    glyph_entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
 }
 
 struct DirectXAtlasTexture {
@@ -43,6 +44,7 @@ impl DirectXAtlas {
             polychrome_textures: Default::default(),
             subpixel_textures: Default::default(),
             tiles_by_key: Default::default(),
+            glyph_entries: Default::default(),
         }))
     }
 
@@ -67,6 +69,7 @@ impl DirectXAtlas {
         lock.polychrome_textures = AtlasTextureList::default();
         lock.subpixel_textures = AtlasTextureList::default();
         lock.tiles_by_key.clear();
+        lock.glyph_entries.clear();
     }
 }
 
@@ -102,8 +105,59 @@ impl PlatformAtlas for DirectXAtlas {
         }
     }
 
+    fn get_or_insert_glyph_with(
+        &self,
+        params: &RenderGlyphParams,
+        build: &mut dyn FnMut() -> anyhow::Result<RasterizedGlyph>,
+    ) -> anyhow::Result<GlyphAtlasEntry> {
+        let mut lock = self.0.lock();
+        if let Some(entry) = lock.glyph_entries.get(params) {
+            return Ok(*entry);
+        }
+
+        let glyph = build()?;
+        glyph.validate()?;
+        let tile = if glyph.size == Size::default() {
+            None
+        } else {
+            let key = AtlasKey::from((params.clone(), glyph.format));
+            let kind = key.texture_kind();
+            kind.validate_upload(glyph.size, &glyph.pixels)?;
+            anyhow::ensure!(
+                glyph.size.width.0 <= 16384 && glyph.size.height.0 <= 16384,
+                "atlas tile {:?} exceeds the Direct3D 11 texture limit",
+                glyph.size
+            );
+            let tile = lock
+                .allocate(glyph.size, kind)
+                .ok_or_else(|| anyhow::anyhow!("failed to allocate"))?;
+            lock.texture(tile.texture_id)
+                .upload(&lock.device_context, tile.bounds, &glyph.pixels);
+            lock.tiles_by_key.insert(key, tile);
+
+            Some(tile)
+        };
+        let entry = GlyphAtlasEntry {
+            tile,
+            bounds: glyph.bounds,
+            format: glyph.format,
+        };
+        lock.glyph_entries.insert(params.clone(), entry);
+
+        Ok(entry)
+    }
+
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
+
+        if let AtlasKey::Glyph { params, format } = key
+            && lock
+                .glyph_entries
+                .get(params)
+                .is_some_and(|entry| entry.format == *format)
+        {
+            lock.glyph_entries.remove(params);
+        }
 
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;

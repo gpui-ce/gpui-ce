@@ -38,9 +38,9 @@ use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
 use parley::{
     Affinity, Alignment, AlignmentOptions, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, Cursor,
-    FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle, FontWeight,
-    GenericFamily, InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight,
-    PositionedLayoutItem, Selection, StyleProperty,
+    FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle,
+    FontVariation as ParleyFontVariation, FontWeight, GenericFamily, InlineBox, InlineBoxKind,
+    Layout, LayoutContext, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
 };
 use skrifa::instance::NormalizedCoord;
 use std::{
@@ -144,20 +144,34 @@ struct ParagraphResultCache {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct RasterStyleCacheKey {
-    scene_color: [u32; 4],
+    color: RasterStyleColorKey,
     requested_mode: gpui::GlyphRenderMode,
+    foreground_dependency: gpui::ForegroundDependency,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum RasterStyleColorKey {
+    Scene([u32; 4]),
+    Normalized(gpui::Rgba8),
 }
 
 impl From<RasterStyleRequest> for RasterStyleCacheKey {
     fn from(request: RasterStyleRequest) -> Self {
-        Self {
-            scene_color: [
+        let color = if request.requested_mode == gpui::GlyphRenderMode::Color {
+            RasterStyleColorKey::Normalized(request.normalized_color())
+        } else {
+            RasterStyleColorKey::Scene([
                 request.scene_color.red.to_bits(),
                 request.scene_color.green.to_bits(),
                 request.scene_color.blue.to_bits(),
                 request.scene_color.alpha.to_bits(),
-            ],
+            ])
+        };
+
+        Self {
+            color,
             requested_mode: request.requested_mode,
+            foreground_dependency: request.foreground_dependency,
         }
     }
 }
@@ -189,7 +203,8 @@ impl RasterStyleCache {
 struct ColorGlyphSupport {
     colr_v0: bool,
     colr_v1: bool,
-    bitmap: bool,
+    cbdt: bool,
+    sbix: bool,
     svg: bool,
 }
 
@@ -198,7 +213,8 @@ impl ColorGlyphSupport {
         Self {
             colr_v0: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV0),
             colr_v1: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV1),
-            bitmap: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Bitmap),
+            cbdt: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Cbdt),
+            sbix: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Sbix),
             svg: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Svg),
         }
     }
@@ -207,7 +223,8 @@ impl ColorGlyphSupport {
         match kind {
             crate::ColorGlyphKind::ColrV0 => self.colr_v0,
             crate::ColorGlyphKind::ColrV1 => self.colr_v1,
-            crate::ColorGlyphKind::Bitmap => self.bitmap,
+            crate::ColorGlyphKind::Cbdt => self.cbdt,
+            crate::ColorGlyphKind::Sbix => self.sbix,
             crate::ColorGlyphKind::Svg => self.svg,
         }
     }
@@ -936,8 +953,10 @@ pub struct ParleyTextSystem {
     fonts: RwLock<FontStore>,
     rasterizer: Mutex<Box<dyn GlyphRasterizer>>,
     raster_styles: Mutex<RasterStyleCache>,
+    foreground_dependencies: Mutex<HashMap<(FontId, GlyphId), gpui::ForegroundDependency>>,
     color_glyph_support: ColorGlyphSupport,
     recommended_rendering_mode: TextRenderingMode,
+    automatic_optical_sizing: bool,
     parley: Mutex<ParleyState>,
     paragraph_cache: Mutex<ParagraphCache>,
     paragraph_result_cache: Mutex<ParagraphResultCache>,
@@ -977,14 +996,23 @@ impl ParleyTextSystem {
             fonts: RwLock::new(FontStore::default()),
             rasterizer: Mutex::new(Box::new(rasterizer)),
             raster_styles: Mutex::default(),
+            foreground_dependencies: Mutex::default(),
             color_glyph_support,
             recommended_rendering_mode,
+            automatic_optical_sizing: false,
             parley: Mutex::new(parley),
             paragraph_cache: Mutex::default(),
             paragraph_result_cache: Mutex::default(),
             system_font_fallback: system_font_fallback.into(),
             additional_fallbacks: Vec::new(),
         }
+    }
+
+    /// Enables explicit optical sizing from each shaped run's logical font size.
+    pub fn with_automatic_optical_sizing(mut self) -> Self {
+        self.automatic_optical_sizing = true;
+
+        self
     }
 
     /// Creates a deterministic text system without operating-system fonts.
@@ -1341,12 +1369,33 @@ impl ParleyTextSystem {
                         .collect::<Result<Vec<_>>>()
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let inline_optical_settings = self.automatic_optical_sizing.then(|| {
+                text_styles
+                    .iter()
+                    .map(|style| {
+                        [ParleyFontVariation::new(
+                            Tag::new(b"opsz"),
+                            f32::from(style.font_size),
+                        )]
+                    })
+                    .collect::<Vec<_>>()
+            });
 
             let mut state = self.parley.lock();
             let ParleyState { fonts, layout } = &mut *state;
             let mut builder = layout.ranged_builder(fonts, text, 1.0, false);
             builder.set_line_break_override(Some(CHROMIUM_LINE_BREAK_OVERRIDE));
             builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
+
+            let default_optical_settings = self.automatic_optical_sizing.then(|| {
+                [ParleyFontVariation::new(
+                    Tag::new(b"opsz"),
+                    f32::from(font_size),
+                )]
+            });
+            if let Some(settings) = &default_optical_settings {
+                builder.push_default(StyleProperty::FontVariations(settings.as_slice().into()));
+            }
 
             if let Some(line_height) = line_height {
                 builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(f32::from(
@@ -1410,11 +1459,18 @@ impl ParleyTextSystem {
                 );
             }
 
-            for style in text_styles {
+            for (style_idx, style) in text_styles.iter().enumerate() {
                 push_style(
                     StyleProperty::FontSize(f32::from(style.font_size)),
                     style.range.clone(),
                 );
+
+                if let Some(settings) = &inline_optical_settings {
+                    push_style(
+                        StyleProperty::FontVariations(settings[style_idx].as_slice().into()),
+                        style.range.clone(),
+                    );
+                }
 
                 push_style(
                     StyleProperty::LineHeight(LineHeight::Absolute(f32::from(style.line_height))),
@@ -1554,11 +1610,15 @@ impl ParleyTextSystem {
                     .copied()
                     .map(NormalizedCoord::from_bits)
                     .collect::<Vec<_>>();
+                let shaping_variations = self
+                    .automatic_optical_sizing
+                    .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
                 let font_id = self.fonts.write().intern(
                     run.font().data.clone(),
                     run.font().index,
                     &normalized_coords,
                     run.synthesis(),
+                    shaping_variations.as_ref().map_or(&[], |settings| settings),
                 )?;
 
                 let baseline = glyph_run.baseline();
@@ -1612,8 +1672,8 @@ impl ParleyTextSystem {
                                 id: glyph_id,
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
                                 is_emoji: color_glyphs
-                                    .kind(glyph_id)
-                                    .is_some_and(|kind| self.color_glyph_support.supports(kind)),
+                                    .available_kinds(glyph_id)
+                                    .any(|kind| self.color_glyph_support.supports(kind)),
                             }
                         })
                         .collect()
@@ -1843,13 +1903,44 @@ impl PlatformTextSystem for ParleyTextSystem {
             .rasterize(font.raster_face(params.font_id), params)
             .with_context(|| {
                 format!(
-                    "native rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_idx}, variations {variations:?}",
+                    "glyph rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_idx}, variations {variations:?}",
                     params.font_id
                 )
             })
     }
 
-    fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
+    fn prepare_raster_style(&self, mut request: RasterStyleRequest) -> PreparedRasterStyle {
+        request.foreground_dependency = if request.requested_mode == gpui::GlyphRenderMode::Color {
+            let dependency_key = (request.font_id, request.glyph_id);
+            if let Some(dependency) = self
+                .foreground_dependencies
+                .lock()
+                .get(&dependency_key)
+                .copied()
+            {
+                dependency
+            } else {
+                let dependency = self
+                    .fonts
+                    .read()
+                    .get(request.font_id)
+                    .and_then(|font| {
+                        font.foreground_dependency(request.glyph_id, |kind| {
+                            self.color_glyph_support.supports(kind)
+                        })
+                        .ok()
+                    })
+                    .unwrap_or(gpui::ForegroundDependency::Full);
+                self.foreground_dependencies
+                    .lock()
+                    .insert(dependency_key, dependency);
+
+                dependency
+            }
+        } else {
+            gpui::ForegroundDependency::Full
+        };
+
         let key = request.into();
         if let Some(style) = self.raster_styles.lock().styles.get(&key).copied() {
             return style;
@@ -3135,13 +3226,20 @@ mod tests {
             },
         );
         let request = RasterStyleRequest {
+            font_id: FontId(1),
+            glyph_id: GlyphId(1),
             scene_color: gpui::rgba(0x334455ff),
             requested_mode: GlyphRenderMode::Grayscale,
+            foreground_dependency: gpui::ForegroundDependency::Full,
         };
 
         assert_eq!(
             system.prepare_raster_style(request),
-            system.prepare_raster_style(request)
+            system.prepare_raster_style(RasterStyleRequest {
+                font_id: FontId(2),
+                glyph_id: GlyphId(2),
+                ..request
+            })
         );
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -3421,13 +3519,243 @@ mod tests {
     }
 
     #[test]
+    fn bundled_emoji_sample_keeps_font_metrics_and_device_scaling() {
+        const SAMPLE: &str = "Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
+        const EMOJI: [char; 6] = ['😀', '🎉', '🚀', '💡', '🔥', '✨'];
+
+        let system = test_system();
+        let noto_id = system.font_id(&font("Noto Color Emoji")).unwrap();
+
+        for font_size in [px(16.0), px(24.0), px(32.0)] {
+            let layout = layout_line(
+                &system,
+                SAMPLE,
+                font_size,
+                &[text_run(SAMPLE, "IBM Plex Sans")],
+            );
+            let emoji_glyphs = layout
+                .paint_fragments
+                .iter()
+                .flat_map(|fragment| {
+                    fragment
+                        .glyphs
+                        .iter()
+                        .filter(|glyph| glyph.is_emoji)
+                        .map(move |glyph| (fragment, glyph))
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(emoji_glyphs.len(), EMOJI.len());
+            assert_eq!(layout.font_size, font_size);
+
+            for (character, (fragment, glyph)) in EMOJI.into_iter().zip(emoji_glyphs) {
+                assert_eq!(
+                    fragment.font_id, noto_id,
+                    "{character} selected another font"
+                );
+                assert_eq!(fragment.font_size, font_size);
+                assert_eq!(glyph.position.y, Pixels::ZERO);
+                assert_eq!(
+                    glyph.id,
+                    system.glyph_for_char(noto_id, character).unwrap(),
+                    "{character} did not use its nominal bundled glyph"
+                );
+
+                let glyph_idx = fragment
+                    .glyphs
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, glyph))
+                    .unwrap();
+                let shaped_advance = fragment
+                    .glyphs
+                    .get(glyph_idx + 1)
+                    .map(|next| next.position.x - glyph.position.x)
+                    .unwrap_or(fragment.x_range.end - glyph.position.x);
+                assert!(shaped_advance > Pixels::ZERO);
+                let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                    font_id: fragment.font_id,
+                    glyph_id: glyph.id,
+                    scene_color: gpui::rgba(0xffffffff),
+                    requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: gpui::ForegroundDependency::Full,
+                });
+                let mut scale_one_bounds: Option<[f32; 4]> = None;
+
+                for scale_factor in [1.0, 1.5, 2.0] {
+                    let raster = system
+                        .rasterize_glyph(&RenderGlyphParams {
+                            font_id: fragment.font_id,
+                            glyph_id: glyph.id,
+                            font_size: fragment.font_size,
+                            subpixel_variant: point(0, 0),
+                            scale_factor,
+                            raster_style,
+                        })
+                        .unwrap();
+                    raster.validate().unwrap();
+                    assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
+                    assert!(
+                        raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                        "{character} produced no visible pixels"
+                    );
+
+                    let logical_bounds = [
+                        raster.bounds.origin.x.0 as f32 / scale_factor,
+                        raster.bounds.origin.y.0 as f32 / scale_factor,
+                        raster.size.width.0 as f32 / scale_factor,
+                        raster.size.height.0 as f32 / scale_factor,
+                    ];
+
+                    if let Some(reference) = scale_one_bounds {
+                        for (actual, expected) in logical_bounds.into_iter().zip(reference) {
+                            assert!(
+                                (actual - expected).abs() <= 1.0,
+                                "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
+                            );
+                        }
+                    } else {
+                        scale_one_bounds = Some(logical_bounds);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_joined_emoji_sequence_shapes_as_one_color_glyph() {
+        let system = test_system();
+        let text = "👩🏽‍💻";
+        let layout = layout_line(
+            &system,
+            text,
+            px(24.0),
+            &[text_run(text, "Noto Color Emoji")],
+        );
+        let glyphs = layout
+            .paint_fragments
+            .iter()
+            .flat_map(|fragment| fragment.glyphs.iter())
+            .collect::<Vec<_>>();
+
+        assert_eq!(glyphs.len(), 1);
+        assert!(glyphs[0].is_emoji);
+    }
+
+    #[test]
+    fn fixed_color_bitmaps_ignore_foreground_rgb_but_preserve_alpha() {
+        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans");
+        system
+            .add_fonts(vec![
+                Cow::Borrowed(IBM_PLEX),
+                Cow::Borrowed(NOTO_COLOR_EMOJI),
+            ])
+            .unwrap();
+        let font_id = system.font_id(&font("Noto Color Emoji")).unwrap();
+        let glyph_id = system.glyph_for_char(font_id, '😀').unwrap();
+        let style = |color| {
+            system.prepare_raster_style(RasterStyleRequest {
+                font_id,
+                glyph_id,
+                scene_color: color,
+                requested_mode: GlyphRenderMode::Color,
+                foreground_dependency: gpui::ForegroundDependency::Full,
+            })
+        };
+
+        let red = style(gpui::rgba(0xff0000cc));
+        let blue = style(gpui::rgba(0x0000ffcc));
+        let translucent = style(gpui::rgba(0x0000ff80));
+        assert_eq!(red, blue);
+        assert_eq!(
+            red.foreground_dependency,
+            gpui::ForegroundDependency::AlphaOnly
+        );
+        assert_ne!(red, translucent);
+    }
+
+    #[test]
+    fn automatic_optical_sizing_tracks_logical_default_and_inline_sizes() {
+        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "Source Serif 4")
+            .with_automatic_optical_sizing();
+        system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)]).unwrap();
+
+        let optical_value = |font_id| {
+            system
+                .fonts
+                .read()
+                .get(font_id)
+                .unwrap()
+                .variations
+                .iter()
+                .find(|variation| variation.tag == skrifa::Tag::new(b"opsz"))
+                .unwrap()
+                .value
+        };
+
+        for font_size in [px(12.0), px(48.0)] {
+            let layout = layout_line(&system, "A", font_size, &[text_run("A", "Source Serif 4")]);
+            let fragment = &layout.paint_fragments[0];
+            assert_eq!(optical_value(fragment.font_id), f32::from(font_size));
+
+            for scale_factor in [1.0, 2.0] {
+                let params = RenderGlyphParams {
+                    font_id: fragment.font_id,
+                    glyph_id: fragment.glyphs[0].id,
+                    font_size,
+                    subpixel_variant: point(0, 0),
+                    scale_factor,
+                    raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
+                };
+                system.rasterize_glyph(&params).unwrap();
+                assert_eq!(optical_value(fragment.font_id), f32::from(font_size));
+            }
+        }
+
+        let text = "small large";
+        let runs = [text_run(text, "Source Serif 4")];
+        let text_styles = [InlineTextStyle {
+            range: 6..text.len(),
+            font_size: px(48.0),
+            line_height: px(52.0),
+        }];
+        let inline = system.layout_inline(InlineLayoutRequest {
+            text,
+            runs: &runs,
+            text_styles: &text_styles,
+            boxes: &[],
+            font_size: px(12.0),
+            line_height: px(16.0),
+            text_metrics: InlineTextMetrics::default(),
+            wrap_width: None,
+            line_clamp: None,
+            text_align: TextAlign::Left,
+        });
+        let small = inline
+            .layout
+            .paint_fragments
+            .iter()
+            .find(|fragment| fragment.font_size == px(12.0))
+            .unwrap();
+        let large = inline
+            .layout
+            .paint_fragments
+            .iter()
+            .find(|fragment| fragment.font_size == px(48.0))
+            .unwrap();
+        assert_ne!(small.font_id, large.font_id);
+        assert_eq!(optical_value(small.font_id), 12.0);
+        assert_eq!(optical_value(large.font_id), 48.0);
+    }
+
+    #[test]
     fn native_backend_receives_the_face_instance_selected_during_shaping() {
         let seen = Arc::new(Mutex::new(None));
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
             "Source Serif 4",
             RecordingRasterizer { seen: seen.clone() },
-        );
+        )
+        .with_automatic_optical_sizing();
         system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)]).unwrap();
 
         let text = "A";
@@ -3470,6 +3798,12 @@ mod tests {
             .find(|variation| variation.tag == skrifa::Tag::new(b"wght"))
             .expect("weight design coordinate");
         assert!((weight.value - 700.0).abs() < 0.05, "{weight:?}");
+        let optical_size = seen
+            .variations
+            .iter()
+            .find(|variation| variation.tag == skrifa::Tag::new(b"opsz"))
+            .expect("optical-size design coordinate");
+        assert_eq!(optical_size.value, 22.0);
     }
 
     #[derive(Clone, Debug)]
@@ -3499,7 +3833,7 @@ mod tests {
             *self.seen.lock() = Some(SeenRasterFace {
                 font_id: face.font_id,
                 face_index: face.face_index,
-                data_matches: face.data == SOURCE_SERIF,
+                data_matches: face.data() == SOURCE_SERIF,
                 variations: face.variations.to_vec(),
                 synthesis: face.synthesis,
                 has_color_glyphs: face.has_color_glyphs,

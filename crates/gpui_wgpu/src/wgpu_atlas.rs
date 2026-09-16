@@ -3,7 +3,7 @@ use collections::FxHashMap;
 use etagere::{BucketedAtlasAllocator, size2};
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams, Size,
 };
 use parking_lot::Mutex;
 use std::{borrow::Cow, ops, sync::Arc};
@@ -40,6 +40,7 @@ struct WgpuAtlasState {
     color_texture_format: wgpu::TextureFormat,
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    glyph_entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
     pending_uploads: Vec<PendingUpload>,
     next_texture_identity: u64,
 }
@@ -64,6 +65,7 @@ impl WgpuAtlas {
             color_texture_format,
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
+            glyph_entries: Default::default(),
             pending_uploads: Vec::new(),
             next_texture_identity: 0,
         }))
@@ -97,6 +99,7 @@ impl WgpuAtlas {
         let mut lock = self.0.lock();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
+        lock.glyph_entries.clear();
         lock.pending_uploads.clear();
     }
 
@@ -109,6 +112,7 @@ impl WgpuAtlas {
         lock.color_texture_format = context.color_texture_format();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
+        lock.glyph_entries.clear();
         lock.pending_uploads.clear();
     }
 }
@@ -143,8 +147,60 @@ impl PlatformAtlas for WgpuAtlas {
         }
     }
 
+    fn get_or_insert_glyph_with(
+        &self,
+        params: &RenderGlyphParams,
+        build: &mut dyn FnMut() -> Result<RasterizedGlyph>,
+    ) -> Result<GlyphAtlasEntry> {
+        let mut lock = self.0.lock();
+        if let Some(entry) = lock.glyph_entries.get(params) {
+            return Ok(*entry);
+        }
+
+        let glyph = build()?;
+        glyph.validate()?;
+        let tile = if glyph.size == Size::default() {
+            None
+        } else {
+            let key = AtlasKey::from((params.clone(), glyph.format));
+            let kind = key.texture_kind();
+            kind.validate_upload(glyph.size, &glyph.pixels)?;
+            anyhow::ensure!(
+                glyph.size.width.0 as u32 <= lock.max_texture_size
+                    && glyph.size.height.0 as u32 <= lock.max_texture_size,
+                "atlas tile {:?} exceeds the device texture limit {}",
+                glyph.size,
+                lock.max_texture_size
+            );
+            let tile = lock
+                .allocate(glyph.size, kind)
+                .context("failed to allocate")?;
+            lock.upload_texture(tile.texture_id, tile.bounds, &glyph.pixels);
+            lock.tiles_by_key.insert(key, tile);
+
+            Some(tile)
+        };
+        let entry = GlyphAtlasEntry {
+            tile,
+            bounds: glyph.bounds,
+            format: glyph.format,
+        };
+        lock.glyph_entries.insert(params.clone(), entry);
+
+        Ok(entry)
+    }
+
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
+
+        if let AtlasKey::Glyph { params, format } = key
+            && lock
+                .glyph_entries
+                .get(params)
+                .is_some_and(|entry| entry.format == *format)
+        {
+            lock.glyph_entries.remove(params);
+        }
 
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;

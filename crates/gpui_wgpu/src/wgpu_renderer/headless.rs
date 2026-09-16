@@ -19,7 +19,7 @@ impl WgpuRenderer {
         context: &WgpuContext,
         size: Size<DevicePixels>,
     ) -> anyhow::Result<Self> {
-        Self::new_internal(
+        let mut renderer = Self::new_internal(
             None,
             context,
             None,
@@ -31,7 +31,11 @@ impl WgpuRenderer {
             None,
             None,
             Arc::new(WgpuAtlas::from_context(context)),
-        )
+        )?;
+
+        renderer.target.clear_color = wgpu::Color::BLACK;
+
+        Ok(renderer)
     }
 
     fn create_offscreen_target(&self) -> OffscreenTarget {

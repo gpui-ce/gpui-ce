@@ -53,9 +53,13 @@ etagere = "0.2"
 fontique = { version = "0.11.1", default-features = false }
 parley = { version = "0.11", default-features = false, features = ["std"] }
 heapless = "0.9.2"
+pathfinder_geometry = "0.5"
 raw-window-handle = "0.6"
 swash = "0.2.6"
 tempfile = "3.20.0"
+unicode-bidi = { version = "0.3.18", default-features = false, features = [
+  "hardcoded-data",
+] }
 ctor = "1.0.6"
 derive_more = { version = "2.1.1", features = [
   "add",

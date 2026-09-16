@@ -1,5 +1,7 @@
 #[cfg(test)]
-use crate::{AtlasKey, AtlasTextureKind, TestTextSystem, hsla, point, size};
+use crate::{
+    AtlasKey, AtlasTextureKind, PlatformAtlas, TestAtlas, TestTextSystem, hsla, point, size,
+};
 
 #[cfg(test)]
 use std::{sync::atomic::AtomicUsize, sync::atomic::Ordering};
@@ -51,7 +53,6 @@ pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
     font_metrics: RwLock<FxHashMap<FontId, FontMetrics>>,
-    raster_metadata: RwLock<FxHashMap<RenderGlyphParams, RasterizedGlyphMetadata>>,
 }
 
 impl TextSystem {
@@ -60,7 +61,6 @@ impl TextSystem {
         TextSystem {
             platform_text_system,
             font_metrics: RwLock::default(),
-            raster_metadata: RwLock::default(),
             font_ids_by_font: RwLock::default(),
         }
     }
@@ -221,45 +221,30 @@ impl TextSystem {
         }
     }
 
-    /// Rasterizes a glyph and records only the metadata needed on later atlas hits.
+    /// Rasterizes a glyph and validates its placement and pixel buffer.
     pub fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
         let glyph = self.platform_text_system.rasterize_glyph(params)?;
         glyph.validate()?;
 
-        let metadata = glyph.metadata();
-        let cached = self.raster_metadata.upgradable_read();
-
-        if let Some(previous) = cached.get(params) {
-            anyhow::ensure!(
-                *previous == metadata,
-                "glyph raster metadata changed for the same render parameters"
-            );
-        } else {
-            let mut cached = RwLockUpgradableReadGuard::upgrade(cached);
-            cached.insert(params.clone(), metadata);
-        }
-
         Ok(glyph)
-    }
-
-    pub(crate) fn raster_metadata(
-        &self,
-        params: &RenderGlyphParams,
-    ) -> Option<RasterizedGlyphMetadata> {
-        self.raster_metadata.read().get(params).copied()
     }
 
     /// Normalizes a requested scene color and render mode into the settings which affect the
     /// cached glyph raster.
     pub(crate) fn prepare_raster_style(
         &self,
+        font_id: FontId,
+        glyph_id: GlyphId,
         scene_color: Hsla,
         requested_mode: GlyphRenderMode,
     ) -> PreparedRasterStyle {
         self.platform_text_system
             .prepare_raster_style(RasterStyleRequest {
+                font_id,
+                glyph_id,
                 scene_color: crate::hsla_to_rgba(scene_color),
                 requested_mode,
+                foreground_dependency: ForegroundDependency::Full,
             })
     }
 
@@ -632,11 +617,11 @@ impl From<&TextRun> for PaintStyle {
 #[repr(C)]
 pub struct GlyphId(pub u32);
 
-/// Parameters for rendering a glyph, used as cache keys for raster bounds.
+/// Parameters for rendering a glyph, used as cache keys for glyph atlas entries.
 ///
 /// This struct identifies a specific glyph rendering configuration including
 /// font, size, subpixel positioning, and scale factor. It's used to look up
-/// cached raster bounds and sprite atlas entries.
+/// cached pixels, placement metadata, and sprite atlas entries.
 #[derive(Clone, Debug, PartialEq)]
 #[expect(missing_docs)]
 pub struct RenderGlyphParams {
@@ -701,10 +686,39 @@ impl From<crate::Rgba> for Rgba8 {
 /// A scene request before a platform rasterizer normalizes its cache-relevant settings.
 #[derive(Clone, Copy, Debug)]
 pub struct RasterStyleRequest {
+    /// The canonical font instance containing the glyph.
+    pub font_id: FontId,
+    /// The glyph whose artwork will be rasterized.
+    pub glyph_id: GlyphId,
     /// The exact application color. Rasterizers may only retain a normalized derivative of it.
     pub scene_color: crate::Rgba,
     /// The requested kind of glyph image.
     pub requested_mode: GlyphRenderMode,
+    /// Which foreground channels can alter the selected artwork.
+    pub foreground_dependency: ForegroundDependency,
+}
+
+impl RasterStyleRequest {
+    /// Quantizes the foreground after removing channels unused by the artwork.
+    pub fn normalized_color(self) -> Rgba8 {
+        let mut color = Rgba8::from(self.scene_color);
+        if self.foreground_dependency == ForegroundDependency::AlphaOnly {
+            color.red = 0;
+            color.green = 0;
+            color.blue = 0;
+        }
+
+        color
+    }
+}
+
+/// Describes which foreground channels can change rasterized color artwork.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ForegroundDependency {
+    /// The artwork or its fallback may use the complete foreground color.
+    Full,
+    /// Fixed RGB artwork uses only the foreground alpha.
+    AlphaOnly,
 }
 
 /// The cache-relevant raster settings chosen by a platform rasterizer.
@@ -714,6 +728,8 @@ pub struct PreparedRasterStyle {
     pub mode: GlyphRenderMode,
     /// Any normalized color effect baked into coverage or color pixels.
     pub color_effect: RasterColorEffect,
+    /// Which foreground channels can alter this raster or its fallback.
+    pub foreground_dependency: ForegroundDependency,
 }
 
 impl PreparedRasterStyle {
@@ -722,6 +738,16 @@ impl PreparedRasterStyle {
         Self {
             mode,
             color_effect: RasterColorEffect::Independent,
+            foreground_dependency: ForegroundDependency::Full,
+        }
+    }
+
+    /// Creates a native preblended style from the request's relevant color channels.
+    pub fn preblend(request: RasterStyleRequest) -> Self {
+        Self {
+            mode: request.requested_mode,
+            color_effect: RasterColorEffect::Preblend(request.normalized_color()),
+            foreground_dependency: request.foreground_dependency,
         }
     }
 }
@@ -761,12 +787,6 @@ pub struct RasterizedGlyph {
     pub pixels: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RasterizedGlyphMetadata {
-    pub(crate) bounds: Bounds<DevicePixels>,
-    pub(crate) format: RasterizedGlyphFormat,
-}
-
 impl RasterizedGlyph {
     /// Returns a successful empty glyph in the requested format.
     pub fn empty(format: RasterizedGlyphFormat) -> Self {
@@ -775,13 +795,6 @@ impl RasterizedGlyph {
             size: Size::default(),
             format,
             pixels: Vec::new(),
-        }
-    }
-
-    pub(crate) fn metadata(&self) -> RasterizedGlyphMetadata {
-        RasterizedGlyphMetadata {
-            bounds: self.bounds,
-            format: self.format,
         }
     }
 
@@ -833,6 +846,17 @@ impl RasterizedGlyph {
         );
         Ok(())
     }
+}
+
+/// A cached glyph's GPU tile and the placement metadata for its uploaded pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GlyphAtlasEntry {
+    /// The GPU tile, or `None` for a successfully empty glyph.
+    pub tile: Option<crate::AtlasTile>,
+    /// Placement relative to the glyph's baseline origin.
+    pub bounds: Bounds<DevicePixels>,
+    /// Byte layout of the cached pixels.
+    pub format: RasterizedGlyphFormat,
 }
 
 impl Eq for RenderGlyphParams {}
@@ -1191,12 +1215,24 @@ mod raster_contract_tests {
     fn prepared_style_and_format_drive_atlas_keys_without_caching_pixels() {
         let backend = Arc::new(SequencedRasterizer::default());
         let text_system = TextSystem::new(backend.clone());
-        let style_a =
-            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.20, 1.0), GlyphRenderMode::Grayscale);
-        let style_b =
-            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.24, 1.0), GlyphRenderMode::Grayscale);
-        let style_c =
-            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.30, 1.0), GlyphRenderMode::Grayscale);
+        let style_a = text_system.prepare_raster_style(
+            FontId(7),
+            GlyphId(42),
+            hsla(0.0, 0.0, 0.20, 1.0),
+            GlyphRenderMode::Grayscale,
+        );
+        let style_b = text_system.prepare_raster_style(
+            FontId(7),
+            GlyphId(42),
+            hsla(0.0, 0.0, 0.24, 1.0),
+            GlyphRenderMode::Grayscale,
+        );
+        let style_c = text_system.prepare_raster_style(
+            FontId(7),
+            GlyphId(42),
+            hsla(0.0, 0.0, 0.30, 1.0),
+            GlyphRenderMode::Grayscale,
+        );
         assert_eq!(style_a, style_b, "nearby scene colors share a mask style");
         assert_ne!(
             style_a, style_c,
@@ -1213,15 +1249,6 @@ mod raster_contract_tests {
         assert_eq!(first_raster.pixels, reused_raster.pixels);
         assert_eq!(first_raster.pixels, distinct_raster.pixels);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
-        assert_eq!(
-            text_system.raster_metadata(&first),
-            Some(first_raster.metadata())
-        );
-        assert_eq!(
-            text_system.raster_metadata(&third),
-            Some(distinct_raster.metadata())
-        );
-
         for (format, expected) in [
             (
                 RasterizedGlyphFormat::AlphaMask,
@@ -1244,7 +1271,7 @@ mod raster_contract_tests {
     }
 
     #[test]
-    fn only_successful_valid_native_rasters_record_metadata() {
+    fn atlas_entries_own_their_raster_metadata_and_retry_failures() {
         let backend = Arc::new(SequencedRasterizer {
             attempts: AtomicUsize::new(0),
             fail_until_valid: true,
@@ -1252,21 +1279,175 @@ mod raster_contract_tests {
 
         let text_system = TextSystem::new(backend.clone());
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
+        let atlas = TestAtlas::new();
 
-        assert!(text_system.rasterize_glyph(&params).is_err());
-        assert!(text_system.raster_metadata(&params).is_none());
-        assert!(text_system.rasterize_glyph(&params).is_err());
-        assert!(text_system.raster_metadata(&params).is_none());
-        let first_success = text_system.rasterize_glyph(&params).unwrap();
-        let second_success = text_system.rasterize_glyph(&params).unwrap();
-
-        assert_eq!(first_success.pixels, [0x7f]);
-        assert_eq!(second_success.pixels, [0x7f]);
-        assert_eq!(
-            text_system.raster_metadata(&params),
-            Some(first_success.metadata())
+        assert!(
+            atlas
+                .get_or_insert_glyph_with(&params, &mut || { text_system.rasterize_glyph(&params) })
+                .is_err()
         );
+        assert!(
+            atlas
+                .get_or_insert_glyph_with(&params, &mut || { text_system.rasterize_glyph(&params) })
+                .is_err()
+        );
+        let first_success = atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        let second_success = atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+
+        assert_eq!(first_success, second_success);
+        assert_eq!(
+            first_success.bounds.size,
+            size(DevicePixels(1), DevicePixels(1))
+        );
+        assert_eq!(first_success.format, RasterizedGlyphFormat::AlphaMask);
+        assert!(first_success.tile.is_some());
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
+
+        atlas.clear();
+        atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn separate_atlases_keep_the_metadata_for_their_own_pixels() {
+        let backend = Arc::new(ChangingRasterizer::default());
+        let text_system = TextSystem::new(backend.clone());
+        let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Color));
+        let first_atlas = TestAtlas::new();
+        let second_atlas = TestAtlas::new();
+
+        let silhouette = first_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        let silhouette_hit = first_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        assert_eq!(silhouette_hit, silhouette);
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 1);
+
+        let color = second_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        assert_ne!(color.bounds, silhouette.bounds);
+        assert_ne!(color.format, silhouette.format);
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 2);
+
+        let original = first_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        assert_eq!(original, silhouette);
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 2);
+
+        first_atlas.clear();
+        let recovered = first_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
+            .unwrap();
+        assert_ne!(recovered.bounds, silhouette.bounds);
+        assert_eq!(recovered.format, RasterizedGlyphFormat::BgraColor);
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn successful_empty_glyphs_are_cached_without_a_tile() {
+        let atlas = TestAtlas::new();
+        let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
+        let mut builds = 0;
+        let mut build = || {
+            builds += 1;
+
+            Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::AlphaMask))
+        };
+
+        let first = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
+        let second = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
+        assert_eq!(first, second);
+        assert!(first.tile.is_none());
+        assert_eq!(builds, 1);
+    }
+
+    #[derive(Default)]
+    struct ChangingRasterizer {
+        attempts: AtomicUsize,
+    }
+
+    impl PlatformTextSystem for ChangingRasterizer {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+            PlatformTextSystem::font_id(&TestTextSystem, descriptor)
+        }
+
+        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+            PlatformTextSystem::font_metrics(&TestTextSystem, font_id)
+        }
+
+        fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
+            PlatformTextSystem::typographic_bounds(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
+            PlatformTextSystem::advance(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
+            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, character)
+        }
+
+        fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            let (origin, size, format) = match attempt {
+                0 => (
+                    point(DevicePixels(-2), DevicePixels(-7)),
+                    size(DevicePixels(2), DevicePixels(3)),
+                    RasterizedGlyphFormat::AlphaMask,
+                ),
+                1 => (
+                    point(DevicePixels(1), DevicePixels(-9)),
+                    size(DevicePixels(4), DevicePixels(5)),
+                    RasterizedGlyphFormat::BgraColor,
+                ),
+                _ => (
+                    point(DevicePixels(3), DevicePixels(-8)),
+                    size(DevicePixels(3), DevicePixels(4)),
+                    RasterizedGlyphFormat::BgraColor,
+                ),
+            };
+            let bytes_per_pixel = if format == RasterizedGlyphFormat::AlphaMask {
+                1
+            } else {
+                4
+            };
+
+            Ok(RasterizedGlyph {
+                bounds: Bounds { origin, size },
+                size,
+                format,
+                pixels: vec![
+                    0x7f;
+                    size.width.0 as usize * size.height.0 as usize * bytes_per_pixel
+                ],
+            })
+        }
+
+        fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
+            PlatformTextSystem::layout_text(&TestTextSystem, request)
+        }
+
+        fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
+            PlatformTextSystem::layout_inline(&TestTextSystem, request)
+        }
     }
 
     #[derive(Default)]
@@ -1348,6 +1529,7 @@ mod raster_contract_tests {
                 color_effect: RasterColorEffect::Dilation(
                     (request.scene_color.red * 4.0).floor() as u8
                 ),
+                foreground_dependency: request.foreground_dependency,
             }
         }
 

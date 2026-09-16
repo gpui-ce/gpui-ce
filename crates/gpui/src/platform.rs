@@ -43,12 +43,12 @@ pub(crate) type PlatformScreenCaptureFrame = ();
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
-    FontId, FontMetrics, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, InlineLayout,
-    InlineLayoutRequest, Keymap, LineLayout, Pixels, PlatformGestures, PlatformInput, Point,
-    PreparedRasterStyle, Priority, RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat,
-    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, SharedString, Size,
-    SvgRenderer, SystemWindowTab, Task, TextLayoutRequest, Window, WindowControlArea, hash, point,
-    px,
+    FontId, FontMetrics, ForegroundExecutor, GlyphAtlasEntry, GlyphId, GpuSpecs, ImageSource,
+    InlineLayout, InlineLayoutRequest, Keymap, LineLayout, Pixels, PlatformGestures, PlatformInput,
+    Point, PreparedRasterStyle, Priority, RasterStyleRequest, RasterizedGlyph,
+    RasterizedGlyphFormat, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
+    Scene, SharedString, Size, SvgRenderer, SystemWindowTab, Task, TextLayoutRequest, Window,
+    WindowControlArea, hash, point, px,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::{
@@ -1828,6 +1828,11 @@ pub trait PlatformAtlas {
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
+    fn get_or_insert_glyph_with(
+        &self,
+        params: &RenderGlyphParams,
+        build: &mut dyn FnMut() -> Result<RasterizedGlyph>,
+    ) -> Result<GlyphAtlasEntry>;
     fn remove(&self, key: &AtlasKey);
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]

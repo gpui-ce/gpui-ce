@@ -1634,7 +1634,7 @@ impl DirectXRenderPipelines {
             "path_rasterization_pipeline",
             ShaderModule::PathRasterization,
             32,
-            create_blend_state_for_path_rasterization(device)?,
+            create_premultiplied_blend_state(device)?,
         )?;
         let path_sprite_pipeline = PipelineState::new(
             device,
@@ -2331,7 +2331,7 @@ fn create_blend_state_for_subpixel_rendering(device: &ID3D11Device) -> Result<ID
 }
 
 #[inline]
-fn create_blend_state_for_path_rasterization(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+pub(crate) fn create_premultiplied_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     // If the feature level is set to greater than D3D_FEATURE_LEVEL_9_3, the display
     // device performs the blend in linear space, which is ideal.
     let mut desc = D3D11_BLEND_DESC::default();
@@ -2372,7 +2372,10 @@ fn create_blend_state_for_path_sprite(device: &ID3D11Device) -> Result<ID3D11Ble
 
 /// Create a CPU-writable dynamic constant buffer of the given byte size (rounded up to 16).
 #[inline]
-fn create_constant_buffer(device: &ID3D11Device, byte_size: usize) -> Result<ID3D11Buffer> {
+pub(crate) fn create_constant_buffer(
+    device: &ID3D11Device,
+    byte_size: usize,
+) -> Result<ID3D11Buffer> {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: byte_size.next_multiple_of(16) as u32,
         Usage: D3D11_USAGE_DYNAMIC,
@@ -2400,7 +2403,10 @@ fn create_blend_state_no_blend(device: &ID3D11Device) -> Result<ID3D11BlendState
 }
 
 #[inline]
-fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11VertexShader> {
+pub(crate) fn create_vertex_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11VertexShader> {
     unsafe {
         let mut shader = None;
         device.CreateVertexShader(bytes, None, Some(&mut shader))?;
@@ -2409,7 +2415,10 @@ fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11Ver
 }
 
 #[inline]
-fn create_fragment_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11PixelShader> {
+pub(crate) fn create_fragment_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11PixelShader> {
     unsafe {
         let mut shader = None;
         device.CreatePixelShader(bytes, None, Some(&mut shader))?;
@@ -2536,27 +2545,6 @@ pub(crate) mod shader_resources {
     }
 
     impl ShaderModule {
-        #[cfg(test)]
-        const ALL: [Self; 17] = [
-            Self::Quad,
-            Self::SmoothedQuad,
-            Self::Shadow,
-            Self::SmoothedShadow,
-            Self::Underline,
-            Self::PathRasterization,
-            Self::PathSprite,
-            Self::MonochromeSprite,
-            Self::SubpixelSprite,
-            Self::PolychromeSprite,
-            Self::SmoothedPolychromeSprite,
-            Self::EmojiRasterization,
-            Self::Surface,
-            Self::BlurDownsample,
-            Self::Blur,
-            Self::BlurComposite,
-            Self::SmoothedBlurComposite,
-        ];
-
         pub(crate) fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
@@ -2585,14 +2573,17 @@ pub(crate) mod shader_resources {
 
         /// Both compiled stages plus the draw-constants contract the vertex stage expects.
         pub(crate) fn bytecode(self) -> Result<Dx11Bytecode> {
-            let shader = self.shader();
-            match shader.dx11 {
-                Dx11Shader::Sm50(bytecode) => Ok(bytecode),
-                Dx11Shader::NativeWindowsBuildRequired => anyhow::bail!(
-                    "{} has no DX11 bytecode: build the Windows target on a Windows host; runtime HLSL compilation is intentionally unsupported",
-                    shader.label,
-                ),
-            }
+            dx11_bytecode(self.shader())
+        }
+    }
+
+    fn dx11_bytecode(shader: &NativeShader) -> Result<Dx11Bytecode> {
+        match shader.dx11 {
+            Dx11Shader::Sm50(bytecode) => Ok(bytecode),
+            Dx11Shader::NativeWindowsBuildRequired => anyhow::bail!(
+                "{} has no DX11 bytecode: build the Windows target on a Windows host; runtime HLSL compilation is intentionally unsupported",
+                shader.label,
+            ),
         }
     }
 
@@ -2603,18 +2594,17 @@ pub(crate) mod shader_resources {
 
         #[test]
         fn every_generated_dx11_artifact_is_available() {
-            for module in ShaderModule::ALL {
-                module
-                    .bytecode()
-                    .unwrap_or_else(|error| panic!("missing bytecode for {module:?}: {error:#}"));
+            for shader in NATIVE_SHADERS {
+                dx11_bytecode(shader).unwrap_or_else(|error| {
+                    panic!("missing bytecode for {}: {error:#}", shader.label)
+                });
             }
         }
 
         /// Instanced pipelines index a whole-frame buffer, so they must carry the base.
         #[test]
         fn instanced_pipelines_declare_draw_constants() {
-            for module in ShaderModule::ALL {
-                let shader = module.shader();
+            for shader in NATIVE_SHADERS {
                 let instanced = matches!(
                     shader.pipeline.data_layout,
                     DataLayout::Instances
@@ -2622,11 +2612,12 @@ pub(crate) mod shader_resources {
                         | DataLayout::MonochromeSprites
                         | DataLayout::SubpixelSprites
                 );
-                let bytecode = module.bytecode().unwrap();
+                let bytecode = dx11_bytecode(shader).unwrap();
                 assert_eq!(
                     bytecode.draw_constants.is_some(),
                     instanced,
-                    "{module:?} draw-constants contract does not match its data layout"
+                    "{} draw-constants contract does not match its data layout",
+                    shader.label,
                 );
             }
         }

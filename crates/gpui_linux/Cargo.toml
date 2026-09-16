@@ -57,17 +57,12 @@ image.workspace = true
 futures.workspace = true
 gpui.workspace = true
 gpui_util.workspace = true
+gpui_parley = { workspace = true, features = ["system-fonts"] }
 gpui_wgpu = { workspace = true, optional = true }
-gpui_parley = { workspace = true, features = [
-  "system-fonts",
-  "fontconfig-dlopen",
-] }
 itertools.workspace = true
 libc.workspace = true
 log.workspace = true
 parking_lot.workspace = true
-pollster.workspace = true
-profiling.workspace = true
 smallvec.workspace = true
 smol.workspace = true
 strum.workspace = true

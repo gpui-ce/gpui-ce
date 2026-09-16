@@ -1,5 +1,5 @@
 use crate::{
-    MacDispatcher, MacDisplay, MacGlyphRasterizer, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
+    MacDispatcher, MacDisplay, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
     events::key_to_native, haptic_feedback::MacHaptics, pasteboard::Pasteboard, renderer,
     set_active_window_cursor_style,
 };
@@ -226,14 +226,7 @@ impl MacPlatform {
         let marker = MainThreadMarker::new().expect("Mac platform not created on main thread");
         let dispatcher = Arc::new(MacDispatcher::new());
 
-        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            gpui_parley::ParleyTextSystem::new_with_rasterizer(
-                gpui_parley::SystemFonts::Load,
-                ".AppleSystemUIFont",
-                MacGlyphRasterizer::new(),
-            )
-            .with_fallback_families(["Lilex", "IBM Plex Sans", "Helvetica", "Arial"]),
-        );
+        let text_system = Arc::new(crate::MacTextSystem::new());
 
         let keyboard_layout = MacKeyboardLayout::new();
         let keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));
