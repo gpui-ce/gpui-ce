@@ -7,8 +7,9 @@ use crate::{
 use std::{sync::atomic::AtomicUsize, sync::atomic::Ordering};
 
 use crate::{
-    Bounds, DevicePixels, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
-    StrikethroughStyle, TextAlign, TextRenderingMode, UnderlineStyle, px,
+    Bounds, DevicePixels, Pixels, PlatformTextSystem, Point, ResolvedDirection, Result,
+    SharedString, Size, StrikethroughStyle, TextAlign, TextRenderingMode, UnderlineStyle,
+    UnicodeBidi, px,
 };
 use anyhow::{Context as _, anyhow};
 use collections::FxHashMap;
@@ -339,13 +340,34 @@ impl WindowTextSystem {
         runs: &[TextRun],
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
-    ) -> Result<WrappedLine> {
+    ) -> Result<ShapedText> {
+        self.shape_text_with_options(
+            text,
+            font_size,
+            runs,
+            TextLayoutOptions {
+                wrap_width,
+                line_clamp,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Shapes a complete text document with explicit direction and alignment options.
+    #[doc(hidden)]
+    pub fn shape_text_with_options<S: AsRef<str> + Into<SharedString>>(
+        &self,
+        text: S,
+        font_size: Pixels,
+        runs: &[TextRun],
+        options: TextLayoutOptions,
+    ) -> Result<ShapedText> {
         let text = text.into();
         let layout = self
             .line_layout_cache
-            .layout_wrapped_line(&text, font_size, runs, wrap_width, line_clamp);
+            .layout_text_with_options(&text, font_size, runs, options);
 
-        Ok(WrappedLine { layout, text })
+        Ok(ShapedText { layout, text })
     }
 
     /// Layout text and atomic element boxes in one inline formatting context.
@@ -488,6 +510,58 @@ pub struct TextRun {
     pub letter_spacing: Option<Pixels>,
 }
 
+/// The paragraph base-direction policy supplied to a text backend.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum ParagraphDirection {
+    /// Determine paragraph direction from its source text.
+    #[default]
+    Auto,
+    /// Use an explicit left-to-right paragraph base direction.
+    LeftToRight,
+    /// Use an explicit right-to-left paragraph base direction.
+    RightToLeft,
+}
+
+impl From<ResolvedDirection> for ParagraphDirection {
+    fn from(direction: ResolvedDirection) -> Self {
+        match direction {
+            ResolvedDirection::LeftToRight => Self::LeftToRight,
+            ResolvedDirection::RightToLeft => Self::RightToLeft,
+        }
+    }
+}
+
+/// A directional scope within an inline text document.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct InlineBidiScope {
+    /// UTF-8 source range covered by this scope.
+    pub range: Range<usize>,
+    /// Resolved direction used by the scope.
+    pub direction: ResolvedDirection,
+    /// The CSS `unicode-bidi` behavior for the scope.
+    pub unicode_bidi: UnicodeBidi,
+}
+
+/// Direction, wrapping, and alignment options for a complete text document.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct TextLayoutOptions {
+    /// Optional soft-wrap width.
+    pub wrap_width: Option<Pixels>,
+    /// Optional maximum number of visual rows.
+    pub line_clamp: Option<usize>,
+    /// Width used for horizontal alignment, independently of wrapping.
+    pub alignment_width: Option<Pixels>,
+    /// Horizontal text alignment.
+    pub text_align: TextAlign,
+    /// Paragraph base-direction policy.
+    pub direction: ParagraphDirection,
+    /// Bidirectional behavior applied to the complete document.
+    pub unicode_bidi: UnicodeBidi,
+}
+
 /// Complete input for one backend-owned text document layout.
 #[derive(Clone, Copy, Debug)]
 pub struct TextLayoutRequest<'a> {
@@ -497,10 +571,8 @@ pub struct TextLayoutRequest<'a> {
     pub font_size: Pixels,
     /// Complete shaping and paint styles covering `text`.
     pub runs: &'a [TextRun],
-    /// Optional soft-wrap width.
-    pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
-    pub line_clamp: Option<usize>,
+    /// Wrapping, alignment, and bidirectional layout options.
+    pub options: TextLayoutOptions,
 }
 
 /// An atomic element inserted at a UTF-8 boundary in an inline document.
@@ -528,7 +600,7 @@ pub struct InlineTextStyle {
 }
 
 /// Complete input for a document containing text and element boxes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct InlineLayoutRequest<'a> {
     /// UTF-8 source text.
     pub text: &'a str,
@@ -544,12 +616,10 @@ pub struct InlineLayoutRequest<'a> {
     pub line_height: Pixels,
     /// Metrics for the inline container's base font.
     pub text_metrics: InlineTextMetrics,
-    /// Optional soft-wrap width.
-    pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
-    pub line_clamp: Option<usize>,
-    /// Horizontal alignment within `wrap_width`.
-    pub text_align: TextAlign,
+    /// Wrapping, alignment, and bidirectional layout options.
+    pub options: TextLayoutOptions,
+    /// Directional scopes established by nested inline elements.
+    pub bidi_scopes: &'a [InlineBidiScope],
 }
 
 impl Eq for TextRun {}
@@ -1088,14 +1158,32 @@ mod layout_cache_tests {
             font_size: px(16.0),
             line_height: px(20.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: Some(wrap_width),
-            line_clamp: None,
-            text_align: TextAlign::Left,
+            options: TextLayoutOptions {
+                wrap_width: Some(wrap_width),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
+            bidi_scopes: &[],
         };
 
         let wide = system.layout_inline(request(px(200.0)));
         let narrow = system.layout_inline(request(px(80.0)));
         assert!(!Arc::ptr_eq(&wide, &narrow));
+
+        let painted_runs = [TextRun {
+            color: hsla(0.5, 0.8, 0.4, 1.0),
+            ..runs[0].clone()
+        }];
+        let changed_paint = system.layout_inline(InlineLayoutRequest {
+            runs: &painted_runs,
+            ..request(px(200.0))
+        });
+        let changed_size = system.layout_inline(InlineLayoutRequest {
+            font_size: px(18.0),
+            ..request(px(200.0))
+        });
+        assert!(!Arc::ptr_eq(&wide, &changed_paint));
+        assert!(!Arc::ptr_eq(&wide, &changed_size));
         assert!(Arc::ptr_eq(
             &wide,
             &system.layout_inline(request(px(200.0)))

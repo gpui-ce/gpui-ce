@@ -52,14 +52,16 @@ use crate::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::{
-    CaretAffinity, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle, PlatformTextLayout,
-    PositionedInlineBox, ShapedGlyph, TextMovement, TextSelectionKind, VisualDirection, VisualLine,
+    CaretAffinity, CaretMovement, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle,
+    PlatformTextLayout, PositionedInlineBox, ResolvedDirection, ShapedGlyph, TextAlign,
+    TextBoundary, TextDirection, TextMovement, TextSelectionKind, VisualDirection, VisualLine,
     align_inline_boxes, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
 use anyhow::{Context as _, Result};
 use async_task::Runnable;
+use collections::FxHashMap;
 use futures::channel::oneshot;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 use image::RgbaImage;
@@ -1213,10 +1215,24 @@ pub struct TestTextSystem;
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 struct TestPlatformTextLayout {
+    /// Source text.
     text: String,
+    /// Ordered `(byte index, x position)` caret stops.
     stops: Vec<(usize, Pixels)>,
-    clusters: Vec<(Range<usize>, Range<Pixels>)>,
+    /// Size of the single visual line.
     size: Size<Pixels>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl TestPlatformTextLayout {
+    fn caret_stop(&self, byte_offset: usize) -> (usize, Pixels) {
+        let stop_index = self
+            .stops
+            .partition_point(|(index, _position)| *index <= byte_offset)
+            .saturating_sub(1);
+
+        self.stops[stop_index]
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1233,37 +1249,50 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         self.size
     }
 
-    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize> {
+    fn byte_index_from_pixel_point(
+        &self,
+        pixel_point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<usize, usize> {
         let closest = self
-            .caret_from_point(point, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
             .unwrap_or_else(|caret| caret)
             .index;
-        self.clusters
-            .iter()
-            .find(|(_, x)| point.x >= x.start && point.x < x.end)
-            .map_or(Err(closest), |(text, _)| Ok(text.start))
+        self.stops
+            .windows(2)
+            .find_map(|stops| {
+                let [(start_index, start_x), (_end_index, end_x)] = stops else {
+                    return None;
+                };
+
+                (pixel_point.x >= *start_x && pixel_point.x < *end_x).then_some(Ok(*start_index))
+            })
+            .unwrap_or(Err(closest))
     }
 
-    fn caret_from_point(
+    fn caret_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
         let index = self
             .stops
             .iter()
             .min_by(|(_, left), (_, right)| {
-                (f32::from(*left) - f32::from(point.x))
+                (f32::from(*left) - f32::from(pixel_point.x))
                     .abs()
-                    .total_cmp(&(f32::from(*right) - f32::from(point.x)).abs())
+                    .total_cmp(&(f32::from(*right) - f32::from(pixel_point.x)).abs())
             })
             .map_or(0, |(index, _)| *index);
-        let caret = self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream));
+        let caret = self.normalized_caret(CaretPosition {
+            index,
+            affinity: CaretAffinity::Downstream,
+        });
 
-        if point.y >= Pixels::ZERO
-            && point.y < line_height
-            && point.x >= Pixels::ZERO
-            && point.x < self.size.width
+        if pixel_point.y >= Pixels::ZERO
+            && pixel_point.y < line_height
+            && pixel_point.x >= Pixels::ZERO
+            && pixel_point.x < self.size.width
         {
             Ok(caret)
         } else {
@@ -1271,41 +1300,33 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
     }
 
-    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
-        let caret = self.refresh_caret(caret);
-        let x = self
-            .stops
-            .iter()
-            .find_map(|(index, x)| (*index == caret.index).then_some(*x))?;
+    fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+        let caret = self.normalized_caret(caret);
+        let (_index, position) = self.caret_stop(caret.index);
+
         Some(Bounds::new(
-            point(x, Pixels::ZERO),
+            point(position, Pixels::ZERO),
             size(Pixels::ZERO, line_height),
         ))
     }
 
-    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
-        let index = self
-            .stops
-            .iter()
-            .map(|(index, _)| *index)
-            .take_while(|index| *index <= caret.index)
-            .last()
-            .unwrap_or(0);
+    fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
+        let (index, _position) = self.caret_stop(caret.index);
         let affinity = if index == self.len() && index != 0 {
             CaretAffinity::Upstream
         } else {
             caret.affinity
         };
 
-        CaretPosition::new(index, affinity)
+        CaretPosition { index, affinity }
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
-        let caret = self.refresh_caret(caret);
+        let caret = self.normalized_caret(caret);
         let position = self
             .stops
             .iter()
@@ -1316,30 +1337,24 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         };
 
         let index = self.stops.get(position)?.0;
-        Some(self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream)))
+        Some(self.normalized_caret(CaretPosition {
+            index,
+            affinity: CaretAffinity::Downstream,
+        }))
     }
 
-    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
-        if range.is_empty() {
+    fn selection_bounds(
+        &self,
+        byte_range: Range<usize>,
+        line_height: Pixels,
+    ) -> Vec<Bounds<Pixels>> {
+        if byte_range.is_empty() {
             return Vec::new();
         }
 
-        let Some(start) = self.caret_geometry(
-            CaretPosition::new(range.start, CaretAffinity::Downstream),
-            line_height,
-        ) else {
-            return Vec::new();
-        };
+        let (_start_index, start) = self.caret_stop(byte_range.start);
+        let (_end_index, end) = self.caret_stop(byte_range.end);
 
-        let Some(end) = self.caret_geometry(
-            CaretPosition::new(range.end, CaretAffinity::Upstream),
-            line_height,
-        ) else {
-            return Vec::new();
-        };
-
-        let start = start.origin.x;
-        let end = end.origin.x;
         vec![Bounds::from_corners(
             point(start.min(end), Pixels::ZERO),
             point(start.max(end), line_height),
@@ -1347,45 +1362,48 @@ impl PlatformTextLayout for TestPlatformTextLayout {
     }
 
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
-        self.clusters
-            .iter()
+        self.stops
+            .windows(2)
             .rev()
-            .find(|(cluster, _)| cluster.end <= caret.index)
-            .map(|(cluster, _)| cluster.clone())
+            .find(|stops| stops[1].0 <= caret.index)
+            .map(|stops| stops[0].0..stops[1].0)
     }
 
     fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>> {
-        self.clusters
-            .iter()
-            .find(|(cluster, _)| cluster.start >= caret.index)
-            .map(|(cluster, _)| cluster.clone())
+        self.stops
+            .windows(2)
+            .find(|stops| stops[0].0 >= caret.index)
+            .map(|stops| stops[0].0..stops[1].0)
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
-        let index = match movement {
-            TextMovement::VisualLeft => {
-                self.move_visual(caret, VisualDirection::Left)
+    ) -> CaretMovement {
+        use TextBoundary::*;
+        use TextDirection::*;
+
+        let index = match (movement.direction, movement.boundary) {
+            (Left, Cluster) => {
+                self.adjacent_visual_caret(caret, VisualDirection::Left)
                     .unwrap_or(caret)
                     .index
             }
-            TextMovement::VisualRight => {
-                self.move_visual(caret, VisualDirection::Right)
+            (Right, Cluster) => {
+                self.adjacent_visual_caret(caret, VisualDirection::Right)
                     .unwrap_or(caret)
                     .index
             }
-            TextMovement::VisualWordLeft => {
+            (Left, Word) => {
                 let prefix = &self.text[..caret.index.min(self.text.len())];
                 let trimmed = prefix.trim_end_matches(char::is_whitespace);
                 trimmed.rfind(char::is_whitespace).map_or(0, |index| {
                     index + trimmed[index..].chars().next().unwrap().len_utf8()
                 })
             }
-            TextMovement::VisualWordRight => {
+            (Right, Word) => {
                 let start = caret.index.min(self.text.len());
                 let suffix = &self.text[start..];
                 let word_end = suffix.find(char::is_whitespace).unwrap_or(suffix.len());
@@ -1396,31 +1414,31 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                         .find(|character: char| !character.is_whitespace())
                         .unwrap_or(rest.len())
             }
-            TextMovement::VisualLineStart
-            | TextMovement::HardLineStart
-            | TextMovement::VisualUp => 0,
-            TextMovement::VisualLineEnd | TextMovement::HardLineEnd | TextMovement::VisualDown => {
-                self.len()
-            }
+            (Up | Start, VisualLine) | (Start, HardLine | Document) => 0,
+            (Down | End, VisualLine) | (End, HardLine | Document) => self.len(),
+            _ => caret.index,
         };
 
-        let preferred_x = matches!(movement, TextMovement::VisualUp | TextMovement::VisualDown)
+        let preferred_x = matches!(movement.direction, TextDirection::Up | TextDirection::Down)
             .then(|| {
                 preferred_x.unwrap_or_else(|| {
-                    self.caret_geometry(caret, self.size.height)
+                    self.caret_bounds(caret, self.size.height)
                         .map_or(Pixels::ZERO, |bounds| bounds.origin.x)
                 })
             });
 
-        (
-            self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream)),
+        CaretMovement {
+            caret: self.normalized_caret(CaretPosition {
+                index,
+                affinity: CaretAffinity::Downstream,
+            }),
             preferred_x,
-        )
+        }
     }
 
-    fn selection_from_point(
+    fn selection_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize> {
@@ -1429,7 +1447,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
 
         let index = self
-            .caret_from_point(point, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
             .unwrap_or_else(|caret| caret)
             .index
             .min(self.text.len());
@@ -1452,6 +1470,17 @@ impl TestTextSystem {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self
+    }
+
+    fn em_width(&self, font_size: Pixels) -> Pixels {
+        let metrics = self.font_metrics(FontId(0));
+
+        font_size
+            * self
+                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
+                .unwrap()
+                .width
+            / metrics.units_per_em as f32
     }
 }
 
@@ -1588,38 +1617,20 @@ impl PlatformTextSystem for TestTextSystem {
         let shaping_runs = request.runs;
         let mut position = px(0.);
         let metrics = self.font_metrics(FontId(0));
-        let em_width = font_size
-            * self
-                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
-                .unwrap()
-                .width
-            / metrics.units_per_em as f32;
+        let em_width = self.em_width(font_size);
         let mut glyphs = Vec::new();
-        let mut interaction_clusters = Vec::new();
         let mut stops = vec![(0, Pixels::ZERO)];
+
         for (idx, character) in text.char_indices() {
-            if let Some(glyph) = self.glyph_for_char(FontId(0), character) {
-                let start = position;
-                glyphs.push(ShapedGlyph {
-                    id: glyph,
-                    position: point(position, px(0.)),
-                    is_emoji: glyph.0 == 2,
-                });
-                if glyph.0 == 2 {
-                    position += em_width * 2.0;
-                } else {
-                    position += em_width;
-                }
+            let glyph_id = GlyphId(character.len_utf16() as u32);
+            glyphs.push(ShapedGlyph {
+                id: glyph_id,
+                position: point(position, Pixels::ZERO),
+                is_emoji: glyph_id.0 == 2,
+            });
 
-                interaction_clusters.push((idx..idx + character.len_utf8(), start..position));
-                stops.push((idx + character.len_utf8(), position));
-            } else {
-                position += em_width
-            }
-        }
-
-        if glyphs.is_empty() {
-            position = px(0.);
+            position += em_width * glyph_id.0 as f32;
+            stops.push((idx + character.len_utf8(), position));
         }
 
         let mut tracking = px(0.);
@@ -1638,10 +1649,33 @@ impl PlatformTextSystem for TestTextSystem {
             tracking_covered = end;
         }
 
+        let direction = match request.options.direction {
+            crate::ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
+            crate::ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
+            crate::ParagraphDirection::Auto => {
+                ResolvedDirection::from_first_strong(text).unwrap_or_default()
+            }
+        };
+        let advance = position + tracking;
+        let alignment_width = request.options.alignment_width.unwrap_or(advance);
+        let offset = match request.options.text_align {
+            TextAlign::Start if direction.is_rtl() => alignment_width - advance,
+            TextAlign::Start | TextAlign::Left => Pixels::ZERO,
+            TextAlign::Center => (alignment_width - advance) / 2.0,
+            TextAlign::End if direction.is_rtl() => Pixels::ZERO,
+            TextAlign::End | TextAlign::Right => alignment_width - advance,
+        };
+
+        for (_idx, position) in &mut stops {
+            *position += offset;
+        }
+
         let visual_lines = [VisualLine {
             text_range: 0..text.len(),
-            fragment_range: 0..usize::from(!glyphs.is_empty()),
-            advance_width: position + tracking,
+            paint_fragment_range: 0..usize::from(!glyphs.is_empty()),
+            advance_width: advance,
+            offset,
+            direction,
         }]
         .into_iter()
         .collect();
@@ -1651,7 +1685,7 @@ impl PlatformTextSystem for TestTextSystem {
                 font_id: FontId(0),
                 font_size,
                 glyphs: glyphs.into(),
-                x_range: Pixels::ZERO..position + tracking,
+                x_range: Pixels::ZERO..advance,
                 style: shaping_runs
                     .first()
                     .map_or_else(PaintStyle::default, PaintStyle::from),
@@ -1662,7 +1696,7 @@ impl PlatformTextSystem for TestTextSystem {
             .collect();
         LineLayout {
             font_size,
-            width: position + tracking,
+            width: advance,
             ascent: font_size * (metrics.ascent / metrics.units_per_em as f32),
             descent: font_size * (metrics.descent / metrics.units_per_em as f32),
             visual_lines,
@@ -1671,8 +1705,7 @@ impl PlatformTextSystem for TestTextSystem {
             platform_layout: Arc::new(TestPlatformTextLayout {
                 text: text.to_owned(),
                 stops,
-                clusters: interaction_clusters,
-                size: size(position + tracking, font_size),
+                size: size(advance, font_size),
             }),
         }
     }
@@ -1682,17 +1715,10 @@ impl PlatformTextSystem for TestTextSystem {
             text: request.text,
             font_size: request.font_size,
             runs: request.runs,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
+            options: request.options,
         });
 
-        let metrics = self.font_metrics(FontId(0));
-        let em_width = request.font_size
-            * self
-                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
-                .unwrap()
-                .width
-            / metrics.units_per_em as f32;
+        let em_width = self.em_width(request.font_size);
         let baseline = request
             .boxes
             .iter()
@@ -1700,12 +1726,17 @@ impl PlatformTextSystem for TestTextSystem {
             .fold(request.line_height, Pixels::max);
         let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
         add_test_inline_box_advances(&mut layout, request);
-        let line_width = request.wrap_width.unwrap_or(Pixels::MAX).min(layout.width);
+        let line_width = request
+            .options
+            .wrap_width
+            .unwrap_or(Pixels::MAX)
+            .min(layout.width);
+        let line_offset = layout.visual_lines[0].offset;
         let mut inline = InlineLayout {
             size: size(layout.width, baseline),
             layout: Arc::new(layout),
             lines: [InlineVisualLine {
-                origin: Point::default(),
+                origin: point(line_offset, Pixels::ZERO),
                 size: size(line_width, baseline),
                 baseline,
             }]
@@ -1821,6 +1852,52 @@ impl From<RenderSvgParams> for AtlasKey {
 impl From<RenderImageParams> for AtlasKey {
     fn from(params: RenderImageParams) -> Self {
         Self::Image(params)
+    }
+}
+
+#[doc(hidden)]
+#[derive(Default)]
+pub struct GlyphAtlasCache {
+    entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
+}
+
+impl GlyphAtlasCache {
+    pub fn get(&self, params: &RenderGlyphParams) -> Option<GlyphAtlasEntry> {
+        self.entries.get(params).copied()
+    }
+
+    pub fn insert(
+        &mut self,
+        params: &RenderGlyphParams,
+        glyph: &RasterizedGlyph,
+        tile: Option<AtlasTile>,
+    ) -> GlyphAtlasEntry {
+        let entry = GlyphAtlasEntry {
+            tile,
+            bounds: glyph.bounds,
+            format: glyph.format,
+        };
+        self.entries.insert(params.clone(), entry);
+
+        entry
+    }
+
+    pub fn remove(&mut self, key: &AtlasKey) {
+        let AtlasKey::Glyph { params, format } = key else {
+            return;
+        };
+
+        if self
+            .entries
+            .get(params)
+            .is_some_and(|entry| entry.format == *format)
+        {
+            self.entries.remove(params);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 

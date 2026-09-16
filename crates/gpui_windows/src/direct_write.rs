@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::hash_map::Entry,
     ffi::{c_uint, c_void},
     mem::ManuallyDrop,
     sync::Arc,
@@ -9,7 +10,7 @@ use anyhow::{Context as _, Result, ensure};
 use collections::HashMap;
 use gpui::{
     Bounds, DevicePixels, Font, FontId, FontMetrics, GlyphId, GlyphRenderMode, InlineLayout,
-    InlineLayoutRequest, LineLayout, Pixels, PlatformTextSystem, Point, PreparedRasterStyle,
+    InlineLayoutRequest, LineLayout, Pixels, PlatformTextSystem, PreparedRasterStyle,
     RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Rgba,
     SUBPIXEL_VARIANTS_X, Size, TextLayoutRequest, TextRenderingMode, bounds, point, size,
 };
@@ -33,6 +34,10 @@ use windows::{
 };
 use windows_numerics::Vector2;
 
+use crate::directx_renderer::{
+    create_constant_buffer, create_fragment_shader, create_premultiplied_blend_state,
+    create_vertex_shader,
+};
 use crate::*;
 
 pub(crate) struct DirectWriteTextSystem {
@@ -48,7 +53,7 @@ struct DirectWriteGlyphRenderer {
     variable_factory: Option<IDWriteFactory6>,
     rendering_params: IDWriteRenderingParams,
     gpu_state: Option<GPUState>,
-    faces: NativeFaceCache<NativeFace>,
+    faces: HashMap<FontId, NativeFace>,
     sources: HashMap<u64, NativeSource>,
     system_subpixel_rendering: bool,
 }
@@ -67,47 +72,6 @@ struct GPUState {
     pixel_shader: ID3D11PixelShader,
 }
 
-#[derive(Clone, Copy)]
-struct NativeFontId(usize);
-
-struct NativeFaceCache<F> {
-    ids: HashMap<FontId, NativeFontId>,
-    fonts: Vec<F>,
-}
-
-impl<F> Default for NativeFaceCache<F> {
-    fn default() -> Self {
-        Self {
-            ids: HashMap::default(),
-            fonts: Vec::new(),
-        }
-    }
-}
-
-impl<F> NativeFaceCache<F> {
-    fn get_or_insert(
-        &mut self,
-        face: RasterFace<'_>,
-        load: impl FnOnce(RasterFace<'_>) -> Result<F>,
-    ) -> Result<NativeFontId> {
-        if let Some(font_id) = self.ids.get(&face.font_id) {
-            return Ok(*font_id);
-        }
-
-        let native = load(face)?;
-        let font_id = NativeFontId(self.fonts.len());
-        self.fonts.push(native);
-        self.ids.insert(face.font_id, font_id);
-
-        Ok(font_id)
-    }
-
-    fn clear(&mut self) {
-        self.ids.clear();
-        self.fonts.clear();
-    }
-}
-
 struct NativeFace {
     face: IDWriteFontFace3,
 }
@@ -121,69 +85,12 @@ struct FontDataOwner {
     _data: FontDataBlob<u8>,
 }
 
-#[derive(Clone)]
-struct NativeGlyphParams {
-    font_id: NativeFontId,
-    glyph_id: GlyphId,
-    font_size: Pixels,
-    subpixel_variant: Point<u8>,
-    scale_factor: f32,
-    is_emoji: bool,
-    subpixel_rendering: bool,
-    dilation: u8,
-}
-
-impl NativeGlyphParams {
-    fn from_parley(font_id: NativeFontId, params: &RenderGlyphParams) -> Self {
-        Self {
-            font_id,
-            glyph_id: params.glyph_id,
-            font_size: params.font_size,
-            subpixel_variant: params.subpixel_variant,
-            scale_factor: params.scale_factor,
-            is_emoji: params.raster_style.mode == GlyphRenderMode::Color,
-            subpixel_rendering: params.raster_style.mode == GlyphRenderMode::Subpixel,
-            dilation: match params.raster_style.color_effect {
-                RasterColorEffect::Dilation(value) => value,
-                _ => 0,
-            },
-        }
-    }
-}
-
 impl GPUState {
     fn new(directx_devices: &DirectXDevices) -> Result<Self> {
         let device = directx_devices.device.clone();
         let device_context = directx_devices.device_context.clone();
 
-        let blend_state = {
-            let mut blend_state = None;
-            let desc = D3D11_BLEND_DESC {
-                AlphaToCoverageEnable: false.into(),
-                IndependentBlendEnable: false.into(),
-                RenderTarget: [
-                    D3D11_RENDER_TARGET_BLEND_DESC {
-                        BlendEnable: true.into(),
-                        SrcBlend: D3D11_BLEND_ONE,
-                        DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
-                        BlendOp: D3D11_BLEND_OP_ADD,
-                        SrcBlendAlpha: D3D11_BLEND_ONE,
-                        DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
-                        BlendOpAlpha: D3D11_BLEND_OP_ADD,
-                        RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    },
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                ],
-            };
-            unsafe { device.CreateBlendState(&desc, Some(&mut blend_state)) }?;
-            blend_state.unwrap()
-        };
+        let blend_state = create_premultiplied_blend_state(&device)?;
 
         let sampler = {
             let mut sampler = None;
@@ -204,17 +111,8 @@ impl GPUState {
         };
 
         let bytecode = shader_resources::ShaderModule::EmojiRasterization.bytecode()?;
-        let vertex_shader = {
-            let mut shader = None;
-            unsafe { device.CreateVertexShader(bytecode.vertex, None, Some(&mut shader)) }?;
-            shader.unwrap()
-        };
-
-        let pixel_shader = {
-            let mut shader = None;
-            unsafe { device.CreatePixelShader(bytecode.fragment, None, Some(&mut shader)) }?;
-            shader.unwrap()
-        };
+        let vertex_shader = create_vertex_shader(&device, bytecode.vertex)?;
+        let pixel_shader = create_fragment_shader(&device, bytecode.fragment)?;
 
         Ok(Self {
             device,
@@ -353,57 +251,57 @@ impl DirectWriteGlyphRenderer {
             variable_factory,
             rendering_params,
             gpu_state: directx_devices.map(GPUState::new).transpose()?,
-            faces: NativeFaceCache::default(),
+            faces: HashMap::default(),
             sources: HashMap::default(),
             system_subpixel_rendering: get_system_subpixel_rendering(),
         })
     }
 
-    fn load_face(&mut self, face: RasterFace<'_>) -> Result<NativeFontId> {
+    fn load_face(&mut self, face: RasterFace<'_>) -> Result<()> {
+        let Entry::Vacant(entry) = self.faces.entry(face.font_id) else {
+            return Ok(());
+        };
         let factory = &self.components.factory;
         let loader = &self.components.in_memory_loader;
         let variable_factory = self.variable_factory.as_ref();
-        let sources = &mut self.sources;
+        let use_default_axes = face.variations.is_empty()
+            || (variable_factory.is_none() && face.has_default_variations()?);
 
-        self.faces.get_or_insert(face, |face| {
-            let use_default_axes = face.variations.is_empty()
-                || (variable_factory.is_none() && face.has_default_variations()?);
+        ensure!(
+            use_default_axes || variable_factory.is_some(),
+            "this DirectWrite version cannot instantiate the selected variable-font coordinates"
+        );
 
-            ensure!(
-                use_default_axes || variable_factory.is_some(),
-                "this DirectWrite version cannot instantiate the selected variable-font coordinates"
-            );
-
-            let source = match sources.entry(face.source_id) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
-                    NativeSource::new(factory, loader, face.source)
-                        .context("DirectWrite could not retain the font source")?,
-                ),
-            };
-
-            NativeFace::new(
-                factory,
-                variable_factory,
-                &source.file,
-                &face,
-                use_default_axes,
+        let source = match self.sources.entry(face.source_id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(
+                NativeSource::new(factory, loader, face.source)
+                    .context("DirectWrite could not retain the font source")?,
+            ),
+        };
+        let native = NativeFace::new(
+            factory,
+            variable_factory,
+            &source.file,
+            &face,
+            use_default_axes,
+        )
+        .with_context(|| {
+            format!(
+                "DirectWrite could not create FontId {:?}, face index {}, variations {:?}",
+                face.font_id, face.face_index, face.variations
             )
-            .with_context(|| {
-                format!(
-                    "DirectWrite could not create FontId {:?}, face index {}, variations {:?}",
-                    face.font_id, face.face_index, face.variations
-                )
-            })
-        })
+        })?;
+        entry.insert(native);
+
+        Ok(())
     }
 
     fn create_glyph_run_analysis(
         &self,
-        components: &DirectWriteComponents,
-        params: &NativeGlyphParams,
+        params: &RenderGlyphParams,
     ) -> Result<IDWriteGlyphRunAnalysis> {
-        let font = &self.faces.fonts[params.font_id.0];
+        let font = &self.faces[&params.font_id];
         let glyph_id = [params.glyph_id.0 as u16];
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
@@ -453,14 +351,14 @@ impl DirectWriteGlyphRenderer {
             m => m,
         };
 
-        let antialias_mode = if params.subpixel_rendering {
+        let antialias_mode = if params.raster_style.mode == GlyphRenderMode::Subpixel {
             DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE
         } else {
             DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE
         };
 
         let glyph_analysis = unsafe {
-            components.factory.CreateGlyphRunAnalysis(
+            self.components.factory.CreateGlyphRunAnalysis(
                 &glyph_run,
                 Some(&transform),
                 rendering_mode,
@@ -474,107 +372,30 @@ impl DirectWriteGlyphRenderer {
         Ok(glyph_analysis)
     }
 
-    fn raster_bounds(
-        &self,
-        components: &DirectWriteComponents,
-        params: &NativeGlyphParams,
-    ) -> Result<Bounds<DevicePixels>> {
-        let glyph_analysis = self.create_glyph_run_analysis(components, params)?;
-
-        let texture_type = if params.subpixel_rendering {
-            DWRITE_TEXTURE_CLEARTYPE_3x1
-        } else {
-            DWRITE_TEXTURE_ALIASED_1x1
-        };
-
-        let bounds = unsafe { glyph_analysis.GetAlphaTextureBounds(texture_type)? };
-
-        if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
-            Ok(Bounds {
-                origin: point(0.into(), 0.into()),
-                size: size(0.into(), 0.into()),
-            })
-        } else {
-            Ok(Bounds {
-                origin: point(bounds.left.into(), bounds.top.into()),
-                size: size(
-                    (bounds.right - bounds.left).into(),
-                    (bounds.bottom - bounds.top).into(),
-                ),
-            })
-        }
-    }
-
-    fn rasterize_glyph(
-        &self,
-        components: &DirectWriteComponents,
-        params: &NativeGlyphParams,
-        glyph_bounds: Bounds<DevicePixels>,
-    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
-            anyhow::bail!("glyph bounds are empty");
-        }
-
-        let bitmap_data = if params.is_emoji {
-            if let Ok(color) = self.rasterize_color(components, params, glyph_bounds) {
-                color
-            } else {
-                let monochrome = self.rasterize_monochrome(components, params, glyph_bounds)?;
-                monochrome
-                    .into_iter()
-                    .flat_map(|pixel| [0, 0, 0, pixel])
-                    .collect::<Vec<_>>()
-            }
-        } else {
-            self.rasterize_monochrome(components, params, glyph_bounds)?
-        };
-
-        Ok((glyph_bounds.size, bitmap_data))
-    }
-
     fn rasterize_monochrome(
         &self,
-        components: &DirectWriteComponents,
-        params: &NativeGlyphParams,
-        glyph_bounds: Bounds<DevicePixels>,
+        glyph_analysis: &IDWriteGlyphRunAnalysis,
+        texture_type: DWRITE_TEXTURE_TYPE,
+        native_bounds: RECT,
     ) -> Result<Vec<u8>> {
-        let glyph_analysis = self.create_glyph_run_analysis(components, params)?;
-        if !params.subpixel_rendering {
-            let mut bitmap_data =
-                vec![0u8; glyph_bounds.size.width.0 as usize * glyph_bounds.size.height.0 as usize];
-            unsafe {
-                glyph_analysis.CreateAlphaTexture(
-                    DWRITE_TEXTURE_ALIASED_1x1,
-                    &RECT {
-                        left: glyph_bounds.origin.x.0,
-                        top: glyph_bounds.origin.y.0,
-                        right: glyph_bounds.size.width.0 + glyph_bounds.origin.x.0,
-                        bottom: glyph_bounds.size.height.0 + glyph_bounds.origin.y.0,
-                    },
-                    &mut bitmap_data,
-                )?;
-            }
-
-            return Ok(bitmap_data);
-        }
-
-        let width = glyph_bounds.size.width.0 as usize;
-        let height = glyph_bounds.size.height.0 as usize;
+        let width = (native_bounds.right - native_bounds.left) as usize;
+        let height = (native_bounds.bottom - native_bounds.top) as usize;
         let pixel_count = width * height;
-
-        let mut bitmap_data = vec![0u8; pixel_count * 4];
+        let subpixel = texture_type == DWRITE_TEXTURE_CLEARTYPE_3x1;
+        let native_channels = if subpixel { 3 } else { 1 };
+        let output_channels = if subpixel { 4 } else { 1 };
+        let mut bitmap_data = vec![0u8; pixel_count * output_channels];
 
         unsafe {
             glyph_analysis.CreateAlphaTexture(
-                DWRITE_TEXTURE_CLEARTYPE_3x1,
-                &RECT {
-                    left: glyph_bounds.origin.x.0,
-                    top: glyph_bounds.origin.y.0,
-                    right: glyph_bounds.size.width.0 + glyph_bounds.origin.x.0,
-                    bottom: glyph_bounds.size.height.0 + glyph_bounds.origin.y.0,
-                },
-                &mut bitmap_data[..pixel_count * 3],
+                texture_type,
+                &native_bounds,
+                &mut bitmap_data[..pixel_count * native_channels],
             )?;
+        }
+
+        if !subpixel {
+            return Ok(bitmap_data);
         }
 
         // The output buffer expects RGBA data, so pad the alpha channel with zeros.
@@ -599,8 +420,7 @@ impl DirectWriteGlyphRenderer {
 
     fn rasterize_color(
         &self,
-        components: &DirectWriteComponents,
-        params: &NativeGlyphParams,
+        params: &RenderGlyphParams,
         glyph_bounds: Bounds<DevicePixels>,
     ) -> Result<Vec<u8>> {
         // INVARIANT: the code below drives the *shared* D3D11 immediate context
@@ -627,7 +447,7 @@ impl DirectWriteGlyphRenderer {
             dy: 0.0,
         };
 
-        let font = &self.faces.fonts[params.font_id.0];
+        let font = &self.faces[&params.font_id];
         let glyph_id = [params.glyph_id.0 as u16];
         let advance = [glyph_bounds.size.width.0 as f32];
         let offset = [DWRITE_GLYPH_OFFSET {
@@ -647,7 +467,7 @@ impl DirectWriteGlyphRenderer {
 
         // todo: support formats other than COLR
         let color_enumerator = unsafe {
-            components.factory.TranslateColorGlyphRun(
+            self.components.factory.TranslateColorGlyphRun(
                 Vector2::new(baseline_origin_x, baseline_origin_y),
                 &glyph_run,
                 None,
@@ -666,7 +486,7 @@ impl DirectWriteGlyphRenderer {
             let image_format = color_run.glyphImageFormat & !DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE;
             if image_format == DWRITE_GLYPH_IMAGE_FORMATS_COLR {
                 let color_analysis = unsafe {
-                    components.factory.CreateGlyphRunAnalysis(
+                    self.components.factory.CreateGlyphRunAnalysis(
                         &color_run.Base.glyphRun as *const _,
                         Some(&transform),
                         DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
@@ -778,25 +598,10 @@ impl DirectWriteGlyphRenderer {
         render_target_texture: &ID3D11Texture2D,
         render_target_view: &Option<ID3D11RenderTargetView>,
     ) -> Result<Vec<u8>> {
-        let params_buffer = {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlyphLayerTextureParams>().next_multiple_of(16)
-                    as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                MiscFlags: 0,
-                StructureByteStride: 0,
-            };
-
-            let mut buffer = None;
-            unsafe {
-                gpu_state
-                    .device
-                    .CreateBuffer(&desc, None, Some(&mut buffer))
-            }?;
-            buffer
-        };
+        let params_buffer = Some(create_constant_buffer(
+            &gpu_state.device,
+            std::mem::size_of::<GlyphLayerTextureParams>(),
+        )?);
 
         let staging_texture = {
             let mut texture = None;
@@ -1000,24 +805,46 @@ impl GlyphRasterizer for DirectWriteGlyphRenderer {
             return Ok(RasterizedGlyph::empty(format));
         }
 
-        let native_id = self.load_face(face)?;
-        let native_params = NativeGlyphParams::from_parley(native_id, params);
-        debug_assert_eq!(native_params.dilation, 0);
-        let bounds = self.raster_bounds(&self.components, &native_params)?;
+        self.load_face(face)?;
+        debug_assert!(
+            !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
+        );
+        let glyph_analysis = self.create_glyph_run_analysis(params)?;
+        let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
+            DWRITE_TEXTURE_CLEARTYPE_3x1
+        } else {
+            DWRITE_TEXTURE_ALIASED_1x1
+        };
+        let native_bounds = unsafe { glyph_analysis.GetAlphaTextureBounds(texture_type)? };
 
-        if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
+        if native_bounds.right <= native_bounds.left || native_bounds.bottom <= native_bounds.top {
             return Ok(RasterizedGlyph::empty(format));
         }
 
-        let (bitmap_size, pixels) =
-            self.rasterize_glyph(&self.components, &native_params, bounds)?;
+        let bounds = Bounds {
+            origin: point(native_bounds.left.into(), native_bounds.top.into()),
+            size: size(
+                (native_bounds.right - native_bounds.left).into(),
+                (native_bounds.bottom - native_bounds.top).into(),
+            ),
+        };
+        let pixels = if params.raster_style.mode == GlyphRenderMode::Color {
+            self.rasterize_color(params, bounds).or_else(|_| {
+                self.rasterize_monochrome(&glyph_analysis, texture_type, native_bounds)
+                    .map(|monochrome| {
+                        monochrome
+                            .into_iter()
+                            .flat_map(|pixel| [0, 0, 0, pixel])
+                            .collect()
+                    })
+            })?
+        } else {
+            self.rasterize_monochrome(&glyph_analysis, texture_type, native_bounds)?
+        };
 
         Ok(RasterizedGlyph {
-            bounds: Bounds {
-                origin: bounds.origin,
-                size: bitmap_size,
-            },
-            size: bitmap_size,
+            bounds,
+            size: bounds.size,
             format,
             pixels,
         })
@@ -1207,8 +1034,8 @@ impl GlyphLayerTexture {
 mod tests {
     use super::*;
     use gpui::{
-        FontStyle, FontWeight, ForegroundDependency, RasterizedGlyphFormat, SUBPIXEL_VARIANTS_Y,
-        font, px, rgba,
+        FontStyle, FontWeight, ForegroundDependency, Point, RasterizedGlyphFormat,
+        SUBPIXEL_VARIANTS_Y, font, px, rgba,
     };
     use gpui_parley::FontSynthesis;
 
@@ -1341,7 +1168,7 @@ mod tests {
         let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX, IBM_PLEX_ITALIC]);
         let source = FontDataBlob::from(collection);
         let mut renderer = DirectWriteGlyphRenderer::new(None)?;
-        let native_id = renderer.load_face(RasterFace {
+        renderer.load_face(RasterFace {
             font_id: FontId(1),
             source_id: source.id(),
             source: &source,
@@ -1354,7 +1181,7 @@ mod tests {
         let codepoint = 'A' as u32;
         let mut glyph_id = 0;
         unsafe {
-            renderer.faces.fonts[native_id.0].face.GetGlyphIndices(
+            renderer.faces[&FontId(1)].face.GetGlyphIndices(
                 &raw const codepoint,
                 1,
                 &raw mut glyph_id,
