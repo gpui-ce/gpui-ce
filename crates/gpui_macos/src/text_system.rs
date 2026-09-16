@@ -853,7 +853,7 @@ mod renderer {
             collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
 
             for (face_idx, face) in faces.iter().enumerate() {
-                while collection.len() % 4 != 0 {
+                while !collection.len().is_multiple_of(4) {
                     collection.push(0);
                 }
 

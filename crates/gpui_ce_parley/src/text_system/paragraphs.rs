@@ -354,11 +354,13 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             _ => None,
         };
 
-        if movement.boundary == Boundary::Cluster && direction.is_some() {
-            return CaretMovement {
-                caret: self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
-                preferred_x: None,
-            };
+        if movement.boundary == Boundary::Cluster {
+            if let Some(direction) = direction {
+                return CaretMovement {
+                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    preferred_x: None,
+                };
+            }
         }
 
         if movement.boundary == Boundary::Document {
