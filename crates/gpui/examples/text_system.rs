@@ -248,6 +248,15 @@ fn multilingual_text() -> impl IntoElement {
         "Noto Color Emoji".into(),
     ]));
 
+    let mut emoji_samples = div().flex().flex_col().gap_2();
+    for font_size in [16.0, 24.0, 32.0] {
+        emoji_samples = emoji_samples.child(
+            div()
+                .text_size(px(font_size))
+                .child("Color emoji: 😀 🎉 🚀 💡 🔥 ✨"),
+        );
+    }
+
     div()
         .flex()
         .flex_col()
@@ -262,7 +271,7 @@ fn multilingual_text() -> impl IntoElement {
         .child("Arabic: مرحباً بالعالم")
         .child("Hebrew: שלום עולם")
         .child("Mixed direction: GPUI يكتب النص 42 مرة")
-        .child("Color emoji: 😀 🎉 🚀 💡 🔥 ✨")
+        .child(emoji_samples)
 }
 
 fn paragraph_layout() -> impl IntoElement {

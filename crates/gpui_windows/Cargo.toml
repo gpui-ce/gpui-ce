@@ -18,7 +18,7 @@ test-support = ["gpui/test-support"]
 screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
-gpui.workspace = true
+gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_render.workspace = true
 wgsl-rs.workspace = true
 
