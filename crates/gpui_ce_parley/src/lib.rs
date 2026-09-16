@@ -17,5 +17,4 @@ pub use store::{
 };
 pub use text_system::ParleyTextSystem;
 
-pub(crate) use catalog::{CatalogState, FaceFamily, FaceRequest, FontCatalog};
 pub(crate) use store::FontStore;

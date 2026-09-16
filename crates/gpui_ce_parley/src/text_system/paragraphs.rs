@@ -62,7 +62,6 @@ pub(super) struct ParagraphLayout {
     pub block_offset: Pixels,
     pub native: Arc<dyn PlatformTextLayout>,
     pub newline: Range<Pixels>,
-    pub is_rtl: bool,
 }
 
 impl ParagraphLayout {

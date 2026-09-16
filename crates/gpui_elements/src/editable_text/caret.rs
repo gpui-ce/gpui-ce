@@ -16,6 +16,7 @@ pub enum CaretNotify {
 
 /// Controls caret visibility and blinking; text layout owns position and geometry.
 /// Blinking is disabled by default.
+#[derive(Default)]
 pub struct Caret {
     /// The frequency at which the caret blinks
     interval: Duration,
@@ -27,17 +28,6 @@ pub struct Caret {
     has_focus: bool,
     #[allow(dead_code)]
     subscriptions: SmallVec<[Subscription; 2]>,
-}
-impl Default for Caret {
-    fn default() -> Self {
-        Self {
-            interval: Duration::ZERO,
-            generation: Default::default(),
-            visible: false,
-            has_focus: false,
-            subscriptions: SmallVec::new(),
-        }
-    }
 }
 
 impl Caret {

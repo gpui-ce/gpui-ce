@@ -1,7 +1,7 @@
 use crate::{
-    Bounds, FontId, GlyphId, InlineBoxRequest, InlineLayoutRequest, InlineTextStyle, Pixels,
-    PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle, TextAlign,
-    TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
+    Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
+    InlineTextStyle, Pixels, PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle,
+    TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -95,14 +95,9 @@ pub struct InlineLayout {
     pub size: Size<Pixels>,
 }
 
-#[derive(Clone, Copy)]
-struct InlineBoxPlacement {
-    line_index: Option<usize>,
-    vertical_align: VerticalAlign,
-}
-
 fn base_inline_line_bounds(metrics: InlineTextMetrics, line_height: Pixels) -> (Pixels, Pixels) {
     let half_leading = ((line_height - metrics.ascent - metrics.descent) / 2.).max(Pixels::ZERO);
+
     (
         -metrics.ascent - half_leading,
         metrics.descent + half_leading,
@@ -159,24 +154,15 @@ pub fn align_inline_boxes(
         .iter()
         .map(|request| (request.id, request.vertical_align))
         .collect::<FxHashMap<_, _>>();
-    let box_placements = boxes
-        .iter()
-        .map(|inline_box| {
-            let vertical_align = request_alignments
+    let mut boxes_by_line = vec![Vec::new(); lines.len()];
+
+    for (box_idx, inline_box) in boxes.iter().enumerate() {
+        if let Some(line_boxes) = boxes_by_line.get_mut(inline_box.line_index) {
+            let align = request_alignments
                 .get(&inline_box.id)
                 .copied()
                 .unwrap_or(VerticalAlign::Baseline);
-            InlineBoxPlacement {
-                line_index: (inline_box.line_index < lines.len()).then_some(inline_box.line_index),
-                vertical_align,
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut box_indices_by_line = vec![Vec::new(); lines.len()];
-
-    for (box_idx, placement) in box_placements.iter().enumerate() {
-        if let Some(line_index) = placement.line_index {
-            box_indices_by_line[line_index].push(box_idx);
+            line_boxes.push((box_idx, align));
         }
     }
 
@@ -194,9 +180,8 @@ pub fn align_inline_boxes(
         let mut top_box_height = Pixels::ZERO;
         let mut bottom_box_height = Pixels::ZERO;
 
-        for box_idx in &box_indices_by_line[line_index] {
-            let inline_box = &boxes[*box_idx];
-            let placement = box_placements[*box_idx];
+        for &(box_idx, align) in &boxes_by_line[line_index] {
+            let inline_box = &boxes[box_idx];
             expand_inline_line_for_box(
                 &mut top,
                 &mut bottom,
@@ -204,7 +189,7 @@ pub fn align_inline_boxes(
                 &mut bottom_box_height,
                 inline_box.bounds.size.height,
                 metrics,
-                placement.vertical_align,
+                align,
             );
         }
 
@@ -214,16 +199,10 @@ pub fn align_inline_boxes(
         line.size.height = bottom - top;
         line.baseline = -top;
 
-        for box_idx in &box_indices_by_line[line_index] {
-            let inline_box = &mut boxes[*box_idx];
-            let placement = box_placements[*box_idx];
-            inline_box.bounds.origin.y = line_y
-                + aligned_inline_box_y(
-                    *line,
-                    metrics,
-                    inline_box.bounds.size.height,
-                    placement.vertical_align,
-                );
+        for &(box_idx, align) in &boxes_by_line[line_index] {
+            let inline_box = &mut boxes[box_idx];
+            inline_box.bounds.origin.y =
+                line_y + aligned_inline_box_y(*line, metrics, inline_box.bounds.size.height, align);
         }
 
         line_y += line.size.height;
@@ -243,16 +222,20 @@ pub fn align_inline_boxes(
 pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Length of the source text in UTF-8 bytes.
     fn len(&self) -> usize;
+
     /// Number of visual lines.
     fn line_count(&self) -> usize;
+
     /// Natural layout size reported by the backend.
     fn size(&self) -> Size<Pixels>;
+
     /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
     fn byte_index_from_pixel_point(
         &self,
         pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<usize, usize>;
+
     /// Returns the closest caret for a point in GPUI layout coordinates.
     /// Points outside a visual row return `Err`.
     fn caret_from_pixel_point(
@@ -260,22 +243,27 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
         pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition>;
+
     /// Returns the caret bounds in GPUI layout coordinates.
     fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>>;
+
     /// Snaps a caret to a native cluster boundary.
     fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition;
+
     /// Returns the adjacent caret stop in visual order.
     fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition>;
+
     /// Returns bounds for a UTF-8 byte range in visual order.
     fn selection_bounds(
         &self,
         byte_range: Range<usize>,
         line_height: Pixels,
     ) -> Vec<Bounds<Pixels>>;
+
     /// Native range rectangles and their visual line indices, without selection-only extensions.
     ///
     /// Returns `None` for an empty input range. A nonempty range can produce an empty vector when
@@ -309,8 +297,10 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
     /// Returns the atomic logical cluster before the caret.
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>>;
+
     /// Returns the atomic logical cluster after the caret.
     fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>>;
+
     /// Returns the caret and retained horizontal coordinate after applying a movement.
     fn caret_movement(
         &self,
@@ -318,6 +308,7 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
         movement: TextMovement,
         vertical_navigation_x: Option<Pixels>,
     ) -> CaretMovement;
+
     /// Returns the word or line selected at a point in GPUI layout coordinates.
     fn selection_from_pixel_point(
         &self,
@@ -407,17 +398,23 @@ pub enum TextSelectionKind {
     HardLine,
 }
 
-/// A row produced by shaping and line breaking.
+/// A horizontal row produced by shaping and line breaking. Soft wrapping can split one logical
+/// line across several rows; bidirectional ordering does not change logical UTF-8 byte ranges.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VisualLine {
     /// The logical UTF-8 byte range assigned to this row.
     pub text_range: Range<usize>,
     /// Indices into [`LineLayout::paint_fragments`] for the positioned glyph runs
     /// painted on this row, ordered by visual position.
-    pub fragment_range: Range<usize>,
+    pub paint_fragment_range: Range<usize>,
     /// Horizontal distance consumed by the row's shaped content before alignment,
-    /// measured to the backend's final text pen position.
+    /// measured to the backend's final text pen position. Inline layouts include
+    /// advances from embedded boxes.
     pub advance_width: Pixels,
+    /// Horizontal offset assigned by backend layout.
+    pub offset: Pixels,
+    /// Base direction used to order and align this visual line.
+    pub direction: crate::ResolvedDirection,
 }
 
 /// GPUI paint properties carried through Parley's brush.
@@ -608,6 +605,14 @@ impl CaretSelection {
         self.anchor.index.min(self.caret.index)..self.anchor.index.max(self.caret.index)
     }
 
+    /// Limits both selection endpoints to `max_idx` while preserving their affinities.
+    pub fn min(mut self, max_idx: usize) -> Self {
+        self.caret.index = self.caret.index.min(max_idx);
+        self.anchor.index = self.anchor.index.min(max_idx);
+
+        self
+    }
+
     /// Moves the active end while preserving the anchor.
     pub fn with_caret(self, caret: CaretPosition) -> Self {
         Self {
@@ -646,9 +651,9 @@ impl CaretMovement<CaretSelection> {
     }
 }
 
-/// A document layout with its optional wrapping constraint.
+/// The layout of shaped text, including its optional wrapping constraint.
 #[derive(Debug)]
-pub struct WrappedLineLayout {
+pub struct ShapedTextLayout {
     /// The laid out document.
     pub layout: Arc<LineLayout>,
 
@@ -656,7 +661,7 @@ pub struct WrappedLineLayout {
     pub wrap_width: Option<Pixels>,
 }
 
-impl WrappedLineLayout {
+impl ShapedTextLayout {
     /// The length of the underlying text, in utf8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
@@ -670,7 +675,7 @@ impl WrappedLineLayout {
             .min(self.layout.width)
     }
 
-    /// The size of the whole wrapped text for the given line height.
+    /// The size of the complete text for the given line height.
     pub fn size(&self, line_height: Pixels) -> Size<Pixels> {
         Size {
             width: self.width(),
@@ -700,7 +705,7 @@ impl WrappedLineLayout {
 
     /// Returns the fragments belonging to a visual line.
     pub fn fragments_for_line(&self, line: &VisualLine) -> &[PaintFragment] {
-        &self.layout.paint_fragments[line.fragment_range.clone()]
+        &self.layout.paint_fragments[line.paint_fragment_range.clone()]
     }
 
     /// The font size of this layout
@@ -921,6 +926,7 @@ impl WrappedLineLayout {
         line_height: Pixels,
     ) -> SmallVec<[Bounds<Pixels>; 4]> {
         let mut result = SmallVec::new();
+
         if byte_range.is_empty() {
             return result;
         }
@@ -934,7 +940,7 @@ impl WrappedLineLayout {
     }
 }
 
-impl std::ops::Deref for WrappedLineLayout {
+impl std::ops::Deref for ShapedTextLayout {
     type Target = LineLayout;
 
     fn deref(&self) -> &Self::Target {
@@ -951,12 +957,64 @@ pub(crate) struct LineLayoutCache {
 
 #[derive(Default)]
 struct FrameCache {
-    lines: FxHashMap<Arc<CacheKey>, Arc<LineLayout>>,
-    wrapped_lines: FxHashMap<Arc<CacheKey>, Arc<WrappedLineLayout>>,
-    inline_layouts: FxHashMap<Arc<InlineCacheKey>, Arc<InlineLayout>>,
-    used_lines: Vec<Arc<CacheKey>>,
-    used_wrapped_lines: Vec<Arc<CacheKey>>,
-    used_inline_layouts: Vec<Arc<InlineCacheKey>>,
+    lines: FrameLayouts<CacheKey, LineLayout>,
+    shaped_texts: FrameLayouts<CacheKey, ShapedTextLayout>,
+    inline_layouts: FrameLayouts<InlineCacheKey, InlineLayout>,
+}
+
+struct FrameLayouts<Key, Value> {
+    entries: FxHashMap<Arc<Key>, Arc<Value>>,
+    used: Vec<Arc<Key>>,
+}
+
+impl<Key, Value> Default for FrameLayouts<Key, Value> {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            used: Vec::new(),
+        }
+    }
+}
+
+impl<Key, Value> FrameLayouts<Key, Value>
+where
+    Key: Eq + Hash,
+{
+    fn get<Query>(&self, key: &Query) -> Option<&Arc<Value>>
+    where
+        Arc<Key>: Borrow<Query>,
+        Query: Eq + Hash + ?Sized,
+    {
+        self.entries.get(key)
+    }
+
+    fn remove_entry<Query>(&mut self, key: &Query) -> Option<(Arc<Key>, Arc<Value>)>
+    where
+        Arc<Key>: Borrow<Query>,
+        Query: Eq + Hash + ?Sized,
+    {
+        self.entries.remove_entry(key)
+    }
+
+    fn insert(&mut self, key: Arc<Key>, value: Arc<Value>) {
+        self.entries.insert(key.clone(), value);
+        self.used.push(key);
+    }
+
+    fn reuse(&mut self, previous: &mut Self, range: Range<usize>) {
+        for key in &previous.used[range] {
+            if let Some(layout) = previous.entries.remove(key) {
+                self.entries.insert(key.clone(), layout);
+            }
+
+            self.used.push(key.clone());
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.used.clear();
+    }
 }
 
 fn repaint_line_layout(layout: Arc<LineLayout>, runs: &[TextRun]) -> Arc<LineLayout> {
@@ -980,17 +1038,17 @@ fn repaint_line_layout(layout: Arc<LineLayout>, runs: &[TextRun]) -> Arc<LineLay
     Arc::new(repainted)
 }
 
-fn repaint_wrapped_layout(
-    layout: Arc<WrappedLineLayout>,
+fn repaint_shaped_text_layout(
+    layout: Arc<ShapedTextLayout>,
     runs: &[TextRun],
-) -> Arc<WrappedLineLayout> {
+) -> Arc<ShapedTextLayout> {
     let repainted = repaint_line_layout(layout.layout.clone(), runs);
 
     if Arc::ptr_eq(&repainted, &layout.layout) {
         return layout;
     }
 
-    Arc::new(WrappedLineLayout {
+    Arc::new(ShapedTextLayout {
         layout: repainted,
         wrap_width: layout.wrap_width,
     })
@@ -999,7 +1057,7 @@ fn repaint_wrapped_layout(
 #[derive(Clone, Default)]
 pub(crate) struct LineLayoutIndex {
     lines_index: usize,
-    wrapped_lines_index: usize,
+    shaped_texts_index: usize,
     inline_layouts_index: usize,
 }
 
@@ -1017,9 +1075,9 @@ impl LineLayoutCache {
     pub fn layout_index(&self) -> LineLayoutIndex {
         let frame = self.current_frame.read();
         LineLayoutIndex {
-            lines_index: frame.used_lines.len(),
-            wrapped_lines_index: frame.used_wrapped_lines.len(),
-            inline_layouts_index: frame.used_inline_layouts.len(),
+            lines_index: frame.lines.used.len(),
+            shaped_texts_index: frame.shaped_texts.used.len(),
+            inline_layouts_index: frame.inline_layouts.used.len(),
         }
     }
 
@@ -1041,40 +1099,30 @@ impl LineLayoutCache {
         let mut previous_frame = &mut *self.previous_frame.lock();
         let mut current_frame = &mut *self.current_frame.write();
 
-        for key in &previous_frame.used_lines[range.start.lines_index..range.end.lines_index] {
-            if let Some((key, line)) = previous_frame.lines.remove_entry(key) {
-                current_frame.lines.insert(key, line);
-            }
-            current_frame.used_lines.push(key.clone());
-        }
-
-        for key in &previous_frame.used_wrapped_lines
-            [range.start.wrapped_lines_index..range.end.wrapped_lines_index]
-        {
-            if let Some((key, line)) = previous_frame.wrapped_lines.remove_entry(key) {
-                current_frame.wrapped_lines.insert(key, line);
-            }
-            current_frame.used_wrapped_lines.push(key.clone());
-        }
-
-        for key in &previous_frame.used_inline_layouts
-            [range.start.inline_layouts_index..range.end.inline_layouts_index]
-        {
-            if let Some((key, layout)) = previous_frame.inline_layouts.remove_entry(key) {
-                current_frame.inline_layouts.insert(key, layout);
-            }
-            current_frame.used_inline_layouts.push(key.clone());
-        }
+        current_frame.lines.reuse(
+            &mut previous_frame.lines,
+            range.start.lines_index..range.end.lines_index,
+        );
+        current_frame.shaped_texts.reuse(
+            &mut previous_frame.shaped_texts,
+            range.start.shaped_texts_index..range.end.shaped_texts_index,
+        );
+        current_frame.inline_layouts.reuse(
+            &mut previous_frame.inline_layouts,
+            range.start.inline_layouts_index..range.end.inline_layouts_index,
+        );
     }
 
     pub fn truncate_layouts(&self, index: LineLayoutIndex) {
         let mut current_frame = &mut *self.current_frame.write();
-        current_frame.used_lines.truncate(index.lines_index);
+        current_frame.lines.used.truncate(index.lines_index);
         current_frame
-            .used_wrapped_lines
-            .truncate(index.wrapped_lines_index);
+            .shaped_texts
+            .used
+            .truncate(index.shaped_texts_index);
         current_frame
-            .used_inline_layouts
+            .inline_layouts
+            .used
             .truncate(index.inline_layouts_index);
     }
 
@@ -1083,64 +1131,57 @@ impl LineLayoutCache {
         let mut curr_frame = self.current_frame.write();
         std::mem::swap(&mut *prev_frame, &mut *curr_frame);
         curr_frame.lines.clear();
-        curr_frame.wrapped_lines.clear();
+        curr_frame.shaped_texts.clear();
         curr_frame.inline_layouts.clear();
-        curr_frame.used_lines.clear();
-        curr_frame.used_wrapped_lines.clear();
-        curr_frame.used_inline_layouts.clear();
     }
 
-    pub fn layout_wrapped_line<Text>(
+    pub fn layout_text_with_options<Text>(
         &self,
         text: Text,
         font_size: Pixels,
         runs: &[TextRun],
-        wrap_width: Option<Pixels>,
-        max_lines: Option<usize>,
-    ) -> Arc<WrappedLineLayout>
+        options: TextLayoutOptions,
+    ) -> Arc<ShapedTextLayout>
     where
         Text: AsRef<str>,
         SharedString: From<Text>,
     {
         self.sync_font_generation();
+        let wrap_width = options.wrap_width;
         let shaping_runs = runs.iter().map(ShapingRun::from).collect::<SmallVec<_>>();
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
             runs: &shaping_runs,
-            wrap_width,
-            max_lines,
+            options,
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
-        if let Some(layout) = current_frame.wrapped_lines.get(key) {
-            return repaint_wrapped_layout(layout.clone(), runs);
+        if let Some(layout) = current_frame.shaped_texts.get(key) {
+            return repaint_shaped_text_layout(layout.clone(), runs);
         }
 
-        let previous_frame_entry = self.previous_frame.lock().wrapped_lines.remove_entry(key);
+        let previous_frame_entry = self.previous_frame.lock().shaped_texts.remove_entry(key);
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
-            current_frame
-                .wrapped_lines
-                .insert(key.clone(), layout.clone());
-            current_frame.used_wrapped_lines.push(key);
-            repaint_wrapped_layout(layout, runs)
+            current_frame.shaped_texts.insert(key, layout.clone());
+            repaint_shaped_text_layout(layout, runs)
         } else {
             drop(current_frame);
             let text = SharedString::from(text);
-            let document_layout =
-                if wrap_width.is_some() || max_lines.is_some() || text.contains('\n') {
-                    Arc::new(self.platform_text_system.layout_text(TextLayoutRequest {
-                        text: &text,
-                        font_size,
-                        runs,
-                        wrap_width,
-                        line_clamp: max_lines,
-                    }))
-                } else {
-                    self.layout_line::<&SharedString>(&text, font_size, runs)
-                };
-            let layout = Arc::new(WrappedLineLayout {
+            let document_layout = if options != TextLayoutOptions::default() || text.contains('\n')
+            {
+                Arc::new(self.platform_text_system.layout_text(TextLayoutRequest {
+                    text: &text,
+                    font_size,
+                    runs,
+                    options,
+                }))
+            } else {
+                self.layout_line::<&SharedString>(&text, font_size, runs)
+            };
+
+            let layout = Arc::new(ShapedTextLayout {
                 layout: document_layout,
                 wrap_width,
             });
@@ -1148,15 +1189,11 @@ impl LineLayoutCache {
                 text,
                 font_size,
                 runs: shaping_runs,
-                wrap_width,
-                max_lines,
+                options,
             });
 
             let mut current_frame = self.current_frame.write();
-            current_frame
-                .wrapped_lines
-                .insert(key.clone(), layout.clone());
-            current_frame.used_wrapped_lines.push(key);
+            current_frame.shaped_texts.insert(key, layout.clone());
 
             layout
         }
@@ -1178,8 +1215,7 @@ impl LineLayoutCache {
             text: text.as_ref(),
             font_size,
             runs: &shaping_runs,
-            wrap_width: None,
-            max_lines: None,
+            options: TextLayoutOptions::default(),
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
@@ -1189,8 +1225,7 @@ impl LineLayoutCache {
 
         let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
         if let Some((key, layout)) = self.previous_frame.lock().lines.remove_entry(key) {
-            current_frame.lines.insert(key.clone(), layout.clone());
-            current_frame.used_lines.push(key);
+            current_frame.lines.insert(key, layout.clone());
             repaint_line_layout(layout, runs)
         } else {
             let text = SharedString::from(text);
@@ -1198,26 +1233,23 @@ impl LineLayoutCache {
                 text: &text,
                 font_size,
                 runs,
-                wrap_width: None,
-                line_clamp: None,
+                options: TextLayoutOptions::default(),
             });
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
                 runs: shaping_runs,
-                wrap_width: None,
-                max_lines: None,
+                options: TextLayoutOptions::default(),
             });
             let layout = Arc::new(layout);
-            current_frame.lines.insert(key.clone(), layout.clone());
-            current_frame.used_lines.push(key);
+            current_frame.lines.insert(key, layout.clone());
             layout
         }
     }
 
     pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
         self.sync_font_generation();
-        let key = &InlineCacheKeyRef::from(request) as &dyn AsInlineCacheKeyRef;
+        let key = &request as &dyn AsInlineCacheKeyRef;
         let current_frame = self.current_frame.upgradable_read();
 
         if let Some(layout) = current_frame.inline_layouts.get(key) {
@@ -1228,10 +1260,7 @@ impl LineLayoutCache {
 
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
-            current_frame
-                .inline_layouts
-                .insert(key.clone(), layout.clone());
-            current_frame.used_inline_layouts.push(key);
+            current_frame.inline_layouts.insert(key, layout.clone());
 
             return layout;
         }
@@ -1241,20 +1270,17 @@ impl LineLayoutCache {
         let key = Arc::new(InlineCacheKey::from(request));
 
         let mut current_frame = self.current_frame.write();
-        current_frame
-            .inline_layouts
-            .insert(key.clone(), layout.clone());
-        current_frame.used_inline_layouts.push(key);
+        current_frame.inline_layouts.insert(key, layout.clone());
 
         layout
     }
 }
 
 trait AsInlineCacheKeyRef {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_>;
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_>;
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct InlineCacheKey {
     text: SharedString,
     runs: SmallVec<[TextRun; 1]>,
@@ -1263,23 +1289,8 @@ struct InlineCacheKey {
     font_size: Pixels,
     line_height: Pixels,
     text_metrics: InlineTextMetrics,
-    wrap_width: Option<Pixels>,
-    line_clamp: Option<usize>,
-    text_align: TextAlign,
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-struct InlineCacheKeyRef<'a> {
-    text: &'a str,
-    runs: &'a [TextRun],
-    text_styles: &'a [InlineTextStyle],
-    boxes: &'a [InlineBoxRequest],
-    font_size: Pixels,
-    line_height: Pixels,
-    text_metrics: InlineTextMetrics,
-    wrap_width: Option<Pixels>,
-    line_clamp: Option<usize>,
-    text_align: TextAlign,
+    options: TextLayoutOptions,
+    bidi_scopes: Vec<InlineBidiScope>,
 }
 
 impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
@@ -1292,33 +1303,15 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
             font_size: request.font_size,
             line_height: request.line_height,
             text_metrics: request.text_metrics,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-            text_align: request.text_align,
-        }
-    }
-}
-
-impl<'a> From<InlineLayoutRequest<'a>> for InlineCacheKeyRef<'a> {
-    fn from(request: InlineLayoutRequest<'a>) -> Self {
-        Self {
-            text: request.text,
-            runs: request.runs,
-            text_styles: request.text_styles,
-            boxes: request.boxes,
-            font_size: request.font_size,
-            line_height: request.line_height,
-            text_metrics: request.text_metrics,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-            text_align: request.text_align,
+            options: request.options,
+            bidi_scopes: request.bidi_scopes.to_vec(),
         }
     }
 }
 
 impl AsInlineCacheKeyRef for InlineCacheKey {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_> {
-        InlineCacheKeyRef {
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_> {
+        InlineLayoutRequest {
             text: &self.text,
             runs: &self.runs,
             text_styles: &self.text_styles,
@@ -1326,28 +1319,15 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
             font_size: self.font_size,
             line_height: self.line_height,
             text_metrics: self.text_metrics,
-            wrap_width: self.wrap_width,
-            line_clamp: self.line_clamp,
-            text_align: self.text_align,
+            options: self.options,
+            bidi_scopes: &self.bidi_scopes,
         }
     }
 }
 
-impl AsInlineCacheKeyRef for InlineCacheKeyRef<'_> {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_> {
+impl AsInlineCacheKeyRef for InlineLayoutRequest<'_> {
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_> {
         *self
-    }
-}
-
-impl PartialEq for InlineCacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_inline_cache_key_ref() == other.as_inline_cache_key_ref()
-    }
-}
-
-impl Hash for InlineCacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_inline_cache_key_ref().hash(state);
     }
 }
 
@@ -1375,13 +1355,12 @@ trait AsCacheKeyRef {
     fn as_cache_key_ref(&self) -> CacheKeyRef<'_>;
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CacheKey {
     text: SharedString,
     font_size: Pixels,
     runs: SmallVec<[ShapingRun; 1]>,
-    wrap_width: Option<Pixels>,
-    max_lines: Option<usize>,
+    options: TextLayoutOptions,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -1389,8 +1368,7 @@ struct CacheKeyRef<'a> {
     text: &'a str,
     font_size: Pixels,
     runs: &'a [ShapingRun],
-    wrap_width: Option<Pixels>,
-    max_lines: Option<usize>,
+    options: TextLayoutOptions,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1430,21 +1408,8 @@ impl AsCacheKeyRef for CacheKey {
             text: &self.text,
             font_size: self.font_size,
             runs: self.runs.as_slice(),
-            wrap_width: self.wrap_width,
-            max_lines: self.max_lines,
+            options: self.options,
         }
-    }
-}
-
-impl PartialEq for CacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_cache_key_ref().eq(&other.as_cache_key_ref())
-    }
-}
-
-impl Hash for CacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_cache_key_ref().hash(state);
     }
 }
 

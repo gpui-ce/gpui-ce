@@ -2356,6 +2356,8 @@ impl Element for Div {
                             );
                         }
 
+                        window.set_layout_logical_children(layout_id, &child_layout_ids);
+
                         layout_id
                     })
                 },
@@ -2451,45 +2453,62 @@ impl Element for Div {
                     return hitbox;
                 }
 
+                #[inline]
+                fn prepaint_children(
+                    children: &mut [StackSafe<AnyElement>],
+                    order: Option<&[usize]>,
+                    window: &mut Window,
+                    cx: &mut App,
+                ) {
+                    let order = match order {
+                        Some(order) => Either::Left(order.iter().copied()),
+                        None => Either::Right(0..children.len()),
+                    };
+
+                    for index in order {
+                        if let Some(child) = children.get_mut(index) {
+                            child.prepaint(window, cx);
+                        }
+                    }
+                }
+
                 window.with_image_cache(image_cache, |window| {
                     window.with_style_transition_containing_bounds(bounds, |window| {
-                        if let Some(inline) = request_layout.standalone_inline_mut() {
-                            let order = self
-                                .prepaint_order_fn
+                        let has_standalone_inline = request_layout.standalone_inline().is_some();
+                        let inline_order = if has_standalone_inline {
+                            self.prepaint_order_fn
                                 .as_ref()
-                                .map(|order_fn| order_fn(window, cx));
-                            inline.prepaint_children(
-                                &mut self.children,
-                                scroll_offset,
-                                order.as_deref(),
-                                window,
-                                cx,
-                            );
-
-                            if let Some(listener) = self.prepaint_listener.as_ref() {
-                                let inline_bounds = request_layout
-                                    .child_layout_ids
-                                    .iter()
-                                    .map(|layout_id| window.layout_bounds(*layout_id));
-                                children_bounds.extend(inline_bounds);
-                                listener(children_bounds, window, cx);
-                            }
-
-                            return;
-                        }
+                                .map(|order_fn| order_fn(window, cx))
+                        } else {
+                            None
+                        };
 
                         window.with_element_offset(scroll_offset, |window| {
-                            let order = match &self.prepaint_order_fn {
-                                Some(order_fn) => Either::Left(order_fn(window, cx).into_iter()),
-                                None => Either::Right(0..self.children.len()),
-                            };
-
-                            for index in order {
-                                if let Some(child) = self.children.get_mut(index) {
-                                    child.prepaint(window, cx);
-                                }
+                            if let Some(inline) = request_layout.standalone_inline_mut() {
+                                inline.record_paragraph_origins(window);
+                                prepaint_children(
+                                    &mut self.children,
+                                    inline_order.as_deref(),
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                let order = self
+                                    .prepaint_order_fn
+                                    .as_ref()
+                                    .map(|order_fn| order_fn(window, cx));
+                                prepaint_children(&mut self.children, order.as_deref(), window, cx);
                             }
                         });
+
+                        if has_prepaint_listener && has_standalone_inline {
+                            children_bounds.extend(
+                                request_layout
+                                    .child_layout_ids
+                                    .iter()
+                                    .map(|layout_id| window.layout_bounds(*layout_id)),
+                            );
+                        }
 
                         if let Some(listener) = self.prepaint_listener.as_ref() {
                             listener(children_bounds, window, cx);
@@ -2532,13 +2551,12 @@ impl Element for Div {
                         return;
                     }
 
-                    if let Some(inline) = request_layout.standalone_inline() {
-                        inline.paint_children(&mut self.children, window, cx);
-                        return;
-                    }
-
                     for child in &mut self.children {
                         child.paint(window, cx);
+                    }
+
+                    if let Some(inline) = request_layout.standalone_inline() {
+                        inline.paint_paragraphs(window, cx);
                     }
                 },
             )
@@ -4968,10 +4986,10 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn inline_div_places_element_children_in_text_flow(context: &mut TestAppContext) {
+    fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
         let placed_children = Rc::new(RefCell::new(Vec::new()));
         let captured_bounds = placed_children.clone();
-        let window = context.add_empty_window();
+        let window = cx.add_empty_window();
         let highlight_color = hsla(0.4, 0.6, 0.5, 1.0);
 
         window.draw(
@@ -5024,10 +5042,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn default_block_preserves_grid_flow_and_hides_none_descendants(context: &mut TestAppContext) {
+    fn default_block_preserves_grid_flow_and_hides_none_descendants(cx: &mut TestAppContext) {
         let hidden_prepainted = Rc::new(Cell::new(false));
         let hidden_prepaint = hidden_prepainted.clone();
-        let window = context.add_empty_window();
+        let window = cx.add_empty_window();
 
         window.draw(
             point(px(10.), px(20.)),

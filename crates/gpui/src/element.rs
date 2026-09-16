@@ -473,33 +473,40 @@ impl<E: Element> Drawable<E> {
                     inline_fragments.clone(),
                 );
 
-                #[cfg(all(
-                    feature = "hot-patching",
-                    debug_assertions,
-                    not(target_family = "wasm")
-                ))]
-                let mut prepaint = subsecond::HotFn::current(E::prepaint).call((
-                    &mut self.element,
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    window,
-                    cx,
-                ));
-                #[cfg(not(all(
-                    feature = "hot-patching",
-                    debug_assertions,
-                    not(target_family = "wasm")
-                )))]
-                let mut prepaint = self.element.prepaint(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    window,
-                    cx,
-                );
+                let mut prepaint = window.with_layout_direction_context(layout_id, |window| {
+                    #[cfg(all(
+                        feature = "hot-patching",
+                        debug_assertions,
+                        not(target_family = "wasm")
+                    ))]
+                    {
+                        subsecond::HotFn::current(E::prepaint).call((
+                            &mut self.element,
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            bounds,
+                            &mut request_layout,
+                            window,
+                            cx,
+                        ))
+                    }
+
+                    #[cfg(not(all(
+                        feature = "hot-patching",
+                        debug_assertions,
+                        not(target_family = "wasm")
+                    )))]
+                    {
+                        self.element.prepaint(
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            bounds,
+                            &mut request_layout,
+                            window,
+                            cx,
+                        )
+                    }
+                });
 
                 window.current_inline_fragments = previous_fragments;
                 window.next_frame.dispatch_tree.pop_node();
@@ -673,10 +680,9 @@ impl<E: Element> Drawable<E> {
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
     ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, context)
-            .1
+        self.compute_layout_as_root(available_space, window, cx).1
     }
 }
 
