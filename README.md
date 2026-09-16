@@ -18,9 +18,9 @@ Everything in GPUI starts with an `Application`. You can create one with `gpui_p
 
 ### Usage
 
-`cargo add gpui-ce`, and you're ready to go! 
+`cargo add gpui-ce`, and you're ready to go!
 
-From then on, `gpui::{import}` to pull in whatever you need. Most of it will be under `gpui::prelude::*`. 
+From then on, `gpui::{import}` to pull in whatever you need. Most of it will be under `gpui::prelude::*`.
 
 ### High level concepts
 
@@ -90,9 +90,7 @@ We were born out of Zed's hard work, and we will always pull their fixes and har
 
 And yet, our ambitious are larger than supporting the use-cases of two applications. We look to become the home for applications, big and small, and make GUI authoring as simple as TUI and CLI development, and allowing GUI-specific concerns and considerations painless to work with, while offering users the power to dive deep when it matters.
 
-As a whole, we'd like to be a framework for real applications, to allow for deep support and code-sharing between GPUI projects. Our roots are in the web, and we want to take on the current application monster that is Electron, head to head, but with order-of-magnitude performance improvements and platform integrations. 
+As a whole, we'd like to be a framework for real applications, to allow for deep support and code-sharing between GPUI projects. Our roots are in the web, and we want to take on the current application monster that is Electron, head to head, but with order-of-magnitude performance improvements and platform integrations.
 
 #### How does the project compare to other forks in the ecosystem?
 Other efforts (namely WGPUI) are actively maintained, but have diverged quite a bit from mainline usage. They typically serve the interests of the projects that they're used within, leading to a diverse yet fragmented ecosystem. GPUI-CE focuses on stability, and continuously monitors the other forks for good ideas worth pulling in.
-
-

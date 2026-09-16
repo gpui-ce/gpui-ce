@@ -1,5 +1,5 @@
 use crate::{
-    MacDispatcher, MacDisplay, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
+    MacDispatcher, MacDisplay, MacGlyphRasterizer, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
     events::key_to_native, haptic_feedback::MacHaptics, pasteboard::Pasteboard, renderer,
     set_active_window_cursor_style,
 };
@@ -226,18 +226,14 @@ impl MacPlatform {
         let marker = MainThreadMarker::new().expect("Mac platform not created on main thread");
         let dispatcher = Arc::new(MacDispatcher::new());
 
-        #[cfg(feature = "font-kit")]
-        let text_system = Arc::new(crate::MacTextSystem::new());
-
-        #[cfg(not(feature = "font-kit"))]
-        let text_system = {
-            if !headless {
-                log::warn!(
-                    "gpui_macos was compiled without the `font-kit` feature, so no text will be rendered."
-                );
-            }
-            Arc::new(gpui::NoopTextSystem::new())
-        };
+        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
+            gpui_parley::ParleyTextSystem::new_with_rasterizer(
+                gpui_parley::SystemFonts::Load,
+                ".AppleSystemUIFont",
+                MacGlyphRasterizer::new(),
+            )
+            .with_fallback_families(["Lilex", "IBM Plex Sans", "Helvetica", "Arial"]),
+        );
 
         let keyboard_layout = MacKeyboardLayout::new();
         let keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));

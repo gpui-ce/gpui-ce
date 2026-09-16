@@ -14,7 +14,6 @@ path = "src/gpui_wgpu.rs"
 
 [features]
 default = []
-font-kit = ["dep:font-kit"]
 test-support = ["gpui/test-support", "dep:image"]
 custom-gpu = ["gpui/custom-gpu"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
@@ -24,24 +23,16 @@ gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-featu
 gpui_render.workspace = true
 anyhow.workspace = true
 collections.workspace = true
-cosmic-text = "0.19.0"
 etagere.workspace = true
-itertools.workspace = true
 image = { workspace = true, optional = true }
 log.workspace = true
 parking_lot.workspace = true
 profiling.workspace = true
 raw-window-handle.workspace = true
 smallvec.workspace = true
-swash.workspace = true
-unicode-bidi.workspace = true
-unicode-segmentation.workspace = true
 gpui_util.workspace = true
 wgpu.workspace = true
 wgsl-rs.workspace = true
-
-# Optional: only needed on platforms with multiple font sources (e.g. Linux)
-font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 pollster.workspace = true
@@ -78,16 +69,12 @@ js-sys.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 criterion.workspace = true
 env_logger.workspace = true
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { workspace = true, features = ["wayland", "x11"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 
 [[example]]
 name = "custom_gpu"
 required-features = ["custom-gpu"]
-
-[[bench]]
-name = "layout_line"
-harness = false
 
 [[bench]]
 name = "renderer"
