@@ -153,7 +153,9 @@ pub trait Styled: Sized {
         self.vertical_align(VerticalAlign::Baseline)
     }
 
-    /// Aligns the middle of this inline element box with the surrounding text.
+    /// Aligns this inline box's midpoint with the parent baseline plus half its font's x-height,
+    /// following CSS `vertical-align: middle`.
+    /// For flex or grid centering, use `self_center` on the item or `items_center` on its container.
     fn align_middle(self) -> Self {
         self.vertical_align(VerticalAlign::Middle)
     }
