@@ -432,7 +432,7 @@ impl EditableTextState {
         };
 
         document
-            .closest_caret_for_position(point, line_height)
+            .closest_caret_for_pixel_point(point, line_height)
             .unwrap_or_else(|closest| closest)
     }
 
@@ -848,7 +848,7 @@ impl EditableTextState {
         let range = match group.layout_kind() {
             Some(kind) => {
                 if let Some(document) = self.current_document() {
-                    document.selection_from_point(point, line_height, kind)
+                    document.selection_from_pixel_point(point, line_height, kind)
                 } else {
                     let caret_pos = self.caret_for_pixel_point(point, line_height).index;
 

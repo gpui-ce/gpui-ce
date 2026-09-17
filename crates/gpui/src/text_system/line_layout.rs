@@ -216,21 +216,26 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Natural layout size reported by the backend.
     fn size(&self) -> Size<Pixels>;
 
-    /// Returns the source index of the cluster under a point.
-    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize>;
-
-    /// Returns the closest caret for a point. Points outside a visual row return `Err`.
-    fn caret_from_point(
+    /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
+    fn byte_index_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<usize, usize>;
+
+    /// Returns the closest caret for a point in GPUI layout coordinates.
+    /// Points outside a visual row return `Err`.
+    fn caret_from_pixel_point(
+        &self,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition>;
 
-    /// Returns the caret rectangle.
-    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>>;
+    /// Returns the caret bounds in GPUI layout coordinates.
+    fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>>;
 
     /// Snaps a caret to a native cluster boundary.
-    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition;
+    fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition;
 
     /// Moves one caret stop in visual order.
     fn move_visual(
@@ -239,8 +244,12 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
         direction: VisualDirection,
     ) -> Option<CaretPosition>;
 
-    /// Returns selection rectangles in visual order.
-    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>>;
+    /// Returns bounds for a UTF-8 byte range in visual order.
+    fn selection_bounds(
+        &self,
+        byte_range: Range<usize>,
+        line_height: Pixels,
+    ) -> Vec<Bounds<Pixels>>;
 
     /// Native range rectangles and their visual line indices, without selection-only extensions.
     /// Backends supporting inline flow should preserve actual vertical metrics here.
@@ -251,7 +260,7 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
         let line_height = self.size().height / self.line_count().max(1) as f32;
 
-        self.selection_geometry(range, line_height)
+        self.selection_bounds(range, line_height)
             .into_iter()
             .map(|bounds| {
                 let line_idx = (bounds.origin.y / line_height) as usize;
@@ -286,10 +295,10 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
         preferred_x: Option<Pixels>,
     ) -> CaretMovement;
 
-    /// Returns the word or line selected at a point.
-    fn selection_from_point(
+    /// Returns the word or line selected at a point in GPUI layout coordinates.
+    fn selection_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize>;
@@ -612,24 +621,24 @@ impl ShapedTextLayout {
         self.layout.font_size
     }
 
-    /// The index corresponding to a given position in this layout for the given line height.
+    /// The UTF-8 byte index for a point in GPUI layout coordinates.
     ///
     /// The backend returns the logical start of the visual cluster under the point.
     /// Whitespace is hit like any other cluster. Positions outside the line return the boundary at
     /// that visual edge in `Err`.
     ///
-    /// See also [`Self::closest_index_for_position`].
-    pub fn index_for_position(
+    /// See also [`Self::closest_byte_index_for_pixel_point`].
+    pub fn byte_index_for_pixel_point(
         &self,
-        position: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<usize, usize> {
         self.layout
             .platform_layout
-            .index_from_point(position, line_height)
+            .byte_index_from_pixel_point(pixel_point, line_height)
     }
 
-    /// The closest index to a given position in this layout for the given line height.
+    /// The closest UTF-8 byte index to a point in GPUI layout coordinates.
     ///
     /// Closest means the character boundary closest to the given position.
     /// The backend only returns cluster boundaries. For right-to-left clusters, the
@@ -637,41 +646,48 @@ impl ShapedTextLayout {
     /// start. Zero-width clusters share a stop with an adjacent cluster and use visual order to
     /// break ties.
     ///
-    pub fn closest_index_for_position(
+    pub fn closest_byte_index_for_pixel_point(
         &self,
-        position: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<usize, usize> {
-        self.closest_caret_for_position(position, line_height)
+        self.closest_caret_for_pixel_point(pixel_point, line_height)
             .map(|caret| caret.index)
             .map_err(|caret| caret.index)
     }
 
-    /// Returns the closest backend-native caret for a point.
+    /// Returns the closest backend-native caret for a point in GPUI layout coordinates.
     ///
     /// Positions outside a visual line return the caret at that edge in `Err`, matching
-    /// [`Self::closest_index_for_position`].
-    pub fn closest_caret_for_position(
+    /// [`Self::closest_byte_index_for_pixel_point`].
+    pub fn closest_caret_for_pixel_point(
         &self,
-        position: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
         self.layout
             .platform_layout
-            .caret_from_point(position, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
     }
 
-    /// Returns the pixel position for the given byte index.
+    /// Returns the visual position in pixels for a UTF-8 byte index.
     ///
     /// The backend maps cluster boundaries to direction-aware visual edges. An index
     /// inside an atomic cluster snaps to its logical start. On a shared wrap boundary, the cluster
     /// starting at the index owns the position, so the caret moves to the following visual line.
-    pub fn position_for_index(&self, idx: usize, line_height: Pixels) -> Option<Point<Pixels>> {
-        if idx > self.len() {
+    pub fn visual_position_for_byte_index(
+        &self,
+        byte_index: usize,
+        line_height: Pixels,
+    ) -> Option<Point<Pixels>> {
+        if byte_index > self.len() {
             return None;
         }
 
-        self.visual_position_for_caret(CaretPosition::attached_to_next_cluster(idx), line_height)
+        self.visual_position_for_caret(
+            CaretPosition::attached_to_next_cluster(byte_index),
+            line_height,
+        )
     }
 
     /// Returns the visual position in pixels for an affinity-aware caret.
@@ -682,13 +698,13 @@ impl ShapedTextLayout {
     ) -> Option<Point<Pixels>> {
         self.layout
             .platform_layout
-            .caret_geometry(caret, line_height)
+            .caret_bounds(caret, line_height)
             .map(|bounds| bounds.origin)
     }
 
     /// Snaps a byte position to a valid cluster boundary while preserving affinity when possible.
-    pub fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
-        self.layout.platform_layout.refresh_caret(caret)
+    pub fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
+        self.layout.platform_layout.normalized_caret(caret)
     }
 
     /// Returns the previous caret stop in visual order.
@@ -794,34 +810,34 @@ impl ShapedTextLayout {
         }
     }
 
-    /// Selects the word or line at a point.
-    pub fn selection_from_point(
+    /// Selects the word or line at a point in GPUI layout coordinates.
+    pub fn selection_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize> {
         self.layout
             .platform_layout
-            .selection_from_point(point, line_height, kind)
+            .selection_from_pixel_point(pixel_point, line_height, kind)
     }
 
     /// Returns rectangles covering all selected clusters in visual order.
     pub fn selection_bounds(
         &self,
-        range: Range<usize>,
+        byte_range: Range<usize>,
         line_height: Pixels,
     ) -> SmallVec<[Bounds<Pixels>; 4]> {
         let mut result = SmallVec::new();
 
-        if range.is_empty() {
+        if byte_range.is_empty() {
             return result;
         }
 
         result.extend(
             self.layout
                 .platform_layout
-                .selection_geometry(range, line_height),
+                .selection_bounds(byte_range, line_height),
         );
         result
     }

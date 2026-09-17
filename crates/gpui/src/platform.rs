@@ -1246,9 +1246,13 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         self.size
     }
 
-    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize> {
+    fn byte_index_from_pixel_point(
+        &self,
+        pixel_point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<usize, usize> {
         let closest = self
-            .caret_from_point(point, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
             .unwrap_or_else(|caret| caret)
             .index;
         self.stops
@@ -1258,34 +1262,34 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                     return None;
                 };
 
-                (point.x >= *start_x && point.x < *end_x).then_some(Ok(*start_idx))
+                (pixel_point.x >= *start_x && pixel_point.x < *end_x).then_some(Ok(*start_idx))
             })
             .unwrap_or(Err(closest))
     }
 
-    fn caret_from_point(
+    fn caret_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
         let idx = self
             .stops
             .iter()
             .min_by(|(_, left), (_, right)| {
-                (f32::from(*left) - f32::from(point.x))
+                (f32::from(*left) - f32::from(pixel_point.x))
                     .abs()
-                    .total_cmp(&(f32::from(*right) - f32::from(point.x)).abs())
+                    .total_cmp(&(f32::from(*right) - f32::from(pixel_point.x)).abs())
             })
             .map_or(0, |(idx, _)| *idx);
-        let caret = self.refresh_caret(CaretPosition {
+        let caret = self.normalized_caret(CaretPosition {
             index: idx,
             affinity: CaretAffinity::Downstream,
         });
 
-        if point.y >= Pixels::ZERO
-            && point.y < line_height
-            && point.x >= Pixels::ZERO
-            && point.x < self.size.width
+        if pixel_point.y >= Pixels::ZERO
+            && pixel_point.y < line_height
+            && pixel_point.x >= Pixels::ZERO
+            && pixel_point.x < self.size.width
         {
             Ok(caret)
         } else {
@@ -1293,8 +1297,8 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
     }
 
-    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
-        let caret = self.refresh_caret(caret);
+    fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+        let caret = self.normalized_caret(caret);
         let (_idx, position) = self.caret_stop(caret.index);
 
         Some(Bounds::new(
@@ -1303,7 +1307,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         ))
     }
 
-    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
+    fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
         let (idx, _position) = self.caret_stop(caret.index);
         let affinity = if idx == self.len() && idx != 0 {
             CaretAffinity::Upstream
@@ -1322,7 +1326,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
-        let caret = self.refresh_caret(caret);
+        let caret = self.normalized_caret(caret);
         let position = self.stops.iter().position(|(idx, _)| *idx == caret.index)?;
         let position = match direction {
             VisualDirection::Left => position.checked_sub(1)?,
@@ -1330,19 +1334,23 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         };
 
         let idx = self.stops.get(position)?.0;
-        Some(self.refresh_caret(CaretPosition {
+        Some(self.normalized_caret(CaretPosition {
             index: idx,
             affinity: CaretAffinity::Downstream,
         }))
     }
 
-    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
-        if range.is_empty() {
+    fn selection_bounds(
+        &self,
+        byte_range: Range<usize>,
+        line_height: Pixels,
+    ) -> Vec<Bounds<Pixels>> {
+        if byte_range.is_empty() {
             return Vec::new();
         }
 
-        let (_start_idx, start) = self.caret_stop(range.start);
-        let (_end_idx, end) = self.caret_stop(range.end);
+        let (_start_idx, start) = self.caret_stop(byte_range.start);
+        let (_end_idx, end) = self.caret_stop(byte_range.end);
 
         vec![Bounds::from_corners(
             point(start.min(end), Pixels::ZERO),
@@ -1411,13 +1419,13 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         let preferred_x = matches!(movement.direction, TextDirection::Up | TextDirection::Down)
             .then(|| {
                 preferred_x.unwrap_or_else(|| {
-                    self.caret_geometry(caret, self.size.height)
+                    self.caret_bounds(caret, self.size.height)
                         .map_or(Pixels::ZERO, |bounds| bounds.origin.x)
                 })
             });
 
         CaretMovement {
-            caret: self.refresh_caret(CaretPosition {
+            caret: self.normalized_caret(CaretPosition {
                 index: idx,
                 affinity: CaretAffinity::Downstream,
             }),
@@ -1425,9 +1433,9 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
     }
 
-    fn selection_from_point(
+    fn selection_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize> {
@@ -1436,7 +1444,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
 
         let idx = self
-            .caret_from_point(point, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
             .unwrap_or_else(|caret| caret)
             .index
             .min(self.text.len());
