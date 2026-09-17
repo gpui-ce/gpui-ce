@@ -585,7 +585,7 @@ impl Interactivity {
     pub fn on_drop<T: 'static>(&mut self, listener: impl Fn(&T, &mut Window, &mut App) + 'static) {
         let type_id = TypeId::of::<T>();
         let on_drop = Box::new(
-            move |dragged_any: &dyn Any, window: &mut Window, cx: &mut App| {
+            move |dragged_any: &dyn Any, _evt: &MouseUpEvent, window: &mut Window, cx: &mut App| {
                 listener(dragged_any.downcast_ref().unwrap(), window, cx);
             },
         );
@@ -1975,8 +1975,12 @@ pub(crate) type HoverListener = Rc<dyn Fn(&bool, &mut Window, &mut App) + 'stati
 pub(crate) type DragListener =
     Box<dyn Fn(Point<Pixels>, Option<CursorStyle>, &mut Window, &mut App) -> AnyDrag + 'static>;
 
-/// Function type for checking if a typed payload can be dropped on an element's hitbox.
+/// Function type for [`DropListener::can_drop`], which checks if a typed payload can be dropped on an element's hitbox.
 pub type CanDropListenerFn<T> = Box<dyn Fn(&T, &Hitbox, &mut Window, &mut App) -> bool + 'static>;
+/// Function type for [`DropListener::on_drag_over`].
+pub type OnDragOverFn<T> = Box<dyn Fn(&T, &mut Window, &mut App) -> StyleRefinement + 'static>;
+/// Function type for [`DropListener::on_drop`].
+pub type OnDropFn<T> = Box<dyn Fn(&T, &MouseUpEvent, &mut Window, &mut App) + 'static>;
 
 /// Behaviors for an interactive element when receiving a dragged element that could be or has been dropped it.
 pub struct DropListener<T: ?Sized> {
@@ -1985,11 +1989,11 @@ pub struct DropListener<T: ?Sized> {
     /// If a drag value is moving over the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to refine the style of the owning element.
-    pub on_drag_over: Option<Box<dyn Fn(&T, &mut Window, &mut App) -> StyleRefinement + 'static>>,
+    pub on_drag_over: Option<OnDragOverFn<T>>,
     /// If a drag value is dropped over the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to process the dropped value.
-    pub on_drop: Option<Box<dyn Fn(&T, &mut Window, &mut App) + 'static>>,
+    pub on_drop: Option<OnDropFn<T>>,
 }
 impl<T> Default for DropListener<T> {
     fn default() -> Self {
@@ -2036,7 +2040,10 @@ impl<T: Sized + 'static> DropListener<T> {
     /// If a value of type [`T`] is dropped on the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to process the dropped value.
-    pub fn on_drop(mut self, predicate: impl Fn(&T, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_drop(
+        mut self,
+        predicate: impl Fn(&T, &MouseUpEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_drop = Some(Box::new(predicate));
         self
     }
@@ -2058,7 +2065,7 @@ impl<T: Sized + 'static> DropListener<T> {
                     };
                     (&predicate)(value_ref, hitbox, window, cx)
                 },
-            ) as Box<dyn Fn(&dyn Any, &Hitbox, &mut Window, &mut App) -> bool + 'static>
+            ) as CanDropListenerFn<dyn Any>
         });
         let on_drag_over = on_drag_over.map(|predicate| {
             Box::new(move |any: &dyn Any, window: &mut Window, cx: &mut App| {
@@ -2066,16 +2073,17 @@ impl<T: Sized + 'static> DropListener<T> {
                     .downcast_ref::<T>()
                     .expect("drop listener type was incorrect");
                 (&predicate)(value_ref, window, cx)
-            })
-                as Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> StyleRefinement + 'static>
+            }) as OnDragOverFn<dyn Any>
         });
         let on_drop = on_drop.map(|predicate| {
-            Box::new(move |any: &dyn Any, window: &mut Window, cx: &mut App| {
-                let value_ref = any
-                    .downcast_ref::<T>()
-                    .expect("drop listener type was incorrect");
-                (&predicate)(value_ref, window, cx)
-            }) as Box<dyn Fn(&dyn Any, &mut Window, &mut App) + 'static>
+            Box::new(
+                move |any: &dyn Any, evt: &MouseUpEvent, window: &mut Window, cx: &mut App| {
+                    let value_ref = any
+                        .downcast_ref::<T>()
+                        .expect("drop listener type was incorrect");
+                    (&predicate)(value_ref, evt, window, cx)
+                },
+            ) as OnDropFn<dyn Any>
         });
         DropListener::<dyn Any> {
             can_drop,
@@ -3297,7 +3305,7 @@ impl Interactivity {
         if !drop_listeners.is_empty() {
             let hitbox = hitbox.clone();
             window.on_mouse_event({
-                move |_: &MouseUpEvent, phase, window, cx| {
+                move |evt: &MouseUpEvent, phase, window, cx| {
                     if !phase.bubble() {
                         return;
                     }
@@ -3340,7 +3348,7 @@ impl Interactivity {
                             cx.stop_drag(window).expect("already confirmed drag exists");
 
                         if let Some(predicate) = &listener.on_drop {
-                            predicate(drag_value.as_ref(), window, cx);
+                            predicate(drag_value.as_ref(), evt, window, cx);
                         }
                         window.refresh();
                         cx.stop_propagation();
