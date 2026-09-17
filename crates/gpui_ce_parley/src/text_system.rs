@@ -1629,8 +1629,8 @@ impl ParleyTextSystem {
             for line in &mut result.layout.visual_lines {
                 line.text_range.start += source.content.start;
                 line.text_range.end += source.content.start;
-                line.fragment_range.start += first_fragment;
-                line.fragment_range.end += first_fragment;
+                line.paint_fragment_range.start += first_fragment;
+                line.paint_fragment_range.end += first_fragment;
             }
 
             if let Some(line) = result.layout.visual_lines.last_mut() {
@@ -2141,8 +2141,8 @@ impl ParleyTextSystem {
 
             visual_lines.push(VisualLine {
                 text_range,
-                fragment_range: fragment_start..paint_fragments.len(),
-                advance: line_advance,
+                paint_fragment_range: fragment_start..paint_fragments.len(),
+                advance_width: line_advance,
                 offset: line_x,
                 direction: paragraph_direction,
             });
@@ -2862,27 +2862,32 @@ mod tests {
             layout.visual_lines.last().unwrap().text_range.end,
             text.len()
         );
-        assert_eq!(layout.visual_lines[0].fragment_range.start, 0);
+        assert_eq!(layout.visual_lines[0].paint_fragment_range.start, 0);
         assert_eq!(
-            layout.visual_lines.last().unwrap().fragment_range.end,
+            layout.visual_lines.last().unwrap().paint_fragment_range.end,
             layout.paint_fragments.len()
         );
 
         for pair in layout.visual_lines.windows(2) {
             assert_eq!(pair[0].text_range.end, pair[1].text_range.start);
-            assert_eq!(pair[0].fragment_range.end, pair[1].fragment_range.start);
+            assert_eq!(
+                pair[0].paint_fragment_range.end,
+                pair[1].paint_fragment_range.start
+            );
         }
 
         for line in &layout.visual_lines {
             assert!(text.is_char_boundary(line.text_range.start));
             assert!(text.is_char_boundary(line.text_range.end));
-            assert!(f32::from(line.advance).is_finite() && line.advance >= Pixels::ZERO);
-            for fragment in &layout.paint_fragments[line.fragment_range.clone()] {
+            assert!(
+                f32::from(line.advance_width).is_finite() && line.advance_width >= Pixels::ZERO
+            );
+            for fragment in &layout.paint_fragments[line.paint_fragment_range.clone()] {
                 assert!(f32::from(fragment.x_range.start).is_finite());
                 assert!(f32::from(fragment.x_range.end).is_finite());
                 assert!(fragment.x_range.start <= fragment.x_range.end);
                 assert!(fragment.x_range.start >= -layout.font_size * 2.0);
-                assert!(fragment.x_range.end <= line.advance + layout.font_size * 2.0);
+                assert!(fragment.x_range.end <= line.advance_width + layout.font_size * 2.0);
                 for glyph in fragment.glyphs.iter() {
                     assert!(f32::from(glyph.position.x).is_finite());
                     assert!(f32::from(glyph.position.y).is_finite());
@@ -3289,10 +3294,10 @@ mod tests {
 
                     for (idx, expected) in independent.visual_lines.iter().enumerate() {
                         let actual = &document.visual_lines[first_line + idx];
-                        assert_eq!(actual.advance, expected.advance);
+                        assert_eq!(actual.advance_width, expected.advance_width);
                         assert_eq!(
-                            document.paint_fragments[actual.fragment_range.clone()],
-                            independent.paint_fragments[expected.fragment_range.clone()],
+                            document.paint_fragments[actual.paint_fragment_range.clone()],
+                            independent.paint_fragments[expected.paint_fragment_range.clone()],
                             "{content:?} at {width:?}"
                         );
                     }
@@ -3551,7 +3556,7 @@ mod tests {
             assert_eq!(bounds.origin.y, line_height * line_idx);
 
             if line_idx == 0 {
-                assert!(bounds.origin.x >= layout.visual_lines[line_idx].advance);
+                assert!(bounds.origin.x >= layout.visual_lines[line_idx].advance_width);
             } else {
                 assert!(bounds.right() <= Pixels::ZERO);
             }
@@ -5204,7 +5209,7 @@ mod tests {
                         && layout
                             .visual_lines
                             .iter()
-                            .any(|line| line.advance > *width + px(0.01))
+                            .any(|line| line.advance_width > *width + px(0.01))
                 })
                 .expect("sample text should have a two-line width with hanging whitespace");
             let mut cx = headless();

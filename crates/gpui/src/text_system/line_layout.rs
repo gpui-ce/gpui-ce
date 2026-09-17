@@ -206,6 +206,10 @@ pub fn align_inline_boxes(
 ///
 /// Byte positions are UTF-8 boundaries. Geometry is in GPUI layout coordinates, using the
 /// caller-provided line height. Implementations must preserve visual order and caret affinity.
+///
+/// A cluster is one backend-defined caret step. It may contain several Unicode scalar values, such
+/// as a combining sequence or an emoji ZWJ sequence. Logical clusters are independent of visual
+/// direction and soft-wrapped rows.
 pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Length of the source text in UTF-8 bytes.
     fn len(&self) -> usize;
@@ -333,11 +337,11 @@ pub enum TextDirection {
 /// The boundary at which a semantic text movement stops.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextBoundary {
-    /// A backend-native shaping cluster and caret stop.
+    /// One backend-defined caret step, which may span several Unicode scalar values.
     Cluster,
     /// A word boundary.
     Word,
-    /// A soft-wrapped visual row.
+    /// One visual row produced by line breaking, including soft wrapping.
     VisualLine,
     /// A line delimited by a hard break.
     HardLine,
@@ -347,8 +351,8 @@ pub enum TextBoundary {
 
 /// A semantic caret movement handled by the native text layout.
 ///
-/// Left and right movement use cluster or word boundaries. Up and down movement use visual-line
-/// boundaries. Start and end movement use visual-line, hard-line, or document boundaries.
+/// `direction` chooses where to move, and `boundary` chooses the unit. Consecutive vertical
+/// movements reuse the returned preferred horizontal coordinate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TextMovement {
     /// The direction in which to move.
@@ -378,15 +382,16 @@ pub enum TextSelectionKind {
     HardLine,
 }
 
-/// A row produced by shaping and line breaking.
+/// A horizontal row produced by shaping and line breaking. Soft wrapping can split one logical
+/// line across several rows; bidirectional ordering does not change logical UTF-8 byte ranges.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VisualLine {
     /// The logical UTF-8 byte range assigned to this row.
     pub text_range: Range<usize>,
-    /// The range of paintable fragments in this row, in visual order.
-    pub fragment_range: Range<usize>,
-    /// The row's advance before alignment.
-    pub advance: Pixels,
+    /// The contiguous range in [`LineLayout::paint_fragments`] painted on this row.
+    pub paint_fragment_range: Range<usize>,
+    /// The row's horizontal typographic advance before its alignment offset is applied.
+    pub advance_width: Pixels,
     /// Horizontal offset assigned by backend layout.
     pub offset: Pixels,
     /// Base direction used to order and align this visual line.
@@ -440,7 +445,11 @@ pub struct ShapedGlyph {
     pub is_emoji: bool,
 }
 
-/// Determines which logical neighbor owns a caret at a text boundary.
+/// Determines which logical neighbor owns a caret at a shared text boundary.
+///
+/// At a soft wrap, downstream places the caret at the next row's start, and upstream places it at
+/// the previous row's end. At a bidirectional boundary, affinities can place the same byte index at
+/// different horizontal positions. They refer to logical order, not visual left and right.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum CaretAffinity {
     /// The caret attaches to the logically following cluster.
@@ -546,7 +555,7 @@ impl CaretSelection {
 pub struct CaretMovement {
     /// The caret at the requested destination.
     pub caret: CaretPosition,
-    /// The horizontal position retained by successive vertical movements.
+    /// The horizontal coordinate reused by consecutive vertical movements.
     pub preferred_x: Option<Pixels>,
 }
 
@@ -555,7 +564,7 @@ pub struct CaretMovement {
 pub struct CaretSelectionMovement {
     /// The selection after movement.
     pub selection: CaretSelection,
-    /// The horizontal position retained by successive vertical movements.
+    /// The horizontal coordinate reused by consecutive vertical movements.
     pub preferred_x: Option<Pixels>,
 }
 
@@ -613,7 +622,7 @@ impl ShapedTextLayout {
 
     /// Returns the fragments belonging to a visual line.
     pub fn fragments_for_line(&self, line: &VisualLine) -> &[PaintFragment] {
-        &self.layout.paint_fragments[line.fragment_range.clone()]
+        &self.layout.paint_fragments[line.paint_fragment_range.clone()]
     }
 
     /// The font size of this layout

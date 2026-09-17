@@ -1215,8 +1215,11 @@ pub struct TestTextSystem;
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 struct TestPlatformTextLayout {
+    /// Source text.
     text: String,
+    /// Ordered `(byte index, x position)` caret stops.
     stops: Vec<(usize, Pixels)>,
+    /// Size of the single visual line.
     size: Size<Pixels>,
 }
 
@@ -1543,7 +1546,7 @@ fn add_test_inline_box_advances(layout: &mut LineLayout, request: InlineLayoutRe
     layout.width += box_width;
 
     if let Some(line) = layout.visual_lines.first_mut() {
-        line.advance += box_width;
+        line.advance_width += box_width;
     }
 }
 
@@ -1669,8 +1672,8 @@ impl PlatformTextSystem for TestTextSystem {
 
         let visual_lines = [VisualLine {
             text_range: 0..text.len(),
-            fragment_range: 0..usize::from(!glyphs.is_empty()),
-            advance,
+            paint_fragment_range: 0..usize::from(!glyphs.is_empty()),
+            advance_width: advance,
             offset,
             direction,
         }]
