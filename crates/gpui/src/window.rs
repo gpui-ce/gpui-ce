@@ -7840,7 +7840,7 @@ mod tests {
     use super::*;
     use crate::{
         FocusHandle, ImageSource, PreparedRasterStyle, RasterColorEffect, RasterStyleRequest,
-        ShaderBool, hsla_to_rgba, img, linear_color_stop, linear_gradient,
+        ShaderBool, img, linear_color_stop, linear_gradient,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
@@ -8135,14 +8135,9 @@ mod tests {
         assert_eq!(
             color_styles,
             [
-                RasterColorEffect::Preblend(crate::Rgba8 {
-                    red: 0,
-                    green: 0,
-                    blue: 0,
-                    alpha: 204,
-                }),
-                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.6, 0.7, 0.4, 0.8)).into()),
-                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.1, 0.6, 0.3, 0.8)).into()),
+                RasterColorEffect::Preblend(crate::Rgba8::new(0, 0, 0, 204)),
+                RasterColorEffect::Preblend(crate::Rgba8::new(31, 88, 173, 204)),
+                RasterColorEffect::Preblend(crate::Rgba8::new(122, 86, 31, 204)),
             ]
         );
     }

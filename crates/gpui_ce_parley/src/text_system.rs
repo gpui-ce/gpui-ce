@@ -643,13 +643,13 @@ struct RasterStyleCacheKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum RasterStyleColorKey {
     Scene([u32; 4]),
-    Normalized(gpui::Rgba8),
+    Normalized([u8; 4]),
 }
 
 impl From<RasterStyleRequest> for RasterStyleCacheKey {
     fn from(request: RasterStyleRequest) -> Self {
         let color = if request.requested_mode == gpui::GlyphRenderMode::Color {
-            RasterStyleColorKey::Normalized(request.normalized_color())
+            RasterStyleColorKey::Normalized(request.normalized_color().into())
         } else {
             RasterStyleColorKey::Scene([
                 request.scene_color.red.to_bits(),
