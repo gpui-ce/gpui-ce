@@ -729,7 +729,7 @@ impl EditableTextState {
 
     fn move_semantic(&mut self, movement: TextMovement, extend: bool, cx: &mut Context<Self>) {
         if let Some(document) = self.current_document() {
-            let moved = document.move_selection(
+            let moved = document.selection_movement(
                 self.selected_range,
                 movement,
                 extend,

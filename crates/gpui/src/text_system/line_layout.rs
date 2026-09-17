@@ -237,8 +237,8 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Snaps a caret to a native cluster boundary.
     fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition;
 
-    /// Moves one caret stop in visual order.
-    fn move_visual(
+    /// Returns the adjacent caret stop in visual order.
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -550,9 +550,9 @@ pub struct CaretMovement {
     pub preferred_x: Option<Pixels>,
 }
 
-/// The result of moving or extending a selection through a laid-out document.
+/// The result of calculating a selection movement through a laid-out document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CaretSelectionMove {
+pub struct CaretSelectionMovement {
     /// The selection after movement.
     pub selection: CaretSelection,
     /// The horizontal position retained by successive vertical movements.
@@ -707,18 +707,15 @@ impl ShapedTextLayout {
         self.layout.platform_layout.normalized_caret(caret)
     }
 
-    /// Returns the previous caret stop in visual order.
-    pub fn previous_visual_caret(&self, caret: CaretPosition) -> Option<CaretPosition> {
+    /// Returns the adjacent caret stop in visual order.
+    pub fn adjacent_visual_caret(
+        &self,
+        caret: CaretPosition,
+        direction: VisualDirection,
+    ) -> Option<CaretPosition> {
         self.layout
             .platform_layout
-            .move_visual(caret, VisualDirection::Left)
-    }
-
-    /// Returns the next caret stop in visual order.
-    pub fn next_visual_caret(&self, caret: CaretPosition) -> Option<CaretPosition> {
-        self.layout
-            .platform_layout
-            .move_visual(caret, VisualDirection::Right)
+            .adjacent_visual_caret(caret, direction)
     }
 
     /// Returns the logical cluster immediately before the caret.
@@ -744,18 +741,24 @@ impl ShapedTextLayout {
             .caret_movement(caret, movement, preferred_x)
     }
 
-    /// Moves or extends an affinity-aware selection using visual text order.
+    /// Returns a moved or extended affinity-aware selection using visual text order.
     ///
     /// Horizontal movement without extension collapses a non-empty selection toward the requested
     /// visual edge. Other movement starts at the caret. Extending keeps the anchor fixed.
-    pub fn move_selection(
+    ///
+    /// `selection` is the current anchor and active caret.
+    /// `movement` supplies the direction and boundary.
+    /// `extend` keeps the anchor fixed when true and collapses the result when false.
+    /// `preferred_x` carries the horizontal target across vertical movements.
+    /// `line_height` converts caret positions into comparable visual coordinates.
+    pub fn selection_movement(
         &self,
         selection: CaretSelection,
         movement: TextMovement,
         extend: bool,
         preferred_x: Option<Pixels>,
         line_height: Pixels,
-    ) -> CaretSelectionMove {
+    ) -> CaretSelectionMovement {
         let forward = movement.direction == TextDirection::Right;
         let horizontal = matches!(
             movement.direction,
@@ -791,7 +794,7 @@ impl ShapedTextLayout {
 
             let caret = if forward { visual_end } else { visual_start };
 
-            return CaretSelectionMove {
+            return CaretSelectionMovement {
                 selection: caret.into(),
                 preferred_x: None,
             };
@@ -800,7 +803,7 @@ impl ShapedTextLayout {
         let CaretMovement { caret, preferred_x } =
             self.caret_movement(selection.caret, movement, preferred_x);
 
-        CaretSelectionMove {
+        CaretSelectionMovement {
             selection: if extend {
                 selection.with_caret(caret)
             } else {

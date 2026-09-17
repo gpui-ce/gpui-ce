@@ -1321,7 +1321,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         }
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -1384,12 +1384,12 @@ impl PlatformTextLayout for TestPlatformTextLayout {
 
         let idx = match (movement.direction, movement.boundary) {
             (Left, Cluster) => {
-                self.move_visual(caret, VisualDirection::Left)
+                self.adjacent_visual_caret(caret, VisualDirection::Left)
                     .unwrap_or(caret)
                     .index
             }
             (Right, Cluster) => {
-                self.move_visual(caret, VisualDirection::Right)
+                self.adjacent_visual_caret(caret, VisualDirection::Right)
                     .unwrap_or(caret)
                     .index
             }

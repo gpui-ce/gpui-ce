@@ -239,7 +239,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         )
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -249,7 +249,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
 
         paragraph
             .native
-            .move_visual(paragraph.local_caret(caret), direction)
+            .adjacent_visual_caret(paragraph.local_caret(caret), direction)
             .map(|caret| paragraph.global_caret(caret))
             .or_else(|| self.adjacent_edge(paragraph_idx, direction))
     }
@@ -371,7 +371,9 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         if movement.boundary == Boundary::Cluster {
             if let Some(direction) = direction {
                 return CaretMovement {
-                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    caret: self
+                        .adjacent_visual_caret(caret, direction)
+                        .unwrap_or(caret),
                     preferred_x: None,
                 };
             }

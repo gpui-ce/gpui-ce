@@ -289,7 +289,7 @@ impl PlatformTextLayout for SourceMappedLayout {
             .source_caret(self.inner.normalized_caret(self.map.backend_caret(caret)))
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -298,7 +298,7 @@ impl PlatformTextLayout for SourceMappedLayout {
         let mut backend_caret = self.map.backend_caret(caret);
 
         for _attempt in 0..=self.inner.len() {
-            backend_caret = self.inner.move_visual(backend_caret, direction)?;
+            backend_caret = self.inner.adjacent_visual_caret(backend_caret, direction)?;
             let source_caret = self.map.source_caret(backend_caret);
 
             if source_caret.index != source_start {
@@ -383,7 +383,9 @@ impl PlatformTextLayout for SourceMappedLayout {
 
         if let Some(direction) = direction {
             return CaretMovement {
-                caret: self.move_visual(caret, direction).unwrap_or(caret),
+                caret: self
+                    .adjacent_visual_caret(caret, direction)
+                    .unwrap_or(caret),
                 preferred_x: None,
             };
         }
@@ -1123,7 +1125,7 @@ impl PlatformTextLayout for ParleyLayout {
         Self::caret_position(self.cursor(caret))
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -1237,7 +1239,9 @@ impl PlatformTextLayout for ParleyLayout {
                 };
 
                 return CaretMovement {
-                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    caret: self
+                        .adjacent_visual_caret(caret, direction)
+                        .unwrap_or(caret),
                     preferred_x: None,
                 };
             }
@@ -2897,16 +2901,20 @@ mod tests {
             assert!(text.is_char_boundary(caret.index));
             assert!(!seen.contains(&caret), "visual caret traversal cycled");
             seen.push(caret);
-            let Some(next) = wrapped.next_visual_caret(caret) else {
+            let Some(next) = wrapped.adjacent_visual_caret(caret, VisualDirection::Right) else {
                 break;
             };
 
             caret = next;
         }
 
-        assert!(wrapped.next_visual_caret(caret).is_none());
+        assert!(
+            wrapped
+                .adjacent_visual_caret(caret, VisualDirection::Right)
+                .is_none()
+        );
         for _ in 0..max_steps {
-            let Some(previous) = wrapped.previous_visual_caret(caret) else {
+            let Some(previous) = wrapped.adjacent_visual_caret(caret, VisualDirection::Left) else {
                 break;
             };
 
@@ -2914,7 +2922,9 @@ mod tests {
         }
 
         assert!(
-            wrapped.previous_visual_caret(caret).is_none(),
+            wrapped
+                .adjacent_visual_caret(caret, VisualDirection::Left)
+                .is_none(),
             "visual traversal did not stop at the left edge of {text:?}: {caret:?}"
         );
 
@@ -3370,9 +3380,9 @@ mod tests {
             .unwrap_err();
         let mut steps = 0;
 
-        while let Some(next) = native.move_visual(caret, VisualDirection::Right) {
+        while let Some(next) = native.adjacent_visual_caret(caret, VisualDirection::Right) {
             let previous = native
-                .move_visual(next, VisualDirection::Left)
+                .adjacent_visual_caret(next, VisualDirection::Left)
                 .unwrap_or_else(|| panic!("cannot reverse {caret:?} -> {next:?}"));
             assert_eq!(
                 geometry(previous),
@@ -4068,7 +4078,7 @@ mod tests {
             );
             let end = wrapped
                 .platform_layout
-                .move_visual(CaretPosition::default(), VisualDirection::Right)
+                .adjacent_visual_caret(CaretPosition::default(), VisualDirection::Right)
                 .unwrap();
             assert_eq!(
                 end.index,
@@ -4078,7 +4088,7 @@ mod tests {
             assert_eq!(
                 wrapped
                     .platform_layout
-                    .move_visual(end, VisualDirection::Left)
+                    .adjacent_visual_caret(end, VisualDirection::Left)
                     .unwrap()
                     .index,
                 0,
@@ -4143,7 +4153,7 @@ mod tests {
             anchor: end,
             caret: start,
         };
-        let collapsed_left = layout.move_selection(
+        let collapsed_left = layout.selection_movement(
             selection,
             Direction::Left.with_boundary(Boundary::Cluster),
             false,
@@ -4152,7 +4162,7 @@ mod tests {
         );
         assert!(collapsed_left.selection.is_empty());
         assert_eq!(collapsed_left.selection.caret, start);
-        let collapsed_right = layout.move_selection(
+        let collapsed_right = layout.selection_movement(
             selection,
             Direction::Right.with_boundary(Boundary::Cluster),
             false,
@@ -4161,7 +4171,7 @@ mod tests {
         );
         assert_eq!(collapsed_right.selection.caret, end);
 
-        let word = layout.move_selection(
+        let word = layout.selection_movement(
             start.into(),
             Direction::Right.with_boundary(Boundary::Word),
             true,
@@ -4170,7 +4180,7 @@ mod tests {
         );
         assert_eq!(word.selection.anchor, start);
         assert_ne!(word.selection.caret, start);
-        let down = layout.move_selection(
+        let down = layout.selection_movement(
             word.selection.caret.into(),
             Direction::Down.with_boundary(Boundary::VisualLine),
             false,
@@ -4179,7 +4189,7 @@ mod tests {
         );
         assert!(down.preferred_x.is_some());
         let maintained_x = layout
-            .move_selection(
+            .selection_movement(
                 down.selection,
                 Direction::Down.with_boundary(Boundary::VisualLine),
                 false,
