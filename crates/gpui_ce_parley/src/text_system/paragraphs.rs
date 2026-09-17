@@ -74,17 +74,20 @@ pub(super) struct ParagraphLayout {
 
 impl ParagraphLayout {
     fn local_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(
-            caret
+        CaretPosition {
+            index: caret
                 .index
                 .saturating_sub(self.source.content.start)
                 .min(self.native.len()),
-            caret.affinity,
-        )
+            affinity: caret.affinity,
+        }
     }
 
     fn global_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(self.source.content.start + caret.index, caret.affinity)
+        CaretPosition {
+            index: self.source.content.start + caret.index,
+            affinity: caret.affinity,
+        }
     }
 
     fn local_point(&self, mut position: Point<Pixels>, line_height: Pixels) -> Point<Pixels> {
@@ -392,7 +395,10 @@ impl PlatformTextLayout for ParleyDocumentLayout {
                 let idx = if delta < 0 { 0 } else { self.len() };
 
                 return CaretMovement {
-                    caret: self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
+                    caret: self.refresh_caret(CaretPosition {
+                        index: idx,
+                        affinity: caret.affinity,
+                    }),
                     preferred_x,
                 };
             };

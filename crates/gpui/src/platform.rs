@@ -1277,7 +1277,10 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                     .total_cmp(&(f32::from(*right) - f32::from(point.x)).abs())
             })
             .map_or(0, |(idx, _)| *idx);
-        let caret = self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+        let caret = self.refresh_caret(CaretPosition {
+            index: idx,
+            affinity: CaretAffinity::Downstream,
+        });
 
         if point.y >= Pixels::ZERO
             && point.y < line_height
@@ -1308,7 +1311,10 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             caret.affinity
         };
 
-        CaretPosition::new(idx, affinity)
+        CaretPosition {
+            index: idx,
+            affinity,
+        }
     }
 
     fn move_visual(
@@ -1324,7 +1330,10 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         };
 
         let idx = self.stops.get(position)?.0;
-        Some(self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)))
+        Some(self.refresh_caret(CaretPosition {
+            index: idx,
+            affinity: CaretAffinity::Downstream,
+        }))
     }
 
     fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
@@ -1408,7 +1417,10 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             });
 
         CaretMovement {
-            caret: self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)),
+            caret: self.refresh_caret(CaretPosition {
+                index: idx,
+                affinity: CaretAffinity::Downstream,
+            }),
             preferred_x,
         }
     }

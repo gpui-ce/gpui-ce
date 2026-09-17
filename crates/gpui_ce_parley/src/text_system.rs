@@ -176,11 +176,17 @@ impl SourceMap {
     }
 
     fn source_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(self.source_index(caret.index), caret.affinity)
+        CaretPosition {
+            index: self.source_index(caret.index),
+            affinity: caret.affinity,
+        }
     }
 
     fn backend_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(self.backend_index(caret.index), caret.affinity)
+        CaretPosition {
+            index: self.backend_index(caret.index),
+            affinity: caret.affinity,
+        }
     }
 
     fn source_range(&self, range: Range<usize>) -> Range<usize> {
@@ -765,13 +771,13 @@ impl ParleyLayout {
     }
 
     fn caret_position(cursor: Cursor) -> CaretPosition {
-        CaretPosition::new(
-            cursor.index(),
-            match cursor.affinity() {
+        CaretPosition {
+            index: cursor.index(),
+            affinity: match cursor.affinity() {
                 Affinity::Downstream => CaretAffinity::Downstream,
                 Affinity::Upstream => CaretAffinity::Upstream,
             },
-        )
+        }
     }
 
     fn cursor(&self, caret: CaretPosition) -> Cursor {
@@ -800,13 +806,25 @@ impl ParleyLayout {
                 let range = cluster.text_range();
                 let (left, right) = if cluster.is_rtl() {
                     (
-                        CaretPosition::new(range.end, CaretAffinity::Upstream),
-                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                        CaretPosition {
+                            index: range.end,
+                            affinity: CaretAffinity::Upstream,
+                        },
+                        CaretPosition {
+                            index: range.start,
+                            affinity: CaretAffinity::Downstream,
+                        },
                     )
                 } else {
                     (
-                        CaretPosition::new(range.start, CaretAffinity::Downstream),
-                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                        CaretPosition {
+                            index: range.start,
+                            affinity: CaretAffinity::Downstream,
+                        },
+                        CaretPosition {
+                            index: range.end,
+                            affinity: CaretAffinity::Upstream,
+                        },
                     )
                 };
 
@@ -2530,7 +2548,7 @@ mod tests {
             );
             let caret = layout
                 .platform_layout
-                .caret_geometry(CaretPosition::new(0, CaretAffinity::Downstream), px(24.0))
+                .caret_geometry(CaretPosition::attached_to_next_cluster(0), px(24.0))
                 .unwrap();
             assert!(caret.origin.x > px(100.0), "text={text:?}, caret={caret:?}");
         }
@@ -2616,10 +2634,7 @@ mod tests {
 
         let caret = rtl_start
             .platform_layout
-            .caret_geometry(
-                CaretPosition::new(0, CaretAffinity::Downstream),
-                line_height,
-            )
+            .caret_geometry(CaretPosition::attached_to_next_cluster(0), line_height)
             .unwrap();
         assert!(caret.origin.x > px(100.0));
     }
@@ -2657,7 +2672,7 @@ mod tests {
             layout
                 .layout
                 .platform_layout
-                .logical_cluster_after(CaretPosition::new(0, CaretAffinity::Downstream)),
+                .logical_cluster_after(CaretPosition::attached_to_next_cluster(0)),
             Some(0..1)
         );
 
@@ -2668,7 +2683,7 @@ mod tests {
             let caret = layout
                 .layout
                 .platform_layout
-                .refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+                .refresh_caret(CaretPosition::attached_to_next_cluster(idx));
             assert!(caret.index <= text.len());
         }
 
@@ -3265,8 +3280,14 @@ mod tests {
                         .chain(std::iter::once((content.len(), '\0')))
                     {
                         for affinity in [CaretAffinity::Downstream, CaretAffinity::Upstream] {
-                            let local = CaretPosition::new(idx, affinity);
-                            let global = CaretPosition::new(source.content.start + idx, affinity);
+                            let local = CaretPosition {
+                                index: idx,
+                                affinity,
+                            };
+                            let global = CaretPosition {
+                                index: source.content.start + idx,
+                                affinity,
+                            };
                             let mut expected = independent
                                 .platform_layout
                                 .caret_geometry(local, px(24.))
@@ -3368,8 +3389,8 @@ mod tests {
                 continue;
             }
 
-            let before = CaretPosition::new(source.separator.start, CaretAffinity::Downstream);
-            let after = CaretPosition::new(source.separator.end, CaretAffinity::Downstream);
+            let before = CaretPosition::attached_to_next_cluster(source.separator.start);
+            let after = CaretPosition::attached_to_next_cluster(source.separator.end);
             assert_eq!(
                 native.logical_cluster_after(before),
                 Some(source.separator.clone())
@@ -3408,7 +3429,7 @@ mod tests {
         }
 
         let crlf = text.find('\r').unwrap();
-        let inside = CaretPosition::new(crlf + 1, CaretAffinity::Downstream);
+        let inside = CaretPosition::attached_to_next_cluster(crlf + 1);
         assert_eq!(native.refresh_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
@@ -3604,7 +3625,7 @@ mod tests {
                 .layout
                 .platform_layout
                 .caret_geometry(
-                    CaretPosition::new(text.len() - 2, CaretAffinity::Downstream),
+                    CaretPosition::attached_to_next_cluster(text.len() - 2),
                     px(28.),
                 )
                 .unwrap();
@@ -4060,7 +4081,7 @@ mod tests {
             ),
             px(500.0),
         );
-        let middle = CaretPosition::new(2, CaretAffinity::Downstream);
+        let middle = CaretPosition::attached_to_next_cluster(2);
         assert_eq!(
             single_line
                 .caret_movement(
@@ -4103,7 +4124,10 @@ mod tests {
         let end = layout
             .closest_caret_for_position(point(px(10_000.0), px(10.0)), line_height)
             .unwrap_err();
-        let selection = CaretSelection::new(end, start);
+        let selection = CaretSelection {
+            anchor: end,
+            caret: start,
+        };
         let collapsed_left = layout.move_selection(
             selection,
             Direction::Left.with_boundary(Boundary::Cluster),
@@ -4112,7 +4136,7 @@ mod tests {
             line_height,
         );
         assert!(collapsed_left.selection.is_empty());
-        assert_eq!(collapsed_left.selection.focus, start);
+        assert_eq!(collapsed_left.selection.caret, start);
         let collapsed_right = layout.move_selection(
             selection,
             Direction::Right.with_boundary(Boundary::Cluster),
@@ -4120,19 +4144,19 @@ mod tests {
             None,
             line_height,
         );
-        assert_eq!(collapsed_right.selection.focus, end);
+        assert_eq!(collapsed_right.selection.caret, end);
 
         let word = layout.move_selection(
-            CaretSelection::collapsed(start),
+            start.into(),
             Direction::Right.with_boundary(Boundary::Word),
             true,
             None,
             line_height,
         );
         assert_eq!(word.selection.anchor, start);
-        assert_ne!(word.selection.focus, start);
+        assert_ne!(word.selection.caret, start);
         let down = layout.move_selection(
-            CaretSelection::collapsed(word.selection.focus),
+            word.selection.caret.into(),
             Direction::Down.with_boundary(Boundary::VisualLine),
             false,
             None,
