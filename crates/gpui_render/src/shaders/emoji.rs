@@ -6,12 +6,9 @@ pub mod emoji_rasterization {
     #[repr(C)]
     #[derive(Clone, Copy, Wgsl)]
     pub struct GlyphLayerTextureParams {
-        pub bounds_origin: Vec2i,
-        pub bounds_size: Vec2i,
         pub run_color: Vec4f,
         pub gamma_ratios: Vec4f,
         pub grayscale_enhanced_contrast: f32,
-        pub padding: Vec3f,
     }
 
     uniform!(group(0), binding(0), GLYPH_LAYER_PARAMS: GlyphLayerTextureParams);

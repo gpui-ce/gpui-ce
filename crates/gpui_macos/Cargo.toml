@@ -16,6 +16,7 @@ path = "src/gpui_macos.rs"
 default = ["gpui/default"]
 bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]
 test-support = ["gpui/test-support", "gpui_apple/test-support"]
+font-kit = []
 screen-capture = ["gpui/screen-capture", "dep:core-video"]
 
 [dependencies]
@@ -37,11 +38,12 @@ core-video = { workspace = true, optional = true }
 ctor.workspace = true
 dispatch2 = "0.3.1"
 etagere.workspace = true
+font-kit = { version = "0.14.1-zed", package = "zed-font-kit" }
 foreign-types.workspace = true
 futures.workspace = true
 gpui_apple.workspace = true
-gpui_util.workspace = true
 gpui_parley = { workspace = true, features = ["system-fonts"] }
+gpui_util.workspace = true
 image.workspace = true
 itertools.workspace = true
 libc.workspace = true
@@ -57,6 +59,7 @@ objc2-screen-capture-kit.workspace = true
 objc2-user-notifications.workspace = true
 palette.workspace = true
 parking_lot.workspace = true
+pathfinder_geometry.workspace = true
 raw-window-handle.workspace = true
 semver.workspace = true
 smallvec.workspace = true

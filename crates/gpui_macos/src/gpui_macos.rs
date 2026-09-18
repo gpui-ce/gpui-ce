@@ -8,7 +8,6 @@ mod dispatcher;
 mod display;
 mod display_link;
 mod events;
-mod font_rasterizer;
 mod haptic_feedback;
 mod keyboard;
 mod pasteboard;
@@ -19,6 +18,8 @@ mod screen_capture;
 
 use gpui_apple::metal_renderer as renderer;
 
+mod text_system;
+
 mod platform;
 mod window;
 mod window_appearance;
@@ -26,9 +27,10 @@ mod window_appearance;
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;
 pub(crate) use display_link::*;
-pub(crate) use font_rasterizer::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;
 pub(crate) use window::*;
+
+pub(crate) use text_system::*;
 
 pub use platform::MacPlatform;
