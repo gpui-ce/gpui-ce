@@ -4,7 +4,8 @@ use derive_more::{Deref, DerefMut};
 use etagere::BucketedAtlasAllocator;
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams, Size,
+    GlyphAtlasCache, GlyphAtlasEntry, PlatformAtlas, Point, RasterizedGlyph, RenderGlyphParams,
+    Size,
 };
 use metal::Device;
 use parking_lot::Mutex;
@@ -20,7 +21,7 @@ impl MetalAtlas {
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
-            glyph_entries: Default::default(),
+            glyph_cache: Default::default(),
         }))
     }
 
@@ -35,7 +36,7 @@ struct MetalAtlasState {
     monochrome_textures: AtlasTextureList<MetalAtlasTexture>,
     polychrome_textures: AtlasTextureList<MetalAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
-    glyph_entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
+    glyph_cache: GlyphAtlasCache,
 }
 
 impl PlatformAtlas for MetalAtlas {
@@ -46,19 +47,15 @@ impl PlatformAtlas for MetalAtlas {
     ) -> Result<Option<AtlasTile>> {
         let mut lock = self.0.lock();
         if let Some(tile) = lock.tiles_by_key.get(key) {
-            Ok(Some(*tile))
-        } else {
-            let Some((size, bytes)) = build()? else {
-                return Ok(None);
-            };
-            let tile = lock
-                .allocate(size, key.texture_kind())
-                .context("failed to allocate")?;
-            let texture = lock.texture(tile.texture_id);
-            texture.upload(tile.bounds, &bytes);
-            lock.tiles_by_key.insert(key.clone(), tile);
-            Ok(Some(tile))
+            return Ok(Some(*tile));
         }
+
+        let Some((size, bytes)) = build()? else {
+            return Ok(None);
+        };
+        let tile = lock.insert_tile(key.clone(), size, &bytes)?;
+
+        Ok(Some(tile))
     }
 
     fn get_or_insert_glyph_with(
@@ -67,8 +64,8 @@ impl PlatformAtlas for MetalAtlas {
         build: &mut dyn FnMut() -> Result<RasterizedGlyph>,
     ) -> Result<GlyphAtlasEntry> {
         let mut lock = self.0.lock();
-        if let Some(entry) = lock.glyph_entries.get(params) {
-            return Ok(*entry);
+        if let Some(entry) = lock.glyph_cache.get(params) {
+            return Ok(entry);
         }
 
         let glyph = build()?;
@@ -77,37 +74,14 @@ impl PlatformAtlas for MetalAtlas {
             None
         } else {
             let key = AtlasKey::from((params.clone(), glyph.format));
-            key.texture_kind()
-                .validate_upload(glyph.size, &glyph.pixels)?;
-            let tile = lock
-                .allocate(glyph.size, key.texture_kind())
-                .context("failed to allocate")?;
-            lock.texture(tile.texture_id)
-                .upload(tile.bounds, &glyph.pixels);
-            lock.tiles_by_key.insert(key, tile);
-
-            Some(tile)
+            Some(lock.insert_tile(key, glyph.size, &glyph.pixels)?)
         };
-        let entry = GlyphAtlasEntry {
-            tile,
-            bounds: glyph.bounds,
-            format: glyph.format,
-        };
-        lock.glyph_entries.insert(params.clone(), entry);
-
-        Ok(entry)
+        Ok(lock.glyph_cache.insert(params, &glyph, tile))
     }
 
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
-        if let AtlasKey::Glyph { params, format } = key
-            && lock
-                .glyph_entries
-                .get(params)
-                .is_some_and(|entry| entry.format == *format)
-        {
-            lock.glyph_entries.remove(params);
-        }
+        lock.glyph_cache.remove(key);
 
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
@@ -141,6 +115,21 @@ impl PlatformAtlas for MetalAtlas {
 }
 
 impl MetalAtlasState {
+    fn insert_tile(
+        &mut self,
+        key: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<AtlasTile> {
+        let tile = self
+            .allocate(size, key.texture_kind())
+            .context("failed to allocate")?;
+        self.texture(tile.texture_id).upload(tile.bounds, bytes);
+        self.tiles_by_key.insert(key, tile);
+
+        Ok(tile)
+    }
+
     fn allocate(
         &mut self,
         size: Size<DevicePixels>,

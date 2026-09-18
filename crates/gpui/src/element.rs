@@ -455,14 +455,16 @@ impl<E: Element> Drawable<E> {
                     &mut window.current_inline_fragments,
                     inline_fragments.clone(),
                 );
-                let mut prepaint = self.element.prepaint(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    window,
-                    cx,
-                );
+                let mut prepaint = window.with_layout_direction_context(layout_id, |window| {
+                    self.element.prepaint(
+                        global_id.as_ref(),
+                        inspector_id.as_ref(),
+                        bounds,
+                        &mut request_layout,
+                        window,
+                        cx,
+                    )
+                });
 
                 window.current_inline_fragments = previous_fragments;
                 window.next_frame.dispatch_tree.pop_node();
@@ -561,12 +563,12 @@ impl<E: Element> Drawable<E> {
         }
     }
 
-    fn compute_layout_as_root(
+    pub(crate) fn layout_as_root(
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, Size<Pixels>) {
+    ) -> Size<Pixels> {
         if matches!(&self.phase, ElementDrawPhase::Start) {
             self.request_layout(window, cx);
         }
@@ -610,17 +612,7 @@ impl<E: Element> Drawable<E> {
             _ => panic!("cannot measure after painting"),
         };
 
-        (layout_id, window.layout_bounds(layout_id).size)
-    }
-
-    pub(crate) fn layout_as_root(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        context: &mut App,
-    ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, context)
-            .1
+        window.layout_bounds(layout_id).size
     }
 }
 

@@ -5,13 +5,17 @@ use gpui::VisualTestAppContext;
 #[cfg(target_family = "wasm")]
 use gpui::{App, Bounds, WindowBounds, WindowOptions, size};
 use gpui::{
-    AppContext, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div, px,
-    rgb, white,
+    AppContext, Context, Div, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
+    px, rgb, white,
 };
 use std::borrow::Cow;
 
 const BIDI_SAMPLE: &str =
     "שלום עולם\nمرحبا بالعالم\nabc אבג def\nx (مرحبا) y\nEnglish ثم عربي ثم English";
+
+fn positioned_text(left: f32, top: f32) -> Div {
+    div().absolute().left(px(left)).top(px(top))
+}
 
 fn fixture_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
@@ -51,41 +55,20 @@ fn main() {
                 .text_size(px(28.0))
                 .font_family("IBM Plex Sans")
                 .p(px(32.0))
+                .child(positioned_text(-2.5, 31.25).child("Parley office cafe\u{301} العربية אבג"))
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(-2.5))
-                        .top(px(31.25))
-                        .child("Parley office cafe\u{301} العربية אבג"),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(80.0))
+                    positioned_text(32.0, 80.0)
                         .font_family("Noto Color Emoji")
                         .child("😀 🎉 🚀 💡 🔥 ✨"),
                 )
+                .child(positioned_text(400.0, 128.0).child("日本語 ไทย"))
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(400.0))
-                        .top(px(128.0))
-                        .child("日本語 ไทย"),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(128.0))
+                    positioned_text(32.0, 128.0)
                         .w(px(260.0))
                         .child("wrapped text one two three four five six seven eight"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(300.0))
+                    positioned_text(32.0, 300.0)
                         .w(px(600.0))
                         .line_height(px(40.0))
                         .child(BIDI_SAMPLE),
@@ -100,30 +83,21 @@ fn main() {
                         .child("MMMM clipped at the bottom edge"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(32.0))
+                    positioned_text(700.0, 32.0)
                         .font_family("Source Serif 4")
                         .font_weight(FontWeight(340.0))
                         .text_size(px(12.0))
                         .child("Hamburgefontsiv"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(80.0))
+                    positioned_text(700.0, 80.0)
                         .font_family("Source Serif 4")
                         .font_weight(FontWeight(340.0))
                         .text_size(px(48.0))
                         .child("Hamburgefontsiv"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(220.0))
+                    positioned_text(700.0, 220.0)
                         .font_family("Noto Color Emoji")
                         .child("👩🏽‍💻 🇬🇧 1️⃣"),
                 )
@@ -133,22 +107,20 @@ fn main() {
     #[cfg(target_family = "wasm")]
     {
         gpui_ce_platform::web_init();
-        let application = gpui_ce_platform::application().run_embedded(|context: &mut App| {
-            context
-                .text_system()
+        let application = gpui_ce_platform::application().run_embedded(|cx: &mut App| {
+            cx.text_system()
                 .add_fonts(fixture_fonts())
                 .expect("failed to load rendering fixture fonts");
-            let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), context);
-            context
-                .open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
-                        ..Default::default()
-                    },
-                    |_, context| context.new(|_| ParleyRenderingFixture),
-                )
-                .expect("failed to open browser text window");
-            context.activate(true);
+            let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| ParleyRenderingFixture),
+            )
+            .expect("failed to open browser text window");
+            cx.activate(true);
         });
         std::mem::forget(application);
 
@@ -158,10 +130,10 @@ fn main() {
     #[cfg(not(target_family = "wasm"))]
     {
         #[cfg(target_os = "macos")]
-        let mut context = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
+        let mut cx = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
 
         #[cfg(not(target_os = "macos"))]
-        let mut context = {
+        let mut cx = {
             let platform = gpui_ce_platform::current_platform(true);
             let text_system = platform.text_system();
 
@@ -173,26 +145,25 @@ fn main() {
             })
         };
 
-        context
-            .update(|context| context.text_system().add_fonts(fixture_fonts()))
+        cx.update(|cx| cx.text_system().add_fonts(fixture_fonts()))
             .expect("failed to load rendering fixture fonts");
 
         #[cfg(target_os = "macos")]
-        let window = context
-            .open_offscreen_window_default(|_, context| context.new(|_| ParleyRenderingFixture))
+        let window = cx
+            .open_offscreen_window_default(|_, cx| cx.new(|_| ParleyRenderingFixture))
             .expect("failed to create offscreen text window");
 
         #[cfg(not(target_os = "macos"))]
-        let window = context
-            .open_window(gpui::size(px(1280.0), px(800.0)), |_, context| {
-                context.new(|_| ParleyRenderingFixture)
+        let window = cx
+            .open_window(gpui::size(px(1280.0), px(800.0)), |_, cx| {
+                cx.new(|_| ParleyRenderingFixture)
             })
             .expect("failed to create the headless text window");
 
         let window = window.into();
-        context.run_until_parked();
+        cx.run_until_parked();
 
-        let primitive_counts = context
+        let primitive_counts = cx
             .update_window(window, |_, window, _| window.rendered_primitive_counts())
             .expect("failed to inspect rendered text");
         let (_, monochrome, subpixel, polychrome) = primitive_counts;
@@ -205,7 +176,7 @@ fn main() {
             "Parley scene contained {polychrome} color emoji sprites, expected at least 9"
         );
 
-        let image = context
+        let image = cx
             .capture_screenshot(window)
             .expect("failed to capture rendered text");
 

@@ -5,33 +5,30 @@ use crate::{FontSynthesis, FontVariation, RasterFace};
 use gpui::{
     AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
     FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode, HeadlessAppContext,
-    HighlightStyle, Hsla, IntoElement, Point, RasterizedGlyphFormat, Render, ScaledPixels,
+    HighlightStyle, Hsla, IntoElement, RasterizedGlyphFormat, Render, ScaledPixels,
     StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle, VerticalAlign, Window,
     WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
 };
 
 #[cfg(test)]
-use std::{
-    cell::Cell,
-    cell::RefCell,
-    rc::Rc,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{cell::Cell, cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
 use crate::{
-    CatalogState, FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer,
-    SwashGlyphRasterizer, SystemFonts,
+    ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
+    catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
 };
 
 use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretPosition, Font, FontId, FontMetrics, GlyphId, InlineBoxRequest,
-    InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, InlineVisualLine,
-    LineLayout, PaintFragment, PaintStyle, Pixels, PlatformTextLayout, PlatformTextSystem,
-    PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
-    RenderGlyphParams, ShapedGlyph, Size, TextAlign, TextLayoutRequest, TextMovement,
-    TextRenderingMode, TextRun, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
-    point, px, size,
+    Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
+    InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineTextMetrics,
+    InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection,
+    Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
+    PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
+    ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
+    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun,
+    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px,
+    size,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -40,14 +37,18 @@ use parley::{
     Affinity, Alignment, AlignmentOptions, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, Cursor,
     FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle,
     FontVariation as ParleyFontVariation, FontWeight, GenericFamily, InlineBox, InlineBoxKind,
-    Layout, LayoutContext, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
+    Layout, LayoutContext, Line, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
 };
 use skrifa::instance::NormalizedCoord;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
+    hash::Hash,
     ops::Range,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -58,8 +59,8 @@ use paragraphs::{
 };
 
 struct ParleyState {
-    fonts: FontContext,
-    layout: LayoutContext<ParleyBrush>,
+    font_context: FontContext,
+    layout_context: LayoutContext<ParleyBrush>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -86,6 +87,7 @@ impl From<&TextRun> for ParleyShapingRun {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphCacheKey {
+    font_generation: u64,
     text: Arc<str>,
     font_size: Pixels,
     runs: Vec<ParleyShapingRun>,
@@ -94,32 +96,42 @@ struct ParagraphCacheKey {
     line_height: Option<Pixels>,
 }
 
-#[derive(Default)]
-struct ParagraphCache {
-    entries: HashMap<ParagraphCacheKey, Layout<ParleyBrush>>,
-    insertion_order: VecDeque<ParagraphCacheKey>,
+struct BoundedCache<Key, Value, const CAPACITY: usize> {
+    entries: HashMap<Key, Value>,
+    insertion_order: VecDeque<Key>,
 }
 
-impl ParagraphCache {
-    const CAPACITY: usize = 512;
+impl<Key, Value, const CAPACITY: usize> Default for BoundedCache<Key, Value, CAPACITY> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+        }
+    }
+}
 
-    fn get(&self, key: &ParagraphCacheKey) -> Option<Layout<ParleyBrush>> {
+impl<Key, Value, const CAPACITY: usize> BoundedCache<Key, Value, CAPACITY>
+where
+    Key: Clone + Eq + Hash,
+    Value: Clone,
+{
+    fn get(&self, key: &Key) -> Option<Value> {
         self.entries.get(key).cloned()
     }
 
-    fn insert(&mut self, key: ParagraphCacheKey, layout: Layout<ParleyBrush>) {
+    fn insert(&mut self, key: Key, value: Value) {
         if self.entries.contains_key(&key) {
             return;
         }
 
-        if self.entries.len() == Self::CAPACITY
+        if self.entries.len() == CAPACITY
             && let Some(expired) = self.insertion_order.pop_front()
         {
             self.entries.remove(&expired);
         }
 
         self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, layout);
+        self.entries.insert(key, value);
     }
 
     fn clear(&mut self) {
@@ -128,18 +140,479 @@ impl ParagraphCache {
     }
 }
 
+type ParagraphCache = BoundedCache<ParagraphCacheKey, Layout<ParleyBrush>, 512>;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphResultCacheKey {
     paragraph: ParagraphCacheKey,
+    source_map: SourceMap,
     wrap: Option<(Pixels, Option<usize>)>,
     inline_text_metrics: Option<InlineTextMetrics>,
-    text_align: Option<TextAlign>,
+    text_align: TextAlign,
+    alignment_width: Option<Pixels>,
 }
 
-#[derive(Default)]
-struct ParagraphResultCache {
-    entries: HashMap<ParagraphResultCacheKey, ParleyLayoutResult>,
-    insertion_order: VecDeque<ParagraphResultCacheKey>,
+type ParagraphResultCache = BoundedCache<ParagraphResultCacheKey, ParleyLayoutResult, 512>;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SourceMap {
+    source_to_backend: Vec<usize>,
+    backend_to_source: Vec<usize>,
+}
+
+impl SourceMap {
+    fn source_index(&self, backend_idx: usize) -> usize {
+        self.backend_to_source
+            .get(backend_idx)
+            .copied()
+            .unwrap_or_else(|| *self.backend_to_source.last().unwrap_or(&0))
+    }
+
+    fn backend_index(&self, source_idx: usize) -> usize {
+        self.source_to_backend
+            .get(source_idx)
+            .copied()
+            .unwrap_or_else(|| *self.source_to_backend.last().unwrap_or(&0))
+    }
+
+    fn source_caret(&self, caret: CaretPosition) -> CaretPosition {
+        CaretPosition::new(self.source_index(caret.index), caret.affinity)
+    }
+
+    fn backend_caret(&self, caret: CaretPosition) -> CaretPosition {
+        CaretPosition::new(self.backend_index(caret.index), caret.affinity)
+    }
+
+    fn source_range(&self, range: Range<usize>) -> Range<usize> {
+        self.source_index(range.start)..self.source_index(range.end)
+    }
+
+    fn backend_range(&self, range: Range<usize>) -> Range<usize> {
+        self.backend_index(range.start)..self.backend_index(range.end)
+    }
+}
+
+#[derive(Debug)]
+struct SourceMappedLayout {
+    source_len: usize,
+    map: SourceMap,
+    inner: Arc<dyn PlatformTextLayout>,
+}
+
+impl SourceMappedLayout {
+    fn source_caret_for_point(
+        &self,
+        caret: CaretPosition,
+        point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> CaretPosition {
+        let mapped = self.map.source_caret(caret);
+        if self.inner.len() == self.source_len {
+            return mapped;
+        }
+
+        let start = CaretPosition::attached_to_next_cluster(0);
+        if self.source_len == 0 {
+            return start;
+        }
+
+        let end = CaretPosition::attached_to_previous_cluster(self.source_len);
+        let mapped = match mapped.index {
+            0 => start,
+            idx if idx == self.source_len => end,
+            _ => return mapped,
+        };
+
+        // A synthetic bidi control can map a visual edge to the other source endpoint.
+        let distance = |endpoint| {
+            self.inner
+                .caret_geometry(self.map.backend_caret(endpoint), line_height)
+                .map(|bounds| (bounds.origin - point).magnitude())
+        };
+
+        match (distance(start), distance(end)) {
+            (Some(start_distance), Some(end_distance)) if end_distance < start_distance => end,
+            (Some(_), Some(_)) => start,
+            _ => mapped,
+        }
+    }
+}
+
+impl PlatformTextLayout for SourceMappedLayout {
+    fn len(&self) -> usize {
+        self.source_len
+    }
+
+    fn line_count(&self) -> usize {
+        self.inner.line_count()
+    }
+
+    fn size(&self) -> Size<Pixels> {
+        self.inner.size()
+    }
+
+    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize> {
+        self.inner
+            .index_from_point(point, line_height)
+            .map(|idx| self.map.source_index(idx))
+            .map_err(|idx| self.map.source_index(idx))
+    }
+
+    fn caret_from_point(
+        &self,
+        point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<CaretPosition, CaretPosition> {
+        self.inner
+            .caret_from_point(point, line_height)
+            .map(|caret| self.source_caret_for_point(caret, point, line_height))
+            .map_err(|caret| self.source_caret_for_point(caret, point, line_height))
+    }
+
+    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+        self.inner
+            .caret_geometry(self.map.backend_caret(caret), line_height)
+    }
+
+    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
+        self.map
+            .source_caret(self.inner.refresh_caret(self.map.backend_caret(caret)))
+    }
+
+    fn move_visual(
+        &self,
+        caret: CaretPosition,
+        direction: VisualDirection,
+    ) -> Option<CaretPosition> {
+        let source_start = caret.index.min(self.source_len);
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            backend_caret = self.inner.move_visual(backend_caret, direction)?;
+            let source_caret = self.map.source_caret(backend_caret);
+
+            if source_caret.index != source_start {
+                return Some(source_caret);
+            }
+        }
+
+        None
+    }
+
+    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
+        self.inner
+            .selection_geometry(self.map.backend_range(range), line_height)
+    }
+
+    fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
+        self.inner.inline_geometry(self.map.backend_range(range))
+    }
+
+    fn inline_geometry_for_ranges(
+        &self,
+        ranges: &[Range<usize>],
+    ) -> Vec<Vec<(Bounds<Pixels>, usize)>> {
+        let ranges = ranges
+            .iter()
+            .cloned()
+            .map(|range| self.map.backend_range(range))
+            .collect::<Vec<_>>();
+
+        self.inner.inline_geometry_for_ranges(&ranges)
+    }
+
+    fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            let range = self.inner.logical_cluster_before(backend_caret)?;
+            let source = self.map.source_range(range.clone());
+
+            if !source.is_empty() {
+                return Some(source);
+            }
+
+            backend_caret.index = range.start;
+        }
+
+        None
+    }
+
+    fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            let range = self.inner.logical_cluster_after(backend_caret)?;
+            let source = self.map.source_range(range.clone());
+
+            if !source.is_empty() {
+                return Some(source);
+            }
+
+            backend_caret.index = range.end;
+        }
+
+        None
+    }
+
+    fn caret_movement(
+        &self,
+        caret: CaretPosition,
+        movement: TextMovement,
+        preferred_x: Option<Pixels>,
+    ) -> CaretMovement {
+        let direction = match (movement.direction, movement.boundary) {
+            (Direction::Left, Boundary::Cluster) => Some(VisualDirection::Left),
+            (Direction::Right, Boundary::Cluster) => Some(VisualDirection::Right),
+            _ => None,
+        };
+
+        if let Some(direction) = direction {
+            return CaretMovement {
+                caret: self.move_visual(caret, direction).unwrap_or(caret),
+                preferred_x: None,
+            };
+        }
+
+        let CaretMovement { caret, preferred_x } =
+            self.inner
+                .caret_movement(self.map.backend_caret(caret), movement, preferred_x);
+
+        CaretMovement {
+            caret: self.map.source_caret(caret),
+            preferred_x,
+        }
+    }
+
+    fn selection_from_point(
+        &self,
+        point: Point<Pixels>,
+        line_height: Pixels,
+        kind: TextSelectionKind,
+    ) -> Range<usize> {
+        self.map
+            .source_range(self.inner.selection_from_point(point, line_height, kind))
+    }
+}
+
+struct PreparedBidiText {
+    text: String,
+    runs: Vec<TextRun>,
+    run_sources: Vec<usize>,
+    text_styles: Vec<InlineTextStyle>,
+    inline_boxes: Vec<InlineBoxRequest>,
+    map: SourceMap,
+}
+
+#[derive(Clone)]
+struct BidiControls {
+    start: usize,
+    end: usize,
+    open: Vec<char>,
+    close: Vec<char>,
+}
+
+fn controls_for_scope(
+    range: Range<usize>,
+    direction: ResolvedDirection,
+    unicode_bidi: UnicodeBidi,
+) -> Option<BidiControls> {
+    let (directional_embed, directional_isolate, directional_override) = match direction {
+        ResolvedDirection::LeftToRight => ('\u{202a}', '\u{2066}', '\u{202d}'),
+        ResolvedDirection::RightToLeft => ('\u{202b}', '\u{2067}', '\u{202e}'),
+    };
+    let (open, close) = match unicode_bidi {
+        UnicodeBidi::Normal => return None,
+        UnicodeBidi::Embed => (vec![directional_embed], vec!['\u{202c}']),
+        UnicodeBidi::Isolate => (vec![directional_isolate], vec!['\u{2069}']),
+        UnicodeBidi::BidiOverride => (vec![directional_override], vec!['\u{202c}']),
+        UnicodeBidi::IsolateOverride => (
+            vec![directional_isolate, directional_override],
+            vec!['\u{202c}', '\u{2069}'],
+        ),
+        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+    };
+
+    Some(BidiControls {
+        start: range.start,
+        end: range.end,
+        open,
+        close,
+    })
+}
+
+fn prepare_bidi_text(
+    text: &str,
+    runs: &[TextRun],
+    text_styles: &[InlineTextStyle],
+    inline_boxes: &[InlineBoxRequest],
+    direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
+    bidi_scopes: &[InlineBidiScope],
+) -> PreparedBidiText {
+    let root_direction = match direction {
+        ParagraphDirection::Auto => None,
+        ParagraphDirection::LeftToRight => Some(ResolvedDirection::LeftToRight),
+        ParagraphDirection::RightToLeft => Some(ResolvedDirection::RightToLeft),
+    };
+    let mut controls = bidi_scopes
+        .iter()
+        .filter(|scope| {
+            scope.range.start <= scope.range.end
+                && scope.range.end <= text.len()
+                && text.is_char_boundary(scope.range.start)
+                && text.is_char_boundary(scope.range.end)
+        })
+        .filter_map(|scope| {
+            controls_for_scope(scope.range.clone(), scope.direction, scope.unicode_bidi)
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(root_direction) = root_direction
+        && let Some(root) = controls_for_scope(0..text.len(), root_direction, unicode_bidi)
+    {
+        controls.push(root);
+    }
+
+    controls.sort_by_key(|scope| (scope.start, std::cmp::Reverse(scope.end)));
+
+    let mut prepared = String::new();
+    let mut backend_to_source = vec![0];
+    let mut source_to_backend = vec![0; text.len() + 1];
+
+    let append_synthetic = |character: char,
+                            source_idx: usize,
+                            prepared: &mut String,
+                            backend_to_source: &mut Vec<usize>| {
+        prepared.push(character);
+        backend_to_source.extend(std::iter::repeat_n(source_idx, character.len_utf8()));
+    };
+
+    if let Some(root_direction) = root_direction {
+        let marker = match root_direction {
+            ResolvedDirection::LeftToRight => '\u{200e}',
+            ResolvedDirection::RightToLeft => '\u{200f}',
+        };
+        append_synthetic(marker, 0, &mut prepared, &mut backend_to_source);
+    }
+
+    for (source_idx, character) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), '\0')))
+    {
+        for scope in controls.iter().rev().filter(|scope| {
+            scope.start < scope.end && scope.end == source_idx && scope.end < text.len()
+        }) {
+            for control in &scope.close {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        for scope in controls.iter().filter(|scope| scope.start == source_idx) {
+            for control in &scope.open {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        source_to_backend[source_idx] = prepared.len();
+
+        if source_idx == text.len() {
+            break;
+        }
+
+        for scope in controls
+            .iter()
+            .filter(|scope| scope.start == source_idx && scope.end == source_idx)
+        {
+            for control in &scope.close {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        prepared.push(character);
+        for byte_offset in 1..=character.len_utf8() {
+            backend_to_source.push(source_idx + byte_offset);
+            source_to_backend[source_idx + byte_offset] =
+                prepared.len() - character.len_utf8() + byte_offset;
+        }
+    }
+
+    for scope in controls
+        .iter()
+        .rev()
+        .filter(|scope| scope.end == text.len())
+    {
+        for control in &scope.close {
+            append_synthetic(*control, text.len(), &mut prepared, &mut backend_to_source);
+        }
+    }
+
+    let map = SourceMap {
+        source_to_backend,
+        backend_to_source,
+    };
+    let (runs, run_sources) = remap_runs(&prepared, &map, runs, text.len());
+    let text_styles = text_styles
+        .iter()
+        .map(|style| InlineTextStyle {
+            range: map.backend_range(style.range.clone()),
+            ..style.clone()
+        })
+        .collect();
+    let inline_boxes = inline_boxes
+        .iter()
+        .map(|inline_box| InlineBoxRequest {
+            index: map.backend_index(inline_box.index),
+            ..*inline_box
+        })
+        .collect();
+
+    PreparedBidiText {
+        text: prepared,
+        runs,
+        run_sources,
+        text_styles,
+        inline_boxes,
+        map,
+    }
+}
+
+fn remap_runs(
+    text: &str,
+    map: &SourceMap,
+    source_runs: &[TextRun],
+    source_len: usize,
+) -> (Vec<TextRun>, Vec<usize>) {
+    let mut run_ends = Vec::with_capacity(source_runs.len());
+    let mut end = 0;
+
+    for run in source_runs {
+        end += run.len;
+        run_ends.push(end);
+    }
+
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut run_sources = Vec::new();
+
+    for (backend_idx, character) in text.char_indices() {
+        let source_idx = map
+            .source_index(backend_idx)
+            .min(source_len.saturating_sub(1));
+        let source_run = run_ends
+            .partition_point(|run_end| *run_end <= source_idx)
+            .min(source_runs.len().saturating_sub(1));
+
+        if run_sources.last().copied() == Some(source_run) {
+            runs.last_mut().unwrap().len += character.len_utf8();
+        } else if let Some(run) = source_runs.get(source_run) {
+            let mut run = run.clone();
+            run.len = character.len_utf8();
+            runs.push(run);
+            run_sources.push(source_run);
+        }
+    }
+
+    (runs, run_sources)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -176,87 +649,7 @@ impl From<RasterStyleRequest> for RasterStyleCacheKey {
     }
 }
 
-#[derive(Default)]
-struct RasterStyleCache {
-    styles: HashMap<RasterStyleCacheKey, PreparedRasterStyle>,
-    insertion_order: VecDeque<RasterStyleCacheKey>,
-}
-
-impl RasterStyleCache {
-    const CAPACITY: usize = 256;
-
-    fn insert(&mut self, key: RasterStyleCacheKey, style: PreparedRasterStyle) {
-        if self.styles.insert(key, style).is_none() {
-            self.insertion_order.push_back(key);
-        }
-
-        while self.styles.len() > Self::CAPACITY {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                break;
-            };
-            self.styles.remove(&oldest);
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ColorGlyphSupport {
-    colr_v0: bool,
-    colr_v1: bool,
-    cbdt: bool,
-    sbix: bool,
-    svg: bool,
-}
-
-impl ColorGlyphSupport {
-    fn from_rasterizer(rasterizer: &dyn GlyphRasterizer) -> Self {
-        Self {
-            colr_v0: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV0),
-            colr_v1: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV1),
-            cbdt: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Cbdt),
-            sbix: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Sbix),
-            svg: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Svg),
-        }
-    }
-
-    fn supports(self, kind: crate::ColorGlyphKind) -> bool {
-        match kind {
-            crate::ColorGlyphKind::ColrV0 => self.colr_v0,
-            crate::ColorGlyphKind::ColrV1 => self.colr_v1,
-            crate::ColorGlyphKind::Cbdt => self.cbdt,
-            crate::ColorGlyphKind::Sbix => self.sbix,
-            crate::ColorGlyphKind::Svg => self.svg,
-        }
-    }
-}
-
-impl ParagraphResultCache {
-    const CAPACITY: usize = 512;
-
-    fn get(&self, key: &ParagraphResultCacheKey) -> Option<ParleyLayoutResult> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: ParagraphResultCacheKey, result: ParleyLayoutResult) {
-        if self.entries.contains_key(&key) {
-            return;
-        }
-
-        if self.entries.len() == Self::CAPACITY
-            && let Some(expired) = self.insertion_order.pop_front()
-        {
-            self.entries.remove(&expired);
-        }
-
-        self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, result);
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.insertion_order.clear();
-    }
-}
+type RasterStyleCache = BoundedCache<RasterStyleCacheKey, PreparedRasterStyle, 256>;
 
 #[derive(Clone)]
 struct ParleyLayoutResult {
@@ -264,18 +657,23 @@ struct ParleyLayoutResult {
     inline_lines: Vec<InlineVisualLine>,
     inline_boxes: Vec<PositionedInlineBox>,
     size: Size<Pixels>,
-    is_rtl: bool,
 }
 
-fn inline_alignment_offset(text_align: TextAlign, lines: &[InlineVisualLine]) -> Pixels {
+fn inline_alignment_offset(
+    text_align: TextAlign,
+    direction: ResolvedDirection,
+    lines: &[InlineVisualLine],
+) -> Pixels {
     let Some(line) = lines.first() else {
         return Pixels::ZERO;
     };
 
     match text_align {
-        TextAlign::Left => Pixels::ZERO,
+        TextAlign::Start if direction.is_rtl() => line.origin.x + line.size.width,
+        TextAlign::Start | TextAlign::Left => Pixels::ZERO,
         TextAlign::Center => line.origin.x + line.size.width / 2.,
-        TextAlign::Right => line.origin.x + line.size.width,
+        TextAlign::End if direction.is_rtl() => Pixels::ZERO,
+        TextAlign::End | TextAlign::Right => line.origin.x + line.size.width,
     }
 }
 
@@ -284,7 +682,6 @@ struct ParleyLayout {
     layout: Layout<ParleyBrush>,
     inline_lines: Vec<InlineVisualLine>,
     text: Arc<str>,
-    text_len: usize,
     caret_stops: OnceLock<ParleyCaretStops>,
     graphemes: OnceLock<Vec<std::ops::Range<usize>>>,
 }
@@ -308,18 +705,44 @@ struct ParleyClusterGeometry {
     line_idx: usize,
 }
 
+fn visit_line_clusters(
+    line: Line<'_, ParleyBrush>,
+    mut visit: impl FnMut(Cluster<'_, ParleyBrush>, Range<f32>),
+) {
+    let mut previous_run_idx = None;
+
+    for item in line.items() {
+        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+            continue;
+        };
+
+        let run = glyph_run.run();
+
+        if previous_run_idx == Some(run.index()) {
+            continue;
+        }
+
+        previous_run_idx = Some(run.index());
+        let mut inline = glyph_run.offset();
+
+        for cluster in run.visual_clusters() {
+            let advance = inline..inline + cluster.advance();
+            inline = advance.end;
+            visit(cluster, advance);
+        }
+    }
+}
+
 impl ParleyLayout {
     fn new(
         layout: Layout<ParleyBrush>,
         text: Arc<str>,
         inline_lines: Vec<InlineVisualLine>,
     ) -> Self {
-        let text_len = text.len();
         Self {
             layout,
             inline_lines,
             text,
-            text_len,
             caret_stops: OnceLock::new(),
             graphemes: OnceLock::new(),
         }
@@ -373,58 +796,32 @@ impl ParleyLayout {
 
         for line in layout.lines() {
             let block = f64::from(line.metrics().block_min_coord);
-            let mut previous_run_idx = None;
-
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
+            visit_line_clusters(line, |cluster, advance| {
+                let range = cluster.text_range();
+                let (left, right) = if cluster.is_rtl() {
+                    (
+                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                    )
+                } else {
+                    (
+                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                    )
                 };
-                let run = glyph_run.run();
 
-                if previous_run_idx == Some(run.index()) {
-                    continue;
-                }
-
-                previous_run_idx = Some(run.index());
-                let mut inline = glyph_run.offset();
-
-                for cluster in run.visual_clusters() {
-                    let range = cluster.text_range();
-                    let (left, right) = if cluster.is_rtl() {
-                        (
-                            CaretPosition::new(range.end, CaretAffinity::Upstream),
-                            CaretPosition::new(range.start, CaretAffinity::Downstream),
-                        )
-                    } else {
-                        (
-                            CaretPosition::new(range.start, CaretAffinity::Downstream),
-                            CaretPosition::new(range.end, CaretAffinity::Upstream),
-                        )
-                    };
-
-                    if grapheme_boundaries.contains(&left.index) {
+                for (caret, inline) in [(left, advance.start), (right, advance.end)] {
+                    if grapheme_boundaries.contains(&caret.index) {
                         Self::push_caret_stop(
                             &mut stops,
                             &mut indices,
-                            left,
-                            block,
-                            f64::from(inline),
-                        );
-                    }
-
-                    inline += cluster.advance();
-
-                    if grapheme_boundaries.contains(&right.index) {
-                        Self::push_caret_stop(
-                            &mut stops,
-                            &mut indices,
-                            right,
+                            caret,
                             block,
                             f64::from(inline),
                         );
                     }
                 }
-            }
+            });
         }
 
         if stops.is_empty() {
@@ -473,7 +870,7 @@ impl ParleyLayout {
 
     fn caret_stop_index(&self, caret: CaretPosition) -> Option<usize> {
         let stops = self.caret_stops.get_or_init(|| {
-            Self::collect_caret_stops(&self.layout, self.text_len, self.graphemes())
+            Self::collect_caret_stops(&self.layout, self.text.len(), self.graphemes())
         });
         if let Some(idx) = stops.indices.get(&caret).copied() {
             return Some(idx);
@@ -533,6 +930,25 @@ impl ParleyLayout {
             .unwrap_or_else(|| self.layout.height())
     }
 
+    fn line_index_from_point(point: Point<Pixels>, line_height: Pixels) -> usize {
+        if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
+            (point.y / line_height) as usize
+        } else {
+            0
+        }
+    }
+
+    fn line_index_at_block(&self, block: f32) -> usize {
+        self.layout
+            .lines()
+            .position(|line| {
+                let metrics = line.metrics();
+
+                block >= metrics.block_min_coord && block < metrics.block_max_coord
+            })
+            .unwrap_or_else(|| self.layout.len().saturating_sub(1))
+    }
+
     fn inline_cluster_geometry(&self) -> Vec<ParleyClusterGeometry> {
         let mut geometries = Vec::new();
 
@@ -540,38 +956,21 @@ impl ParleyLayout {
             let Some(inline_line) = self.inline_lines.get(line_idx).copied() else {
                 continue;
             };
-            let mut previous_run_idx = None;
+            visit_line_clusters(line, |cluster, advance| {
+                let left = px(advance.start);
+                let right = px(advance.end);
 
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
-                };
-                let run = glyph_run.run();
-
-                if previous_run_idx == Some(run.index()) {
-                    continue;
+                if right > left {
+                    geometries.push(ParleyClusterGeometry {
+                        text_range: cluster.text_range(),
+                        bounds: Bounds::new(
+                            point(left, inline_line.origin.y),
+                            size(right - left, inline_line.size.height),
+                        ),
+                        line_idx,
+                    });
                 }
-
-                previous_run_idx = Some(run.index());
-                let mut left = px(glyph_run.offset());
-
-                for cluster in run.visual_clusters() {
-                    let right = left + px(cluster.advance());
-
-                    if right > left {
-                        geometries.push(ParleyClusterGeometry {
-                            text_range: cluster.text_range(),
-                            bounds: Bounds::new(
-                                point(left, inline_line.origin.y),
-                                size(right - left, inline_line.size.height),
-                            ),
-                            line_idx,
-                        });
-                    }
-
-                    left = right;
-                }
-            }
+            });
         }
 
         geometries
@@ -598,7 +997,7 @@ impl ParleyLayout {
 
 impl PlatformTextLayout for ParleyLayout {
     fn len(&self) -> usize {
-        self.text_len
+        self.text.len()
     }
 
     fn line_count(&self) -> usize {
@@ -606,7 +1005,7 @@ impl PlatformTextLayout for ParleyLayout {
     }
 
     fn size(&self) -> Size<Pixels> {
-        let width = if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        let width = if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             Pixels::ZERO
         } else {
             px(self.layout.width())
@@ -622,30 +1021,13 @@ impl PlatformTextLayout for ParleyLayout {
     ) -> std::result::Result<usize, usize> {
         let closest = self
             .caret_from_point(point, line_height)
-            .unwrap_or_else(|caret| caret)
+            .map_err(|caret| caret.index)?
             .index;
-
-        if self.text_len == 0 || point.y < Pixels::ZERO || line_height <= Pixels::ZERO {
-            return Err(closest);
-        }
-
-        let line_idx = (point.y / line_height) as usize;
-        let Some(line) = self.layout.get(line_idx) else {
-            return Err(closest);
-        };
-
-        let metrics = line.metrics();
-        let left = metrics.inline_min_coord + metrics.offset;
-        let right = left + metrics.advance;
-
-        if f32::from(point.x) < left || f32::from(point.x) >= right {
-            return Err(closest);
-        }
 
         Cluster::from_point(
             &self.layout,
             point.x.into(),
-            self.native_y_for_line(line_idx),
+            self.native_y_for_line(Self::line_index_from_point(point, line_height)),
         )
         .map(|(cluster, _)| cluster.text_range().start)
         .ok_or(closest)
@@ -656,11 +1038,7 @@ impl PlatformTextLayout for ParleyLayout {
         point: gpui::Point<Pixels>,
         line_height: Pixels,
     ) -> std::result::Result<CaretPosition, CaretPosition> {
-        let line_idx = if line_height > px(0.0) && point.y >= Pixels::ZERO {
-            (point.y / line_height) as usize
-        } else {
-            0
-        };
+        let line_idx = Self::line_index_from_point(point, line_height);
 
         let caret = Self::caret_position(Cursor::from_point(
             &self.layout,
@@ -668,7 +1046,7 @@ impl PlatformTextLayout for ParleyLayout {
             self.native_y_for_line(line_idx),
         ));
 
-        if self.text_len == 0 {
+        if self.text.is_empty() {
             return Err(caret);
         }
 
@@ -696,7 +1074,7 @@ impl PlatformTextLayout for ParleyLayout {
             return None;
         }
 
-        if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             return Some(Bounds::new(
                 point(self.inline_lines[0].origin.x, Pixels::ZERO),
                 size(Pixels::ZERO, line_height),
@@ -705,15 +1083,8 @@ impl PlatformTextLayout for ParleyLayout {
 
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
-        let line_idx = self
-            .layout
-            .lines()
-            .position(|line| {
-                let metrics = line.metrics();
-                geometry.y0 as f32 >= metrics.block_min_coord
-                    && (geometry.y0 as f32) < metrics.block_max_coord
-            })
-            .unwrap_or_else(|| self.layout.len().saturating_sub(1));
+        let line_idx = self.line_index_at_block(geometry.y0 as f32);
+
         Some(Bounds::from_corners(
             point(px(geometry.x0 as f32), line_height * line_idx),
             point(px(geometry.x1 as f32), line_height * (line_idx + 1)),
@@ -729,7 +1100,7 @@ impl PlatformTextLayout for ParleyLayout {
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
-        if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             return None;
         }
 
@@ -822,59 +1193,60 @@ impl PlatformTextLayout for ParleyLayout {
             .cloned()
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let cursor = self.cursor(caret);
-        let moved = match movement {
-            TextMovement::VisualLeft => {
-                return (
-                    self.move_visual(caret, VisualDirection::Left)
-                        .unwrap_or(caret),
-                    None,
-                );
+        let moved = match (movement.direction, movement.boundary) {
+            (Direction::Left | Direction::Right, Boundary::Cluster) => {
+                let direction = if movement.direction == Direction::Left {
+                    VisualDirection::Left
+                } else {
+                    VisualDirection::Right
+                };
+
+                return CaretMovement {
+                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    preferred_x: None,
+                };
             }
-            TextMovement::VisualRight => {
-                return (
-                    self.move_visual(caret, VisualDirection::Right)
-                        .unwrap_or(caret),
-                    None,
-                );
-            }
-            TextMovement::VisualWordLeft => cursor.previous_visual_word(&self.layout),
-            TextMovement::VisualWordRight => cursor.next_visual_word(&self.layout),
-            TextMovement::VisualLineStart => Selection::from(cursor)
+            (Direction::Left, Boundary::Word) => cursor.previous_visual_word(&self.layout),
+            (Direction::Right, Boundary::Word) => cursor.next_visual_word(&self.layout),
+            (Direction::Start, Boundary::VisualLine) => Selection::from(cursor)
                 .line_start(&self.layout, false)
                 .focus(),
-            TextMovement::VisualLineEnd => Selection::from(cursor)
+            (Direction::End, Boundary::VisualLine) => Selection::from(cursor)
                 .line_end(&self.layout, false)
                 .focus(),
-            TextMovement::HardLineStart => Selection::from(cursor)
+            (Direction::Start, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_start(&self.layout, false)
                 .focus(),
-            TextMovement::HardLineEnd => Selection::from(cursor)
+            (Direction::End, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_end(&self.layout, false)
                 .focus(),
-            TextMovement::VisualUp | TextMovement::VisualDown => {
-                let delta = if movement == TextMovement::VisualUp {
+            (Direction::Start | Direction::End, Boundary::Document) => {
+                let delta = if movement.direction == Direction::Start {
+                    isize::MIN
+                } else {
+                    isize::MAX
+                };
+
+                Selection::from(cursor)
+                    .move_lines(&self.layout, delta, false)
+                    .focus()
+            }
+            (Direction::Up | Direction::Down, Boundary::VisualLine) => {
+                let delta = if movement.direction == Direction::Up {
                     -1
                 } else {
                     1
                 };
 
                 let geometry = cursor.geometry(&self.layout, 0.0);
-                let line_idx = self
-                    .layout
-                    .lines()
-                    .position(|line| {
-                        let metrics = line.metrics();
-                        geometry.y0 as f32 >= metrics.block_min_coord
-                            && (geometry.y0 as f32) < metrics.block_max_coord
-                    })
-                    .unwrap_or_else(|| self.layout.len().saturating_sub(1));
+                let line_idx = self.line_index_at_block(geometry.y0 as f32);
                 let target_idx = line_idx
                     .checked_add_signed(delta)
                     .filter(|&target_idx| self.layout.get(target_idx).is_some());
@@ -886,17 +1258,27 @@ impl PlatformTextLayout for ParleyLayout {
                         selection.next_line(&self.layout, false)
                     };
 
-                    return (Self::caret_position(moved.focus()), preferred_x);
+                    return CaretMovement {
+                        caret: Self::caret_position(moved.focus()),
+                        preferred_x,
+                    };
                 };
 
                 let x = preferred_x
                     .map_or_else(|| cursor.geometry(&self.layout, 0.0).x0 as f32, f32::from);
                 let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_idx));
-                return (Self::caret_position(moved), Some(px(x)));
+                return CaretMovement {
+                    caret: Self::caret_position(moved),
+                    preferred_x: Some(px(x)),
+                };
             }
+            _ => cursor,
         };
 
-        (Self::caret_position(moved), None)
+        CaretMovement {
+            caret: Self::caret_position(moved),
+            preferred_x: None,
+        }
     }
 
     fn selection_from_point(
@@ -905,11 +1287,7 @@ impl PlatformTextLayout for ParleyLayout {
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> std::ops::Range<usize> {
-        let line_idx = if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
-            (point.y / line_height) as usize
-        } else {
-            0
-        };
+        let line_idx = Self::line_index_from_point(point, line_height);
 
         let y = self.native_y_for_line(line_idx);
         match kind {
@@ -926,35 +1304,22 @@ impl PlatformTextLayout for ParleyLayout {
 }
 
 impl ParleyState {
-    fn new(system_fonts: SystemFonts) -> (Self, FontCatalog) {
-        let collection = fontique::Collection::new(fontique::CollectionOptions {
-            shared: true,
-            system_fonts: system_fonts == SystemFonts::Load,
-        });
-
-        let source_cache = fontique::SourceCache::new_shared();
-        let catalog = FontCatalog::from_shared(collection.clone(), source_cache.clone());
-        (
-            Self {
-                fonts: FontContext {
-                    collection,
-                    source_cache,
-                },
-                layout: LayoutContext::new(),
-            },
-            catalog,
-        )
+    fn new(system_fonts: SystemFonts) -> Self {
+        Self {
+            font_context: new_font_context(system_fonts),
+            layout_context: LayoutContext::new(),
+        }
     }
 }
 
 /// Shapes with Parley and paints exact font instances with an injected glyph rasterizer.
 pub struct ParleyTextSystem {
-    catalog: FontCatalog,
-    fonts: RwLock<FontStore>,
+    font_instances: RwLock<FontStore>,
+    font_generation: AtomicU64,
     rasterizer: Mutex<Box<dyn GlyphRasterizer>>,
     raster_styles: Mutex<RasterStyleCache>,
     foreground_dependencies: Mutex<HashMap<(FontId, GlyphId), gpui::ForegroundDependency>>,
-    color_glyph_support: ColorGlyphSupport,
+    color_glyph_formats: Vec<ColorGlyphKind>,
     recommended_rendering_mode: TextRenderingMode,
     automatic_optical_sizing: bool,
     parley: Mutex<ParleyState>,
@@ -988,16 +1353,26 @@ impl ParleyTextSystem {
         system_font_fallback: impl Into<String>,
         rasterizer: impl GlyphRasterizer + 'static,
     ) -> Self {
-        let (parley, catalog) = ParleyState::new(system_fonts);
-        let color_glyph_support = ColorGlyphSupport::from_rasterizer(&rasterizer);
+        let parley = ParleyState::new(system_fonts);
+        let color_glyph_formats = [
+            ColorGlyphKind::ColrV0,
+            ColorGlyphKind::ColrV1,
+            ColorGlyphKind::Cbdt,
+            ColorGlyphKind::Sbix,
+            ColorGlyphKind::Svg,
+        ]
+        .into_iter()
+        .filter(|kind| rasterizer.supports_color_glyph(*kind))
+        .collect();
         let recommended_rendering_mode = rasterizer.recommended_mode();
+
         Self {
-            catalog,
-            fonts: RwLock::new(FontStore::default()),
+            font_instances: RwLock::new(FontStore::default()),
+            font_generation: AtomicU64::new(0),
             rasterizer: Mutex::new(Box::new(rasterizer)),
             raster_styles: Mutex::default(),
             foreground_dependencies: Mutex::default(),
-            color_glyph_support,
+            color_glyph_formats,
             recommended_rendering_mode,
             automatic_optical_sizing: false,
             parley: Mutex::new(parley),
@@ -1029,73 +1404,76 @@ impl ParleyTextSystem {
         self
     }
 
+    fn font_families<'a>(
+        &'a self,
+        descriptor: &'a Font,
+    ) -> impl Iterator<Item = FontFamilyName<'a>> {
+        std::iter::once(descriptor.family.as_ref())
+            .chain(
+                descriptor
+                    .fallbacks
+                    .iter()
+                    .flat_map(|fallbacks| fallbacks.fallback_list().iter().map(String::as_str)),
+            )
+            .flat_map(|name| face_families(name, &self.system_font_fallback))
+    }
+
     fn resolve_canonical_font(&self, descriptor: &Font) -> Result<FontId> {
-        let mut families = Vec::with_capacity(
-            1 + descriptor
-                .fallbacks
-                .as_ref()
-                .map_or(0, |fallbacks| fallbacks.fallback_list().len()),
-        );
-        push_face_families(
-            &mut families,
-            descriptor.family.as_ref(),
-            &self.system_font_fallback,
-        );
+        let families = self
+            .font_families(descriptor)
+            .chain(
+                self.additional_fallbacks
+                    .iter()
+                    .flat_map(|name| face_families(name, &self.system_font_fallback)),
+            )
+            .collect::<Vec<_>>();
 
-        if let Some(fallbacks) = &descriptor.fallbacks {
-            for family in fallbacks.fallback_list() {
-                push_face_families(&mut families, family, &self.system_font_fallback);
-            }
-        }
+        let resolved = {
+            let mut state = self.parley.lock();
 
-        for family in &self.additional_fallbacks {
-            push_face_families(&mut families, family, &self.system_font_fallback);
-        }
+            resolve_face(
+                &mut state.font_context,
+                &families,
+                descriptor.weight.0,
+                descriptor.style,
+            )
+            .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?
+        };
 
-        let resolved = self
-            .catalog
-            .resolve(&FaceRequest {
-                families: &families,
-                weight: descriptor.weight.0,
-                style: descriptor.style,
-                character: None,
-            })
-            .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?;
-        let font_id = self.fonts.write().intern_synthesized(
-            resolved.data,
+        self.font_instances.write().intern_synthesized(
+            resolved.blob,
             resolved.index,
             resolved.synthesis,
-        )?;
-        Ok(font_id)
+        )
     }
 
     fn parley_layout(
         &self,
-        text: &str,
-        font_size: Pixels,
-        runs: &[TextRun],
-        wrap: Option<(Pixels, Option<usize>)>,
+        request: TextLayoutRequest<'_>,
         inline_boxes: &[InlineBoxRequest],
         text_styles: &[InlineTextStyle],
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
-        text_align: Option<TextAlign>,
+        bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
         // Parley 0.11 resolves one base direction per layout, including across newlines.
-        if !text.chars().any(is_paragraph_separator) {
+        if !request.text.chars().any(is_paragraph_separator) {
             return self.parley_paragraph_layout(
-                text,
-                font_size,
-                runs,
-                wrap,
+                request,
                 inline_boxes,
                 text_styles,
                 line_height,
                 inline_text_metrics,
-                text_align,
+                bidi_scopes,
             );
         }
 
+        let TextLayoutRequest {
+            text,
+            font_size,
+            runs,
+            options,
+        } = request;
         let run_ranges = run_ranges(runs);
 
         let mut paragraphs = Vec::new();
@@ -1177,23 +1555,33 @@ impl ParleyTextSystem {
                     ..*inline_box
                 })
                 .collect::<Vec<_>>();
-            let paragraph_wrap = wrap.map(|(width, max_lines)| {
-                // Clamping stops soft wrapping after the budget, but preserves hard breaks.
-                (
-                    width,
-                    max_lines.map(|count| count.saturating_sub(visual_lines.len())),
-                )
-            });
             let mut result = self.parley_paragraph_layout(
-                &text[source.content.clone()],
-                font_size,
-                &paragraph_runs,
-                paragraph_wrap,
+                TextLayoutRequest {
+                    text: &text[source.content.clone()],
+                    runs: &paragraph_runs,
+                    options: TextLayoutOptions {
+                        // Clamping stops soft wrapping after the budget, but preserves hard breaks.
+                        line_clamp: options
+                            .line_clamp
+                            .map(|count| count.saturating_sub(visual_lines.len())),
+                        ..options
+                    },
+                    ..request
+                },
                 &paragraph_boxes,
                 &paragraph_styles,
                 line_height,
                 inline_text_metrics,
-                text_align,
+                &bidi_scopes
+                    .iter()
+                    .filter_map(|scope| {
+                        local_range(&scope.range, &source.content).map(|range| InlineBidiScope {
+                            range,
+                            direction: scope.direction,
+                            unicode_bidi: scope.unicode_bidi,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
             )?;
 
             for fragment in &mut result.layout.paint_fragments {
@@ -1233,7 +1621,7 @@ impl ParleyTextSystem {
 
             let last_line = result.inline_lines.last().unwrap();
             let newline_width = (result.layout.ascent + result.layout.descent) * 0.25;
-            let newline = if result.is_rtl {
+            let newline = if result.layout.visual_lines[0].direction.is_rtl() {
                 last_line.origin.x - newline_width..last_line.origin.x
             } else {
                 let newline_x = last_line.origin.x + last_line.size.width;
@@ -1247,7 +1635,6 @@ impl ParleyTextSystem {
                 block_offset,
                 native: result.layout.platform_layout,
                 newline,
-                is_rtl: result.is_rtl,
             });
             visual_lines.extend(result.layout.visual_lines);
             paint_fragments.extend(result.layout.paint_fragments);
@@ -1255,7 +1642,6 @@ impl ParleyTextSystem {
             positioned_inline_boxes.extend(result.inline_boxes);
         }
 
-        let is_rtl = paragraphs[0].is_rtl;
         let platform_layout = ParleyDocumentLayout::new(paragraphs, text, document_size);
 
         Ok(ParleyLayoutResult {
@@ -1272,22 +1658,49 @@ impl ParleyTextSystem {
             inline_lines,
             inline_boxes: positioned_inline_boxes,
             size: document_size,
-            is_rtl,
         })
     }
 
     fn parley_paragraph_layout(
         &self,
-        text: &str,
-        font_size: Pixels,
-        runs: &[TextRun],
-        wrap: Option<(Pixels, Option<usize>)>,
+        request: TextLayoutRequest<'_>,
         inline_boxes: &[InlineBoxRequest],
         text_styles: &[InlineTextStyle],
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
-        text_align: Option<TextAlign>,
+        bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
+        let TextLayoutRequest {
+            text,
+            font_size,
+            runs,
+            options,
+        } = request;
+        let TextLayoutOptions {
+            wrap_width,
+            line_clamp,
+            text_align,
+            alignment_width,
+            direction,
+            unicode_bidi,
+        } = options;
+        let wrap = (wrap_width.is_some() || line_clamp.is_some())
+            .then_some((wrap_width.unwrap_or(Pixels::MAX), line_clamp));
+        let source_text_len = text.len();
+        let source_runs = runs;
+        let prepared = prepare_bidi_text(
+            text,
+            runs,
+            text_styles,
+            inline_boxes,
+            direction,
+            unicode_bidi,
+            bidi_scopes,
+        );
+        let text = prepared.text.as_str();
+        let runs = prepared.runs.as_slice();
+        let text_styles = prepared.text_styles.as_slice();
+        let inline_boxes = prepared.inline_boxes.as_slice();
         let run_ranges = run_ranges(runs);
         let line_height = if text.is_empty() {
             text_styles
@@ -1299,6 +1712,7 @@ impl ParleyTextSystem {
         };
         let paragraph_text: Arc<str> = text.into();
         let cache_key = ParagraphCacheKey {
+            font_generation: self.font_generation.load(Ordering::Acquire),
             text: paragraph_text.clone(),
             font_size,
             runs: runs.iter().map(ParleyShapingRun::from).collect(),
@@ -1308,14 +1722,16 @@ impl ParleyTextSystem {
         };
         let result_cache_key = ParagraphResultCacheKey {
             paragraph: cache_key.clone(),
+            source_map: prepared.map.clone(),
             wrap,
             inline_text_metrics,
             text_align,
+            alignment_width,
         };
 
         if let Some(mut result) = self.paragraph_result_cache.lock().get(&result_cache_key) {
             for fragment in &mut result.layout.paint_fragments {
-                fragment.style = PaintStyle::from(&runs[fragment.source_run]);
+                fragment.style = PaintStyle::from(&source_runs[fragment.source_run]);
             }
 
             return Ok(result);
@@ -1324,31 +1740,16 @@ impl ParleyTextSystem {
         let mut layout = if let Some(layout) = self.paragraph_cache.lock().get(&cache_key) {
             layout
         } else {
-            let family_lists = runs
-                .iter()
-                .map(|run| {
-                    let descriptor = &run.font;
-                    let mut families = Vec::new();
-                    push_parley_families(
-                        &mut families,
-                        descriptor.family.as_ref(),
-                        &self.system_font_fallback,
-                    );
-
-                    if let Some(fallbacks) = &descriptor.fallbacks {
-                        for family in fallbacks.fallback_list() {
-                            push_parley_families(&mut families, family, &self.system_font_fallback);
-                        }
-                    }
-
-                    families.extend(
-                        self.additional_fallbacks
-                            .iter()
-                            .map(|family| FontFamilyName::Named(Cow::Borrowed(family.as_str()))),
-                    );
-                    families
-                })
-                .collect::<Vec<_>>();
+            let family_lists =
+                runs.iter()
+                    .map(|run| {
+                        self.font_families(&run.font)
+                            .chain(self.additional_fallbacks.iter().map(|family| {
+                                FontFamilyName::Named(Cow::Borrowed(family.as_str()))
+                            }))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
             let feature_lists = runs
                 .iter()
                 .map(|run| {
@@ -1382,8 +1783,11 @@ impl ParleyTextSystem {
             });
 
             let mut state = self.parley.lock();
-            let ParleyState { fonts, layout } = &mut *state;
-            let mut builder = layout.ranged_builder(fonts, text, 1.0, false);
+            let ParleyState {
+                font_context,
+                layout_context,
+            } = &mut *state;
+            let mut builder = layout_context.ranged_builder(font_context, text, 1.0, false);
             builder.set_line_break_override(Some(CHROMIUM_LINE_BREAK_OVERRIDE));
             builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
 
@@ -1418,22 +1822,20 @@ impl ParleyTextSystem {
                     continue;
                 }
 
-                push_style(
+                for property in [
                     StyleProperty::FontFamily(FontFamily::from(family_lists[run_idx].as_slice())),
-                    range.clone(),
-                );
-                push_style(
                     StyleProperty::FontWeight(FontWeight::new(descriptor.weight.0)),
-                    range.clone(),
-                );
-                push_style(
                     StyleProperty::FontStyle(match descriptor.style {
                         gpui::FontStyle::Normal => FontStyle::Normal,
                         gpui::FontStyle::Italic => FontStyle::Italic,
                         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
                     }),
-                    range.clone(),
-                );
+                    StyleProperty::Brush(ParleyBrush {
+                        source_run: run_idx,
+                    }),
+                ] {
+                    push_style(property, range.clone());
+                }
 
                 if !feature_lists[run_idx].is_empty() {
                     push_style(
@@ -1450,13 +1852,6 @@ impl ParleyTextSystem {
                         range.clone(),
                     );
                 }
-
-                push_style(
-                    StyleProperty::Brush(ParleyBrush {
-                        source_run: run_idx,
-                    }),
-                    range,
-                );
             }
 
             for (style_idx, style) in text_styles.iter().enumerate() {
@@ -1518,6 +1913,16 @@ impl ParleyTextSystem {
             } else {
                 layout.break_all_lines(Some(f32::from(wrap_width)));
             }
+        } else if let Some(alignment_width) = alignment_width {
+            let mut breaker = layout.break_lines();
+            breaker.state_mut().set_layout_max_advance(f32::INFINITY);
+            breaker.state_mut().set_line_max_advance(f32::INFINITY);
+
+            while breaker.break_next().is_some() {
+                breaker.set_prior_line_width(f32::from(alignment_width));
+            }
+
+            breaker.finish();
         } else {
             layout.break_all_lines(None);
         }
@@ -1525,30 +1930,42 @@ impl ParleyTextSystem {
         // Parley uses an unbounded line width for empty layouts. Align their empty
         // row here so centered and right-aligned carets stay inside the container.
         let empty_alignment = (text.is_empty() && inline_boxes.is_empty()).then(|| {
-            let width = wrap
-                .map(|(width, _max_lines)| width)
+            let width = alignment_width
+                .or_else(|| wrap.map(|(width, _max_lines)| width))
                 .filter(|width| *width < Pixels::MAX)
                 .unwrap_or_default();
 
             match text_align {
-                Some(TextAlign::Right) => width,
-                Some(TextAlign::Center) => width / 2.,
+                TextAlign::Start if layout.is_rtl() => width,
+                TextAlign::End if !layout.is_rtl() => width,
+                TextAlign::Right => width,
+                TextAlign::Center => width / 2.,
                 _ => Pixels::ZERO,
             }
         });
 
-        if let Some(text_align) = text_align
-            && empty_alignment.is_none()
-        {
+        if empty_alignment.is_none() {
             let alignment = match text_align {
+                TextAlign::Start => Alignment::Start,
+                TextAlign::End => Alignment::End,
                 TextAlign::Left => Alignment::Left,
                 TextAlign::Center => Alignment::Center,
                 TextAlign::Right => Alignment::Right,
             };
 
-            layout.align(alignment, AlignmentOptions::default());
+            layout.align(
+                alignment,
+                AlignmentOptions {
+                    align_when_overflowing: true,
+                },
+            );
         }
 
+        let paragraph_direction = if layout.is_rtl() {
+            ResolvedDirection::RightToLeft
+        } else {
+            ResolvedDirection::LeftToRight
+        };
         let mut visual_lines = Vec::new();
         let mut paint_fragments = Vec::new();
 
@@ -1561,11 +1978,7 @@ impl ParleyTextSystem {
         let mut ascent = px(0.0);
         let mut descent = px(0.0);
 
-        let mut saw_line = false;
-
         for (line_idx, line) in layout.lines().enumerate() {
-            saw_line = true;
-
             let fragment_start = paint_fragments.len();
             let metrics = *line.metrics();
             let line_x =
@@ -1613,7 +2026,7 @@ impl ParleyTextSystem {
                 let shaping_variations = self
                     .automatic_optical_sizing
                     .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
-                let font_id = self.fonts.write().intern(
+                let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
                     &normalized_coords,
@@ -1627,8 +2040,6 @@ impl ParleyTextSystem {
                 // Resolve leading from the input ranges. Parley 0.11 can report the
                 // following style's line height in a shaped run's cached metrics.
                 let range = run.text_range();
-                let source_run = glyph_run.style().brush.source_run;
-
                 let first_style =
                     text_styles.partition_point(|style| style.range.end <= range.start);
                 let run_line_height = text_styles[first_style..]
@@ -1654,13 +2065,9 @@ impl ParleyTextSystem {
                     continue;
                 }
 
-                let paint_style = PaintStyle::from(&runs[source_run]);
-                let underline_offset = Some(px(run_metrics.underline_offset));
-                let strikethrough_offset = Some(px(run_metrics.strikethrough_offset));
-
                 let glyphs = {
-                    let fonts = self.fonts.read();
-                    let color_glyphs = fonts
+                    let font_instances = self.font_instances.read();
+                    let color_glyphs = font_instances
                         .get(font_id)
                         .context("canonical font missing after interning")?
                         .color_glyphs()?;
@@ -1673,33 +2080,37 @@ impl ParleyTextSystem {
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
                                 is_emoji: color_glyphs
                                     .available_kinds(glyph_id)
-                                    .any(|kind| self.color_glyph_support.supports(kind)),
+                                    .any(|kind| self.color_glyph_formats.contains(&kind)),
                             }
                         })
                         .collect()
                 };
 
                 let start = px(glyph_run.offset()) - line_x;
+                let source_run = prepared.run_sources[glyph_run.style().brush.source_run];
                 paint_fragments.push(PaintFragment {
                     source_run,
                     font_id,
                     font_size: px(run.font_size()),
                     glyphs,
                     x_range: start..start + px(glyph_run.advance()),
-                    style: paint_style,
-                    underline_offset,
-                    strikethrough_offset,
+                    style: PaintStyle::from(&source_runs[source_run]),
+                    underline_offset: Some(px(run_metrics.underline_offset)),
+                    strikethrough_offset: Some(px(run_metrics.strikethrough_offset)),
                 });
             }
 
             let parley_text_range = line.text_range();
-            let text_range =
-                parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len());
+            let text_range = prepared.map.source_range(
+                parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len()),
+            );
 
             visual_lines.push(VisualLine {
                 text_range,
                 fragment_range: fragment_start..paint_fragments.len(),
                 advance: line_advance,
+                offset: line_x,
+                direction: paragraph_direction,
             });
 
             inline_lines.push(InlineVisualLine {
@@ -1719,7 +2130,7 @@ impl ParleyTextSystem {
             descent = descent.max(px(metrics.descent));
         }
 
-        if !saw_line {
+        if visual_lines.is_empty() {
             anyhow::bail!("Parley produced no line");
         }
 
@@ -1742,17 +2153,21 @@ impl ParleyTextSystem {
             );
         }
 
-        let is_rtl = layout.is_rtl();
         let platform_layout = ParleyLayout::new(layout, paragraph_text, inline_lines.clone());
+        let platform_layout: Arc<dyn PlatformTextLayout> = Arc::new(SourceMappedLayout {
+            source_len: source_text_len,
+            map: prepared.map,
+            inner: Arc::new(platform_layout),
+        });
         let line_layout = LineLayout {
             font_size,
             width,
             ascent,
             descent,
-            visual_lines: visual_lines.iter().cloned().collect(),
+            visual_lines: visual_lines.into_iter().collect(),
             paint_fragments,
-            len: text.len(),
-            platform_layout: std::sync::Arc::new(platform_layout),
+            len: source_text_len,
+            platform_layout,
         };
 
         let result = ParleyLayoutResult {
@@ -1760,7 +2175,6 @@ impl ParleyTextSystem {
             inline_lines,
             inline_boxes: positioned_inline_boxes,
             size,
-            is_rtl,
         };
         self.paragraph_result_cache
             .lock()
@@ -1783,37 +2197,16 @@ fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
         .collect()
 }
 
-fn push_face_families<'a>(
-    families: &mut Vec<FaceFamily<'a>>,
+fn face_families<'a>(
     name: &'a str,
     system_font_fallback: &'a str,
-) {
-    if name == ".SystemUIFont" {
-        families.push(FaceFamily::SystemUi);
-        families.push(FaceFamily::Named(system_font_fallback));
-    } else {
-        families.push(FaceFamily::Named(canonical_family(
-            name,
-            system_font_fallback,
-        )));
-    }
-}
-
-fn push_parley_families<'a>(
-    families: &mut Vec<FontFamilyName<'a>>,
-    name: &'a str,
-    system_font_fallback: &str,
-) {
-    if name == ".SystemUIFont" {
-        families.push(FontFamilyName::Generic(GenericFamily::SystemUi));
-        families.push(FontFamilyName::Named(Cow::Owned(
-            system_font_fallback.to_string(),
-        )));
-    } else {
-        families.push(FontFamilyName::Named(Cow::Owned(
-            canonical_family(name, system_font_fallback).to_string(),
-        )));
-    }
+) -> impl Iterator<Item = FontFamilyName<'a>> {
+    (name == ".SystemUIFont")
+        .then_some(FontFamilyName::Generic(GenericFamily::SystemUi))
+        .into_iter()
+        .chain(std::iter::once(FontFamilyName::Named(Cow::Borrowed(
+            canonical_family(name, system_font_fallback),
+        ))))
 }
 
 fn canonical_family<'a>(name: &'a str, system: &'a str) -> &'a str {
@@ -1828,29 +2221,37 @@ fn canonical_family<'a>(name: &'a str, system: &'a str) -> &'a str {
 impl PlatformTextSystem for ParleyTextSystem {
     fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         let blobs = fonts
-            .iter()
-            .map(|bytes| fontique::Blob::from(bytes.as_ref().to_vec()))
+            .into_iter()
+            .map(|bytes| fontique::Blob::from(bytes.into_owned()))
             .collect::<Vec<_>>();
-        let mut state = self.catalog.state.write();
-        let mut next: CatalogState = state.clone();
-        next.register_blobs(&blobs)?;
-        *state = next;
-        self.paragraph_cache.lock().clear();
-        self.paragraph_result_cache.lock().clear();
+
+        {
+            let mut state = self.parley.lock();
+            register_font_blobs(&mut state.font_context, &blobs)?;
+
+            let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
+            self.paragraph_cache.lock().clear();
+            self.paragraph_result_cache.lock().clear();
+        }
 
         Ok(())
     }
 
     fn all_font_names(&self) -> Vec<String> {
-        let mut names = self.catalog.family_names();
+        let mut names = {
+            let mut state = self.parley.lock();
+
+            family_names(&mut state.font_context)
+        };
         names.extend([".SystemUIFont", ".ZedSans", ".ZedMono"].map(str::to_owned));
         names.sort_unstable();
         names.dedup();
+
         names
     }
 
     fn font_generation(&self) -> u64 {
-        self.catalog.generation()
+        self.font_generation.load(Ordering::Acquire)
     }
 
     fn font_id(&self, descriptor: &Font) -> Result<FontId> {
@@ -1858,7 +2259,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .expect("Parley FontId missing from its store")
@@ -1867,7 +2268,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .context("Parley FontId missing from its store")?
@@ -1875,7 +2276,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .context("Parley FontId missing from its store")?
@@ -1883,7 +2284,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)?
             .glyph_for_char(character)
@@ -1891,8 +2292,8 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
-        let fonts = self.fonts.read();
-        let font = fonts
+        let font_instances = self.font_instances.read();
+        let font = font_instances
             .get(params.font_id)
             .context("Parley FontId missing from its store")?;
         let data_identity = font.data_identity();
@@ -1921,12 +2322,12 @@ impl PlatformTextSystem for ParleyTextSystem {
                 dependency
             } else {
                 let dependency = self
-                    .fonts
+                    .font_instances
                     .read()
                     .get(request.font_id)
                     .and_then(|font| {
                         font.foreground_dependency(request.glyph_id, |kind| {
-                            self.color_glyph_support.supports(kind)
+                            self.color_glyph_formats.contains(&kind)
                         })
                         .ok()
                     })
@@ -1942,7 +2343,7 @@ impl PlatformTextSystem for ParleyTextSystem {
         };
 
         let key = request.into();
-        if let Some(style) = self.raster_styles.lock().styles.get(&key).copied() {
+        if let Some(style) = self.raster_styles.lock().get(&key) {
             return style;
         }
 
@@ -1960,46 +2361,37 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-        let wrap = (request.wrap_width.is_some() || request.line_clamp.is_some()).then_some((
-            request.wrap_width.unwrap_or(Pixels::MAX),
-            request.line_clamp,
-        ));
-        self.parley_layout(
-            request.text,
-            request.font_size,
-            request.runs,
-            wrap,
-            &[],
-            &[],
-            None,
-            None,
-            None,
-        )
-        .expect("Parley failed to lay out a validated GPUI document")
-        .layout
+        self.parley_layout(request, &[], &[], None, None, &[])
+            .expect("Parley failed to lay out a validated GPUI document")
+            .layout
     }
 
     fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        let wrap = (request.wrap_width.is_some() || request.line_clamp.is_some()).then_some((
-            request.wrap_width.unwrap_or(Pixels::MAX),
-            request.line_clamp,
-        ));
         let result = self
             .parley_layout(
-                request.text,
-                request.font_size,
-                request.runs,
-                wrap,
+                TextLayoutRequest {
+                    text: request.text,
+                    font_size: request.font_size,
+                    runs: request.runs,
+                    options: request.options,
+                },
                 request.boxes,
                 request.text_styles,
                 Some(request.line_height),
                 Some(request.text_metrics),
-                Some(request.text_align),
+                request.bidi_scopes,
             )
             .expect("Parley failed to lay out a validated GPUI inline document");
+
+        let alignment_offset = inline_alignment_offset(
+            request.options.text_align,
+            result.layout.visual_lines[0].direction,
+            &result.inline_lines,
+        );
+
         InlineLayout {
             layout: std::sync::Arc::new(result.layout),
-            alignment_offset: inline_alignment_offset(request.text_align, &result.inline_lines),
+            alignment_offset,
             lines: result.inline_lines,
             boxes: result.inline_boxes,
             size: result.size,
@@ -2069,8 +2461,10 @@ mod tests {
             text,
             font_size,
             runs,
-            wrap_width: None,
-            line_clamp: None,
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
         })
     }
 
@@ -2086,13 +2480,301 @@ mod tests {
             text,
             font_size,
             runs,
-            wrap_width: Some(wrap_width),
-            line_clamp,
+            options: TextLayoutOptions {
+                wrap_width: Some(wrap_width),
+                line_clamp,
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
         })
     }
 
-    fn wrapped(layout: LineLayout, width: Pixels) -> gpui::WrappedLineLayout {
-        gpui::WrappedLineLayout {
+    fn layout_directional(
+        system: &ParleyTextSystem,
+        text: &str,
+        direction: ParagraphDirection,
+        text_align: TextAlign,
+        alignment_width: Option<Pixels>,
+    ) -> LineLayout {
+        system.layout_text(TextLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &[text_run(text, "IBM Plex Sans")],
+            options: TextLayoutOptions {
+                alignment_width,
+                text_align,
+                direction,
+                ..Default::default()
+            },
+        })
+    }
+
+    #[test]
+    fn explicit_rtl_sets_the_base_direction_without_rtl_characters() {
+        let system = test_system();
+
+        for text in ["English 123!", "123 …", ""] {
+            let layout = layout_directional(
+                &system,
+                text,
+                ParagraphDirection::RightToLeft,
+                TextAlign::Start,
+                Some(px(240.0)),
+            );
+
+            assert_eq!(layout.len, text.len());
+            assert_eq!(layout.platform_layout.len(), text.len());
+            assert_eq!(
+                layout.visual_lines[0].direction,
+                ResolvedDirection::RightToLeft
+            );
+            let caret = layout
+                .platform_layout
+                .caret_geometry(CaretPosition::new(0, CaretAffinity::Downstream), px(24.0))
+                .unwrap();
+            assert!(caret.origin.x > px(100.0), "text={text:?}, caret={caret:?}");
+        }
+    }
+
+    #[test]
+    fn directional_hit_testing_preserves_source_endpoint_carets() {
+        let system = test_system();
+        let line_height = px(24.0);
+
+        for (text, direction) in [
+            ("English 123", ParagraphDirection::RightToLeft),
+            ("مرحبا", ParagraphDirection::LeftToRight),
+            ("English 123", ParagraphDirection::LeftToRight),
+            ("مرحبا", ParagraphDirection::RightToLeft),
+        ] {
+            let layout =
+                layout_directional(&system, text, direction, TextAlign::Start, Some(px(240.0)));
+
+            for expected in [
+                CaretPosition::attached_to_next_cluster(0),
+                CaretPosition::attached_to_previous_cluster(text.len()),
+            ] {
+                let expected_bounds = layout
+                    .platform_layout
+                    .caret_geometry(expected, line_height)
+                    .unwrap();
+                let hit = layout
+                    .platform_layout
+                    .caret_from_point(
+                        expected_bounds.origin + point(px(0.0), line_height / 2.0),
+                        line_height,
+                    )
+                    .unwrap_or_else(|caret| caret);
+
+                assert_eq!(hit, expected, "text={text:?}, direction={direction:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn logical_text_alignment_uses_the_paragraph_direction() {
+        let system = test_system();
+        let rtl_start = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::RightToLeft,
+            TextAlign::Start,
+            Some(px(240.0)),
+        );
+        let rtl_end = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::RightToLeft,
+            TextAlign::End,
+            Some(px(240.0)),
+        );
+        let ltr_start = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::LeftToRight,
+            TextAlign::Start,
+            Some(px(240.0)),
+        );
+
+        let line_height = px(24.0);
+        let rtl_start_selection = rtl_start
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        let rtl_end_selection = rtl_end
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        let ltr_start_selection = ltr_start
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        assert!(
+            rtl_start_selection[0].origin.x > px(100.0),
+            "start={rtl_start_selection:?}, end={rtl_end_selection:?}, fragments={:?}",
+            rtl_start.paint_fragments
+        );
+        assert!(rtl_end_selection[0].origin.x < px(1.0));
+        assert!(ltr_start_selection[0].origin.x < px(1.0));
+
+        let caret = rtl_start
+            .platform_layout
+            .caret_geometry(
+                CaretPosition::new(0, CaretAffinity::Downstream),
+                line_height,
+            )
+            .unwrap();
+        assert!(caret.origin.x > px(100.0));
+    }
+
+    #[test]
+    fn bidi_scope_controls_preserve_source_byte_indices() {
+        let system = test_system();
+        let text = "A אב B";
+        let hebrew = text.find('א').unwrap()..text.find('ב').unwrap() + 'ב'.len_utf8();
+        let runs = [text_run(text, "IBM Plex Sans")];
+        let scopes = [InlineBidiScope {
+            range: hebrew,
+            direction: ResolvedDirection::RightToLeft,
+            unicode_bidi: UnicodeBidi::IsolateOverride,
+        }];
+        let layout = system.layout_inline(InlineLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &runs,
+            boxes: &[],
+            text_styles: &[],
+            line_height: px(24.0),
+            text_metrics: InlineTextMetrics::default(),
+            options: TextLayoutOptions {
+                alignment_width: Some(px(240.0)),
+                direction: ParagraphDirection::LeftToRight,
+                ..Default::default()
+            },
+            bidi_scopes: &scopes,
+        });
+
+        assert_eq!(layout.layout.len, text.len());
+        assert_eq!(layout.layout.platform_layout.len(), text.len());
+        assert_eq!(
+            layout
+                .layout
+                .platform_layout
+                .logical_cluster_after(CaretPosition::new(0, CaretAffinity::Downstream)),
+            Some(0..1)
+        );
+
+        for (idx, _) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), '\0')))
+        {
+            let caret = layout
+                .layout
+                .platform_layout
+                .refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+            assert!(caret.index <= text.len());
+        }
+
+        let selection = layout
+            .layout
+            .platform_layout
+            .selection_geometry(0..text.len(), px(24.0));
+        assert!(!selection.is_empty());
+    }
+
+    #[test]
+    fn result_cache_keeps_source_maps_for_authored_directional_controls() {
+        let system = test_system();
+        let explicit = layout_directional(
+            &system,
+            "a",
+            ParagraphDirection::LeftToRight,
+            TextAlign::Left,
+            None,
+        );
+        let source = "\u{200e}a";
+        let authored_control = system.layout_text(TextLayoutRequest {
+            text: source,
+            font_size: px(16.0),
+            runs: &[text_run(source, "IBM Plex Sans")],
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(explicit.platform_layout.len(), 1);
+        assert_eq!(authored_control.len, source.len());
+        assert_eq!(authored_control.platform_layout.len(), source.len());
+    }
+
+    #[test]
+    fn rtl_bidi_override_reverses_visual_cluster_positions() {
+        let system = test_system();
+        let text = "abc";
+        let runs = [text_run(text, "IBM Plex Sans")];
+        let scopes = [InlineBidiScope {
+            range: 0..text.len(),
+            direction: ResolvedDirection::RightToLeft,
+            unicode_bidi: UnicodeBidi::IsolateOverride,
+        }];
+        let layout = system.layout_inline(InlineLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &runs,
+            boxes: &[],
+            text_styles: &[],
+            line_height: px(24.0),
+            text_metrics: InlineTextMetrics::default(),
+            options: TextLayoutOptions {
+                direction: ParagraphDirection::LeftToRight,
+                ..Default::default()
+            },
+            bidi_scopes: &scopes,
+        });
+        let positions = [0..1, 1..2, 2..3].map(|range| {
+            layout.layout.platform_layout.inline_geometry(range)[0]
+                .0
+                .origin
+                .x
+        });
+
+        assert!(positions[0] > positions[1]);
+        assert!(positions[1] > positions[2]);
+    }
+
+    #[test]
+    fn plaintext_resolves_each_hard_paragraph_and_neutral_lines_fall_back_to_ltr() {
+        let system = test_system();
+        let text = "مرحبا\n123 …\nEnglish\n";
+        let layout = system.layout_text(TextLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &[text_run(text, "IBM Plex Sans")],
+            options: TextLayoutOptions {
+                alignment_width: Some(px(240.0)),
+                unicode_bidi: UnicodeBidi::Plaintext,
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(
+            layout
+                .visual_lines
+                .iter()
+                .map(|line| line.direction)
+                .collect::<Vec<_>>(),
+            vec![
+                ResolvedDirection::RightToLeft,
+                ResolvedDirection::LeftToRight,
+                ResolvedDirection::LeftToRight,
+                ResolvedDirection::LeftToRight,
+            ]
+        );
+        assert!(layout.visual_lines[0].offset > px(100.0));
+        assert_eq!(layout.visual_lines[1].offset, Pixels::ZERO);
+        assert_eq!(layout.visual_lines[3].text_range, text.len()..text.len());
+    }
+
+    fn shaped_text_layout(layout: LineLayout, width: Pixels) -> gpui::ShapedTextLayout {
+        gpui::ShapedTextLayout {
             layout: Arc::new(layout),
             wrap_width: Some(width),
         }
@@ -2178,7 +2860,7 @@ mod tests {
         }
 
         let line_height = px(24.0);
-        let wrapped = wrapped(layout.clone_for_test(), px(120.0));
+        let wrapped = shaped_text_layout(layout.clone(), px(120.0));
         let mut caret = wrapped
             .closest_caret_for_position(point(px(-100.0), line_height * 0.5), line_height)
             .unwrap_err();
@@ -2211,7 +2893,7 @@ mod tests {
 
         for caret in seen {
             let bounds = wrapped
-                .position_for_caret(caret, line_height)
+                .visual_position_for_caret(caret, line_height)
                 .expect("native caret must have geometry");
             assert!(f32::from(bounds.x).is_finite() && f32::from(bounds.y).is_finite());
         }
@@ -2255,9 +2937,12 @@ mod tests {
                 x_height: px(7.),
             },
 
-            wrap_width: Some(px(300.)),
-            line_clamp: None,
-            text_align: TextAlign::Left,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(300.)),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
+            bidi_scopes: &[],
         });
 
         assert_eq!(layout.lines.len(), 3);
@@ -2378,9 +3063,12 @@ mod tests {
             font_size: px(18.0),
             line_height: px(24.0),
             text_metrics,
-            wrap_width: Some(px(160.0)),
-            line_clamp: None,
-            text_align: TextAlign::Center,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(160.0)),
+                text_align: TextAlign::Center,
+                ..Default::default()
+            },
+            bidi_scopes: &[],
         };
 
         let layout = system.layout_inline(request);
@@ -2480,9 +3168,12 @@ mod tests {
                 descent: px(4.0),
                 x_height: px(8.0),
             },
-            wrap_width: Some(px(24.0)),
-            line_clamp: None,
-            text_align: TextAlign::Left,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(24.0)),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
+            bidi_scopes: &[],
         });
 
         assert_eq!(layout.boxes.len(), 2);
@@ -2501,31 +3192,12 @@ mod tests {
         assert_inline_geometry_is_contained(&layout, layout.size.width);
     }
 
-    trait CloneLineLayoutForTest {
-        fn clone_for_test(&self) -> LineLayout;
-    }
-
-    impl CloneLineLayoutForTest for LineLayout {
-        fn clone_for_test(&self) -> LineLayout {
-            LineLayout {
-                font_size: self.font_size,
-                width: self.width,
-                ascent: self.ascent,
-                descent: self.descent,
-                visual_lines: self.visual_lines.clone(),
-                paint_fragments: self.paint_fragments.clone(),
-                len: self.len,
-                platform_layout: self.platform_layout.clone(),
-            }
-        }
-    }
-
     #[test]
     fn paragraph_direction_does_not_leak_across_newlines() {
         let system = test_system();
         let text = "שלום עולם\nabc אבג def\nx (مرحبا) y";
         let runs = [text_run(text, "IBM Plex Sans")];
-        let document = wrapped(layout_line(&system, text, px(18.0), &runs), px(500.0));
+        let document = shaped_text_layout(layout_line(&system, text, px(18.0), &runs), px(500.0));
 
         for (left, right) in [("abc", "def"), ("x", "y")] {
             let left_position = document
@@ -2719,10 +3391,19 @@ mod tests {
             assert_eq!(selected, source.content.start..source.separator.end);
 
             for (movement, expected) in [
-                (TextMovement::HardLineStart, source.content.start),
-                (TextMovement::HardLineEnd, source.content.end),
+                (
+                    Direction::Start.with_boundary(Boundary::HardLine),
+                    source.content.start,
+                ),
+                (
+                    Direction::End.with_boundary(Boundary::HardLine),
+                    source.content.end,
+                ),
             ] {
-                assert_eq!(native.move_caret(before, movement, None).0.index, expected);
+                assert_eq!(
+                    native.caret_movement(before, movement, None).caret.index,
+                    expected
+                );
             }
         }
 
@@ -2731,33 +3412,69 @@ mod tests {
         assert_eq!(native.refresh_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
-        let (down, preferred_x) = native.move_caret(start, TextMovement::VisualDown, None);
+        let down = native.caret_movement(
+            start,
+            Direction::Down.with_boundary(Boundary::VisualLine),
+            None,
+        );
         assert_eq!(
-            geometry(down).origin.y,
+            geometry(down.caret).origin.y,
             geometry(start).origin.y + line_height
         );
-        assert_eq!(preferred_x, Some(geometry(start).origin.x));
+        assert_eq!(down.preferred_x, Some(geometry(start).origin.x));
 
         let mut vertical_caret = start;
         let mut preferred_x = None;
 
         for line_idx in 1..native.line_count() {
-            (vertical_caret, preferred_x) =
-                native.move_caret(vertical_caret, TextMovement::VisualDown, preferred_x);
+            let moved = native.caret_movement(
+                vertical_caret,
+                Direction::Down.with_boundary(Boundary::VisualLine),
+                preferred_x,
+            );
+            vertical_caret = moved.caret;
+            preferred_x = moved.preferred_x;
+
             assert_eq!(geometry(vertical_caret).origin.y, line_height * line_idx);
             assert_eq!(preferred_x, Some(geometry(start).origin.x));
         }
 
         for line_idx in (0..native.line_count() - 1).rev() {
-            (vertical_caret, preferred_x) =
-                native.move_caret(vertical_caret, TextMovement::VisualUp, preferred_x);
+            let moved = native.caret_movement(
+                vertical_caret,
+                Direction::Up.with_boundary(Boundary::VisualLine),
+                preferred_x,
+            );
+            vertical_caret = moved.caret;
+            preferred_x = moved.preferred_x;
+
             assert_eq!(geometry(vertical_caret).origin.y, line_height * line_idx);
         }
 
+        let document_start = native.caret_movement(
+            CaretPosition::attached_to_previous_cluster(text.len()),
+            Direction::Start.with_boundary(Boundary::Document),
+            None,
+        );
+        assert_eq!(
+            document_start.caret,
+            CaretPosition::attached_to_next_cluster(0)
+        );
+
+        let document_end = native.caret_movement(
+            CaretPosition::attached_to_next_cluster(0),
+            Direction::End.with_boundary(Boundary::Document),
+            None,
+        );
+        assert_eq!(
+            document_end.caret,
+            CaretPosition::attached_to_previous_cluster(text.len())
+        );
+
         for direction in [VisualDirection::Left, VisualDirection::Right] {
             let movement = match direction {
-                VisualDirection::Left => TextMovement::VisualWordLeft,
-                VisualDirection::Right => TextMovement::VisualWordRight,
+                VisualDirection::Left => Direction::Left.with_boundary(Boundary::Word),
+                VisualDirection::Right => Direction::Right.with_boundary(Boundary::Word),
             };
             let edge_x = match direction {
                 VisualDirection::Left => px(-100.),
@@ -2766,7 +3483,7 @@ mod tests {
             let empty_row = native
                 .caret_from_point(point(edge_x, line_height * 1.5), line_height)
                 .unwrap_or_else(|caret| caret);
-            let word = native.move_caret(empty_row, movement, None).0;
+            let word = native.caret_movement(empty_row, movement, None).caret;
             assert_ne!(geometry(word).origin.y, geometry(empty_row).origin.y);
         }
 
@@ -2846,9 +3563,12 @@ mod tests {
                     descent: px(4.),
                     x_height: px(9.),
                 },
-                wrap_width: Some(px(260.)),
-                line_clamp: None,
-                text_align,
+                options: TextLayoutOptions {
+                    wrap_width: Some(px(260.)),
+                    text_align,
+                    ..Default::default()
+                },
+                bidi_scopes: &[],
             });
             let mut ids = inline
                 .boxes
@@ -2930,15 +3650,21 @@ mod tests {
             let document = layout_wrapped(&system, text, px(18.), &runs, px(80.), max_lines);
             let previous = system
                 .parley_paragraph_layout(
-                    text,
-                    px(18.),
-                    &runs,
-                    Some((px(80.), max_lines)),
+                    TextLayoutRequest {
+                        text,
+                        font_size: px(18.),
+                        runs: &runs,
+                        options: TextLayoutOptions {
+                            wrap_width: Some(px(80.)),
+                            line_clamp: max_lines,
+                            ..TextLayoutOptions::default()
+                        },
+                    },
                     &[],
                     &[],
                     None,
                     None,
-                    None,
+                    &[],
                 )
                 .unwrap();
 
@@ -3276,6 +4002,8 @@ mod tests {
             .shape_text(text, px(18.0), &[run], None, None)
             .unwrap();
         assert_ne!(fallback_id, after.paint_fragments[0].font_id);
+        let source_serif_regular = backend.font_id(&font("Source Serif 4")).unwrap();
+        assert_eq!(after.paint_fragments[0].font_id, source_serif_regular);
 
         backend
             .add_fonts(vec![Cow::Borrowed(IBM_PLEX_SEMIBOLD)])
@@ -3288,7 +4016,6 @@ mod tests {
         variable.weight = GpuiFontWeight(725.0);
         variable.style = GpuiFontStyle::Oblique;
         let variable_id = backend.font_id(&variable).unwrap();
-        let source_serif_regular = backend.font_id(&font("Source Serif 4")).unwrap();
         assert_ne!(source_serif_regular, variable_id);
     }
 
@@ -3297,7 +4024,7 @@ mod tests {
         let system = test_system();
         for text in ["👩🏽‍💻", "👨‍👩‍👧‍👦", "🇬🇧", "ก้"] {
             let layout = layout_line(&system, text, px(22.0), &[text_run(text, "IBM Plex Sans")]);
-            let wrapped = wrapped(layout, px(500.0));
+            let wrapped = shaped_text_layout(layout, px(500.0));
             assert_eq!(
                 wrapped.logical_cluster_after(CaretPosition::default()),
                 Some(0..text.len()),
@@ -3324,7 +4051,7 @@ mod tests {
         }
 
         let single_line_text = "abcd";
-        let single_line = wrapped(
+        let single_line = shaped_text_layout(
             layout_line(
                 &system,
                 single_line_text,
@@ -3336,21 +4063,29 @@ mod tests {
         let middle = CaretPosition::new(2, CaretAffinity::Downstream);
         assert_eq!(
             single_line
-                .move_caret(middle, TextMovement::VisualUp, None)
-                .0
+                .caret_movement(
+                    middle,
+                    Direction::Up.with_boundary(Boundary::VisualLine),
+                    None,
+                )
+                .caret
                 .index,
             0
         );
         assert_eq!(
             single_line
-                .move_caret(middle, TextMovement::VisualDown, None)
-                .0
+                .caret_movement(
+                    middle,
+                    Direction::Down.with_boundary(Boundary::VisualLine),
+                    None,
+                )
+                .caret
                 .index,
             single_line_text.len()
         );
 
         let text = "abc אבג العربية xyz";
-        let layout = wrapped(
+        let layout = shaped_text_layout(
             layout_wrapped(
                 &system,
                 text,
@@ -3371,7 +4106,7 @@ mod tests {
         let selection = CaretSelection::new(end, start);
         let collapsed_left = layout.move_selection(
             selection,
-            TextMovement::VisualLeft,
+            Direction::Left.with_boundary(Boundary::Cluster),
             false,
             None,
             line_height,
@@ -3380,7 +4115,7 @@ mod tests {
         assert_eq!(collapsed_left.selection.focus, start);
         let collapsed_right = layout.move_selection(
             selection,
-            TextMovement::VisualRight,
+            Direction::Right.with_boundary(Boundary::Cluster),
             false,
             None,
             line_height,
@@ -3389,7 +4124,7 @@ mod tests {
 
         let word = layout.move_selection(
             CaretSelection::collapsed(start),
-            TextMovement::VisualWordRight,
+            Direction::Right.with_boundary(Boundary::Word),
             true,
             None,
             line_height,
@@ -3398,7 +4133,7 @@ mod tests {
         assert_ne!(word.selection.focus, start);
         let down = layout.move_selection(
             CaretSelection::collapsed(word.selection.focus),
-            TextMovement::VisualDown,
+            Direction::Down.with_boundary(Boundary::VisualLine),
             false,
             None,
             line_height,
@@ -3407,7 +4142,7 @@ mod tests {
         let maintained_x = layout
             .move_selection(
                 down.selection,
-                TextMovement::VisualDown,
+                Direction::Down.with_boundary(Boundary::VisualLine),
                 false,
                 down.preferred_x,
                 line_height,
@@ -3681,7 +4416,7 @@ mod tests {
 
         let optical_value = |font_id| {
             system
-                .fonts
+                .font_instances
                 .read()
                 .get(font_id)
                 .unwrap()
@@ -3726,9 +4461,11 @@ mod tests {
             font_size: px(12.0),
             line_height: px(16.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: None,
-            line_clamp: None,
-            text_align: TextAlign::Left,
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
+            bidi_scopes: &[],
         });
         let small = inline
             .layout
@@ -3879,7 +4616,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 div().size_full().pl(px(11.)).pt(px(9.)).child(
                     div()
@@ -3928,13 +4665,12 @@ mod tests {
 
         impl Geometry {
             fn read(
-                context: &mut HeadlessAppContext,
+                cx: &mut HeadlessAppContext,
                 window: WindowHandle<InlineTranslationView>,
             ) -> Self {
                 let any_window = window.into();
                 let mut debug_bounds = |selector| {
-                    context
-                        .debug_bounds(any_window, selector)
+                    cx.debug_bounds(any_window, selector)
                         .unwrap()
                         .unwrap_or_else(|| panic!("missing debug bounds for {selector}"))
                 };
@@ -3945,8 +4681,8 @@ mod tests {
                 let nested = debug_bounds(NESTED);
 
                 let text_groups = [
-                    text_group_bounds(context, any_window, first_group_color()),
-                    text_group_bounds(context, any_window, second_group_color()),
+                    text_group_bounds(cx, any_window, first_group_color()),
+                    text_group_bounds(cx, any_window, second_group_color()),
                 ];
 
                 Self {
@@ -4011,11 +4747,11 @@ mod tests {
         }
 
         fn text_group_bounds(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             color: Hsla,
         ) -> Bounds<Pixels> {
-            let bounds = context.solid_quad_bounds(window, color).unwrap();
+            let bounds = cx.solid_quad_bounds(window, color).unwrap();
             assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
 
             logical_bounds(bounds[0])
@@ -4037,6 +4773,20 @@ mod tests {
             assert_close(actual.y, expected.y, context);
         }
 
+        fn update_view<View: Render>(
+            cx: &mut HeadlessAppContext,
+            window: WindowHandle<View>,
+            edit: impl FnOnce(&mut View),
+        ) {
+            window
+                .update(cx, |view, _window, cx| {
+                    edit(view);
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
+
         #[test]
         fn centered_inline_lines_move_as_one_group_during_fractional_resize() {
             let text_system =
@@ -4045,30 +4795,26 @@ mod tests {
                 .add_fonts(vec![Cow::Borrowed(IBM_PLEX)])
                 .unwrap();
 
-            let mut context = HeadlessAppContext::new(Arc::new(text_system));
+            let mut cx = HeadlessAppContext::new(Arc::new(text_system));
 
-            let window = context
-                .open_window(size(px(340.), px(180.)), |window, context| {
+            let window = cx
+                .open_window(size(px(340.), px(180.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| InlineTranslationView { width_offset: 0. })
+                    cx.new(|_| InlineTranslationView { width_offset: 0. })
                 })
                 .unwrap();
 
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let initial = Geometry::read(&mut context, window);
+            let initial = Geometry::read(&mut cx, window);
             initial.assert_valid();
 
             for step in 1..=64 {
-                window
-                    .update(&mut context, |view, _, context| {
-                        view.width_offset = step as f32 / 16.;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut cx, window, |view| {
+                    view.width_offset = step as f32 / 16.;
+                });
 
-                let translated = Geometry::read(&mut context, window);
+                let translated = Geometry::read(&mut cx, window);
                 translated.assert_valid();
                 translated.assert_moved_as_one_group(initial, step);
                 assert_point_close(
@@ -4078,14 +4824,8 @@ mod tests {
                 );
             }
 
-            window
-                .update(&mut context, |view, _, context| {
-                    view.width_offset = 0.;
-                    context.notify();
-                })
-                .unwrap();
-            context.run_until_parked();
-            assert_eq!(Geometry::read(&mut context, window), initial);
+            update_view(&mut cx, window, |view| view.width_offset = 0.);
+            assert_eq!(Geometry::read(&mut cx, window), initial);
         }
 
         fn headless() -> HeadlessAppContext {
@@ -4133,11 +4873,11 @@ mod tests {
                 global_id: Option<&gpui::GlobalElementId>,
                 inspector_id: Option<&gpui::InspectorElementId>,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> (gpui::LayoutId, Self::RequestLayoutState) {
                 let (layout_id, state) =
                     self.element
-                        .request_layout(global_id, inspector_id, window, context);
+                        .request_layout(global_id, inspector_id, window, cx);
 
                 if self.remeasure {
                     self.measurements.borrow_mut().clear();
@@ -4149,7 +4889,7 @@ mod tests {
                                 gpui::AvailableSpace::Definite(px(width)),
                                 gpui::AvailableSpace::MaxContent,
                             ),
-                            context,
+                            cx,
                         );
                         self.measurements
                             .borrow_mut()
@@ -4167,10 +4907,10 @@ mod tests {
                 bounds: Bounds<Pixels>,
                 state: &mut Self::RequestLayoutState,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> Self::PrepaintState {
                 self.element
-                    .prepaint(global_id, inspector_id, bounds, state, window, context)
+                    .prepaint(global_id, inspector_id, bounds, state, window, cx)
             }
 
             fn paint(
@@ -4181,18 +4921,11 @@ mod tests {
                 state: &mut Self::RequestLayoutState,
                 prepaint: &mut Self::PrepaintState,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 *self.painted.borrow_mut() = state.measured_inline_paragraphs();
-                self.element.paint(
-                    global_id,
-                    inspector_id,
-                    bounds,
-                    state,
-                    prepaint,
-                    window,
-                    context,
-                );
+                self.element
+                    .paint(global_id, inspector_id, bounds, state, prepaint, window, cx);
             }
         }
 
@@ -4233,7 +4966,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 let mut paragraph = div()
                     .block()
@@ -4307,7 +5040,7 @@ mod tests {
 
         #[test]
         fn block_paragraph_paints_grapheme_safe_end_start_and_middle_ellipsis() {
-            let mut context = headless();
+            let mut cx = headless();
 
             for direction in [
                 gpui::TruncateFrom::End,
@@ -4316,14 +5049,14 @@ mod tests {
             ] {
                 let view = OverflowParagraph::new(direction);
                 let painted = view.painted.clone();
-                let window = context
-                    .open_window(size(px(360.), px(180.)), |window, context| {
+                let window = cx
+                    .open_window(size(px(360.), px(180.)), |window, cx| {
                         window.set_scale_factor(SCALE_FACTOR);
 
-                        context.new(|_context| view)
+                        cx.new(|_cx| view)
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
                 let captured = painted.borrow();
                 assert_eq!(captured.len(), 1);
@@ -4348,8 +5081,7 @@ mod tests {
                 }
 
                 assert!(
-                    !context
-                        .glyph_bounds(window.into(), first_group_color())
+                    !cx.glyph_bounds(window.into(), first_group_color())
                         .unwrap()
                         .is_empty()
                 );
@@ -4358,17 +5090,15 @@ mod tests {
 
         #[test]
         fn block_paragraph_places_requested_marker_on_second_clamped_line() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
             view.max_lines = Some(2);
             view.width = 140.;
             let painted = view.painted.clone();
-            let window = context
-                .open_window(size(px(360.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            let window = cx
+                .open_window(size(px(360.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             {
                 let captured = painted.borrow();
@@ -4390,12 +5120,12 @@ mod tests {
             }
 
             window
-                .update(&mut context, |view, _window, context| {
+                .update(&mut cx, |view, _window, cx| {
                     view.marker = false;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let captured = painted.borrow();
             assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
@@ -4413,8 +5143,11 @@ mod tests {
                         text: LINE_CLAMP_TEXT,
                         font_size: px(14.),
                         runs: &runs,
-                        wrap_width: Some(*width),
-                        line_clamp: None,
+                        options: TextLayoutOptions {
+                            wrap_width: Some(*width),
+                            text_align: TextAlign::Left,
+                            ..Default::default()
+                        },
                     });
 
                     layout.visual_lines.len() == 2
@@ -4425,18 +5158,15 @@ mod tests {
                             .any(|line| line.advance > *width + px(0.01))
                 })
                 .expect("sample text should have a two-line width with hanging whitespace");
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
             view.text = LINE_CLAMP_TEXT;
             view.max_lines = Some(2);
             view.width = f32::from(width);
             let painted = view.painted.clone();
-            context
-                .open_window(size(px(900.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            cx.open_window(size(px(900.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let captured = painted.borrow();
             let (text, layout) = &captured[0];
@@ -4446,17 +5176,15 @@ mod tests {
 
         #[test]
         fn block_paragraph_remeasures_nowrap_overflow_and_restores_original_text() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
             view.remeasure = true;
             let painted = view.painted.clone();
             let measurements = view.measurements.clone();
-            let window = context
-                .open_window(size(px(2200.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            let window = cx
+                .open_window(size(px(2200.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             {
                 let measured = measurements.borrow();
@@ -4473,13 +5201,7 @@ mod tests {
             let initial = painted.borrow()[0].0.clone();
 
             for width in [90., 2000., 180.] {
-                window
-                    .update(&mut context, |view, _window, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut cx, window, |view| view.width = width);
                 let captured = painted.borrow();
                 assert_paragraph_fits(&captured[0].0, &captured[0].1, width, 1);
 
@@ -4493,34 +5215,28 @@ mod tests {
 
         #[test]
         fn block_ellipsis_preserves_span_metrics_and_only_places_display_ranges() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
             view.styled = true;
             view.width = 260.;
             let painted = view.painted.clone();
-            let window = context
-                .open_window(size(px(360.), px(180.)), |window, context| {
+            let window = cx
+                .open_window(size(px(360.), px(180.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
 
-                    context.new(|_context| view)
+                    cx.new(|_cx| view)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             for width in [260., 100., 260.] {
-                window
-                    .update(&mut context, |view, _window, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut cx, window, |view| view.width = width);
 
                 let captured = painted.borrow();
                 let (text, layout) = &captured[0];
                 assert_paragraph_fits(text, layout, width, 1);
                 assert!(text.contains('…') && text.ends_with("end"));
-                let spans = quads(&mut context, window.into(), first_group_color());
+                let spans = quads(&mut cx, window.into(), first_group_color());
                 assert_eq!(spans.len(), 1);
                 assert_close(
                     spans[0].size.width,
@@ -4535,10 +5251,9 @@ mod tests {
 
                 if width == 100. {
                     assert!(!text.contains('W'));
-                    assert!(quads(&mut context, window.into(), second_group_color()).is_empty());
+                    assert!(quads(&mut cx, window.into(), second_group_color()).is_empty());
                     assert!(
-                        context
-                            .glyph_bounds(window.into(), second_group_color())
+                        cx.glyph_bounds(window.into(), second_group_color())
                             .unwrap()
                             .is_empty()
                     );
@@ -4559,10 +5274,10 @@ mod tests {
                             .iter()
                             .any(|fragment| fragment.font_size == px(14.))
                     );
-                    let backgrounds = quads(&mut context, window.into(), second_group_color());
+                    let backgrounds = quads(&mut cx, window.into(), second_group_color());
                     assert!(!backgrounds.is_empty());
 
-                    for glyph in context
+                    for glyph in cx
                         .glyph_bounds(window.into(), second_group_color())
                         .unwrap()
                     {
@@ -4577,11 +5292,11 @@ mod tests {
         }
 
         fn quads(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             color: Hsla,
         ) -> Vec<Bounds<Pixels>> {
-            let mut bounds: Vec<_> = context
+            let mut bounds: Vec<_> = cx
                 .solid_quad_bounds(window, color)
                 .unwrap()
                 .into_iter()
@@ -4666,20 +5381,20 @@ mod tests {
 
         #[test]
         fn nested_spans_wrap_like_flat_styled_text_without_boundary_breaks() {
-            let mut context = headless();
-            let nested = context
-                .open_window(size(px(360.), px(300.)), |window, context| {
+            let mut cx = headless();
+            let nested = cx
+                .open_window(size(px(360.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| NestedWrapping {
+                    cx.new(|_| NestedWrapping {
                         width: 130.,
                         flat: false,
                     })
                 })
                 .unwrap();
-            let flat = context
-                .open_window(size(px(360.), px(300.)), |window, context| {
+            let flat = cx
+                .open_window(size(px(360.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| NestedWrapping {
+                    cx.new(|_| NestedWrapping {
                         width: 130.,
                         flat: true,
                     })
@@ -4689,23 +5404,23 @@ mod tests {
             for width in [130., 179., 240., 310.] {
                 for window in [nested, flat] {
                     window
-                        .update(&mut context, |view, _, context| {
+                        .update(&mut cx, |view, _, cx| {
                             view.width = width;
-                            context.notify();
+                            cx.notify();
                         })
                         .unwrap();
                 }
 
-                context.run_until_parked();
+                cx.run_until_parked();
                 assert_eq!(
-                    context.debug_bounds(nested.into(), "paragraph").unwrap(),
-                    context.debug_bounds(flat.into(), "paragraph").unwrap()
+                    cx.debug_bounds(nested.into(), "paragraph").unwrap(),
+                    cx.debug_bounds(flat.into(), "paragraph").unwrap()
                 );
 
                 for color in [first_group_color(), second_group_color()] {
                     assert_eq!(
-                        quads(&mut context, nested.into(), color),
-                        quads(&mut context, flat.into(), color),
+                        quads(&mut cx, nested.into(), color),
+                        quads(&mut cx, flat.into(), color),
                         "width {width}"
                     );
                 }
@@ -4762,7 +5477,7 @@ mod tests {
 
         #[test]
         fn inline_sizing_depends_on_parent_context() {
-            let mut context = headless();
+            let mut cx = headless();
 
             for parent_context in [
                 ParentContext::Block,
@@ -4770,21 +5485,21 @@ mod tests {
                 ParentContext::Flex,
                 ParentContext::Grid,
             ] {
-                let window = context
-                    .open_window(size(px(300.), px(240.)), |window, context| {
+                let window = cx
+                    .open_window(size(px(300.), px(240.)), |window, cx| {
                         window.set_scale_factor(SCALE_FACTOR);
-                        context.new(|_| ContextView {
+                        cx.new(|_| ContextView {
                             context: parent_context,
                         })
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
-                let span = context
+                let span = cx
                     .debug_bounds(window.into(), "context-inline")
                     .unwrap()
                     .unwrap();
-                let badge = context
+                let badge = cx
                     .debug_bounds(window.into(), "context-badge")
                     .unwrap()
                     .unwrap();
@@ -4854,24 +5569,24 @@ mod tests {
 
         #[test]
         fn blocks_split_nested_spans_and_hidden_absolute_empty_children_add_no_rows() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(300.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(300.), px(240.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| MixedFlow)
+                    cx.new(|_| MixedFlow)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let fragments = quads(&mut context, window.into(), first_group_color());
+            let fragments = quads(&mut cx, window.into(), first_group_color());
             assert_eq!(fragments.len(), 2);
 
-            let block = context
+            let block = cx
                 .debug_bounds(window.into(), "inner-block")
                 .unwrap()
                 .unwrap();
-            let following = context
+            let following = cx
                 .debug_bounds(window.into(), "following-block")
                 .unwrap()
                 .unwrap();
@@ -4888,10 +5603,7 @@ mod tests {
             );
             assert_close(following.origin.y, fragments[1].bottom(), "no phantom rows");
 
-            let paragraph = context
-                .debug_bounds(window.into(), "mixed")
-                .unwrap()
-                .unwrap();
+            let paragraph = cx.debug_bounds(window.into(), "mixed").unwrap().unwrap();
             assert_close(
                 paragraph.bottom(),
                 following.bottom(),
@@ -4964,59 +5676,38 @@ mod tests {
 
         #[test]
         fn inline_flex_and_box_only_spans_move_as_atomic_content() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(340.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(340.), px(240.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| AtomicFlow { width: 150. })
+                    cx.new(|_| AtomicFlow { width: 150. })
                 })
                 .unwrap();
             let mut previous = None;
 
             for width in [150., 290.] {
-                window
-                    .update(&mut context, |view, _, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut cx, window, |view| view.width = width);
 
-                let badge = context
-                    .debug_bounds(window.into(), "badge")
-                    .unwrap()
-                    .unwrap();
-                let span = context
-                    .debug_bounds(window.into(), "box-span")
-                    .unwrap()
-                    .unwrap();
+                let badge = cx.debug_bounds(window.into(), "badge").unwrap().unwrap();
+                let span = cx.debug_bounds(window.into(), "box-span").unwrap().unwrap();
 
-                let left = context
-                    .debug_bounds(window.into(), "badge-a")
-                    .unwrap()
-                    .unwrap();
-                let right = context
-                    .debug_bounds(window.into(), "badge-b")
-                    .unwrap()
-                    .unwrap();
+                let left = cx.debug_bounds(window.into(), "badge-a").unwrap().unwrap();
+                let right = cx.debug_bounds(window.into(), "badge-b").unwrap().unwrap();
 
-                let icon_span = context
+                let icon_span = cx
                     .debug_bounds(window.into(), "icon-span")
                     .unwrap()
                     .unwrap();
-                let image = context
-                    .debug_bounds(window.into(), "image")
-                    .unwrap()
-                    .unwrap();
-                let svg = context.debug_bounds(window.into(), "svg").unwrap().unwrap();
+                let image = cx.debug_bounds(window.into(), "image").unwrap().unwrap();
+                let svg = cx.debug_bounds(window.into(), "svg").unwrap().unwrap();
 
                 assert_bounds_close(icon_span, image.union(&svg), "box-only span bounds");
                 assert_close(image.size.width, px(12.), "inline image stays atomic");
                 assert_close(svg.size.width, px(14.), "inline SVG stays atomic");
                 assert_bounds_close(span, badge, "badge span bounds");
 
-                let backgrounds = quads(&mut context, window.into(), first_group_color());
+                let backgrounds = quads(&mut cx, window.into(), first_group_color());
                 assert_eq!(backgrounds.len(), 1);
                 assert_bounds_close(backgrounds[0], badge, "badge span background");
 
@@ -5079,10 +5770,10 @@ mod tests {
                 _: Option<&gpui::GlobalElementId>,
                 _: Option<&gpui::InspectorElementId>,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> (gpui::LayoutId, ()) {
                 self.counts[1].set(self.counts[1].get() + 1);
-                (self.element.request_layout(window, context), ())
+                (self.element.request_layout(window, cx), ())
             }
 
             fn prepaint(
@@ -5092,10 +5783,10 @@ mod tests {
                 _: Bounds<Pixels>,
                 _: &mut (),
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 self.counts[2].set(self.counts[2].get() + 1);
-                self.element.prepaint(window, context);
+                self.element.prepaint(window, cx);
             }
 
             fn paint(
@@ -5106,10 +5797,10 @@ mod tests {
                 _: &mut (),
                 _: &mut (),
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 self.counts[3].set(self.counts[3].get() + 1);
-                self.element.paint(window, context);
+                self.element.paint(window, cx);
             }
         }
 
@@ -5147,14 +5838,14 @@ mod tests {
                         span.inline_flex().w(px(100.)).h(px(110.))
                     })
                     .on_hover(move |value, _, _| hovered.set(*value))
-                    .tooltip(|_, context| context.new(|_| InlineTooltip).into())
+                    .tooltip(|_, cx| cx.new(|_| InlineTooltip).into())
                     .tooltip_show_delay(std::time::Duration::from_millis(10))
                     .track_focus(&self.focus)
                     .bg(first_group_color())
                     .debug_selector(|| "interactive-span".into())
-                    .on_click(move |_, window, context| {
+                    .on_click(move |_, window, cx| {
                         clicks.set(clicks.get() + 1);
-                        focus.focus(window, context);
+                        focus.focus(window, cx);
                     })
                     .child(gpui::text!(
                         "these words can wrap across several lines with a short ending"
@@ -5191,39 +5882,38 @@ mod tests {
         }
 
         fn click(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             position: Point<Pixels>,
         ) {
-            context
-                .update_window(window, |_, window, context| {
-                    window.simulate_mouse_move(position, context);
-                    window.dispatch_event(
-                        gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                            position,
-                            button: gpui::MouseButton::Left,
-                            click_count: 1,
-                            ..Default::default()
-                        }),
-                        context,
-                    );
-                    window.dispatch_event(
-                        gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                            position,
-                            button: gpui::MouseButton::Left,
-                            click_count: 1,
-                            ..Default::default()
-                        }),
-                        context,
-                    );
-                })
-                .unwrap();
-            context.run_until_parked();
+            cx.update_window(window, |_, window, cx| {
+                window.simulate_mouse_move(position, cx);
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+            cx.run_until_parked();
         }
 
         #[test]
         fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle() {
-            let mut context = headless();
+            let mut cx = headless();
             let clicks = Rc::new(Cell::new(0));
             let hovered = Rc::new(Cell::new(false));
 
@@ -5231,12 +5921,12 @@ mod tests {
             let callback = Rc::new(RefCell::new(Vec::new()));
 
             let scroll = gpui::ScrollHandle::new();
-            let focus = context.update(|context| context.focus_handle());
+            let focus = cx.update(|cx| cx.focus_handle());
 
-            let window = context
-                .open_window(size(px(350.), px(300.)), |window, context| {
+            let window = cx
+                .open_window(size(px(350.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| InteractiveFlow {
+                    cx.new(|_| InteractiveFlow {
                         width: 190.,
                         large: false,
                         atomic: false,
@@ -5249,9 +5939,9 @@ mod tests {
                     })
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let regions = quads(&mut context, window.into(), first_group_color());
+            let regions = quads(&mut cx, window.into(), first_group_color());
             assert!(regions.len() >= 3);
 
             let union = regions
@@ -5263,24 +5953,19 @@ mod tests {
             assert_eq!(callback.borrow().len(), 3);
             assert_eq!(callback.borrow()[1], union);
 
-            click(&mut context, window.into(), regions[0].center());
-            click(
-                &mut context,
-                window.into(),
-                regions.last().unwrap().center(),
-            );
+            click(&mut cx, window.into(), regions[0].center());
+            click(&mut cx, window.into(), regions.last().unwrap().center());
             assert_eq!(clicks.get(), 2);
             assert!(hovered.get());
             assert!(
-                context
-                    .update_window(window.into(), |_, window, _| focus.is_focused(window))
+                cx.update_window(window.into(), |_, window, _| focus.is_focused(window))
                     .unwrap()
             );
 
             let gap = gpui::point(regions[0].origin.x / 2., regions[0].center().y);
             assert!(union.contains(&gap) && !regions.iter().any(|right| right.contains(&gap)));
 
-            click(&mut context, window.into(), gap);
+            click(&mut cx, window.into(), gap);
             assert_eq!(
                 clicks.get(),
                 2,
@@ -5289,78 +5974,72 @@ mod tests {
 
             assert!(!hovered.get());
 
-            context
-                .update_window(window.into(), |_, window, context| {
-                    window.simulate_mouse_move(regions[0].center(), context)
-                })
-                .unwrap();
-            context.run_until_parked();
-            context.advance_clock(std::time::Duration::from_millis(20));
-            context.run_until_parked();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_mouse_move(regions[0].center(), cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
             assert!(
-                context
-                    .debug_bounds(window.into(), "inline-tooltip")
+                cx.debug_bounds(window.into(), "inline-tooltip")
                     .unwrap()
                     .is_some()
             );
 
-            context
-                .update_window(window.into(), |_, window, context| {
-                    window.simulate_mouse_move(gap, context)
-                })
-                .unwrap();
-            context.run_until_parked();
-            context.advance_clock(std::time::Duration::from_secs(1));
-            context.run_until_parked();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_mouse_move(gap, cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_secs(1));
+            cx.run_until_parked();
             assert!(
-                context
-                    .debug_bounds(window.into(), "inline-tooltip")
+                cx.debug_bounds(window.into(), "inline-tooltip")
                     .unwrap()
                     .is_none()
             );
 
             window
-                .update(&mut context, |view, _, context| {
+                .update(&mut cx, |view, _, cx| {
                     view.width = 250.;
                     view.large = true;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let resized = quads(&mut context, window.into(), first_group_color());
+            let resized = quads(&mut cx, window.into(), first_group_color());
             assert_ne!(resized, regions);
             assert!(resized.iter().any(|right| right.size.height >= px(34.)));
 
-            click(&mut context, window.into(), resized[1].center());
+            click(&mut cx, window.into(), resized[1].center());
             assert_eq!(clicks.get(), 3);
 
             scroll.set_offset(gpui::point(px(0.), px(-24.)));
-            window
-                .update(&mut context, |_, _, context| context.notify())
-                .unwrap();
-            context.run_until_parked();
+            window.update(&mut cx, |_, _, cx| cx.notify()).unwrap();
+            cx.run_until_parked();
 
-            let scrolled = quads(&mut context, window.into(), first_group_color());
+            let scrolled = quads(&mut cx, window.into(), first_group_color());
             assert_close(
                 scrolled[1].origin.y,
                 resized[1].origin.y - px(24.),
                 "scroll updates fragment origin",
             );
 
-            click(&mut context, window.into(), scrolled[1].center());
+            click(&mut cx, window.into(), scrolled[1].center());
             assert_eq!(clicks.get(), 4);
 
             scroll.set_offset(Point::default());
             window
-                .update(&mut context, |view, _, context| {
+                .update(&mut cx, |view, _, cx| {
                     view.atomic = true;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let atomic = context
+            let atomic = cx
                 .debug_bounds(window.into(), "interactive-span")
                 .unwrap()
                 .unwrap();
@@ -5436,23 +6115,23 @@ mod tests {
 
         #[test]
         fn mixed_font_sizes_colors_and_underlines_paint_in_their_wrapped_rows() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(320.), px(300.)), |window, context| {
+            let window = cx
+                .open_window(size(px(320.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| MixedTypography)
+                    cx.new(|_| MixedTypography)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let mut glyph_heights = Vec::new();
 
             for color in [first_group_color(), second_group_color()] {
-                let backgrounds = quads(&mut context, window.into(), color);
+                let backgrounds = quads(&mut cx, window.into(), color);
                 assert!(!backgrounds.is_empty());
 
-                let underlines: Vec<_> = context
+                let underlines: Vec<_> = cx
                     .underline_bounds(window.into(), color)
                     .unwrap()
                     .into_iter()
@@ -5472,7 +6151,7 @@ mod tests {
                     );
                 }
 
-                let glyphs: Vec<_> = context
+                let glyphs: Vec<_> = cx
                     .glyph_bounds(window.into(), color)
                     .unwrap()
                     .into_iter()
@@ -5497,11 +6176,236 @@ mod tests {
                 );
             }
 
-            assert!(quads(&mut context, window.into(), first_group_color()).len() >= 2);
+            assert!(quads(&mut cx, window.into(), first_group_color()).len() >= 2);
             assert!(
                 glyph_heights[0] > glyph_heights[1] * 1.5,
                 "glyph painting must use each shaped run's font size"
             );
+        }
+    }
+
+    mod direction_layout {
+        use super::*;
+
+        struct DirectionFlexView {
+            direction: gpui::Direction,
+            cached_child: gpui::Entity<CachedDirectionChild>,
+            cached_arabic: gpui::Entity<CachedArabicChild>,
+        }
+
+        struct CachedDirectionChild;
+        struct CachedArabicChild {
+            text: gpui::SharedString,
+        }
+
+        impl Render for CachedDirectionChild {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().flex().justify_start().size_full().child(
+                    div()
+                        .w(px(30.0))
+                        .h(px(20.0))
+                        .debug_selector(|| "cached-first".into()),
+                )
+            }
+        }
+
+        impl Render for CachedArabicChild {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(self.text.clone())
+            }
+        }
+
+        impl Render for DirectionFlexView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                let item = |selector: &'static str| {
+                    div()
+                        .w(px(30.0))
+                        .h(px(20.0))
+                        .debug_selector(move || selector.into())
+                };
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .flex()
+                            .flex_row_reverse()
+                            .justify_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "logical-row".into())
+                            .child(item("logical-first"))
+                            .child(item("logical-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .flex()
+                            .flex_row_reverse()
+                            .justify_flex_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "flex-row".into())
+                            .child(item("flex-first"))
+                            .child(item("flex-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .grid()
+                            .grid_cols(2)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "grid-row".into())
+                            .child(item("grid-first"))
+                            .child(item("grid-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "cached-row".into())
+                            .child(
+                                self.cached_child
+                                    .clone()
+                                    .cached(gpui::StyleRefinement::default().size_full()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "deferred-row".into())
+                            .child(gpui::deferred(
+                                div().flex().justify_start().size_full().child(
+                                    div()
+                                        .w(px(30.0))
+                                        .h(px(20.0))
+                                        .debug_selector(|| "deferred-first".into()),
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .direction(gpui::Direction::Auto)
+                            .flex()
+                            .justify_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "auto-cached-row".into())
+                            .child(
+                                div()
+                                    .w(px(30.0))
+                                    .h(px(20.0))
+                                    .debug_selector(|| "auto-cached-item".into())
+                                    .child(
+                                        self.cached_arabic
+                                            .clone()
+                                            .cached(gpui::StyleRefinement::default().size_full()),
+                                    ),
+                            ),
+                    )
+            }
+        }
+
+        fn bounds(
+            cx: &mut HeadlessAppContext,
+            window: gpui::AnyWindowHandle,
+            selector: &str,
+        ) -> Bounds<Pixels> {
+            cx.debug_bounds(window, selector)
+                .unwrap()
+                .unwrap_or_else(|| panic!("missing {selector}"))
+        }
+
+        #[test]
+        fn direction_updates_logical_and_flex_relative_alignment() {
+            let mut cx = HeadlessAppContext::new(test_system());
+            let window = cx
+                .open_window(size(px(320.0), px(160.0)), |_window, cx| {
+                    let cached_child = cx.new(|_| CachedDirectionChild);
+                    let cached_arabic = cx.new(|_| CachedArabicChild {
+                        text: "مرحبا".into(),
+                    });
+                    cx.new(|_| DirectionFlexView {
+                        direction: gpui::Direction::RightToLeft,
+                        cached_child,
+                        cached_arabic,
+                    })
+                })
+                .unwrap();
+            cx.run_until_parked();
+
+            let any_window = window.into();
+            let logical_row = bounds(&mut cx, any_window, "logical-row");
+            let logical_first = bounds(&mut cx, any_window, "logical-first");
+            let flex_row = bounds(&mut cx, any_window, "flex-row");
+            let flex_first = bounds(&mut cx, any_window, "flex-first");
+            let grid_row = bounds(&mut cx, any_window, "grid-row");
+            let grid_first = bounds(&mut cx, any_window, "grid-first");
+            let cached_row = bounds(&mut cx, any_window, "cached-row");
+            let cached_first = bounds(&mut cx, any_window, "cached-first");
+            let auto_cached_row = bounds(&mut cx, any_window, "auto-cached-row");
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+            let deferred_row = bounds(&mut cx, any_window, "deferred-row");
+            let deferred_first = bounds(&mut cx, any_window, "deferred-first");
+            assert!(logical_first.origin.x > logical_row.center().x);
+            assert!(flex_first.right() < flex_row.center().x);
+            assert!(grid_first.origin.x > grid_row.center().x);
+            assert!(cached_first.origin.x > cached_row.center().x);
+            assert!(auto_cached_item.origin.x > auto_cached_row.center().x);
+            assert!(deferred_first.origin.x > deferred_row.center().x);
+
+            window
+                .update(&mut cx, |view, _, cx| {
+                    view.direction = gpui::Direction::LeftToRight;
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+
+            let logical_first = bounds(&mut cx, any_window, "logical-first");
+            let flex_first = bounds(&mut cx, any_window, "flex-first");
+            let grid_first = bounds(&mut cx, any_window, "grid-first");
+            let cached_first = bounds(&mut cx, any_window, "cached-first");
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+            let deferred_first = bounds(&mut cx, any_window, "deferred-first");
+            assert!(logical_first.right() < logical_row.center().x);
+            assert!(flex_first.origin.x > flex_row.center().x);
+            assert!(grid_first.right() < grid_row.center().x);
+            assert!(cached_first.right() < cached_row.center().x);
+            assert!(auto_cached_item.origin.x > auto_cached_row.center().x);
+            assert!(deferred_first.right() < deferred_row.center().x);
+
+            window
+                .update(&mut cx, |view, _, cx| {
+                    view.cached_arabic.update(cx, |child, cx| {
+                        child.text = "English".into();
+                        cx.notify();
+                    });
+                })
+                .unwrap();
+            cx.run_until_parked();
+
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+            assert!(auto_cached_item.right() < auto_cached_row.center().x);
         }
     }
 }

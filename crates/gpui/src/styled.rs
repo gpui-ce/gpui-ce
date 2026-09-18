@@ -1,10 +1,10 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace, px, relative,
-    rems,
+    DefiniteLength, Direction, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures,
+    FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent,
+    Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    TextStyleRefinement, TextTransform, UnderlineStyle, UnicodeBidi, VerticalAlign, WhiteSpace, px,
+    relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -34,6 +34,32 @@ pub trait Styled: Sized {
     gpui_macros::cursor_style_methods!();
     gpui_macros::border_style_methods!();
     gpui_macros::box_shadow_style_methods!();
+
+    /// Sets the inline direction for this element and its logical descendants.
+    fn direction(mut self, direction: Direction) -> Self {
+        self.style().direction = Some(direction);
+
+        self
+    }
+
+    /// Establishes right-to-left directionality for this element.
+    fn rtl(self) -> Self {
+        self.direction(Direction::RightToLeft)
+    }
+
+    /// Establishes left-to-right directionality for this element.
+    fn ltr(self) -> Self {
+        self.direction(Direction::LeftToRight)
+    }
+
+    /// Sets this element's Unicode bidirectional formatting behavior.
+    fn unicode_bidi(mut self, unicode_bidi: UnicodeBidi) -> Self {
+        let style = self.style();
+        style.unicode_bidi = Some(unicode_bidi);
+        style.unicode_bidi_explicit = Some(true);
+
+        self
+    }
 
     /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
     ///
@@ -212,6 +238,16 @@ pub trait Styled: Sized {
     fn text_align(mut self, align: TextAlign) -> Self {
         self.text_style().text_align = Some(align);
         self
+    }
+
+    /// Aligns text to the start edge for each line's direction.
+    fn text_start(self) -> Self {
+        self.text_align(TextAlign::Start)
+    }
+
+    /// Aligns text to the end edge for each line's direction.
+    fn text_end(self) -> Self {
+        self.text_align(TextAlign::End)
     }
 
     /// Sets the text alignment to left
@@ -491,6 +527,18 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#end)
     fn justify_end(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::End);
+        self
+    }
+
+    /// Packs items against the flex-relative start of the main axis.
+    fn justify_flex_start(mut self) -> Self {
+        self.style().justify_content = Some(JustifyContent::FlexStart);
+        self
+    }
+
+    /// Packs items against the flex-relative end of the main axis.
+    fn justify_flex_end(mut self) -> Self {
+        self.style().justify_content = Some(JustifyContent::FlexEnd);
         self
     }
 

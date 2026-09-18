@@ -1,12 +1,12 @@
-use crate::elements::div::{ScrollHandle, StackSafe};
+use crate::elements::div::ScrollHandle;
 use crate::elements::text::{
     TruncationCandidate, text_layout_fits, truncate_with_measured_candidates,
 };
 use crate::{
-    AnyElement, App, AvailableSpace, Bounds, Display, InlineBoxRequest, InlineLayout,
+    App, AvailableSpace, Bounds, Display, InlineBidiScope, InlineBoxRequest, InlineLayout,
     InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
-    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, Window,
-    WindowTextSystem, place_inline_layout, size,
+    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi,
+    Window, WindowTextSystem, place_inline_layout, size,
 };
 
 use collections::FxHashMap;
@@ -37,6 +37,8 @@ struct InlineSpan {
     layout_id: LayoutId,
     text_range: Range<usize>,
     box_range: Range<usize>,
+    direction: crate::taffy::LayoutDirectionHandle,
+    unicode_bidi: UnicodeBidi,
 }
 
 #[derive(Default)]
@@ -50,20 +52,35 @@ struct InlineDocument {
 }
 
 impl InlineDocument {
+    fn bidi_scopes(&self) -> Vec<InlineBidiScope> {
+        self.spans
+            .iter()
+            .filter(|span| span.unicode_bidi != UnicodeBidi::Normal)
+            .map(|span| InlineBidiScope {
+                range: span.text_range.clone(),
+                direction: span.direction.get(),
+                unicode_bidi: span.unicode_bidi,
+            })
+            .collect()
+    }
+
     fn layout(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         request: InlineLayoutRequest<'_>,
         truncation: &TextLayoutTruncation,
         text_system: &WindowTextSystem,
-    ) -> (Arc<Self>, Arc<InlineLayout>) {
+    ) -> (Rc<Self>, Arc<InlineLayout>) {
         // Removing embedded widgets also requires suppressing their painting and hit regions.
         let Some(width) = truncation.width.filter(|_width| self.boxes.is_empty()) else {
             return (self.clone(), text_system.layout_inline(request));
         };
 
-        let max_lines = request.line_clamp;
+        let max_lines = request.options.line_clamp;
         let request = InlineLayoutRequest {
-            line_clamp: None,
+            options: crate::TextLayoutOptions {
+                line_clamp: None,
+                ..request.options
+            },
             ..request
         };
         let probe = text_system.layout_inline(request);
@@ -89,15 +106,17 @@ impl InlineDocument {
             truncation.source,
             |candidate| {
                 let document = self.truncated(candidate);
+                let bidi_scopes = document.bidi_scopes();
                 let layout = text_system.layout_inline(InlineLayoutRequest {
                     text: &document.text,
                     runs: &document.runs,
                     text_styles: &document.text_styles,
+                    bidi_scopes: &bidi_scopes,
                     ..request
                 });
                 let fits = fits(&layout);
 
-                ((Arc::new(document), layout), fits)
+                ((Rc::new(document), layout), fits)
             },
         );
 
@@ -129,6 +148,8 @@ impl InlineDocument {
                         layout_id: span.layout_id,
                         text_range,
                         box_range: 0..0,
+                        direction: span.direction.clone(),
+                        unicode_bidi: span.unicode_bidi,
                     })
             })
             .collect();
@@ -144,15 +165,16 @@ impl InlineDocument {
 }
 
 struct InlineParagraphMeasurement {
-    wrap_width: Option<Pixels>,
     truncate_width: Option<Pixels>,
-    document: Arc<InlineDocument>,
+    options: crate::TextLayoutOptions,
+    bidi_scopes: Vec<InlineBidiScope>,
+    document: Rc<InlineDocument>,
     layout: Arc<InlineLayout>,
 }
 
 struct InlineParagraph {
     layout_id: LayoutId,
-    document: Arc<InlineDocument>,
+    document: Rc<InlineDocument>,
     measurement: Rc<RefCell<Option<InlineParagraphMeasurement>>>,
     paint_origin: Point<Pixels>,
 }
@@ -174,6 +196,7 @@ struct InlineParagraphCollector<'a> {
     current_span_indices: FxHashMap<LayoutId, usize>,
     open_span_layout_ids: Vec<LayoutId>,
     text_style: TextStyle,
+    unicode_bidi: UnicodeBidi,
     window: &'a mut Window,
     cx: &'a mut App,
 }
@@ -280,6 +303,8 @@ impl InlineParagraphCollector<'_> {
                 layout_id,
                 text_range: text_start..text_end,
                 box_range: box_start..box_end,
+                direction: self.window.layout_direction_handle(layout_id),
+                unicode_bidi: self.window.layout_directionality(layout_id).1,
             });
         }
     }
@@ -289,7 +314,7 @@ impl InlineParagraphCollector<'_> {
             return;
         }
 
-        let document = Arc::new(std::mem::take(&mut self.current_document));
+        let document = Rc::new(std::mem::take(&mut self.current_document));
         self.current_span_indices.clear();
         let measurement = Rc::new(RefCell::new(None));
 
@@ -311,26 +336,29 @@ impl InlineParagraphCollector<'_> {
 
         let measured_document = document.clone();
         let measurement_cache = measurement.clone();
+        let unicode_bidi = self.unicode_bidi;
 
         let layout_id = self.window.request_measured_layout(
             Style {
                 display: Display::Block,
                 ..Style::default()
             },
-            move |known_dimensions, available_space, window, _context| {
-                let wrap_width = TextLayout::evaluate_wrap_width(
-                    &text_style.white_space,
+            move |known_dimensions, available_space, window, _cx| {
+                let (options, truncation) = TextLayout::layout_options(
+                    &text_style,
                     known_dimensions,
                     available_space,
+                    window.resolved_direction(),
+                    unicode_bidi,
                 );
 
-                let truncation =
-                    TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+                let bidi_scopes = measured_document.bidi_scopes();
 
                 if let Some(measurement) =
                     measurement_cache.borrow().as_ref() as Option<&InlineParagraphMeasurement>
-                    && measurement.wrap_width == wrap_width
                     && measurement.truncate_width == truncation.width
+                    && measurement.options == options
+                    && measurement.bidi_scopes == bidi_scopes
                 {
                     return measurement.layout.size;
                 }
@@ -343,9 +371,8 @@ impl InlineParagraphCollector<'_> {
                     font_size,
                     line_height,
                     text_metrics,
-                    wrap_width,
-                    line_clamp: text_style.line_clamp,
-                    text_align: text_style.text_align,
+                    options,
+                    bidi_scopes: &bidi_scopes,
                 };
                 let (document, layout) =
                     measured_document.layout(request, &truncation, window.text_system());
@@ -354,8 +381,9 @@ impl InlineParagraphCollector<'_> {
                 measurement_cache
                     .borrow_mut()
                     .replace(InlineParagraphMeasurement {
-                        wrap_width,
                         truncate_width: truncation.width,
+                        options,
+                        bidi_scopes,
                         document,
                         layout,
                     });
@@ -395,7 +423,7 @@ impl InlineDivFrameState {
         style: &Style,
         children: &[LayoutId],
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
     ) -> (LayoutId, Self) {
         let mut paragraph_collector = InlineParagraphCollector {
             frame_state: Self::default(),
@@ -403,8 +431,9 @@ impl InlineDivFrameState {
             current_span_indices: FxHashMap::default(),
             open_span_layout_ids: Vec::new(),
             text_style: window.text_style(),
+            unicode_bidi: style.effective_unicode_bidi(),
             window,
-            cx: context,
+            cx,
         };
 
         for child in children {
@@ -528,54 +557,13 @@ impl InlineDivFrameState {
             .map_or(Size::default(), |right| right.size)
     }
 
-    pub(super) fn prepaint_children(
-        &mut self,
-        children: &mut [StackSafe<AnyElement>],
-        child_ids: &[LayoutId],
-        scroll_offset: Point<Pixels>,
-        order: Option<&[usize]>,
-        collect_bounds: bool,
-        window: &mut Window,
-        context: &mut App,
-    ) -> Vec<Bounds<Pixels>> {
-        window.with_element_offset(scroll_offset, |window| {
-            for paragraph in &mut self.paragraphs {
-                paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
-            }
-
-            if let Some(order) = order {
-                for idx in order {
-                    if let Some(child) = children.get_mut(*idx) {
-                        child.prepaint(window, context);
-                    }
-                }
-            } else {
-                for child in children {
-                    child.prepaint(window, context);
-                }
-            }
-
-            if collect_bounds {
-                child_ids
-                    .iter()
-                    .map(|node_id| window.layout_bounds(*node_id))
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        })
+    pub(super) fn record_paragraph_origins(&mut self, window: &mut Window) {
+        for paragraph in &mut self.paragraphs {
+            paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
+        }
     }
 
-    pub(super) fn paint_children(
-        &self,
-        children: &mut [StackSafe<AnyElement>],
-        window: &mut Window,
-        context: &mut App,
-    ) {
-        for child in children {
-            child.paint(window, context);
-        }
-
+    pub(super) fn paint_paragraphs(&self, window: &mut Window, cx: &mut App) {
         for paragraph in &self.paragraphs {
             let measurement = paragraph.measurement.borrow();
             let layout = &measurement
@@ -584,12 +572,10 @@ impl InlineDivFrameState {
                 .layout;
 
             layout
-                .paint_background(paragraph.paint_origin, window, context)
+                .paint_background(paragraph.paint_origin, window, cx)
                 .log_err();
 
-            layout
-                .paint(paragraph.paint_origin, window, context)
-                .log_err();
+            layout.paint(paragraph.paint_origin, window, cx).log_err();
         }
     }
 }
