@@ -1086,13 +1086,13 @@ impl TextLayout {
     }
 
     /// Get the byte index into the input of the pixel position.
-    pub fn index_for_position(&self, mut position: Point<Pixels>) -> Result<usize, usize> {
+    pub fn index_for_position(&self, pixel_point: Point<Pixels>) -> Result<usize, usize> {
         let element_state = self.measured();
         let bounds = element_state
             .bounds
             .expect("prepaint has not been performed");
 
-        if position.y < bounds.top() {
+        if pixel_point.y < bounds.top() {
             return Err(0);
         }
 
@@ -1101,11 +1101,11 @@ impl TextLayout {
             return Err(0);
         };
 
-        document.index_for_position(position - bounds.origin, line_height)
+        document.byte_index_for_pixel_point(pixel_point - bounds.origin, line_height)
     }
 
     /// Get the pixel position for the given byte index.
-    pub fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
+    pub fn position_for_index(&self, byte_index: usize) -> Option<Point<Pixels>> {
         let element_state = self.measured();
         let bounds = element_state
             .bounds
@@ -1113,7 +1113,7 @@ impl TextLayout {
         let line_height = element_state.line_height;
 
         let document = element_state.document.as_ref()?;
-        Some(bounds.origin + document.position_for_index(index, line_height)?)
+        Some(bounds.origin + document.visual_position_for_byte_index(byte_index, line_height)?)
     }
 
     /// Retrieve the layout for the line containing the given byte index.

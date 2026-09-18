@@ -709,8 +709,8 @@ mod renderer {
 
         match color_effect {
             RasterColorEffect::Preblend(color) => {
-                let [red, green, blue, alpha] = [color.red, color.green, color.blue, color.alpha]
-                    .map(|channel| f64::from(channel) / 255.0);
+                let channels: [u8; 4] = color.into();
+                let [red, green, blue, alpha] = channels.map(|channel| f64::from(channel) / 255.0);
                 context.set_alpha(alpha);
                 context.set_rgb_fill_color(red, green, blue, 1.0);
                 context.set_rgb_stroke_color(red, green, blue, 1.0);
@@ -853,7 +853,7 @@ mod renderer {
             collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
 
             for (face_idx, face) in faces.iter().enumerate() {
-                while collection.len() % 4 != 0 {
+                while !collection.len().is_multiple_of(4) {
                     collection.push(0);
                 }
 
@@ -1457,12 +1457,7 @@ mod renderer {
             });
             assert_eq!(
                 transparent_style.color_effect,
-                RasterColorEffect::Preblend(Rgba8 {
-                    red: 0,
-                    green: 0,
-                    blue: 0,
-                    alpha: 0,
-                })
+                RasterColorEffect::Preblend(Rgba8::new(0, 0, 0, 0))
             );
             let transparent_emoji = emoji_system
                 .rasterize_glyph(&RenderGlyphParams {

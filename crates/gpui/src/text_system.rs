@@ -726,31 +726,19 @@ impl GlyphRenderMode {
 }
 
 /// Eight-bit sRGB color stored in a raster cache key when a native raster path needs it.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Rgba8 {
-    /// Red channel.
-    pub red: u8,
-    /// Green channel.
-    pub green: u8,
-    /// Blue channel.
-    pub blue: u8,
-    /// Alpha channel.
-    pub alpha: u8,
-}
+pub type Rgba8 = palette::Srgba<u8>;
 
-impl From<crate::Rgba> for Rgba8 {
-    fn from(color: crate::Rgba) -> Self {
-        fn channel(value: f32) -> u8 {
-            (value.clamp(0.0, 1.0) * 255.0).round() as u8
-        }
-
-        Self {
-            red: channel(color.red),
-            green: channel(color.green),
-            blue: channel(color.blue),
-            alpha: channel(color.alpha),
-        }
+fn quantize_raster_color(color: crate::Rgba) -> Rgba8 {
+    fn channel(value: f32) -> u8 {
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
     }
+
+    Rgba8::new(
+        channel(color.red),
+        channel(color.green),
+        channel(color.blue),
+        channel(color.alpha),
+    )
 }
 
 /// A scene request before a platform rasterizer normalizes its cache-relevant settings.
@@ -771,11 +759,9 @@ pub struct RasterStyleRequest {
 impl RasterStyleRequest {
     /// Quantizes the foreground after removing channels unused by the artwork.
     pub fn normalized_color(self) -> Rgba8 {
-        let mut color = Rgba8::from(self.scene_color);
+        let color = quantize_raster_color(self.scene_color);
         if self.foreground_dependency == ForegroundDependency::AlphaOnly {
-            color.red = 0;
-            color.green = 0;
-            color.blue = 0;
+            return Rgba8::new(0, 0, 0, color.alpha);
         }
 
         color
@@ -823,7 +809,7 @@ impl PreparedRasterStyle {
 }
 
 /// The part of the requested color, if any, which changes rasterized pixels.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RasterColorEffect {
     /// Coverage and color pixels do not depend on the scene color.
     Independent,
@@ -831,6 +817,18 @@ pub enum RasterColorEffect {
     Dilation(u8),
     /// A quantized color consumed by a native preblending or `currentColor` path.
     Preblend(Rgba8),
+}
+
+impl Hash for RasterColorEffect {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+
+        match self {
+            Self::Independent => {}
+            Self::Dilation(dilation) => dilation.hash(state),
+            Self::Preblend(color) => <[u8; 4]>::from(*color).hash(state),
+        }
+    }
 }
 
 /// The byte layout supplied by a glyph rasterizer.

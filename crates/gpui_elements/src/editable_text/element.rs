@@ -586,7 +586,7 @@ fn accessible_selection(byte_offsets: &[usize], selection: CaretSelection) -> (u
 
     (
         byte_to_character(selection.anchor.index),
-        byte_to_character(selection.focus.index),
+        byte_to_character(selection.caret.index),
     )
 }
 
@@ -1211,19 +1211,19 @@ mod tests {
             }));
         }
 
-        fn assert_selection(&mut self, anchor: usize, focus: usize) {
+        fn assert_selection(&mut self, anchor: usize, caret_idx: usize) {
             let caret = self.cx.update(|cx| self.input.read(cx).caret());
-            assert_eq!(caret.index, focus);
+            assert_eq!(caret.index, caret_idx);
             self.assert_caret_selection(anchor, caret);
         }
 
-        fn assert_caret_selection(&mut self, anchor: usize, focus: CaretPosition) {
-            let focus_idx = focus.index;
-            let range = anchor.min(focus_idx)..anchor.max(focus_idx);
+        fn assert_caret_selection(&mut self, anchor: usize, expected_caret: CaretPosition) {
+            let caret_idx = expected_caret.index;
+            let range = anchor.min(caret_idx)..anchor.max(caret_idx);
             let caret = self.cx.update(|cx| {
                 let state = self.input.read(cx);
                 assert_eq!(state.selected_range(), range);
-                assert_eq!(state.caret(), focus);
+                assert_eq!(state.caret(), expected_caret);
 
                 state.caret()
             });
@@ -1284,7 +1284,7 @@ mod tests {
         fixture.cx.update(|cx| {
             assert_eq!(
                 fixture.input.read(cx).caret_selection(),
-                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(text.len()))
+                CaretSelection::from(CaretPosition::attached_to_previous_cluster(text.len()))
             );
         });
         fixture.assert_quads(SELECTION_COLOR, Vec::new());
@@ -1764,7 +1764,10 @@ mod tests {
         assert_eq!(
             accessible_selection(
                 &byte_offsets,
-                CaretSelection::new(selection.focus, selection.anchor),
+                CaretSelection {
+                    anchor: selection.caret,
+                    caret: selection.anchor,
+                },
             ),
             (1, 4)
         );

@@ -261,7 +261,7 @@ fn paint_visual_line(
         text_system,
     };
 
-    for fragment in &layout.paint_fragments[visual_line.fragment_range.clone()] {
+    for fragment in &layout.paint_fragments[visual_line.paint_fragment_range.clone()] {
         paint_text_fragment(fragment, &context, window);
     }
 }
@@ -393,7 +393,7 @@ fn visual_text_bounds(
     for line in visual_lines {
         let line_left = visual_line_origin_x(origin.x, align, align_width, line);
         left = left.min(line_left);
-        right = right.max(line_left + line.advance);
+        right = right.max(line_left + line.advance_width);
     }
 
     Bounds::new(
@@ -411,8 +411,8 @@ fn visual_line_origin_x(
     line.offset
         + aligned_visual_origin_x(
             origin_x,
-            align_width.unwrap_or(line.advance),
-            line.advance,
+            align_width.unwrap_or(line.advance_width),
+            line.advance_width,
             align,
             line.direction,
         )

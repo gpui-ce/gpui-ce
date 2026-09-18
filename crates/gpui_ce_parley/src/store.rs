@@ -1,5 +1,5 @@
 #[cfg(test)]
-use gpui::{RasterColorEffect, px, rgba};
+use gpui::{RasterColorEffect, Rgba8, px, rgba};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use fontique::{Blob, Synthesis};
@@ -659,14 +659,9 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                     && params.raster_style.foreground_dependency
                         != ForegroundDependency::AlphaOnly =>
             {
-                let color = match params.raster_style.color_effect {
-                    gpui::RasterColorEffect::Preblend(color) => color,
-                    gpui::RasterColorEffect::Independent => gpui::Rgba8 {
-                        red: 0,
-                        green: 0,
-                        blue: 0,
-                        alpha: 255,
-                    },
+                let [red, green, blue, foreground_alpha] = match params.raster_style.color_effect {
+                    gpui::RasterColorEffect::Preblend(color) => color.into(),
+                    gpui::RasterColorEffect::Independent => [0, 0, 0, 255],
                     gpui::RasterColorEffect::Dilation(_) => {
                         bail!("color glyph rasterization cannot use a dilation style")
                     }
@@ -677,8 +672,8 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                     .into_iter()
                     .flat_map(|coverage| {
                         let alpha =
-                            ((u16::from(coverage) * u16::from(color.alpha) + 127) / 255) as u8;
-                        [color.blue, color.green, color.red, alpha]
+                            ((u16::from(coverage) * u16::from(foreground_alpha) + 127) / 255) as u8;
+                        [blue, green, red, alpha]
                     })
                     .collect();
                 (RasterizedGlyphFormat::BgraColor, pixels)
@@ -1223,7 +1218,7 @@ mod tests {
         assert_eq!(style.mode, GlyphRenderMode::Color);
         assert_eq!(
             style.color_effect,
-            RasterColorEffect::Preblend(rgba(0xe02010cc).into())
+            RasterColorEffect::Preblend(Rgba8::new(224, 32, 16, 204))
         );
 
         for scale_factor in [1.0, 2.0] {

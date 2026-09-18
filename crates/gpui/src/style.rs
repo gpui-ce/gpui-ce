@@ -1390,7 +1390,9 @@ pub enum VerticalAlign {
     /// Align the bottom of the box with the text baseline.
     #[default]
     Baseline,
-    /// Align the middle of the box with the baseline plus half the parent font's x-height.
+    /// Align the box midpoint with the parent baseline plus half the parent font's x-height.
+    /// This is CSS text-metric alignment. Use `self_center` or `items_center` for flex or grid
+    /// container centering.
     Middle,
     /// Align the top of the box with the top of its line.
     Top,

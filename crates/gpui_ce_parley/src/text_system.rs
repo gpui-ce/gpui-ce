@@ -176,11 +176,17 @@ impl SourceMap {
     }
 
     fn source_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(self.source_index(caret.index), caret.affinity)
+        CaretPosition {
+            index: self.source_index(caret.index),
+            affinity: caret.affinity,
+        }
     }
 
     fn backend_caret(&self, caret: CaretPosition) -> CaretPosition {
-        CaretPosition::new(self.backend_index(caret.index), caret.affinity)
+        CaretPosition {
+            index: self.backend_index(caret.index),
+            affinity: caret.affinity,
+        }
     }
 
     fn source_range(&self, range: Range<usize>) -> Range<usize> {
@@ -203,7 +209,7 @@ impl SourceMappedLayout {
     fn source_caret_for_point(
         &self,
         caret: CaretPosition,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> CaretPosition {
         let mapped = self.map.source_caret(caret);
@@ -226,8 +232,8 @@ impl SourceMappedLayout {
         // A synthetic bidi control can map a visual edge to the other source endpoint.
         let distance = |endpoint| {
             self.inner
-                .caret_geometry(self.map.backend_caret(endpoint), line_height)
-                .map(|bounds| (bounds.origin - point).magnitude())
+                .caret_bounds(self.map.backend_caret(endpoint), line_height)
+                .map(|bounds| (bounds.origin - pixel_point).magnitude())
         };
 
         match (distance(start), distance(end)) {
@@ -251,35 +257,39 @@ impl PlatformTextLayout for SourceMappedLayout {
         self.inner.size()
     }
 
-    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize> {
+    fn byte_index_from_pixel_point(
+        &self,
+        pixel_point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<usize, usize> {
         self.inner
-            .index_from_point(point, line_height)
+            .byte_index_from_pixel_point(pixel_point, line_height)
             .map(|idx| self.map.source_index(idx))
             .map_err(|idx| self.map.source_index(idx))
     }
 
-    fn caret_from_point(
+    fn caret_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
         self.inner
-            .caret_from_point(point, line_height)
-            .map(|caret| self.source_caret_for_point(caret, point, line_height))
-            .map_err(|caret| self.source_caret_for_point(caret, point, line_height))
+            .caret_from_pixel_point(pixel_point, line_height)
+            .map(|caret| self.source_caret_for_point(caret, pixel_point, line_height))
+            .map_err(|caret| self.source_caret_for_point(caret, pixel_point, line_height))
     }
 
-    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+    fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
         self.inner
-            .caret_geometry(self.map.backend_caret(caret), line_height)
+            .caret_bounds(self.map.backend_caret(caret), line_height)
     }
 
-    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
+    fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
         self.map
-            .source_caret(self.inner.refresh_caret(self.map.backend_caret(caret)))
+            .source_caret(self.inner.normalized_caret(self.map.backend_caret(caret)))
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -288,7 +298,7 @@ impl PlatformTextLayout for SourceMappedLayout {
         let mut backend_caret = self.map.backend_caret(caret);
 
         for _attempt in 0..=self.inner.len() {
-            backend_caret = self.inner.move_visual(backend_caret, direction)?;
+            backend_caret = self.inner.adjacent_visual_caret(backend_caret, direction)?;
             let source_caret = self.map.source_caret(backend_caret);
 
             if source_caret.index != source_start {
@@ -299,9 +309,13 @@ impl PlatformTextLayout for SourceMappedLayout {
         None
     }
 
-    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
+    fn selection_bounds(
+        &self,
+        byte_range: Range<usize>,
+        line_height: Pixels,
+    ) -> Vec<Bounds<Pixels>> {
         self.inner
-            .selection_geometry(self.map.backend_range(range), line_height)
+            .selection_bounds(self.map.backend_range(byte_range), line_height)
     }
 
     fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
@@ -369,7 +383,9 @@ impl PlatformTextLayout for SourceMappedLayout {
 
         if let Some(direction) = direction {
             return CaretMovement {
-                caret: self.move_visual(caret, direction).unwrap_or(caret),
+                caret: self
+                    .adjacent_visual_caret(caret, direction)
+                    .unwrap_or(caret),
                 preferred_x: None,
             };
         }
@@ -384,14 +400,16 @@ impl PlatformTextLayout for SourceMappedLayout {
         }
     }
 
-    fn selection_from_point(
+    fn selection_from_pixel_point(
         &self,
-        point: Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize> {
-        self.map
-            .source_range(self.inner.selection_from_point(point, line_height, kind))
+        self.map.source_range(
+            self.inner
+                .selection_from_pixel_point(pixel_point, line_height, kind),
+        )
     }
 }
 
@@ -625,13 +643,13 @@ struct RasterStyleCacheKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum RasterStyleColorKey {
     Scene([u32; 4]),
-    Normalized(gpui::Rgba8),
+    Normalized([u8; 4]),
 }
 
 impl From<RasterStyleRequest> for RasterStyleCacheKey {
     fn from(request: RasterStyleRequest) -> Self {
         let color = if request.requested_mode == gpui::GlyphRenderMode::Color {
-            RasterStyleColorKey::Normalized(request.normalized_color())
+            RasterStyleColorKey::Normalized(request.normalized_color().into())
         } else {
             RasterStyleColorKey::Scene([
                 request.scene_color.red.to_bits(),
@@ -765,13 +783,13 @@ impl ParleyLayout {
     }
 
     fn caret_position(cursor: Cursor) -> CaretPosition {
-        CaretPosition::new(
-            cursor.index(),
-            match cursor.affinity() {
+        CaretPosition {
+            index: cursor.index(),
+            affinity: match cursor.affinity() {
                 Affinity::Downstream => CaretAffinity::Downstream,
                 Affinity::Upstream => CaretAffinity::Upstream,
             },
-        )
+        }
     }
 
     fn cursor(&self, caret: CaretPosition) -> Cursor {
@@ -800,13 +818,25 @@ impl ParleyLayout {
                 let range = cluster.text_range();
                 let (left, right) = if cluster.is_rtl() {
                     (
-                        CaretPosition::new(range.end, CaretAffinity::Upstream),
-                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                        CaretPosition {
+                            index: range.end,
+                            affinity: CaretAffinity::Upstream,
+                        },
+                        CaretPosition {
+                            index: range.start,
+                            affinity: CaretAffinity::Downstream,
+                        },
                     )
                 } else {
                     (
-                        CaretPosition::new(range.start, CaretAffinity::Downstream),
-                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                        CaretPosition {
+                            index: range.start,
+                            affinity: CaretAffinity::Downstream,
+                        },
+                        CaretPosition {
+                            index: range.end,
+                            affinity: CaretAffinity::Upstream,
+                        },
                     )
                 };
 
@@ -1014,35 +1044,35 @@ impl PlatformTextLayout for ParleyLayout {
         size(width, px(self.layout.height()))
     }
 
-    fn index_from_point(
+    fn byte_index_from_pixel_point(
         &self,
-        point: gpui::Point<Pixels>,
+        pixel_point: gpui::Point<Pixels>,
         line_height: Pixels,
     ) -> std::result::Result<usize, usize> {
         let closest = self
-            .caret_from_point(point, line_height)
+            .caret_from_pixel_point(pixel_point, line_height)
             .map_err(|caret| caret.index)?
             .index;
 
         Cluster::from_point(
             &self.layout,
-            point.x.into(),
-            self.native_y_for_line(Self::line_index_from_point(point, line_height)),
+            pixel_point.x.into(),
+            self.native_y_for_line(Self::line_index_from_point(pixel_point, line_height)),
         )
         .map(|(cluster, _)| cluster.text_range().start)
         .ok_or(closest)
     }
 
-    fn caret_from_point(
+    fn caret_from_pixel_point(
         &self,
-        point: gpui::Point<Pixels>,
+        pixel_point: gpui::Point<Pixels>,
         line_height: Pixels,
     ) -> std::result::Result<CaretPosition, CaretPosition> {
-        let line_idx = Self::line_index_from_point(point, line_height);
+        let line_idx = Self::line_index_from_point(pixel_point, line_height);
 
         let caret = Self::caret_position(Cursor::from_point(
             &self.layout,
-            point.x.into(),
+            pixel_point.x.into(),
             self.native_y_for_line(line_idx),
         ));
 
@@ -1058,10 +1088,10 @@ impl PlatformTextLayout for ParleyLayout {
         let left = metrics.inline_min_coord + metrics.offset;
         let right = left + metrics.advance;
 
-        if point.y >= Pixels::ZERO
+        if pixel_point.y >= Pixels::ZERO
             && line_height > Pixels::ZERO
-            && f32::from(point.x) >= left
-            && f32::from(point.x) < right
+            && f32::from(pixel_point.x) >= left
+            && f32::from(pixel_point.x) < right
         {
             Ok(caret)
         } else {
@@ -1069,7 +1099,7 @@ impl PlatformTextLayout for ParleyLayout {
         }
     }
 
-    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+    fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
         if caret.index > self.len() {
             return None;
         }
@@ -1091,11 +1121,11 @@ impl PlatformTextLayout for ParleyLayout {
         ))
     }
 
-    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
+    fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
         Self::caret_position(self.cursor(caret))
     }
 
-    fn move_visual(
+    fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
@@ -1108,13 +1138,13 @@ impl PlatformTextLayout for ParleyLayout {
             .map(|stop| stop.caret)
     }
 
-    fn selection_geometry(
+    fn selection_bounds(
         &self,
-        range: std::ops::Range<usize>,
+        byte_range: std::ops::Range<usize>,
         line_height: Pixels,
     ) -> Vec<Bounds<Pixels>> {
-        let anchor = Cursor::from_byte_index(&self.layout, range.start, Affinity::Downstream);
-        let focus = Cursor::from_byte_index(&self.layout, range.end, Affinity::Upstream);
+        let anchor = Cursor::from_byte_index(&self.layout, byte_range.start, Affinity::Downstream);
+        let focus = Cursor::from_byte_index(&self.layout, byte_range.end, Affinity::Upstream);
         Selection::new(anchor, focus)
             .geometry(&self.layout)
             .into_iter()
@@ -1209,7 +1239,9 @@ impl PlatformTextLayout for ParleyLayout {
                 };
 
                 return CaretMovement {
-                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    caret: self
+                        .adjacent_visual_caret(caret, direction)
+                        .unwrap_or(caret),
                     preferred_x: None,
                 };
             }
@@ -1281,22 +1313,24 @@ impl PlatformTextLayout for ParleyLayout {
         }
     }
 
-    fn selection_from_point(
+    fn selection_from_pixel_point(
         &self,
-        point: gpui::Point<Pixels>,
+        pixel_point: gpui::Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> std::ops::Range<usize> {
-        let line_idx = Self::line_index_from_point(point, line_height);
+        let line_idx = Self::line_index_from_point(pixel_point, line_height);
 
         let y = self.native_y_for_line(line_idx);
         match kind {
-            TextSelectionKind::Word => Selection::word_from_point(&self.layout, point.x.into(), y),
+            TextSelectionKind::Word => {
+                Selection::word_from_point(&self.layout, pixel_point.x.into(), y)
+            }
             TextSelectionKind::VisualLine => {
-                Selection::line_from_point(&self.layout, point.x.into(), y)
+                Selection::line_from_point(&self.layout, pixel_point.x.into(), y)
             }
             TextSelectionKind::HardLine => {
-                Selection::hard_line_from_point(&self.layout, point.x.into(), y)
+                Selection::hard_line_from_point(&self.layout, pixel_point.x.into(), y)
             }
         }
         .text_range()
@@ -1595,8 +1629,8 @@ impl ParleyTextSystem {
             for line in &mut result.layout.visual_lines {
                 line.text_range.start += source.content.start;
                 line.text_range.end += source.content.start;
-                line.fragment_range.start += first_fragment;
-                line.fragment_range.end += first_fragment;
+                line.paint_fragment_range.start += first_fragment;
+                line.paint_fragment_range.end += first_fragment;
             }
 
             if let Some(line) = result.layout.visual_lines.last_mut() {
@@ -2107,8 +2141,8 @@ impl ParleyTextSystem {
 
             visual_lines.push(VisualLine {
                 text_range,
-                fragment_range: fragment_start..paint_fragments.len(),
-                advance: line_advance,
+                paint_fragment_range: fragment_start..paint_fragments.len(),
+                advance_width: line_advance,
                 offset: line_x,
                 direction: paragraph_direction,
             });
@@ -2530,7 +2564,7 @@ mod tests {
             );
             let caret = layout
                 .platform_layout
-                .caret_geometry(CaretPosition::new(0, CaretAffinity::Downstream), px(24.0))
+                .caret_bounds(CaretPosition::attached_to_next_cluster(0), px(24.0))
                 .unwrap();
             assert!(caret.origin.x > px(100.0), "text={text:?}, caret={caret:?}");
         }
@@ -2556,11 +2590,11 @@ mod tests {
             ] {
                 let expected_bounds = layout
                     .platform_layout
-                    .caret_geometry(expected, line_height)
+                    .caret_bounds(expected, line_height)
                     .unwrap();
                 let hit = layout
                     .platform_layout
-                    .caret_from_point(
+                    .caret_from_pixel_point(
                         expected_bounds.origin + point(px(0.0), line_height / 2.0),
                         line_height,
                     )
@@ -2599,13 +2633,13 @@ mod tests {
         let line_height = px(24.0);
         let rtl_start_selection = rtl_start
             .platform_layout
-            .selection_geometry(0.."English".len(), line_height);
+            .selection_bounds(0.."English".len(), line_height);
         let rtl_end_selection = rtl_end
             .platform_layout
-            .selection_geometry(0.."English".len(), line_height);
+            .selection_bounds(0.."English".len(), line_height);
         let ltr_start_selection = ltr_start
             .platform_layout
-            .selection_geometry(0.."English".len(), line_height);
+            .selection_bounds(0.."English".len(), line_height);
         assert!(
             rtl_start_selection[0].origin.x > px(100.0),
             "start={rtl_start_selection:?}, end={rtl_end_selection:?}, fragments={:?}",
@@ -2616,10 +2650,7 @@ mod tests {
 
         let caret = rtl_start
             .platform_layout
-            .caret_geometry(
-                CaretPosition::new(0, CaretAffinity::Downstream),
-                line_height,
-            )
+            .caret_bounds(CaretPosition::attached_to_next_cluster(0), line_height)
             .unwrap();
         assert!(caret.origin.x > px(100.0));
     }
@@ -2657,7 +2688,7 @@ mod tests {
             layout
                 .layout
                 .platform_layout
-                .logical_cluster_after(CaretPosition::new(0, CaretAffinity::Downstream)),
+                .logical_cluster_after(CaretPosition::attached_to_next_cluster(0)),
             Some(0..1)
         );
 
@@ -2668,14 +2699,14 @@ mod tests {
             let caret = layout
                 .layout
                 .platform_layout
-                .refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+                .normalized_caret(CaretPosition::attached_to_next_cluster(idx));
             assert!(caret.index <= text.len());
         }
 
         let selection = layout
             .layout
             .platform_layout
-            .selection_geometry(0..text.len(), px(24.0));
+            .selection_bounds(0..text.len(), px(24.0));
         assert!(!selection.is_empty());
     }
 
@@ -2831,27 +2862,32 @@ mod tests {
             layout.visual_lines.last().unwrap().text_range.end,
             text.len()
         );
-        assert_eq!(layout.visual_lines[0].fragment_range.start, 0);
+        assert_eq!(layout.visual_lines[0].paint_fragment_range.start, 0);
         assert_eq!(
-            layout.visual_lines.last().unwrap().fragment_range.end,
+            layout.visual_lines.last().unwrap().paint_fragment_range.end,
             layout.paint_fragments.len()
         );
 
         for pair in layout.visual_lines.windows(2) {
             assert_eq!(pair[0].text_range.end, pair[1].text_range.start);
-            assert_eq!(pair[0].fragment_range.end, pair[1].fragment_range.start);
+            assert_eq!(
+                pair[0].paint_fragment_range.end,
+                pair[1].paint_fragment_range.start
+            );
         }
 
         for line in &layout.visual_lines {
             assert!(text.is_char_boundary(line.text_range.start));
             assert!(text.is_char_boundary(line.text_range.end));
-            assert!(f32::from(line.advance).is_finite() && line.advance >= Pixels::ZERO);
-            for fragment in &layout.paint_fragments[line.fragment_range.clone()] {
+            assert!(
+                f32::from(line.advance_width).is_finite() && line.advance_width >= Pixels::ZERO
+            );
+            for fragment in &layout.paint_fragments[line.paint_fragment_range.clone()] {
                 assert!(f32::from(fragment.x_range.start).is_finite());
                 assert!(f32::from(fragment.x_range.end).is_finite());
                 assert!(fragment.x_range.start <= fragment.x_range.end);
                 assert!(fragment.x_range.start >= -layout.font_size * 2.0);
-                assert!(fragment.x_range.end <= line.advance + layout.font_size * 2.0);
+                assert!(fragment.x_range.end <= line.advance_width + layout.font_size * 2.0);
                 for glyph in fragment.glyphs.iter() {
                     assert!(f32::from(glyph.position.x).is_finite());
                     assert!(f32::from(glyph.position.y).is_finite());
@@ -2862,7 +2898,7 @@ mod tests {
         let line_height = px(24.0);
         let wrapped = shaped_text_layout(layout.clone(), px(120.0));
         let mut caret = wrapped
-            .closest_caret_for_position(point(px(-100.0), line_height * 0.5), line_height)
+            .closest_caret_for_pixel_point(point(px(-100.0), line_height * 0.5), line_height)
             .unwrap_err();
         let mut seen = Vec::new();
         let max_steps = text.chars().count() * 4 + wrapped.line_count() * 4 + 8;
@@ -2870,16 +2906,20 @@ mod tests {
             assert!(text.is_char_boundary(caret.index));
             assert!(!seen.contains(&caret), "visual caret traversal cycled");
             seen.push(caret);
-            let Some(next) = wrapped.next_visual_caret(caret) else {
+            let Some(next) = wrapped.adjacent_visual_caret(caret, VisualDirection::Right) else {
                 break;
             };
 
             caret = next;
         }
 
-        assert!(wrapped.next_visual_caret(caret).is_none());
+        assert!(
+            wrapped
+                .adjacent_visual_caret(caret, VisualDirection::Right)
+                .is_none()
+        );
         for _ in 0..max_steps {
-            let Some(previous) = wrapped.previous_visual_caret(caret) else {
+            let Some(previous) = wrapped.adjacent_visual_caret(caret, VisualDirection::Left) else {
                 break;
             };
 
@@ -2887,7 +2927,9 @@ mod tests {
         }
 
         assert!(
-            wrapped.previous_visual_caret(caret).is_none(),
+            wrapped
+                .adjacent_visual_caret(caret, VisualDirection::Left)
+                .is_none(),
             "visual traversal did not stop at the left edge of {text:?}: {caret:?}"
         );
 
@@ -2974,7 +3016,7 @@ mod tests {
         let selection = layout
             .layout
             .platform_layout
-            .selection_geometry(16..19, px(20.));
+            .selection_bounds(16..19, px(20.));
         assert_eq!(
             selection[0].origin.y,
             px(40.),
@@ -3201,10 +3243,10 @@ mod tests {
 
         for (left, right) in [("abc", "def"), ("x", "y")] {
             let left_position = document
-                .position_for_index(text.find(left).unwrap(), px(24.0))
+                .visual_position_for_byte_index(text.find(left).unwrap(), px(24.0))
                 .unwrap();
             let right_position = document
-                .position_for_index(text.find(right).unwrap(), px(24.0))
+                .visual_position_for_byte_index(text.find(right).unwrap(), px(24.0))
                 .unwrap();
 
             assert_eq!(left_position.y, right_position.y);
@@ -3252,10 +3294,10 @@ mod tests {
 
                     for (idx, expected) in independent.visual_lines.iter().enumerate() {
                         let actual = &document.visual_lines[first_line + idx];
-                        assert_eq!(actual.advance, expected.advance);
+                        assert_eq!(actual.advance_width, expected.advance_width);
                         assert_eq!(
-                            document.paint_fragments[actual.fragment_range.clone()],
-                            independent.paint_fragments[expected.fragment_range.clone()],
+                            document.paint_fragments[actual.paint_fragment_range.clone()],
+                            independent.paint_fragments[expected.paint_fragment_range.clone()],
                             "{content:?} at {width:?}"
                         );
                     }
@@ -3265,16 +3307,22 @@ mod tests {
                         .chain(std::iter::once((content.len(), '\0')))
                     {
                         for affinity in [CaretAffinity::Downstream, CaretAffinity::Upstream] {
-                            let local = CaretPosition::new(idx, affinity);
-                            let global = CaretPosition::new(source.content.start + idx, affinity);
+                            let local = CaretPosition {
+                                index: idx,
+                                affinity,
+                            };
+                            let global = CaretPosition {
+                                index: source.content.start + idx,
+                                affinity,
+                            };
                             let mut expected = independent
                                 .platform_layout
-                                .caret_geometry(local, px(24.))
+                                .caret_bounds(local, px(24.))
                                 .unwrap();
                             expected.origin.y += px(24.) * first_line;
 
                             assert_eq!(
-                                document.platform_layout.caret_geometry(global, px(24.)),
+                                document.platform_layout.caret_bounds(global, px(24.)),
                                 Some(expected)
                             );
                         }
@@ -3331,15 +3379,15 @@ mod tests {
         );
         let native = &layout.platform_layout;
         let line_height = px(24.);
-        let geometry = |caret| native.caret_geometry(caret, line_height).unwrap();
+        let geometry = |caret| native.caret_bounds(caret, line_height).unwrap();
         let mut caret = native
-            .caret_from_point(point(px(-100.), px(12.)), line_height)
+            .caret_from_pixel_point(point(px(-100.), px(12.)), line_height)
             .unwrap_err();
         let mut steps = 0;
 
-        while let Some(next) = native.move_visual(caret, VisualDirection::Right) {
+        while let Some(next) = native.adjacent_visual_caret(caret, VisualDirection::Right) {
             let previous = native
-                .move_visual(next, VisualDirection::Left)
+                .adjacent_visual_caret(next, VisualDirection::Left)
                 .unwrap_or_else(|| panic!("cannot reverse {caret:?} -> {next:?}"));
             assert_eq!(
                 geometry(previous),
@@ -3349,7 +3397,7 @@ mod tests {
 
             let bounds = geometry(next);
             let hit = native
-                .caret_from_point(
+                .caret_from_pixel_point(
                     point(bounds.origin.x, bounds.origin.y + line_height / 2.),
                     line_height,
                 )
@@ -3368,8 +3416,8 @@ mod tests {
                 continue;
             }
 
-            let before = CaretPosition::new(source.separator.start, CaretAffinity::Downstream);
-            let after = CaretPosition::new(source.separator.end, CaretAffinity::Downstream);
+            let before = CaretPosition::attached_to_next_cluster(source.separator.start);
+            let after = CaretPosition::attached_to_next_cluster(source.separator.end);
             assert_eq!(
                 native.logical_cluster_after(before),
                 Some(source.separator.clone())
@@ -3380,14 +3428,17 @@ mod tests {
             );
             assert!(
                 !native
-                    .selection_geometry(source.separator.clone(), line_height)
+                    .selection_bounds(source.separator.clone(), line_height)
                     .is_empty()
             );
             assert!(native.inline_geometry(source.separator.clone()).is_empty());
 
             let position = geometry(before).origin + point(px(0.), line_height / 2.);
-            let selected =
-                native.selection_from_point(position, line_height, TextSelectionKind::HardLine);
+            let selected = native.selection_from_pixel_point(
+                position,
+                line_height,
+                TextSelectionKind::HardLine,
+            );
             assert_eq!(selected, source.content.start..source.separator.end);
 
             for (movement, expected) in [
@@ -3408,8 +3459,8 @@ mod tests {
         }
 
         let crlf = text.find('\r').unwrap();
-        let inside = CaretPosition::new(crlf + 1, CaretAffinity::Downstream);
-        assert_eq!(native.refresh_caret(inside).index, crlf);
+        let inside = CaretPosition::attached_to_next_cluster(crlf + 1);
+        assert_eq!(native.normalized_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
         let down = native.caret_movement(
@@ -3481,13 +3532,13 @@ mod tests {
                 VisualDirection::Right => px(10_000.),
             };
             let empty_row = native
-                .caret_from_point(point(edge_x, line_height * 1.5), line_height)
+                .caret_from_pixel_point(point(edge_x, line_height * 1.5), line_height)
                 .unwrap_or_else(|caret| caret);
             let word = native.caret_movement(empty_row, movement, None).caret;
             assert_ne!(geometry(word).origin.y, geometry(empty_row).origin.y);
         }
 
-        let selected = native.selection_geometry(0..text.len(), line_height);
+        let selected = native.selection_bounds(0..text.len(), line_height);
         assert!(
             selected
                 .windows(2)
@@ -3500,12 +3551,12 @@ mod tests {
         for (line_idx, source) in paragraph_ranges(mixed).into_iter().take(2).enumerate() {
             let selection = layout
                 .platform_layout
-                .selection_geometry(source.separator, line_height);
+                .selection_bounds(source.separator, line_height);
             let bounds = selection[0];
             assert_eq!(bounds.origin.y, line_height * line_idx);
 
             if line_idx == 0 {
-                assert!(bounds.origin.x >= layout.visual_lines[line_idx].advance);
+                assert!(bounds.origin.x >= layout.visual_lines[line_idx].advance_width);
             } else {
                 assert!(bounds.right() <= Pixels::ZERO);
             }
@@ -3603,8 +3654,8 @@ mod tests {
             let empty_caret = inline
                 .layout
                 .platform_layout
-                .caret_geometry(
-                    CaretPosition::new(text.len() - 2, CaretAffinity::Downstream),
+                .caret_bounds(
+                    CaretPosition::attached_to_next_cluster(text.len() - 2),
                     px(28.),
                 )
                 .unwrap();
@@ -4032,7 +4083,7 @@ mod tests {
             );
             let end = wrapped
                 .platform_layout
-                .move_visual(CaretPosition::default(), VisualDirection::Right)
+                .adjacent_visual_caret(CaretPosition::default(), VisualDirection::Right)
                 .unwrap();
             assert_eq!(
                 end.index,
@@ -4042,7 +4093,7 @@ mod tests {
             assert_eq!(
                 wrapped
                     .platform_layout
-                    .move_visual(end, VisualDirection::Left)
+                    .adjacent_visual_caret(end, VisualDirection::Left)
                     .unwrap()
                     .index,
                 0,
@@ -4060,7 +4111,7 @@ mod tests {
             ),
             px(500.0),
         );
-        let middle = CaretPosition::new(2, CaretAffinity::Downstream);
+        let middle = CaretPosition::attached_to_next_cluster(2);
         assert_eq!(
             single_line
                 .caret_movement(
@@ -4098,13 +4149,16 @@ mod tests {
         );
         let line_height = px(26.0);
         let start = layout
-            .closest_caret_for_position(point(px(-10.0), px(10.0)), line_height)
+            .closest_caret_for_pixel_point(point(px(-10.0), px(10.0)), line_height)
             .unwrap_err();
         let end = layout
-            .closest_caret_for_position(point(px(10_000.0), px(10.0)), line_height)
+            .closest_caret_for_pixel_point(point(px(10_000.0), px(10.0)), line_height)
             .unwrap_err();
-        let selection = CaretSelection::new(end, start);
-        let collapsed_left = layout.move_selection(
+        let selection = CaretSelection {
+            anchor: end,
+            caret: start,
+        };
+        let collapsed_left = layout.selection_movement(
             selection,
             Direction::Left.with_boundary(Boundary::Cluster),
             false,
@@ -4112,27 +4166,27 @@ mod tests {
             line_height,
         );
         assert!(collapsed_left.selection.is_empty());
-        assert_eq!(collapsed_left.selection.focus, start);
-        let collapsed_right = layout.move_selection(
+        assert_eq!(collapsed_left.selection.caret, start);
+        let collapsed_right = layout.selection_movement(
             selection,
             Direction::Right.with_boundary(Boundary::Cluster),
             false,
             None,
             line_height,
         );
-        assert_eq!(collapsed_right.selection.focus, end);
+        assert_eq!(collapsed_right.selection.caret, end);
 
-        let word = layout.move_selection(
-            CaretSelection::collapsed(start),
+        let word = layout.selection_movement(
+            start.into(),
             Direction::Right.with_boundary(Boundary::Word),
             true,
             None,
             line_height,
         );
         assert_eq!(word.selection.anchor, start);
-        assert_ne!(word.selection.focus, start);
-        let down = layout.move_selection(
-            CaretSelection::collapsed(word.selection.focus),
+        assert_ne!(word.selection.caret, start);
+        let down = layout.selection_movement(
+            word.selection.caret.into(),
             Direction::Down.with_boundary(Boundary::VisualLine),
             false,
             None,
@@ -4140,7 +4194,7 @@ mod tests {
         );
         assert!(down.preferred_x.is_some());
         let maintained_x = layout
-            .move_selection(
+            .selection_movement(
                 down.selection,
                 Direction::Down.with_boundary(Boundary::VisualLine),
                 false,
@@ -4149,7 +4203,7 @@ mod tests {
             )
             .preferred_x;
         assert_eq!(maintained_x, down.preferred_x);
-        let selection = layout.selection_from_point(
+        let selection = layout.selection_from_pixel_point(
             point(px(12.0), px(10.0)),
             line_height,
             TextSelectionKind::Word,
@@ -5155,7 +5209,7 @@ mod tests {
                         && layout
                             .visual_lines
                             .iter()
-                            .any(|line| line.advance > *width + px(0.01))
+                            .any(|line| line.advance_width > *width + px(0.01))
                 })
                 .expect("sample text should have a two-line width with hanging whitespace");
             let mut cx = headless();
