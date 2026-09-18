@@ -1,7 +1,5 @@
 #[cfg(test)]
-use crate::{
-    AtlasKey, AtlasTextureKind, InlineLayout, LineLayout, TestTextSystem, hsla, point, size,
-};
+use crate::{AtlasKey, AtlasTextureKind, TestTextSystem, hsla, point, size};
 
 #[cfg(test)]
 use std::{sync::atomic::AtomicUsize, sync::atomic::Ordering};
