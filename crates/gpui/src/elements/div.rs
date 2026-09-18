@@ -2191,6 +2191,16 @@ pub struct DivFrameState {
     contents_in_parent_paragraph: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl DivFrameState {
+    /// Returns the display text and layout used to paint each inline paragraph.
+    pub fn measured_inline_paragraphs(&self) -> Vec<(SharedString, Arc<crate::InlineLayout>)> {
+        self.inline
+            .as_ref()
+            .map_or_else(Vec::new, |inline| inline.measured_paragraphs())
+    }
+}
+
 /// Interactivity state displayed an manipulated in the inspector.
 #[derive(Clone)]
 pub struct DivInspectorState {
@@ -2288,13 +2298,22 @@ impl Element for Div {
                 cx,
                 |style, window, cx| {
                     window.with_text_style(style.text_style().cloned(), |window| {
+                        let display = style.display;
+                        let collected_by_ancestor =
+                            window.collecting_inline && display == Display::Inline;
+                        let previous_collecting_inline = std::mem::replace(
+                            &mut window.collecting_inline,
+                            matches!(display, Display::Block | Display::Inline),
+                        );
                         child_layout_ids = self
                             .children
                             .iter_mut()
                             .map(|child| child.request_layout(window, cx))
                             .collect();
+                        window.collecting_inline = previous_collecting_inline;
 
-                        let layout_id = if matches!(style.display, Display::Block | Display::Inline)
+                        let layout_id = if matches!(display, Display::Block | Display::Inline)
+                            && !collected_by_ancestor
                         {
                             let (node_id, state) = InlineDivFrameState::request_layout(
                                 &style,
@@ -2305,16 +2324,21 @@ impl Element for Div {
 
                             inline = Some(state);
                             node_id
+                        } else if collected_by_ancestor {
+                            window.request_layout(style, std::iter::empty(), cx)
                         } else {
                             window.request_layout(style, child_layout_ids.iter().copied(), cx)
                         };
 
-                        window.publish_inline_content(
-                            layout_id,
-                            InlineContent::Container {
-                                children: child_layout_ids.clone(),
-                            },
-                        );
+                        if display == Display::Inline {
+                            window.publish_inline_content(
+                                layout_id,
+                                InlineContent::Container {
+                                    children: child_layout_ids.clone(),
+                                },
+                            );
+                        }
+
                         layout_id
                     })
                 },
@@ -2431,6 +2455,7 @@ impl Element for Div {
                                 &request_layout.child_layout_ids,
                                 scroll_offset,
                                 order.as_deref(),
+                                self.prepaint_listener.is_some(),
                                 window,
                                 cx,
                             );
@@ -4993,6 +5018,50 @@ mod tests {
             }),
             "the highlighted inline text did not paint its background"
         );
+    }
+
+    #[gpui::test]
+    fn default_block_preserves_grid_flow_and_hides_none_descendants(context: &mut TestAppContext) {
+        let hidden_prepainted = Rc::new(Cell::new(false));
+        let hidden_prepaint = hidden_prepainted.clone();
+        let window = context.add_empty_window();
+
+        window.draw(
+            point(px(10.), px(20.)),
+            size(px(200.), px(100.)),
+            move |_, _| {
+                div()
+                    .w(px(200.))
+                    .child(
+                        div()
+                            .grid()
+                            .w_full()
+                            .grid_cols(2)
+                            .debug_selector(|| "grid".into())
+                            .child(div().h(px(20.)).debug_selector(|| "grid-cell-1".into()))
+                            .child(div().h(px(30.)).debug_selector(|| "grid-cell-2".into())),
+                    )
+                    .child(div().hidden().h(px(300.)).child(canvas(
+                        move |_, _, _| hidden_prepaint.set(true),
+                        |_, _, _, _| {},
+                    )))
+                    .child(div().h(px(10.)).debug_selector(|| "following-block".into()))
+                    .into_any_element()
+            },
+        );
+
+        let [grid, first_cell, second_cell, following] =
+            ["grid", "grid-cell-1", "grid-cell-2", "following-block"].map(|selector| {
+                window
+                    .update(|window, _| window.rendered_frame.debug_bounds.get(selector).copied())
+                    .unwrap_or_else(|| panic!("{selector} was not rendered"))
+            });
+
+        assert_eq!(first_cell.origin.y, grid.origin.y);
+        assert_eq!(second_cell.origin.y, grid.origin.y);
+        assert!(second_cell.origin.x > first_cell.origin.x);
+        assert_eq!(following.origin.y, grid.bottom());
+        assert!(!hidden_prepainted.get());
     }
 
     struct GroupHoverTestView {

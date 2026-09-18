@@ -65,6 +65,8 @@ impl From<Synthesis> for FontSynthesis {
 pub struct RasterFace<'a> {
     /// Canonical identity of the full face, variation, and synthesis combination.
     pub font_id: FontId,
+    /// Stable identity shared by every face and instance backed by the same source bytes.
+    pub source_id: u64,
     /// Original font or collection bytes.
     pub data: &'a [u8],
     /// Face index within a TTC or OTC collection.
@@ -295,6 +297,7 @@ impl LoadedFont {
     pub(crate) fn raster_face(&self, font_id: FontId) -> RasterFace<'_> {
         RasterFace {
             font_id,
+            source_id: self.source_identity.0,
             data: self.data.as_ref(),
             face_index: self.index,
             variations: &self.variations,
@@ -411,45 +414,84 @@ fn design_variations(
 ) -> Vec<FontVariation> {
     let axes = font.axes();
     let axis_records = axes.iter().collect::<Vec<_>>();
+    if normalized_coords
+        .iter()
+        .all(|coord| *coord == NormalizedCoord::default())
+    {
+        return axis_records
+            .into_iter()
+            .map(|axis| FontVariation {
+                tag: axis.tag(),
+                value: axis.default_value(),
+            })
+            .collect();
+    }
+
     let mut values = axis_records
         .iter()
-        .map(|axis| axis.default_value())
-        .collect::<Vec<_>>();
-
-    // Revisit every axis so version 2 `avar` mappings which couple axes converge as well as the
-    // ordinary per-axis segment maps. Native APIs will apply the same mapping to these values.
-    for _ in 0..4 {
-        for (axis_idx, axis) in axis_records.iter().enumerate() {
+        .enumerate()
+        .map(|(axis_idx, axis)| {
             let target = normalized_coords
                 .get(axis_idx)
                 .copied()
                 .unwrap_or_default()
                 .to_f32();
+            let default = axis.default_value();
+            if target < 0.0 {
+                default + target * (default - axis.min_value())
+            } else {
+                default + target * (axis.max_value() - default)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut current = vec![NormalizedCoord::default(); axis_records.len()];
+
+    // Revisit every axis so version 2 `avar` mappings which couple axes converge as well as the
+    // ordinary per-axis segment maps. Native APIs will apply the same mapping to these values.
+    for _ in 0..4 {
+        axes.location_to_slice(
+            axis_records
+                .iter()
+                .zip(&values)
+                .map(|(axis, value)| (axis.tag(), *value)),
+            &mut current,
+        );
+        if current
+            .iter()
+            .zip(normalized_coords)
+            .all(|(current, target)| current == target)
+        {
+            break;
+        }
+
+        for (axis_idx, axis) in axis_records.iter().enumerate() {
+            let target_coord = normalized_coords.get(axis_idx).copied().unwrap_or_default();
+            if current[axis_idx] == target_coord {
+                continue;
+            }
+
+            let target = target_coord.to_f32();
             let mut low = axis.min_value();
             let mut high = axis.max_value();
-            for _ in 0..24 {
+            for _ in 0..16 {
                 values[axis_idx] = (low + high) * 0.5;
-                let normalized = axes
-                    .location(
-                        axis_records
-                            .iter()
-                            .zip(&values)
-                            .map(|(axis, value)| (axis.tag(), *value)),
-                    )
-                    .coords()
-                    .get(axis_idx)
-                    .copied()
-                    .unwrap_or_default()
-                    .to_f32();
+                axes.location_to_slice(
+                    axis_records
+                        .iter()
+                        .zip(&values)
+                        .map(|(axis, value)| (axis.tag(), *value)),
+                    &mut current,
+                );
+                if current[axis_idx] == target_coord {
+                    break;
+                }
 
-                if normalized < target {
+                if current[axis_idx].to_f32() < target {
                     low = values[axis_idx];
                 } else {
                     high = values[axis_idx];
                 }
             }
-
-            values[axis_idx] = (low + high) * 0.5;
         }
     }
 
@@ -673,6 +715,30 @@ mod tests {
 
     const IBM_PLEX: &[u8] =
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
+    const SOURCE_SERIF: &[u8] =
+        include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
+
+    #[test]
+    fn design_variations_round_trip_normalized_coordinates() {
+        let font = FontRef::new(SOURCE_SERIF).unwrap();
+        let axes = font.axes();
+
+        for target in [
+            vec![NormalizedCoord::default(); axes.len()],
+            vec![
+                NormalizedCoord::from_f32(-0.35),
+                NormalizedCoord::from_f32(0.625),
+            ],
+        ] {
+            let variations = design_variations(&font, &target);
+            let actual = axes.location(
+                variations
+                    .iter()
+                    .map(|variation| (variation.tag, variation.value)),
+            );
+            assert_eq!(actual.coords(), target);
+        }
+    }
 
     #[test]
     fn interning_deduplicates_only_equivalent_font_instances() {

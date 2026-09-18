@@ -269,20 +269,12 @@ name = "image_loading"
 path = "examples/legacy/image_loading.rs"
 
 [[example]]
-name = "inline_layout"
-path = "examples/legacy/inline_layout.rs"
-
-[[example]]
 name = "layer_shell"
 path = "examples/legacy/layer_shell.rs"
 
 [[example]]
 name = "on_window_close_quit"
 path = "examples/legacy/on_window_close_quit.rs"
-
-[[example]]
-name = "parley_fontique"
-path = "examples/legacy/parley_fontique.rs"
 
 [[example]]
 name = "opacity"

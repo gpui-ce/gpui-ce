@@ -294,7 +294,7 @@ fn paint_text_fragment(
         .bounding_box(fragment.font_id, fragment.font_size)
         .size;
 
-    for glyph in &fragment.glyphs {
+    for glyph in fragment.glyphs.iter() {
         let cull_origin = point(
             context.line_origin.x + glyph.position.x,
             context.line_origin.y,

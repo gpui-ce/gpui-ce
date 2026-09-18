@@ -8,7 +8,7 @@ use gpui::{
     Point, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine, point,
     utf16_to_utf8_offset,
 };
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, cell::RefCell, ops::Range, sync::Arc};
 
 const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
 
@@ -42,6 +42,8 @@ pub struct EditableTextState {
 
     focus_handle: FocusHandle,
     history: Option<EditableTextHistory>,
+
+    accessibility_text: RefCell<Option<Arc<AccessibilityText>>>,
 
     pub(super) layout_data: EditableTextLayoutResult,
 }
@@ -132,6 +134,7 @@ impl EditableTextState {
             focus_handle: cx.focus_handle(),
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
+            accessibility_text: RefCell::default(),
 
             layout_data: EditableTextLayoutResult::default(),
         }
@@ -193,6 +196,43 @@ impl EditableTextState {
     pub(super) fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
+
+    pub(super) fn accessibility_text(&self) -> Arc<AccessibilityText> {
+        let version = self.storage.version();
+        if let Some(text) = self
+            .accessibility_text
+            .borrow()
+            .as_ref()
+            .filter(|text| text.version == version)
+        {
+            return text.clone();
+        }
+
+        let text = self.storage.content_utf8();
+        let mut byte_offsets = text
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .collect::<Vec<_>>();
+        byte_offsets.push(text.len());
+        let accessibility_text = Arc::new(AccessibilityText {
+            version,
+            text: text.to_owned(),
+            character_lengths: text
+                .chars()
+                .map(|character| character.len_utf8() as u8)
+                .collect(),
+            byte_offsets,
+        });
+        *self.accessibility_text.borrow_mut() = Some(accessibility_text.clone());
+        accessibility_text
+    }
+}
+
+pub(super) struct AccessibilityText {
+    version: u16,
+    pub(super) text: String,
+    pub(super) character_lengths: Vec<u8>,
+    pub(super) byte_offsets: Vec<usize>,
 }
 
 impl EditableTextState {
