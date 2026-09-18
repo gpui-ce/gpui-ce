@@ -22,6 +22,7 @@ gpui.workspace = true
 scheduler.workspace = true
 parking_lot = { workspace = true, features = ["nightly"] }
 gpui_wgpu.workspace = true
+gpui_parley.workspace = true
 http.workspace = true
 anyhow.workspace = true
 futures.workspace = true

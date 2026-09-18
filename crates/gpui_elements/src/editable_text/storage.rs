@@ -1,8 +1,9 @@
-use gpui::NavigationDirection;
+use gpui::{NavigationDirection, utf8_to_utf16_offset, utf16_to_utf8_offset};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Describes a boundary within a chunk of text.
+#[derive(Clone, Copy)]
 pub enum TextBoundary {
     /// The utf-8 character
     Graphmeme,
@@ -42,14 +43,7 @@ pub trait UnicodeTextStorage {
             return self.len_utf16();
         }
 
-        let mut count_utf16 = 0;
-        for (idx, character) in self.content_utf8().char_indices() {
-            if idx >= pos_uft8 {
-                break;
-            }
-            count_utf16 += character.len_utf16();
-        }
-        count_utf16
+        utf8_to_utf16_offset(self.content_utf8(), pos_uft8)
     }
 
     /// Returns the utf8 position equivalent of the provided utf16 character position.
@@ -59,14 +53,7 @@ pub trait UnicodeTextStorage {
             return 0;
         }
 
-        let mut count_utf16 = 0;
-        for (idx, character) in self.content_utf8().char_indices() {
-            if count_utf16 >= pos_utf16 {
-                return idx;
-            }
-            count_utf16 += character.len_utf16();
-        }
-        self.content_utf8().len()
+        utf16_to_utf8_offset(self.content_utf8(), pos_utf16)
     }
 
     /// Converts a utf8 character range into a utf16 character range.
