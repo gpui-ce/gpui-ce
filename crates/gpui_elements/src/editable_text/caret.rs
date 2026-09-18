@@ -1,3 +1,6 @@
+#[cfg(test)]
+use gpui::{AppContext, TestAppContext};
+
 use gpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 use std::time::Duration;
@@ -85,13 +88,16 @@ impl Caret {
         if self.has_focus != is_focused {
             self.has_focus = is_focused;
             self.visible = is_focused;
+
             if is_focused && !self.interval.is_zero() {
                 self.restart_blink_ticker(cx);
             } else {
                 self.generation = self.generation.wrapping_add(1);
             }
+
             cx.notify();
         }
+
         is_focused && (self.interval.is_zero() || self.visible)
     }
 
@@ -108,6 +114,7 @@ impl Caret {
                 if this.generation != generation || !this.has_focus || this.interval.is_zero() {
                     return;
                 }
+
                 this.visible = !this.visible;
                 cx.notify();
                 this.restart_blink_ticker(cx);
@@ -120,39 +127,47 @@ impl Caret {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{AppContext as _, TestAppContext};
 
     struct CaretEventEmitter;
     impl EventEmitter<CaretNotify> for CaretEventEmitter {}
 
     #[gpui::test]
-    fn visibility_tracks_focus_activity_and_blur(cx: &mut TestAppContext) {
+    fn visibility_tracks_focus_activity_and_blur(context: &mut TestAppContext) {
         let interval = Duration::from_millis(10);
-        let emitter = cx.new(|_| CaretEventEmitter);
-        let caret = cx.new(|cx| {
+        let emitter = context.new(|_| CaretEventEmitter);
+        let caret = context.new(|context| {
             let mut caret = Caret::default().with_blink_interval(interval);
-            caret.subscribe_to(&emitter, cx);
+            caret.subscribe_to(&emitter, context);
             caret
         });
 
-        caret.update(cx, |caret, cx| assert!(caret.update_focus(true, cx)));
-        cx.run_until_parked();
+        caret.update(context, |caret, context| {
+            assert!(caret.update_focus(true, context))
+        });
 
-        cx.executor().advance_clock(interval);
-        cx.run_until_parked();
-        assert!(!cx.read(|cx| caret.read(cx).visible));
+        context.run_until_parked();
 
-        emitter.update(cx, |_, cx| cx.emit(CaretNotify::PauseBlinking));
-        cx.run_until_parked();
-        assert!(cx.read(|cx| caret.read(cx).visible));
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
 
-        cx.executor().advance_clock(interval);
-        cx.run_until_parked();
-        assert!(!cx.read(|cx| caret.read(cx).visible));
+        emitter.update(context, |_, context| {
+            context.emit(CaretNotify::PauseBlinking)
+        });
 
-        caret.update(cx, |caret, cx| assert!(!caret.update_focus(false, cx)));
-        cx.executor().advance_clock(interval);
-        cx.run_until_parked();
-        assert!(!cx.read(|cx| caret.read(cx).visible));
+        context.run_until_parked();
+        assert!(context.read(|context| caret.read(context).visible));
+
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
+
+        caret.update(context, |caret, context| {
+            assert!(!caret.update_focus(false, context))
+        });
+
+        context.executor().advance_clock(interval);
+        context.run_until_parked();
+        assert!(!context.read(|context| caret.read(context).visible));
     }
 }

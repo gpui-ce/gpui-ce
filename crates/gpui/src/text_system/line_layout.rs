@@ -141,6 +141,7 @@ pub fn align_inline_boxes(
     size: &mut Size<Pixels>,
     requests: &[InlineBoxRequest],
     line_metrics: &[InlineTextMetrics],
+    text_bounds: &[(Pixels, Pixels)],
     fallback_metrics: InlineTextMetrics,
     line_height: Pixels,
 ) {
@@ -159,19 +160,23 @@ pub fn align_inline_boxes(
         .collect::<Vec<_>>();
     let mut line_y = Pixels::ZERO;
 
-    for (line_index, line) in lines.iter_mut().enumerate() {
+    for (line_idx, line) in lines.iter_mut().enumerate() {
         let metrics = line_metrics
-            .get(line_index)
+            .get(line_idx)
             .copied()
             .unwrap_or(fallback_metrics);
-        let (mut top, mut bottom) = base_inline_line_bounds(metrics, line_height);
+        let (mut top, mut bottom) = text_bounds
+            .get(line_idx)
+            .copied()
+            .unwrap_or_else(|| base_inline_line_bounds(metrics, line_height));
         let mut top_box_height = Pixels::ZERO;
         let mut bottom_box_height = Pixels::ZERO;
 
         for (inline_box, placement) in boxes.iter().zip(&box_placements) {
-            if placement.line_index != Some(line_index) {
+            if placement.line_index != Some(line_idx) {
                 continue;
             }
+
             expand_inline_line_for_box(
                 &mut top,
                 &mut bottom,
@@ -190,9 +195,10 @@ pub fn align_inline_boxes(
         line.baseline = -top;
 
         for (inline_box, placement) in boxes.iter_mut().zip(&box_placements) {
-            if placement.line_index != Some(line_index) {
+            if placement.line_index != Some(line_idx) {
                 continue;
             }
+
             inline_box.bounds.origin.y = line_y
                 + aligned_inline_box_y(
                     *line,
@@ -239,6 +245,25 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     ) -> Option<CaretPosition>;
     /// Returns selection rectangles in visual order.
     fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>>;
+    /// Native range rectangles and their visual line indices, without selection-only extensions.
+    /// Backends supporting inline flow should preserve actual vertical metrics here.
+    fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+
+        let line_height = self.size().height / self.line_count().max(1) as f32;
+
+        self.selection_geometry(range, line_height)
+            .into_iter()
+            .map(|bounds| {
+                let line_idx = (bounds.origin.y / line_height) as usize;
+
+                (bounds, line_idx)
+            })
+            .collect()
+    }
+
     /// Returns the atomic logical cluster before the caret.
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>>;
     /// Returns the atomic logical cluster after the caret.
@@ -333,6 +358,8 @@ pub struct PaintStyle {
 pub struct PaintFragment {
     /// Canonical font used by the glyphs.
     pub font_id: FontId,
+    /// Resolved size of this shaped run.
+    pub font_size: Pixels,
     /// Positioned glyphs local to the visual line.
     pub glyphs: Vec<ShapedGlyph>,
     /// Horizontal bounds of this fragment.
@@ -379,8 +406,11 @@ pub struct CaretPosition {
 
 impl CaretPosition {
     /// Creates a caret at a byte index with the given affinity.
-    pub fn new(index: usize, affinity: CaretAffinity) -> Self {
-        Self { index, affinity }
+    pub fn new(idx: usize, affinity: CaretAffinity) -> Self {
+        Self {
+            index: idx,
+            affinity,
+        }
     }
 }
 
@@ -396,8 +426,8 @@ pub struct CaretSelection {
 }
 
 impl From<usize> for CaretSelection {
-    fn from(index: usize) -> Self {
-        Self::collapsed(CaretPosition::new(index, CaretAffinity::Downstream))
+    fn from(idx: usize) -> Self {
+        Self::collapsed(CaretPosition::new(idx, CaretAffinity::Downstream))
     }
 }
 
@@ -575,15 +605,15 @@ impl WrappedLineLayout {
     /// The backend maps cluster boundaries to direction-aware visual edges. An index
     /// inside an atomic cluster snaps to its logical start. On a shared wrap boundary, the cluster
     /// starting at the index owns the position, so the caret moves to the following visual line.
-    pub fn position_for_index(&self, index: usize, line_height: Pixels) -> Option<Point<Pixels>> {
-        if index > self.len() {
+    pub fn position_for_index(&self, idx: usize, line_height: Pixels) -> Option<Point<Pixels>> {
+        if idx > self.len() {
             return None;
         }
 
         self.layout
             .platform_layout
             .caret_geometry(
-                CaretPosition::new(index, CaretAffinity::Downstream),
+                CaretPosition::new(idx, CaretAffinity::Downstream),
                 line_height,
             )
             .map(|bounds| bounds.origin)
@@ -685,7 +715,9 @@ impl WrappedLineLayout {
                         (selection.anchor, selection.focus)
                     }
                 });
+
             let caret = if forward { visual_end } else { visual_start };
+
             return CaretSelectionMove {
                 selection: CaretSelection::collapsed(caret),
                 preferred_x: None,
@@ -722,6 +754,7 @@ impl WrappedLineLayout {
         line_height: Pixels,
     ) -> SmallVec<[Bounds<Pixels>; 4]> {
         let mut result = SmallVec::new();
+
         if range.is_empty() {
             return result;
         }
@@ -791,6 +824,7 @@ impl LineLayoutCache {
 
     fn sync_font_generation(&self) {
         let generation = self.platform_text_system.font_generation();
+
         if self.font_generation.load(Ordering::Acquire) != generation {
             self.clear();
             self.font_generation.store(generation, Ordering::Release);
@@ -885,6 +919,7 @@ impl LineLayoutCache {
                 } else {
                     self.layout_line::<&SharedString>(&text, font_size, runs)
                 };
+
             let layout = Arc::new(WrappedLineLayout {
                 layout: document_layout,
                 wrap_width,
@@ -945,6 +980,7 @@ impl LineLayoutCache {
                 wrap_width: None,
                 line_clamp: None,
             });
+
             let key = Arc::new(CacheKey {
                 text,
                 font_size,

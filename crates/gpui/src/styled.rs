@@ -103,9 +103,16 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Lays out the element's children in lines of text.
+    /// Contributes this element's contents to a block parent's paragraph.
+    /// Nested inline elements wrap together without adding whitespace or breaks.
     fn inline(mut self) -> Self {
         self.style().display = Some(Display::Inline);
+        self
+    }
+
+    /// Places this element in a paragraph as one atomic box with flex layout inside.
+    fn inline_flex(mut self) -> Self {
+        self.style().display = Some(Display::InlineFlex);
         self
     }
 

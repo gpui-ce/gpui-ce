@@ -192,6 +192,44 @@ impl HeadlessAppContext {
         })
     }
 
+    /// Returns the device-pixel bounds of painted monochrome glyphs of this color.
+    pub fn glyph_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        color: Hsla,
+    ) -> Result<Vec<Bounds<ScaledPixels>>> {
+        let color = color.into();
+        self.update_window(window, |_, window, _| {
+            window
+                .rendered_frame
+                .scene
+                .monochrome_sprites
+                .iter()
+                .filter(|sprite| sprite.color == color)
+                .map(|sprite| sprite.bounds)
+                .collect()
+        })
+    }
+
+    /// Returns the device-pixel bounds of painted underlines of this color.
+    pub fn underline_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        color: Hsla,
+    ) -> Result<Vec<Bounds<ScaledPixels>>> {
+        let color = color.into();
+        self.update_window(window, |_, window, _| {
+            window
+                .rendered_frame
+                .scene
+                .underlines
+                .iter()
+                .filter(|underline| underline.color == color)
+                .map(|underline| underline.bounds)
+                .collect()
+        })
+    }
+
     /// Captures a screenshot from a window.
     ///
     /// Requires that the context was created with a renderer factory that

@@ -1,3 +1,9 @@
+#[cfg(test)]
+use crate::{Context, Hsla, Render, ScaledPixels, TestApp, div, hsla, prelude::*};
+
+#[cfg(test)]
+use std::collections::HashSet;
+
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -67,19 +73,6 @@ use unicode_segmentation::UnicodeSegmentation;
 pub struct Text {
     id: Option<ElementId>,
     text: SharedString,
-}
-
-pub(crate) struct InlineTextContent {
-    pub text: SharedString,
-    pub runs: Vec<TextRun>,
-}
-
-pub(crate) fn inline_text_content(text: SharedString, text_style: &TextStyle) -> InlineTextContent {
-    let text = apply_text_transform_preserving_byte_len(text, text_style.text_transform);
-    InlineTextContent {
-        runs: vec![text_style.to_run(text.len())],
-        text,
-    }
 }
 
 impl Text {
@@ -551,18 +544,10 @@ impl StyledText {
         runs.unwrap_or_else(|| vec![default_style.to_run(self.text.len())])
     }
 
-    pub(crate) fn take_inline_content(&mut self, default_style: &TextStyle) -> InlineTextContent {
-        let runs = self.take_runs(default_style);
-        let text = apply_text_transform_preserving_byte_len(
-            self.text.clone(),
-            default_style.text_transform,
-        );
-        InlineTextContent { text, runs }
-    }
-
     /// Set the text runs for this piece of text.
     pub fn with_runs(mut self, runs: Vec<TextRun>) -> Self {
         let mut text = &*self.text;
+
         for run in &runs {
             text = text.get(run.len..).unwrap_or_else(|| {
                 #[cfg(debug_assertions)]
@@ -895,6 +880,7 @@ impl TextLayout {
         let Some(truncate_width) = truncation.width else {
             return (text, Cow::Borrowed(runs));
         };
+
         truncate_to_shaped_layout(
             text,
             font_size,
@@ -929,6 +915,15 @@ impl TextLayout {
         } else {
             vec![text_style.to_run(text.len())]
         };
+
+        let runs: Arc<[TextRun]> = runs.into();
+        let content = crate::InlineContent::Text {
+            text: text.clone(),
+            runs: runs.clone(),
+            font_size,
+            line_height,
+        };
+
         let layout_id = window.request_measured_layout(Default::default(), {
             let element_state = self.clone();
 
@@ -997,6 +992,7 @@ impl TextLayout {
                             size: Some(Size::default()),
                             bounds: None,
                         });
+
                     return Size::default();
                 };
 
@@ -1019,11 +1015,17 @@ impl TextLayout {
                 size
             }
         });
+
+        window.publish_inline_content(layout_id, content);
         self.0.layout_id.set(Some(layout_id));
         layout_id
     }
 
     fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, window: &mut Window) {
+        if window.current_inline_fragments.is_some() {
+            return;
+        }
+
         let bounds = self
             .0
             .layout_id
@@ -1039,6 +1041,10 @@ impl TextLayout {
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
+        if window.current_inline_fragments.is_some() {
+            return;
+        }
+
         let element_state = self.0.layout.borrow();
         let element_state = element_state
             .as_ref()
@@ -1051,6 +1057,7 @@ impl TextLayout {
 
         let line_height = element_state.line_height;
         let text_style = window.text_style();
+
         if let Some(document) = &element_state.document {
             document
                 .paint_background(
@@ -1093,6 +1100,7 @@ impl TextLayout {
         let Some(document) = &element_state.document else {
             return Err(0);
         };
+
         document.index_for_position(position - bounds.origin, line_height)
     }
 
@@ -1198,6 +1206,7 @@ fn truncate_to_shaped_layout<'a>(
         ) else {
             return false;
         };
+
         let width = wrap_width.unwrap_or(truncate_width);
         max_lines.is_none_or(|max_lines| document.line_count() <= max_lines.max(1))
             && document
@@ -1212,7 +1221,7 @@ fn truncate_to_shaped_layout<'a>(
 
     let mut boundaries = text
         .grapheme_indices(true)
-        .map(|(index, _)| index)
+        .map(|(idx, _)| idx)
         .collect::<Vec<_>>();
     boundaries.push(text.len());
     let grapheme_count = boundaries.len().saturating_sub(1);
@@ -1224,12 +1233,14 @@ fn truncate_to_shaped_layout<'a>(
     while low < high {
         let middle = low + (high - low).div_ceil(2);
         let (candidate_text, candidate_runs) = candidate(middle);
+
         if fits(&candidate_text, &candidate_runs, window) {
             low = middle;
         } else {
             high = middle - 1;
         }
     }
+
     let (result, result_runs) = candidate(low);
     (result, Cow::Owned(result_runs))
 }
@@ -1248,8 +1259,10 @@ fn make_truncation_candidate(
     match direction {
         TruncateFrom::End => {
             let end = boundaries[keep];
-            let prefix = text[..end]
-                .trim_end_matches(|ch: char| ch.is_whitespace() || ch.is_ascii_punctuation());
+            let prefix = text[..end].trim_end_matches(|character: char| {
+                character.is_whitespace() || character.is_ascii_punctuation()
+            });
+
             let result = SharedString::from(format!("{prefix}{affix}"));
             update_runs_after_truncation(&result, affix, &mut candidate_runs, direction);
             (result, candidate_runs)
@@ -1285,23 +1298,23 @@ fn update_runs_after_truncation(
     let mut retained = result.len().saturating_sub(affix.len());
     match direction {
         TruncateFrom::Start => {
-            for run_index in (0..runs.len()).rev() {
-                if runs[run_index].len <= retained {
-                    retained -= runs[run_index].len;
+            for run_idx in (0..runs.len()).rev() {
+                if runs[run_idx].len <= retained {
+                    retained -= runs[run_idx].len;
                 } else {
-                    runs[run_index].len = retained + affix.len();
-                    runs.drain(..run_index);
+                    runs[run_idx].len = retained + affix.len();
+                    runs.drain(..run_idx);
                     break;
                 }
             }
         }
         TruncateFrom::End => {
-            for run_index in 0..runs.len() {
-                if runs[run_index].len <= retained {
-                    retained -= runs[run_index].len;
+            for run_idx in 0..runs.len() {
+                if runs[run_idx].len <= retained {
+                    retained -= runs[run_idx].len;
                 } else {
-                    runs[run_index].len = retained + affix.len();
-                    runs.truncate(run_index + 1);
+                    runs[run_idx].len = retained + affix.len();
+                    runs.truncate(run_idx + 1);
                     break;
                 }
             }
@@ -1321,13 +1334,16 @@ fn update_runs_after_middle_truncation(
     let mut byte_offset = 0usize;
     for run in &original {
         let run_end = byte_offset + run.len;
+
         if byte_offset < front_end {
             let mut retained = run.clone();
             retained.len = run_end.min(front_end) - byte_offset;
             result.push(retained);
         }
+
         byte_offset = run_end;
     }
+
     if let Some(last) = result.last_mut() {
         last.len += affix.len();
     } else if let Some(first) = original.first() {
@@ -1335,59 +1351,21 @@ fn update_runs_after_middle_truncation(
         affix_run.len = affix.len();
         result.push(affix_run);
     }
+
     byte_offset = 0;
     for run in &original {
         let run_end = byte_offset + run.len;
+
         if run_end > back_start {
             let mut retained = run.clone();
             retained.len = run_end - back_start.max(byte_offset);
             result.push(retained);
         }
+
         byte_offset = run_end;
     }
+
     *runs = result;
-}
-
-#[cfg(test)]
-mod truncation_tests {
-    use super::*;
-
-    #[test]
-    fn truncation_candidates_keep_complete_graphemes_and_cover_output_with_runs() {
-        const FAMILY: &str = "👩‍👩‍👧‍👦";
-        let text = format!("Ae\u{301}{FAMILY}Z");
-        let split = "Ae\u{301}".len();
-        let runs = [
-            TextRun {
-                len: split,
-                ..Default::default()
-            },
-            TextRun {
-                len: text.len() - split,
-                ..Default::default()
-            },
-        ];
-        let mut boundaries = text
-            .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        boundaries.push(text.len());
-
-        for (direction, keep, expected) in [
-            (TruncateFrom::Start, 2, format!("…{FAMILY}Z")),
-            (TruncateFrom::End, 2, "Ae\u{301}…".to_owned()),
-            (TruncateFrom::Middle, 3, "Ae\u{301}…Z".to_owned()),
-        ] {
-            let (candidate, candidate_runs) =
-                make_truncation_candidate(&text, &boundaries, keep, "…", &runs, direction);
-            assert_eq!(candidate.as_ref(), expected, "{direction:?}");
-            assert_eq!(
-                candidate_runs.iter().map(|run| run.len).sum::<usize>(),
-                candidate.len(),
-                "style runs must cover {candidate:?} after {direction:?} truncation"
-            );
-        }
-    }
 }
 
 /// A text element that can be interacted with.
@@ -1496,7 +1474,11 @@ impl Element for InteractiveText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        self.text.request_layout(None, inspector_id, window, cx)
+        let result = self.text.request_layout(None, inspector_id, window, cx);
+
+        // InteractiveText owns range-based selection and hit testing in its independent layout.
+        window.publish_inline_content(result.0, crate::InlineContent::Atomic);
+        result
     }
 
     fn prepaint(
@@ -1635,16 +1617,16 @@ impl Element for InteractiveText {
                         }
                     });
 
-                    // Use bounds instead of testing hitbox since this is called during prepaint.
+                    // Check hitbox geometry directly because hover state is unavailable during prepaint.
                     let check_is_hovered_during_prepaint = Rc::new({
-                        let source_bounds = hitbox.bounds;
+                        let source_hitbox = hitbox.clone();
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
                         move |window: &Window| {
                             text_layout
                                 .index_for_position(window.mouse_position())
                                 .is_ok()
-                                && source_bounds.contains(&window.mouse_position())
+                                && source_hitbox.contains(&window.mouse_position())
                                 && pending_mouse_down.get().is_none()
                         }
                     });
@@ -1693,8 +1675,43 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Hsla, Render, ScaledPixels, TestApp, div, hsla, prelude::*};
-    use std::collections::HashSet;
+
+    #[test]
+    fn truncation_candidates_keep_complete_graphemes_and_cover_output_with_runs() {
+        const FAMILY: &str = "👩‍👩‍👧‍👦";
+        let text = format!("Ae\u{301}{FAMILY}Z");
+        let split = "Ae\u{301}".len();
+        let runs = [
+            TextRun {
+                len: split,
+                ..Default::default()
+            },
+            TextRun {
+                len: text.len() - split,
+                ..Default::default()
+            },
+        ];
+        let mut boundaries = text
+            .grapheme_indices(true)
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+        boundaries.push(text.len());
+
+        for (direction, keep, expected) in [
+            (TruncateFrom::Start, 2, format!("…{FAMILY}Z")),
+            (TruncateFrom::End, 2, "Ae\u{301}…".to_owned()),
+            (TruncateFrom::Middle, 3, "Ae\u{301}…Z".to_owned()),
+        ] {
+            let (candidate, candidate_runs) =
+                make_truncation_candidate(&text, &boundaries, keep, "…", &runs, direction);
+            assert_eq!(candidate.as_ref(), expected, "{direction:?}");
+            assert_eq!(
+                candidate_runs.iter().map(|run| run.len).sum::<usize>(),
+                candidate.len(),
+                "style runs must cover {candidate:?} after {direction:?} truncation"
+            );
+        }
+    }
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
     const TEXT_BACKGROUND_COLOR: Hsla = hsla(0.37, 0.65, 0.42, 1.0);
@@ -1704,7 +1721,11 @@ mod tests {
     }
 
     impl Render for CenteredTextView {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
@@ -1798,6 +1819,7 @@ mod tests {
                 window.set_scale_factor(scale_factor);
                 CenteredTextView { extent: 0.0 }
             });
+
             test_window.draw();
 
             let (initial_container, initial_background) = test_window.update(|_, window, _| {
@@ -1806,6 +1828,7 @@ mod tests {
                     only_quad(window, TEXT_BACKGROUND_COLOR),
                 )
             });
+
             let expected_offset = initial_background.origin - initial_container.origin;
             let mut container_origins = HashSet::from([(
                 initial_container.origin.x.as_f32() as i32,
@@ -1813,10 +1836,11 @@ mod tests {
             )]);
 
             for step in 1..=32 {
-                test_window.update(|view, _, cx| {
+                test_window.update(|view, _, context| {
                     view.extent = step as f32;
-                    cx.notify();
+                    context.notify();
                 });
+
                 test_window.draw();
 
                 let (container, background) = test_window.update(|_, window, _| {
@@ -1825,6 +1849,7 @@ mod tests {
                         only_quad(window, TEXT_BACKGROUND_COLOR),
                     )
                 });
+
                 assert_eq!(
                     background.origin - container.origin,
                     expected_offset,

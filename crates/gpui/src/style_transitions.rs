@@ -1055,10 +1055,13 @@ mod tests {
                     })
                     .hover(|style| style.w(px(200.0)))
                     .active(|style| style.w(px(50.0)))
-                    .child(canvas(
-                        move |bounds, _, _| presented_width.set(bounds.size.width),
-                        |_, _, _, _| {},
-                    )),
+                    .child(
+                        canvas(
+                            move |bounds, _, _| presented_width.set(bounds.size.width),
+                            |_, _, _, _| {},
+                        )
+                        .size_full(),
+                    ),
             )
         }
     }

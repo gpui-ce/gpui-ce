@@ -1,3 +1,5 @@
+use fontique::{Attributes, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus};
+
 use anyhow::{Result, bail};
 use fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parking_lot::RwLock;
@@ -37,14 +39,17 @@ impl CatalogState {
             shared: false,
             system_fonts: false,
         });
+
         for blob in fonts {
             if validator.register_fonts(blob.clone(), None).is_empty() {
                 bail!("font data did not contain a supported font face");
             }
         }
+
         for blob in fonts {
             self.collection.register_fonts(blob.clone(), None);
         }
+
         self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
@@ -63,6 +68,7 @@ impl FontCatalog {
             shared: true,
             system_fonts: system_fonts == SystemFonts::Load,
         });
+
         Self {
             state: RwLock::new(CatalogState {
                 collection,
@@ -150,13 +156,12 @@ pub(crate) struct ResolvedFace {
 }
 
 fn resolve(state: &mut CatalogState, request: &FaceRequest<'_>) -> Option<ResolvedFace> {
-    use fontique::{Attributes, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus};
-
     let style = match request.style {
         gpui::FontStyle::Normal => FontStyle::Normal,
         gpui::FontStyle::Italic => FontStyle::Italic,
         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
     };
+
     let mut selected = None;
     {
         let mut query = state.collection.query(&mut state.sources);
@@ -164,6 +169,7 @@ fn resolve(state: &mut CatalogState, request: &FaceRequest<'_>) -> Option<Resolv
             FaceFamily::Named(name) => QueryFamily::Named(name),
             FaceFamily::SystemUi => QueryFamily::Generic(GenericFamily::SystemUi),
         }));
+
         query.set_attributes(Attributes::new(
             FontWidth::NORMAL,
             style,
@@ -177,13 +183,15 @@ fn resolve(state: &mut CatalogState, request: &FaceRequest<'_>) -> Option<Resolv
             }) {
                 return QueryStatus::Continue;
             }
+
             selected = Some((font.blob.clone(), font.index, font.synthesis));
             QueryStatus::Stop
         });
     }
-    selected.map(|(data, index, synthesis)| ResolvedFace {
+
+    selected.map(|(data, idx, synthesis)| ResolvedFace {
         data,
-        index,
+        index: idx,
         synthesis,
     })
 }

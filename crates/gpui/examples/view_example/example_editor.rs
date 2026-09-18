@@ -409,6 +409,7 @@ impl Element for EditorText {
                         underline: None,
                         strikethrough: None,
                     };
+
                     window.text_system().shape_line(text, font_size, &[run])
                 })
                 .collect()
