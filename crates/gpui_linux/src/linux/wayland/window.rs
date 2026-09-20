@@ -1928,6 +1928,18 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    fn activate_with_token(&self, token: &str) -> bool {
+        let state = self.borrow();
+        let Some(activation) = &state.globals.activation else {
+            return false;
+        };
+        if token.is_empty() {
+            return false;
+        }
+        activation.activate(token.to_owned(), &state.surface);
+        true
+    }
+
     fn request_attention(&self) {}
 
     fn is_active(&self) -> bool {

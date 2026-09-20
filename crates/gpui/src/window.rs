@@ -6325,6 +6325,17 @@ impl Window {
         self.platform_window.activate();
     }
 
+    /// Request focus using a token supplied by the desktop shell, such as a
+    /// Wayland tray host. Show the window before calling this method.
+    ///
+    /// Returns whether the platform submitted the request. The compositor may
+    /// still deny focus. Returns false for empty tokens or unsupported platforms;
+    /// callers can then fall back to [`Self::activate_window`]. Tokens must not
+    /// be reused for subsequent activations.
+    pub fn activate_window_with_token(&self, token: &str) -> bool {
+        !token.is_empty() && self.platform_window.activate_with_token(token)
+    }
+
     /// Requests that the operating system draw attention to this window.
     pub fn request_attention(&self) {
         self.platform_window.request_attention();

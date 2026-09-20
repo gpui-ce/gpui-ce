@@ -893,6 +893,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    /// Submit an externally supplied activation token, if supported.
+    /// Returns whether a request was sent, not whether focus was granted.
+    fn activate_with_token(&self, _token: &str) -> bool {
+        false
+    }
     /// Requests that the operating system draw attention to this window.
     fn request_attention(&self) {}
     fn is_active(&self) -> bool;
