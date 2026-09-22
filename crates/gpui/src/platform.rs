@@ -1222,7 +1222,7 @@ struct TestPlatformTextLayout {
 #[cfg(any(test, feature = "test-support"))]
 impl PlatformTextLayout for TestPlatformTextLayout {
     fn len(&self) -> usize {
-        self.stops.last().map_or(0, |(idx, _)| *idx)
+        self.stops.last().map_or(0, |(index, _)| *index)
     }
 
     fn line_count(&self) -> usize {
@@ -1249,7 +1249,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
-        let idx = self
+        let index = self
             .stops
             .iter()
             .min_by(|(_, left), (_, right)| {
@@ -1257,8 +1257,8 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                     .abs()
                     .total_cmp(&(f32::from(*right) - f32::from(point.x)).abs())
             })
-            .map_or(0, |(idx, _)| *idx);
-        let caret = self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+            .map_or(0, |(index, _)| *index);
+        let caret = self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream));
 
         if point.y >= Pixels::ZERO
             && point.y < line_height
@@ -1276,7 +1276,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         let x = self
             .stops
             .iter()
-            .find_map(|(idx, x)| (*idx == caret.index).then_some(*x))?;
+            .find_map(|(index, x)| (*index == caret.index).then_some(*x))?;
         Some(Bounds::new(
             point(x, Pixels::ZERO),
             size(Pixels::ZERO, line_height),
@@ -1284,20 +1284,20 @@ impl PlatformTextLayout for TestPlatformTextLayout {
     }
 
     fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
-        let idx = self
+        let index = self
             .stops
             .iter()
-            .map(|(idx, _)| *idx)
-            .take_while(|idx| *idx <= caret.index)
+            .map(|(index, _)| *index)
+            .take_while(|index| *index <= caret.index)
             .last()
             .unwrap_or(0);
-        let affinity = if idx == self.len() && idx != 0 {
+        let affinity = if index == self.len() && index != 0 {
             CaretAffinity::Upstream
         } else {
             caret.affinity
         };
 
-        CaretPosition::new(idx, affinity)
+        CaretPosition::new(index, affinity)
     }
 
     fn move_visual(
@@ -1306,14 +1306,17 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
         let caret = self.refresh_caret(caret);
-        let position = self.stops.iter().position(|(idx, _)| *idx == caret.index)?;
+        let position = self
+            .stops
+            .iter()
+            .position(|(index, _)| *index == caret.index)?;
         let position = match direction {
             VisualDirection::Left => position.checked_sub(1)?,
             VisualDirection::Right => position.checked_add(1)?,
         };
 
-        let idx = self.stops.get(position)?.0;
-        Some(self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)))
+        let index = self.stops.get(position)?.0;
+        Some(self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream)))
     }
 
     fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
@@ -1364,7 +1367,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         movement: TextMovement,
         preferred_x: Option<Pixels>,
     ) -> (CaretPosition, Option<Pixels>) {
-        let idx = match movement {
+        let index = match movement {
             TextMovement::VisualLeft => {
                 self.move_visual(caret, VisualDirection::Left)
                     .unwrap_or(caret)
@@ -1378,8 +1381,8 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             TextMovement::VisualWordLeft => {
                 let prefix = &self.text[..caret.index.min(self.text.len())];
                 let trimmed = prefix.trim_end_matches(char::is_whitespace);
-                trimmed.rfind(char::is_whitespace).map_or(0, |idx| {
-                    idx + trimmed[idx..].chars().next().unwrap().len_utf8()
+                trimmed.rfind(char::is_whitespace).map_or(0, |index| {
+                    index + trimmed[index..].chars().next().unwrap().len_utf8()
                 })
             }
             TextMovement::VisualWordRight => {
@@ -1410,7 +1413,7 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             });
 
         (
-            self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)),
+            self.refresh_caret(CaretPosition::new(index, CaretAffinity::Downstream)),
             preferred_x,
         )
     }
@@ -1425,20 +1428,20 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             return 0..self.len();
         }
 
-        let idx = self
+        let index = self
             .caret_from_point(point, line_height)
             .unwrap_or_else(|caret| caret)
             .index
             .min(self.text.len());
-        let start = self.text[..idx]
+        let start = self.text[..index]
             .rfind(char::is_whitespace)
             .map_or(0, |offset| {
                 offset + self.text[offset..].chars().next().unwrap().len_utf8()
             });
 
-        let end = self.text[idx..]
+        let end = self.text[index..]
             .find(char::is_whitespace)
-            .map_or(self.text.len(), |offset| idx + offset);
+            .map_or(self.text.len(), |offset| index + offset);
         start..end
     }
 }

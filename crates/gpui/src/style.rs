@@ -861,16 +861,16 @@ impl Style {
         &self,
         bounds: Bounds<Pixels>,
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
         #[cfg(debug_assertions)]
         if self.debug_below {
-            context.set_global(DebugBelow)
+            cx.set_global(DebugBelow)
         }
 
         #[cfg(debug_assertions)]
-        if self.debug || context.has_global::<DebugBelow>() {
+        if self.debug || cx.has_global::<DebugBelow>() {
             window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
         }
 
@@ -907,7 +907,7 @@ impl Style {
         // The element's own box — background, inset shadows, children, and border — painted as a
         // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
         // and its children together as one group; without a filter it paints directly.
-        let paint_box = |window: &mut Window, context: &mut App| {
+        let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
@@ -939,7 +939,7 @@ impl Style {
                 &self.box_shadow,
             );
 
-            continuation(window, context);
+            continuation(window, cx);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
@@ -961,7 +961,7 @@ impl Style {
         };
 
         if self.filter.is_empty() {
-            paint_box(window, context);
+            paint_box(window, cx);
         } else {
             window.with_filter_layer_with_corner_smoothing(
                 bounds,
@@ -969,14 +969,14 @@ impl Style {
                 corner_smoothing,
                 &self.filter,
                 |window| {
-                    paint_box(window, context);
+                    paint_box(window, cx);
                 },
             );
         }
 
         #[cfg(debug_assertions)]
         if self.debug_below {
-            context.remove_global::<DebugBelow>();
+            cx.remove_global::<DebugBelow>();
         }
     }
 

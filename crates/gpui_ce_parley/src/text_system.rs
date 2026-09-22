@@ -142,9 +142,9 @@ impl ParleyLayout {
             .chain(std::iter::once(text.len()));
 
         let mut stops = Vec::with_capacity((graphemes.len() + 2) * 2);
-        for idx in boundaries {
+        for index in boundaries {
             for affinity in [Affinity::Downstream, Affinity::Upstream] {
-                let cursor = Cursor::from_byte_index(layout, idx, affinity);
+                let cursor = Cursor::from_byte_index(layout, index, affinity);
                 let (block, inline) = Self::cursor_position(layout, cursor);
                 stops.push(ParleyCaretStop {
                     cursor,
@@ -213,10 +213,12 @@ impl ParleyLayout {
         cursor: Cursor,
         direction: VisualDirection,
     ) -> Option<ParleyCaretStop> {
-        let idx = self.caret_stop_index(cursor)?;
+        let index = self.caret_stop_index(cursor)?;
         match direction {
-            VisualDirection::Left => idx.checked_sub(1).and_then(|idx| self.caret_stops.get(idx)),
-            VisualDirection::Right => self.caret_stops.get(idx + 1),
+            VisualDirection::Left => index
+                .checked_sub(1)
+                .and_then(|index| self.caret_stops.get(index)),
+            VisualDirection::Right => self.caret_stops.get(index + 1),
         }
         .copied()
     }
@@ -273,8 +275,8 @@ impl PlatformTextLayout for ParleyLayout {
             return Err(closest);
         }
 
-        let line_idx = (point.y / line_height) as usize;
-        let Some(line) = self.layout.get(line_idx) else {
+        let line_ix = (point.y / line_height) as usize;
+        let Some(line) = self.layout.get(line_ix) else {
             return Err(closest);
         };
 
@@ -289,7 +291,7 @@ impl PlatformTextLayout for ParleyLayout {
         Cluster::from_point(
             &self.layout,
             point.x.into(),
-            self.native_y_for_line(line_idx),
+            self.native_y_for_line(line_ix),
         )
         .map(|(cluster, _)| cluster.text_range().start)
         .ok_or(closest)
@@ -300,7 +302,7 @@ impl PlatformTextLayout for ParleyLayout {
         point: gpui::Point<Pixels>,
         line_height: Pixels,
     ) -> std::result::Result<CaretPosition, CaretPosition> {
-        let line_idx = if line_height > px(0.0) && point.y >= Pixels::ZERO {
+        let line_ix = if line_height > px(0.0) && point.y >= Pixels::ZERO {
             (point.y / line_height) as usize
         } else {
             0
@@ -309,9 +311,9 @@ impl PlatformTextLayout for ParleyLayout {
         let caret = Self::caret_position(Cursor::from_point(
             &self.layout,
             point.x.into(),
-            self.native_y_for_line(line_idx),
+            self.native_y_for_line(line_ix),
         ));
-        let Some(line) = self.layout.get(line_idx) else {
+        let Some(line) = self.layout.get(line_ix) else {
             return Err(caret);
         };
 
@@ -337,7 +339,7 @@ impl PlatformTextLayout for ParleyLayout {
 
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
-        let line_idx = self
+        let line_ix = self
             .layout
             .lines()
             .position(|line| {
@@ -347,8 +349,8 @@ impl PlatformTextLayout for ParleyLayout {
             })
             .unwrap_or_else(|| self.layout.len().saturating_sub(1));
         Some(Bounds::from_corners(
-            point(px(geometry.x0 as f32), line_height * line_idx),
-            point(px(geometry.x1 as f32), line_height * (line_idx + 1)),
+            point(px(geometry.x0 as f32), line_height * line_ix),
+            point(px(geometry.x1 as f32), line_height * (line_ix + 1)),
         ))
     }
 
@@ -490,7 +492,7 @@ impl PlatformTextLayout for ParleyLayout {
                 };
 
                 let geometry = cursor.geometry(&self.layout, 0.0);
-                let line_idx = self
+                let line_ix = self
                     .layout
                     .lines()
                     .position(|line| {
@@ -499,10 +501,10 @@ impl PlatformTextLayout for ParleyLayout {
                             && (geometry.y0 as f32) < metrics.block_max_coord
                     })
                     .unwrap_or_else(|| self.layout.len().saturating_sub(1));
-                let target_idx = line_idx
+                let target_ix = line_ix
                     .checked_add_signed(delta)
-                    .filter(|&target_idx| self.layout.get(target_idx).is_some());
-                let Some(target_idx) = target_idx else {
+                    .filter(|&target_ix| self.layout.get(target_ix).is_some());
+                let Some(target_ix) = target_ix else {
                     let selection = Selection::from(cursor);
                     let moved = if delta < 0 {
                         selection.previous_line(&self.layout, false)
@@ -515,7 +517,7 @@ impl PlatformTextLayout for ParleyLayout {
 
                 let x = preferred_x
                     .map_or_else(|| cursor.geometry(&self.layout, 0.0).x0 as f32, f32::from);
-                let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_idx));
+                let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_ix));
                 return (Self::caret_position(moved), Some(px(x)));
             }
         };
@@ -529,13 +531,13 @@ impl PlatformTextLayout for ParleyLayout {
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> std::ops::Range<usize> {
-        let line_idx = if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
+        let line_ix = if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
             (point.y / line_height) as usize
         } else {
             0
         };
 
-        let y = self.native_y_for_line(line_idx);
+        let y = self.native_y_for_line(line_ix);
         match kind {
             TextSelectionKind::Word => Selection::word_from_point(&self.layout, point.x.into(), y),
             TextSelectionKind::VisualLine => {
@@ -1006,12 +1008,12 @@ impl ParleyTextSystem {
                     glyph_run
                         .positioned_glyphs()
                         .map(|glyph| {
-                            let glyph_id = GlyphId(glyph.id);
+                            let id = GlyphId(glyph.id);
                             ShapedGlyph {
-                                id: glyph_id,
+                                id,
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
                                 is_emoji: color_glyphs
-                                    .kind(glyph_id)
+                                    .kind(id)
                                     .is_some_and(|kind| rasterizer.supports_color_glyph(kind)),
                             }
                         })
@@ -1207,14 +1209,14 @@ impl PlatformTextSystem for ParleyTextSystem {
             .get(params.font_id)
             .context("Parley FontId missing from its store")?;
         let data_identity = font.data_identity();
-        let face_idx = font.index;
+        let face_index = font.index;
         let variations = font.variations.clone();
         self.rasterizer
             .lock()
             .rasterize(font.raster_face(params.font_id), params)
             .with_context(|| {
                 format!(
-                    "native rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_idx}, variations {variations:?}",
+                    "native rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_index}, variations {variations:?}",
                     params.font_id
                 )
             })

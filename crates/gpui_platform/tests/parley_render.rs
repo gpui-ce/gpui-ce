@@ -55,14 +55,14 @@ fn main() {
         }
     }
 
-    let mut context = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
-    let window = context
-        .open_offscreen_window_default(|_, context| context.new(|_| ParleyRenderingFixture))
+    let mut cx = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
+    let window = cx
+        .open_offscreen_window_default(|_, cx| cx.new(|_| ParleyRenderingFixture))
         .expect("failed to create offscreen text window");
     let window = window.into();
-    context.run_until_parked();
+    cx.run_until_parked();
 
-    let primitive_counts = context
+    let primitive_counts = cx
         .update_window(window, |_, window, _| window.rendered_primitive_counts())
         .expect("failed to inspect rendered text");
     let (_, monochrome, subpixel, polychrome) = primitive_counts;
@@ -77,7 +77,7 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     {
-        let image = context
+        let image = cx
             .capture_screenshot(window)
             .expect("failed to capture rendered text");
         let background = *image.get_pixel(0, 0);

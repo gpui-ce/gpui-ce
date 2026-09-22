@@ -414,8 +414,8 @@ mod tests {
             "Ag&"
                 .chars()
                 .enumerate()
-                .map(|(idx, character)| {
-                    let step = idx as u8;
+                .map(|(index, character)| {
+                    let step = index as u8;
                     let glyph = system
                         .rasterize_glyph(&RenderGlyphParams {
                             font_id,
