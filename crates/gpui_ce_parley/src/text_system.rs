@@ -21,12 +21,12 @@ use crate::{
 use anyhow::{Context as _, Result};
 use gpui::{
     Bounds, CaretAffinity, CaretPosition, Font, FontId, FontMetrics, GlyphId, InlineBoxRequest,
-    InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, InlineVisualLine,
-    LineLayout, PaintFragment, PaintStyle, Pixels, PlatformTextLayout, PlatformTextSystem,
-    PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
-    RenderGlyphParams, ShapedGlyph, Size, TextAlign, TextLayoutRequest, TextMovement,
-    TextRenderingMode, TextRun, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
-    point, px, size,
+    InlineLayout, InlineLayoutRequest, InlineRangeGeometry, InlineTextMetrics, InlineTextStyle,
+    InlineVisualLine, LineLayout, PaintFragment, PaintStyle, Pixels, PlatformTextLayout,
+    PlatformTextSystem, PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest,
+    RasterizedGlyph, RenderGlyphParams, ShapedGlyph, Size, TextAlign, TextLayoutRequest,
+    TextMovement, TextRenderingMode, TextRun, TextSelectionKind, VisualDirection, VisualLine,
+    align_inline_boxes, point, px, size,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -399,9 +399,9 @@ impl PlatformTextLayout for ParleyLayout {
             .collect()
     }
 
-    fn inline_geometry(&self, range: std::ops::Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
+    fn inline_geometry(&self, range: std::ops::Range<usize>) -> Option<Vec<InlineRangeGeometry>> {
         if range.is_empty() {
-            return Vec::new();
+            return None;
         }
 
         let anchor = Cursor::from_byte_index(&self.layout, range.start, Affinity::Downstream);
@@ -420,17 +420,17 @@ impl PlatformTextLayout for ParleyLayout {
                 (rect.x1 as f32).min(metrics.inline_min_coord + metrics.offset + metrics.advance);
 
             if right > rect.x0 as f32 {
-                regions.push((
-                    Bounds::from_corners(
+                regions.push(InlineRangeGeometry {
+                    bounds: Bounds::from_corners(
                         point(px(rect.x0 as f32), px(rect.y0 as f32)),
                         point(px(right), px(rect.y1 as f32)),
                     ),
-                    idx,
-                ));
+                    visual_line_index: idx,
+                });
             }
         });
 
-        regions
+        Some(regions)
     }
 
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<std::ops::Range<usize>> {
@@ -1556,10 +1556,14 @@ mod tests {
                 .any(|fragment| fragment.font_size == px(14.))
         );
 
-        let native = layout.layout.platform_layout.inline_geometry(16..19);
+        let native = layout
+            .layout
+            .platform_layout
+            .inline_geometry(16..19)
+            .unwrap();
         assert_eq!(native.len(), 1);
-        assert_eq!(native[0].1, 2);
-        assert!(native[0].0.origin.y >= px(65.99), "{native:?}");
+        assert_eq!(native[0].visual_line_index, 2);
+        assert!(native[0].bounds.origin.y >= px(65.99), "{native:?}");
 
         let selection = layout
             .layout
@@ -1576,6 +1580,7 @@ mod tests {
                 .layout
                 .platform_layout
                 .inline_geometry(5..6)
+                .unwrap()
                 .is_empty(),
             "newlines add no span hit region"
         );
@@ -1584,7 +1589,7 @@ mod tests {
                 .layout
                 .platform_layout
                 .inline_geometry(6..6)
-                .is_empty()
+                .is_none()
         );
     }
 

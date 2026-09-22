@@ -348,23 +348,24 @@ impl InlineDivFrameState {
             for span in &paragraph.document.spans {
                 let regions = fragments.get_mut(&span.layout_id).unwrap();
 
-                for (native, line_idx) in layout
+                for geometry in layout
                     .layout
                     .platform_layout
                     .inline_geometry(span.text_range.clone())
+                    .unwrap_or_default()
                 {
-                    let Some(line) = layout.lines.get(line_idx) else {
+                    let Some(line) = layout.lines.get(geometry.visual_line_index) else {
                         continue;
                     };
 
                     // Selection geometry can include boxes attached to a neighboring cluster.
                     // Remove every box first, then add exactly the boxes owned by this span.
-                    let mut ranges = vec![native.origin.x..native.right()];
+                    let mut ranges = vec![geometry.bounds.origin.x..geometry.bounds.right()];
 
                     for inline_box in layout
                         .boxes
                         .iter()
-                        .filter(|right| right.line_index == line_idx)
+                        .filter(|right| right.line_index == geometry.visual_line_index)
                     {
                         let left = inline_box.bounds.origin.x;
                         let right = inline_box.bounds.right();

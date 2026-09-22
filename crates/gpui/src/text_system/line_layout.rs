@@ -70,6 +70,15 @@ pub struct PositionedInlineBox {
     pub bounds: Bounds<Pixels>,
 }
 
+/// The native geometry occupied by a text range on one visual line.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InlineRangeGeometry {
+    /// Bounds relative to the complete text layout.
+    pub bounds: Bounds<Pixels>,
+    /// Index of the visual line containing these bounds.
+    pub visual_line_index: usize,
+}
+
 /// Text and element boxes laid out in one inline formatting context.
 #[derive(Debug)]
 pub struct InlineLayout {
@@ -246,22 +255,26 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Returns selection rectangles in visual order.
     fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>>;
     /// Native range rectangles and their visual line indices, without selection-only extensions.
-    /// Backends supporting inline flow should preserve actual vertical metrics here.
-    fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
+    ///
+    /// Returns `None` for an empty input range. A nonempty range can produce an empty vector when
+    /// it has no drawable geometry. Backends supporting inline flow should preserve actual
+    /// vertical metrics here.
+    fn inline_geometry(&self, range: Range<usize>) -> Option<Vec<InlineRangeGeometry>> {
         if range.is_empty() {
-            return Vec::new();
+            return None;
         }
 
         let line_height = self.size().height / self.line_count().max(1) as f32;
 
-        self.selection_geometry(range, line_height)
-            .into_iter()
-            .map(|bounds| {
-                let line_idx = (bounds.origin.y / line_height) as usize;
-
-                (bounds, line_idx)
-            })
-            .collect()
+        Some(
+            self.selection_geometry(range, line_height)
+                .into_iter()
+                .map(|bounds| InlineRangeGeometry {
+                    visual_line_index: (bounds.origin.y / line_height) as usize,
+                    bounds,
+                })
+                .collect(),
+        )
     }
 
     /// Returns the atomic logical cluster before the caret.
