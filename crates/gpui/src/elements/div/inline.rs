@@ -81,9 +81,7 @@ impl InlineParagraphCollector<'_> {
 
         if display == Display::None {
             return;
-        }
-
-        if position == Position::Absolute {
+        } else if position == Position::Absolute {
             self.frame_state.flow_child_layout_ids.push(layout_id);
             return;
         }
@@ -436,12 +434,11 @@ impl InlineDivFrameState {
     pub(super) fn prepaint_children(
         &mut self,
         children: &mut [StackSafe<AnyElement>],
-        child_ids: &[LayoutId],
         scroll_offset: Point<Pixels>,
         order: Option<&[usize]>,
         window: &mut Window,
         context: &mut App,
-    ) -> Vec<Bounds<Pixels>> {
+    ) {
         window.with_element_offset(scroll_offset, |window| {
             for paragraph in &mut self.paragraphs {
                 paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
@@ -458,11 +455,6 @@ impl InlineDivFrameState {
                     child.prepaint(window, context);
                 }
             }
-
-            child_ids
-                .iter()
-                .map(|node_id| window.layout_bounds(*node_id))
-                .collect()
         })
     }
 

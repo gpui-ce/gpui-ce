@@ -2191,6 +2191,24 @@ pub struct DivFrameState {
     contents_in_parent_paragraph: bool,
 }
 
+impl DivFrameState {
+    fn standalone_inline(&self) -> Option<&InlineDivFrameState> {
+        if self.contents_in_parent_paragraph {
+            None
+        } else {
+            self.inline.as_ref()
+        }
+    }
+
+    fn standalone_inline_mut(&mut self) -> Option<&mut InlineDivFrameState> {
+        if self.contents_in_parent_paragraph {
+            None
+        } else {
+            self.inline.as_mut()
+        }
+    }
+}
+
 /// Interactivity state displayed an manipulated in the inspector.
 #[derive(Clone)]
 pub struct DivInspectorState {
@@ -2362,11 +2380,7 @@ impl Element for Div {
 
         request_layout.contents_in_parent_paragraph = window.current_inline_fragments.is_some();
 
-        let content_size = if let Some(inline) = request_layout
-            .inline
-            .as_ref()
-            .filter(|_| !request_layout.contents_in_parent_paragraph)
-        {
+        let content_size = if let Some(inline) = request_layout.standalone_inline() {
             inline.prepare_layout(
                 bounds,
                 self.interactivity.tracked_scroll_handle.as_ref(),
@@ -2417,23 +2431,23 @@ impl Element for Div {
 
                 window.with_image_cache(image_cache, |window| {
                     window.with_style_transition_containing_bounds(bounds, |window| {
-                        if let Some(inline) = request_layout
-                            .inline
-                            .as_mut()
-                            .filter(|_| !request_layout.contents_in_parent_paragraph)
-                        {
+                        if let Some(inline) = request_layout.standalone_inline_mut() {
                             let order = self
                                 .prepaint_order_fn
                                 .as_ref()
                                 .map(|order_fn| order_fn(window, cx));
-                            let inline_bounds = inline.prepaint_children(
+                            inline.prepaint_children(
                                 &mut self.children,
-                                &request_layout.child_layout_ids,
                                 scroll_offset,
                                 order.as_deref(),
                                 window,
                                 cx,
                             );
+
+                            let inline_bounds = request_layout
+                                .child_layout_ids
+                                .iter()
+                                .map(|layout_id| window.layout_bounds(*layout_id));
 
                             if let Some(listener) = self.prepaint_listener.as_ref() {
                                 children_bounds.extend(inline_bounds);
@@ -2499,11 +2513,7 @@ impl Element for Div {
                         return;
                     }
 
-                    if let Some(inline) = request_layout
-                        .inline
-                        .as_ref()
-                        .filter(|_| !request_layout.contents_in_parent_paragraph)
-                    {
+                    if let Some(inline) = request_layout.standalone_inline() {
                         inline.paint_children(&mut self.children, window, cx);
                         return;
                     }
