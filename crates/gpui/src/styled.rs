@@ -82,38 +82,39 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the display type of the element.
+    fn display(mut self, display: Display) -> Self {
+        self.style().display = Some(display);
+        self
+    }
+
     /// Sets the display type of the element to `block`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn block(mut self) -> Self {
-        self.style().display = Some(Display::Block);
-        self
+    fn block(self) -> Self {
+        self.display(Display::Block)
     }
 
     /// Sets the display type of the element to `flex`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn flex(mut self) -> Self {
-        self.style().display = Some(Display::Flex);
-        self
+    fn flex(self) -> Self {
+        self.display(Display::Flex)
     }
 
     /// Sets the display type of the element to `grid`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn grid(mut self) -> Self {
-        self.style().display = Some(Display::Grid);
-        self
+    fn grid(self) -> Self {
+        self.display(Display::Grid)
     }
 
     /// Contributes this element's contents to a block parent's paragraph.
     /// Nested inline elements wrap together without adding whitespace or breaks.
-    fn inline(mut self) -> Self {
-        self.style().display = Some(Display::Inline);
-        self
+    fn inline(self) -> Self {
+        self.display(Display::Inline)
     }
 
     /// Places this element in a paragraph as one atomic box with flex layout inside.
-    fn inline_flex(mut self) -> Self {
-        self.style().display = Some(Display::InlineFlex);
-        self
+    fn inline_flex(self) -> Self {
+        self.display(Display::InlineFlex)
     }
 
     /// Sets the vertical alignment of this element when it is placed in an inline layout.
@@ -146,9 +147,8 @@ pub trait Styled: Sized {
 
     /// Sets the display type of the element to `none`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn hidden(mut self) -> Self {
-        self.style().display = Some(Display::None);
-        self
+    fn hidden(self) -> Self {
+        self.display(Display::None)
     }
 
     /// Set the space to be reserved for rendering the scrollbar.
