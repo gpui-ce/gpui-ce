@@ -463,6 +463,11 @@ impl CaretSelection {
         self.anchor.index == self.focus.index
     }
 
+    /// Compares the active focus's UTF-8 byte index with the fixed anchor's index.
+    pub fn endpoint_ordering(self) -> std::cmp::Ordering {
+        self.focus.index.cmp(&self.anchor.index)
+    }
+
     /// Returns the selected UTF-8 byte range in logical order.
     pub fn byte_range(self) -> Range<usize> {
         self.anchor.index.min(self.focus.index)..self.anchor.index.max(self.focus.index)
@@ -1058,7 +1063,31 @@ impl AsCacheKeyRef for CacheKeyRef<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::CaretAffinity;
+    use super::{CaretAffinity, CaretPosition, CaretSelection};
+
+    #[test]
+    fn caret_selection_endpoint_ordering_uses_byte_indices() {
+        for (focus, anchor, expected) in [
+            (
+                CaretPosition::new(2, CaretAffinity::Downstream),
+                CaretPosition::new(5, CaretAffinity::Downstream),
+                std::cmp::Ordering::Less,
+            ),
+            (
+                CaretPosition::new(5, CaretAffinity::Downstream),
+                CaretPosition::new(5, CaretAffinity::Upstream),
+                std::cmp::Ordering::Equal,
+            ),
+            (
+                CaretPosition::new(8, CaretAffinity::Upstream),
+                CaretPosition::new(5, CaretAffinity::Downstream),
+                std::cmp::Ordering::Greater,
+            ),
+        ] {
+            let selection = CaretSelection::from_focus_anchor(focus, anchor);
+            assert_eq!(selection.endpoint_ordering(), expected);
+        }
+    }
 
     #[test]
     fn inserted_text_affinity_tracks_trailing_hard_line_breaks() {

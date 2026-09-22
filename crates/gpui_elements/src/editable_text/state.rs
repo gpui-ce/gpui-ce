@@ -160,12 +160,7 @@ impl EditableTextState {
     }
 
     pub(super) fn selection_direction(&self) -> Option<NavigationDirection> {
-        match self
-            .selected_range
-            .focus
-            .index
-            .cmp(&self.selected_range.anchor.index)
-        {
+        match self.selected_range.endpoint_ordering() {
             std::cmp::Ordering::Less => Some(NavigationDirection::Forward),
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
