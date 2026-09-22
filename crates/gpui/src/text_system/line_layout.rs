@@ -138,10 +138,12 @@ pub enum TextSelectionKind {
 pub struct VisualLine {
     /// The logical UTF-8 byte range assigned to this row.
     pub text_range: Range<usize>,
-    /// The range of paintable fragments in this row, in visual order.
+    /// Indices into [`LineLayout::paint_fragments`] for the positioned glyph runs
+    /// painted on this row, ordered by visual position.
     pub fragment_range: Range<usize>,
-    /// The row's advance before alignment.
-    pub advance: Pixels,
+    /// Horizontal distance consumed by the row's shaped content before alignment,
+    /// measured to the backend's final text pen position.
+    pub advance_width: Pixels,
 }
 
 /// GPUI paint properties carried through Parley's brush.

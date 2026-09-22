@@ -1558,7 +1558,7 @@ impl PlatformTextSystem for TestTextSystem {
         let visual_lines = [VisualLine {
             text_range: 0..text.len(),
             fragment_range: 0..usize::from(!glyphs.is_empty()),
-            advance: position + tracking,
+            advance_width: position + tracking,
         }]
         .into_iter()
         .collect();

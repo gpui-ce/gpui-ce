@@ -265,7 +265,7 @@ fn paint_visual_text(
 
     let paint_width = visual_lines
         .iter()
-        .map(|line| line.advance)
+        .map(|line| line.advance_width)
         .fold(Pixels::ZERO, Pixels::max);
     let line_bounds = Bounds::new(
         origin,
@@ -279,8 +279,8 @@ fn paint_visual_text(
             let line_origin = point(
                 aligned_visual_origin_x(
                     origin.x,
-                    align_width.unwrap_or(line.advance),
-                    line.advance,
+                    align_width.unwrap_or(line.advance_width),
+                    line.advance_width,
                     align,
                 ),
                 origin.y + line_ix as f32 * line_height,
@@ -315,7 +315,7 @@ fn paint_visual_background(
     }
     let paint_width = visual_lines
         .iter()
-        .map(|line| line.advance)
+        .map(|line| line.advance_width)
         .fold(Pixels::ZERO, Pixels::max);
     let line_bounds = Bounds::new(
         origin,
@@ -328,8 +328,8 @@ fn paint_visual_background(
             let line_origin = point(
                 aligned_visual_origin_x(
                     origin.x,
-                    align_width.unwrap_or(line.advance),
-                    line.advance,
+                    align_width.unwrap_or(line.advance_width),
+                    line.advance_width,
                     align,
                 ),
                 origin.y + line_ix as f32 * line_height,

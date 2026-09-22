@@ -1179,7 +1179,7 @@ fn truncate_to_shaped_layout<'a>(
             && document
                 .visual_lines()
                 .iter()
-                .all(|visual| visual.advance <= width + px(0.01))
+                .all(|visual| visual.advance_width <= width + px(0.01))
     };
 
     if fits(&text, runs, window) {

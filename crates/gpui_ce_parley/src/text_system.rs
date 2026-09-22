@@ -814,7 +814,7 @@ impl ParleyTextSystem {
             visual_lines.push(VisualLine {
                 text_range,
                 fragment_range: fragment_start..paint_fragments.len(),
-                advance: px(metrics.advance),
+                advance_width: px(metrics.advance),
             });
             width = width.max(px(metrics.advance));
             ascent = ascent.max(px(metrics.ascent));
@@ -1099,13 +1099,15 @@ mod tests {
         for line in &layout.visual_lines {
             assert!(text.is_char_boundary(line.text_range.start));
             assert!(text.is_char_boundary(line.text_range.end));
-            assert!(f32::from(line.advance).is_finite() && line.advance >= Pixels::ZERO);
+            assert!(
+                f32::from(line.advance_width).is_finite() && line.advance_width >= Pixels::ZERO
+            );
             for fragment in &layout.paint_fragments[line.fragment_range.clone()] {
                 assert!(f32::from(fragment.x_range.start).is_finite());
                 assert!(f32::from(fragment.x_range.end).is_finite());
                 assert!(fragment.x_range.start <= fragment.x_range.end);
                 assert!(fragment.x_range.start >= -layout.font_size * 2.0);
-                assert!(fragment.x_range.end <= line.advance + layout.font_size * 2.0);
+                assert!(fragment.x_range.end <= line.advance_width + layout.font_size * 2.0);
                 for glyph in &fragment.glyphs {
                     assert!(f32::from(glyph.position.x).is_finite());
                     assert!(f32::from(glyph.position.y).is_finite());
