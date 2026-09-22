@@ -61,6 +61,28 @@ struct ParleyCaretStop {
     inline: f64,
 }
 
+trait IntoAffinity<T> {
+    fn into_affinity(self) -> T;
+}
+
+impl IntoAffinity<Affinity> for CaretAffinity {
+    fn into_affinity(self) -> Affinity {
+        match self {
+            Self::Downstream => Affinity::Downstream,
+            Self::Upstream => Affinity::Upstream,
+        }
+    }
+}
+
+impl IntoAffinity<CaretAffinity> for Affinity {
+    fn into_affinity(self) -> CaretAffinity {
+        match self {
+            Self::Downstream => CaretAffinity::Downstream,
+            Self::Upstream => CaretAffinity::Upstream,
+        }
+    }
+}
+
 impl ParleyLayout {
     fn new(layout: Layout<PaintStyle>, text: &str) -> Self {
         let graphemes = text
@@ -76,25 +98,14 @@ impl ParleyLayout {
         }
     }
 
-    fn affinity(affinity: CaretAffinity) -> Affinity {
-        match affinity {
-            CaretAffinity::Downstream => Affinity::Downstream,
-            CaretAffinity::Upstream => Affinity::Upstream,
-        }
-    }
-
     fn caret_position(cursor: Cursor) -> CaretPosition {
-        CaretPosition::new(
-            cursor.index(),
-            match cursor.affinity() {
-                Affinity::Downstream => CaretAffinity::Downstream,
-                Affinity::Upstream => CaretAffinity::Upstream,
-            },
-        )
+        let gpui_affinity = cursor.affinity().into_affinity();
+        CaretPosition::new(cursor.index(), gpui_affinity)
     }
 
     fn cursor(&self, caret: CaretPosition) -> Cursor {
-        Cursor::from_byte_index(&self.layout, caret.index, Self::affinity(caret.affinity))
+        let parley_affinity = caret.affinity.into_affinity();
+        Cursor::from_byte_index(&self.layout, caret.index, parley_affinity)
     }
 
     fn cursor_position(layout: &Layout<PaintStyle>, cursor: Cursor) -> (f64, f64) {
@@ -1118,6 +1129,15 @@ mod tests {
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
     const NOTO_COLOR_EMOJI: &[u8] =
         include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
+
+    #[test]
+    fn caret_affinity_round_trips_through_parley() {
+        for affinity in [CaretAffinity::Downstream, CaretAffinity::Upstream] {
+            let parley_affinity: Affinity = affinity.into_affinity();
+            let gpui_affinity: CaretAffinity = parley_affinity.into_affinity();
+            assert_eq!(gpui_affinity, affinity);
+        }
+    }
 
     fn test_system() -> Arc<ParleyTextSystem> {
         let system = Arc::new(
