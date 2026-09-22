@@ -8,7 +8,12 @@ use crate::{
 use collections::FxHashMap;
 use gpui_util::ResultExt;
 use smallvec::SmallVec;
-use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
+use std::{
+    cell::{Ref, RefCell},
+    ops::Range,
+    rc::Rc,
+    sync::Arc,
+};
 
 /// Resolved content published by the element's ordinary layout request. Wrappers that return
 /// the same layout ID automatically retain this content and the element's normal lifecycle.
@@ -54,6 +59,12 @@ struct InlineParagraph {
     document: Arc<InlineDocument>,
     measurement: Rc<RefCell<Option<InlineParagraphMeasurement>>>,
     paint_origin: Point<Pixels>,
+}
+
+impl InlineParagraph {
+    fn measurement(&self) -> Option<Ref<'_, InlineParagraphMeasurement>> {
+        Ref::filter_map(self.measurement.borrow(), Option::as_ref).ok()
+    }
 }
 
 pub(super) struct InlineDivFrameState {
@@ -314,12 +325,11 @@ impl InlineDivFrameState {
             .collect();
 
         for paragraph in &self.paragraphs {
+            let Some(measurement) = paragraph.measurement() else {
+                continue;
+            };
             let origin = window.layout_bounds(paragraph.layout_id).origin;
-            let measurement = paragraph.measurement.borrow();
-            let layout = &measurement
-                .as_ref()
-                .expect("paragraph was not measured")
-                .layout;
+            let layout = &measurement.layout;
 
             let placement = place_inline_layout(origin, layout.alignment_offset, window);
             let origin = origin + placement.delta;
@@ -469,11 +479,10 @@ impl InlineDivFrameState {
         }
 
         for paragraph in &self.paragraphs {
-            let measurement = paragraph.measurement.borrow();
-            let layout = &measurement
-                .as_ref()
-                .expect("paragraph was not measured")
-                .layout;
+            let Some(measurement) = paragraph.measurement() else {
+                continue;
+            };
+            let layout = &measurement.layout;
 
             layout
                 .paint_background(paragraph.paint_origin, window, context)
