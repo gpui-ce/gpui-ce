@@ -780,7 +780,7 @@ impl PrepaintElements {
         } = prepaint;
 
         let caret = state.caret();
-        let selection = state.selected_range();
+        let selection = state.selected_byte_range();
         let ime_range = state.marked_range();
 
         let mut elements = PrepaintElements::default();

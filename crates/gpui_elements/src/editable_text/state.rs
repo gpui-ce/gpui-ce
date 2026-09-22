@@ -150,9 +150,8 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Returns the utf-8 character range that is currently selected within the current state of the text.
-    /// Internally converts the stored direction-aware range into a canonical range.
-    pub(super) fn selected_range(&self) -> Range<usize> {
+    /// Returns the current selection as a canonical logical-order UTF-8 byte range.
+    pub(super) fn selected_byte_range(&self) -> Range<usize> {
         self.selected_range.byte_range()
     }
 
@@ -171,11 +170,6 @@ impl EditableTextState {
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
         }
-    }
-
-    /// Returns the position of the caret in utf8 character space.
-    pub(super) fn caret_pos(&self) -> usize {
-        self.selected_range.focus.index
     }
 
     pub(super) fn caret(&self) -> CaretPosition {
@@ -469,13 +463,13 @@ impl EditableTextState {
             return;
         }
 
-        let range = self.selected_range();
+        let range = self.selected_byte_range();
         let range = match range.is_empty() {
             false => range,
             true if matches!(boundary, TextBoundary::Graphmeme) => {
                 self.cluster_deletion_range(direction).unwrap_or_else(|| {
                     self.storage
-                        .range_from_caret(self.caret_pos(), direction, boundary)
+                        .range_from_caret(self.caret().index, direction, boundary)
                 })
             }
             true if matches!(boundary, TextBoundary::Word | TextBoundary::Line) => self
@@ -497,15 +491,15 @@ impl EditableTextState {
                         _ => unreachable!(),
                     };
                     let target = document.move_caret(self.caret(), movement, None).0.index;
-                    target.min(self.caret_pos())..target.max(self.caret_pos())
+                    target.min(self.caret().index)..target.max(self.caret().index)
                 })
                 .unwrap_or_else(|| {
                     self.storage
-                        .range_from_caret(self.caret_pos(), direction, boundary)
+                        .range_from_caret(self.caret().index, direction, boundary)
                 }),
             true => self
                 .storage
-                .range_from_caret(self.caret_pos(), direction, boundary),
+                .range_from_caret(self.caret().index, direction, boundary),
         };
         let storage_len_utf8 = self.storage.content_utf8().len();
         let start = range.start.min(storage_len_utf8);
@@ -539,7 +533,7 @@ impl EditableTextState {
             },
             true => self
                 .storage
-                .offset_from_caret(self.caret_pos(), direction, boundary),
+                .offset_from_caret(self.caret().index, direction, boundary),
         };
         self.move_to(caret_pos, cx);
     }
@@ -623,7 +617,7 @@ impl EditableTextState {
             self.move_to_caret(CaretPosition::new(index, CaretAffinity::Downstream), cx);
             return;
         } else {
-            self.caret_pos()
+            self.caret().index
         };
         let caret = CaretPosition::new(
             self.storage.offset_from_caret(base, direction, boundary),
@@ -659,7 +653,7 @@ impl EditableTextState {
     ) {
         let caret_pos = self
             .storage
-            .offset_from_caret(self.caret_pos(), direction, boundary);
+            .offset_from_caret(self.caret().index, direction, boundary);
         self.select_to(caret_pos, cx);
     }
 
@@ -776,7 +770,7 @@ impl EditableTextState {
         // Fallback order: IME provided range, active IME marked range, selection
         let range = range_utf16.map(|range_utf16| self.storage.utf_range_16to8(&range_utf16));
         let range = range.or_else(|| self.marked_range.clone());
-        let range = range.unwrap_or_else(|| self.selected_range());
+        let range = range.unwrap_or_else(|| self.selected_byte_range());
 
         let storage_len_utf8 = self.as_str().len();
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
@@ -833,7 +827,7 @@ impl EntityInputHandler for EditableTextState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let selection_range = self.selected_range();
+        let selection_range = self.selected_byte_range();
         let direction = self.selection_direction();
         Some(UTF16Selection {
             range: self.storage.utf_range_8to16(&selection_range),
