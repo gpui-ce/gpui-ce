@@ -29,6 +29,18 @@ pub use font_features::*;
 pub use line::*;
 pub use line_layout::*;
 
+/// UTF-8 text range containment checks.
+pub trait TextRangeExt {
+    /// Returns whether `range` is ordered, in bounds, and lies on character boundaries.
+    fn contains_range(&self, range: &Range<usize>) -> bool;
+}
+
+impl TextRangeExt for str {
+    fn contains_range(&self, range: &Range<usize>) -> bool {
+        self.get(range.clone()).is_some()
+    }
+}
+
 /// An opaque identifier for a specific font.
 #[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 #[repr(C)]
@@ -939,6 +951,28 @@ impl FontMetrics {
     /// Returns the outer limits of the area that the font covers in pixels.
     pub fn bounding_box(&self, font_size: Pixels) -> Bounds<Pixels> {
         (self.bounding_box / self.units_per_em as f32 * font_size.0).map(px)
+    }
+}
+
+#[cfg(test)]
+mod text_range_tests {
+    use super::*;
+
+    #[test]
+    fn contained_ranges_are_valid_utf8_slices() {
+        let text = "aé日";
+        let cases = [
+            ("valid ASCII", 0..1, true),
+            ("valid multibyte", 1..3, true),
+            ("empty", 1..1, true),
+            ("out of bounds", 0..text.len() + 1, false),
+            ("reversed", 3..1, false),
+            ("split UTF-8 code point", 2..3, false),
+        ];
+
+        for (name, range, expected) in cases {
+            assert_eq!(text.contains_range(&range), expected, "{name}");
+        }
     }
 }
 

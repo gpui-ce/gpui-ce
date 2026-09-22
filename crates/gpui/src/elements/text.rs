@@ -2,8 +2,8 @@ use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
     LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size,
-    TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace, Window, WrappedLine,
-    WrappedLineLayout, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
+    TextOverflow, TextRangeExt, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace, Window,
+    WrappedLine, WrappedLineLayout, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
@@ -455,8 +455,7 @@ impl StyledText {
             highlights
                 .into_iter()
                 .inspect(|(run, _)| {
-                    debug_assert!(self.text.is_char_boundary(run.start));
-                    debug_assert!(self.text.is_char_boundary(run.end));
+                    debug_assert!(self.text.contains_range(run));
                 })
                 .collect::<Vec<_>>(),
         );
@@ -471,11 +470,11 @@ impl StyledText {
         let mut runs = Vec::new();
         let mut ix = 0;
         for (range, highlight) in highlights {
+            debug_assert!(text.contains_range(&range));
+
             if ix < range.start {
-                debug_assert!(text.is_char_boundary(range.start));
                 runs.push(default_style.clone().to_run(range.start - ix));
             }
-            debug_assert!(text.is_char_boundary(range.end));
             runs.push(
                 default_style
                     .clone()
@@ -506,8 +505,7 @@ impl StyledText {
             overrides
                 .into_iter()
                 .inspect(|(range, _)| {
-                    debug_assert!(self.text.is_char_boundary(range.start));
-                    debug_assert!(self.text.is_char_boundary(range.end));
+                    debug_assert!(self.text.contains_range(range));
                 })
                 .collect(),
         );

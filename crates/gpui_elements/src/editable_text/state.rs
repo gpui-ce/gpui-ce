@@ -5,8 +5,8 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
-    Point, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine, point,
-    utf16_to_utf8_offset,
+    Point, TextMovement, TextRangeExt, TextSelectionKind, UTF16Selection, Window, WrappedLine,
+    point, utf16_to_utf8_offset,
 };
 use std::{borrow::Cow, ops::Range};
 
@@ -302,7 +302,8 @@ impl EditableTextState {
                 self.current_document()?.logical_cluster_after(self.caret())
             }
         }?;
-        (!range.is_empty() && range.end <= self.as_str().len()).then_some(range)
+
+        (!range.is_empty() && self.as_str().contains_range(&range)).then_some(range)
     }
 
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
