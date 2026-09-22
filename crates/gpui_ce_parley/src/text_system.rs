@@ -26,7 +26,7 @@ use gpui::{
     ParagraphDirection, Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
     PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
     ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
-    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun,
+    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRangeExt, TextRenderingMode, TextRun,
     TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px,
     size,
 };
@@ -486,12 +486,7 @@ fn prepare_bidi_text(
     };
     let mut controls = bidi_scopes
         .iter()
-        .filter(|scope| {
-            scope.range.start <= scope.range.end
-                && scope.range.end <= text.len()
-                && text.is_char_boundary(scope.range.start)
-                && text.is_char_boundary(scope.range.end)
-        })
+        .filter(|scope| text.contains_range(&scope.range))
         .filter_map(|scope| {
             controls_for_scope(scope.range.clone(), scope.direction, scope.unicode_bidi)
         })
