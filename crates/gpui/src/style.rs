@@ -310,8 +310,6 @@ pub struct Style {
     pub align_items: Option<AlignItems>,
     /// How this node should be aligned in the cross/block axis. Falls back to the parents [`AlignItems`] if not set
     pub align_self: Option<AlignSelf>,
-    /// How this element aligns vertically when it participates in an inline formatting context.
-    pub vertical_align: VerticalAlign,
     /// How should content contained within this item be aligned in the cross/block axis
     pub align_content: Option<AlignContent>,
     /// How should contained within this item be aligned in the main/inline axis
@@ -992,7 +990,6 @@ impl Default for Style {
             // Alignment
             align_items: None,
             align_self: None,
-            vertical_align: VerticalAlign::Baseline,
             align_content: None,
             justify_content: None,
             // Flexbox
@@ -1270,24 +1267,6 @@ pub type AlignSelf = AlignItems;
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/justify-self)
 pub type JustifySelf = AlignItems;
 
-/// Controls the vertical position of an element box in an inline formatting context.
-///
-/// This property has no effect on ordinary block, flex, or grid layout.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
-pub enum VerticalAlign {
-    /// Align the bottom of the box with the text baseline.
-    #[default]
-    Baseline,
-    /// Align the box midpoint with the parent baseline plus half the parent font's x-height.
-    /// This is CSS text-metric alignment. Use `self_center` or `items_center` for flex or grid
-    /// container centering.
-    Middle,
-    /// Align the top of the box with the top of its line.
-    Top,
-    /// Align the bottom of the box with the bottom of its line.
-    Bottom,
-}
-
 /// Sets the distribution of space between and around content items
 /// For Flexbox it controls alignment in the cross axis
 /// For Grid it controls alignment in the block axis
@@ -1334,7 +1313,7 @@ pub type JustifyContent = AlignContent;
 
 /// Sets the layout used for the children of this node
 ///
-/// The default values depends on on which feature flags are enabled. The order of precedence is: Flex, Grid, Block, Inline, None.
+/// The default values depends on on which feature flags are enabled. The order of precedence is: Flex, Grid, Block, None.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
 // Copy of taffy::style type of the same name, to derive JsonSchema.
 pub enum Display {
@@ -1345,8 +1324,6 @@ pub enum Display {
     Flex,
     /// The children will follow the CSS Grid layout algorithm
     Grid,
-    /// The children will be laid out in lines of text
-    Inline,
     /// The children will not be laid out, and will follow absolute positioning
     None,
 }
@@ -1493,8 +1470,6 @@ impl From<Display> for taffy::style::Display {
             Display::Block => Self::Block,
             Display::Flex => Self::Flex,
             Display::Grid => Self::Grid,
-            // GPUI handles inline child layout before handing the containing box to Taffy.
-            Display::Inline => Self::Block,
             Display::None => Self::None,
         }
     }

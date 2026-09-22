@@ -5180,13 +5180,6 @@ impl Window {
         bounds
     }
 
-    pub(crate) fn layout_vertical_align(&self, layout_id: LayoutId) -> crate::VerticalAlign {
-        self.layout_engine
-            .as_ref()
-            .unwrap()
-            .vertical_align(layout_id)
-    }
-
     /// This method should be called during `prepaint`. You can use
     /// the returned [Hitbox] during `paint` or in an event handler
     /// to determine whether the inserted hitbox was the topmost.
@@ -7647,14 +7640,14 @@ mod tests {
         AnyWindowHandle, AppContext as _, Background, Bounds, BoxShadow, ColorExt as _, Context,
         DevicePixels, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
         FileDragPaths, FileDropEvent, FocusHandle, Font, FontId, FontMetrics, GlyphId, ImageSource,
-        InlineLayout, InlineLayoutRequest, InputEvent as _, InteractiveElement as _, IntoElement,
-        LineLayout, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-        Pixels, PlatformTextSystem, Point, RasterizedGlyph, RasterizedGlyphFormat, Render,
-        RenderGlyphParams, RenderImage, RequestFrameOptions, SUBPIXEL_VARIANTS_X,
-        SUBPIXEL_VARIANTS_Y, ScaledPixels, ShaderBool, Size, StatefulInteractiveElement as _,
-        Styled, TestApp, TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent,
-        TouchEvent, TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div,
-        hsla, img, linear_color_stop, linear_gradient, point, px, size, white,
+        InputEvent as _, InteractiveElement as _, IntoElement, LineLayout, LongPressEvent,
+        MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem,
+        Point, RasterizedGlyph, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
+        RequestFrameOptions, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, ShaderBool,
+        Size, StatefulInteractiveElement as _, Styled, TestApp, TestAppContext, TestTextSystem,
+        TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
+        WindowAppearance, WindowOptions, canvas, div, hsla, img, linear_color_stop,
+        linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
@@ -7750,10 +7743,6 @@ mod tests {
 
         fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
             PlatformTextSystem::layout_text(&TestTextSystem, request)
-        }
-
-        fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-            PlatformTextSystem::layout_inline(&TestTextSystem, request)
         }
     }
 

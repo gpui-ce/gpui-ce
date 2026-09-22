@@ -167,17 +167,6 @@ impl HeadlessAppContext {
         app.update_window(window, f)
     }
 
-    /// Returns the most recently rendered bounds for an element's debug selector.
-    pub fn debug_bounds(
-        &mut self,
-        window: AnyWindowHandle,
-        selector: &str,
-    ) -> Result<Option<Bounds<Pixels>>> {
-        self.update_window(window, |_, window, _| {
-            window.rendered_frame.debug_bounds.get(selector).copied()
-        })
-    }
-
     /// Returns the device-pixel bounds of rendered solid quads with the requested color.
     pub fn solid_quad_bounds(
         &mut self,

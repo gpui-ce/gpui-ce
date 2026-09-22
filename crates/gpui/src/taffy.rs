@@ -1,6 +1,6 @@
 use crate::{
     AbsoluteLength, App, Bounds, DefiniteLength, Edges, GridTemplate, Length, Pixels, Point, Size,
-    Style, VerticalAlign, Window, size,
+    Style, Window, size,
     util::{
         ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
         round_to_device_pixel,
@@ -34,7 +34,6 @@ pub struct TaffyLayoutEngine {
     /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
     computed_layouts: FxHashSet<LayoutId>,
-    vertical_alignments: FxHashMap<LayoutId, VerticalAlign>,
     layout_bounds_scratch_space: Vec<LayoutId>,
 }
 
@@ -49,7 +48,6 @@ impl TaffyLayoutEngine {
             absolute_layout_bounds: FxHashMap::default(),
             absolute_outer_origins: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
-            vertical_alignments: FxHashMap::default(),
             layout_bounds_scratch_space: Vec::new(),
         }
     }
@@ -59,7 +57,6 @@ impl TaffyLayoutEngine {
         self.absolute_layout_bounds.clear();
         self.absolute_outer_origins.clear();
         self.computed_layouts.clear();
-        self.vertical_alignments.clear();
     }
 
     pub fn request_layout(
@@ -69,10 +66,9 @@ impl TaffyLayoutEngine {
         scale_factor: f32,
         children: &[LayoutId],
     ) -> LayoutId {
-        let vertical_align = style.vertical_align;
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        let id = if children.is_empty() {
+        if children.is_empty() {
             self.taffy
                 .new_leaf(taffy_style)
                 .expect(EXPECT_MESSAGE)
@@ -83,9 +79,7 @@ impl TaffyLayoutEngine {
                 .new_with_children(taffy_style, LayoutId::to_taffy_slice(children))
                 .expect(EXPECT_MESSAGE)
                 .into()
-        };
-        self.record_vertical_align(id, vertical_align);
-        id
+        }
     }
 
     pub fn request_measured_layout(
@@ -101,32 +95,15 @@ impl TaffyLayoutEngine {
         ) -> Size<Pixels>
         + 'static,
     ) -> LayoutId {
-        let vertical_align = style.vertical_align;
         let taffy_style = style.to_taffy(rem_size, scale_factor);
         let measure = Box::new(measure) as Box<MeasureFn>;
         #[cfg(feature = "stacker")]
         let measure = StackSafe::new(measure);
 
-        let id = self
-            .taffy
+        self.taffy
             .new_leaf_with_context(taffy_style, NodeContext { measure })
             .expect(EXPECT_MESSAGE)
-            .into();
-        self.record_vertical_align(id, vertical_align);
-        id
-    }
-
-    fn record_vertical_align(&mut self, id: LayoutId, vertical_align: VerticalAlign) {
-        if vertical_align != VerticalAlign::Baseline {
-            self.vertical_alignments.insert(id, vertical_align);
-        }
-    }
-
-    pub(crate) fn vertical_align(&self, id: LayoutId) -> VerticalAlign {
-        self.vertical_alignments
-            .get(&id)
-            .copied()
-            .unwrap_or_default()
+            .into()
     }
 
     /// Treats any `auto` dimension of the given node's style as filling `size`.

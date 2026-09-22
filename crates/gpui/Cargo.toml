@@ -272,10 +272,6 @@ name = "image_loading"
 path = "examples/legacy/image_loading.rs"
 
 [[example]]
-name = "inline_layout"
-path = "examples/legacy/inline_layout.rs"
-
-[[example]]
 name = "layer_shell"
 path = "examples/legacy/layer_shell.rs"
 

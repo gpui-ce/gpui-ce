@@ -69,19 +69,6 @@ pub struct Text {
     text: SharedString,
 }
 
-pub(crate) struct InlineTextContent {
-    pub text: SharedString,
-    pub runs: Vec<TextRun>,
-}
-
-pub(crate) fn inline_text_content(text: SharedString, text_style: &TextStyle) -> InlineTextContent {
-    let text = apply_text_transform_preserving_byte_len(text, text_style.text_transform);
-    InlineTextContent {
-        runs: vec![text_style.to_run(text.len())],
-        text,
-    }
-}
-
 impl Text {
     /// Create a new [`Text`] element with a specific ID.
     ///
@@ -547,15 +534,6 @@ impl StyledText {
         }
 
         runs.unwrap_or_else(|| vec![default_style.to_run(self.text.len())])
-    }
-
-    pub(crate) fn take_inline_content(&mut self, default_style: &TextStyle) -> InlineTextContent {
-        let runs = self.take_runs(default_style);
-        let text = apply_text_transform_preserving_byte_len(
-            self.text.clone(),
-            default_style.text_transform,
-        );
-        InlineTextContent { text, runs }
     }
 
     /// Set the text runs for this piece of text.

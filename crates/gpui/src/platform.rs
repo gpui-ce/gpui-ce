@@ -43,18 +43,16 @@ pub(crate) type PlatformScreenCaptureFrame = ();
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
-    FontId, FontMetrics, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, InlineLayout,
-    InlineLayoutRequest, Keymap, LineLayout, Pixels, PlatformGestures, PlatformInput, Point,
-    PreparedRasterStyle, Priority, RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat,
-    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, SharedString, Size,
-    SvgRenderer, SystemWindowTab, Task, TextLayoutRequest, Window, WindowControlArea, hash, point,
-    px,
+    FontId, FontMetrics, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap, LineLayout,
+    Pixels, PlatformGestures, PlatformInput, Point, PreparedRasterStyle, Priority,
+    RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, RenderImage,
+    RenderImageParams, RenderSvgParams, Scene, SharedString, Size, SvgRenderer, SystemWindowTab,
+    Task, TextLayoutRequest, Window, WindowControlArea, hash, point, px,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::{
-    CaretAffinity, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle, PlatformTextLayout,
-    PositionedInlineBox, ShapedGlyph, TextMovement, TextSelectionKind, VisualDirection, VisualLine,
-    align_inline_boxes, size,
+    CaretAffinity, CaretPosition, PaintFragment, PaintStyle, PlatformTextLayout, ShapedGlyph,
+    TextMovement, TextSelectionKind, VisualDirection, VisualLine, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -1194,8 +1192,6 @@ pub trait PlatformTextSystem: Send + Sync {
     }
     /// Layout one complete text document, including hard breaks and optional wrapping.
     fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout;
-    /// Layout one complete text document containing atomic element boxes.
-    fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout;
     /// Returns the recommended text rendering mode for the given font and size.
     fn recommended_rendering_mode(
         &self,
@@ -1446,66 +1442,6 @@ impl TestTextSystem {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn position_test_inline_boxes(
-    request: InlineLayoutRequest<'_>,
-    em_width: Pixels,
-    baseline: Pixels,
-) -> Vec<PositionedInlineBox> {
-    let mut preceding_width = Pixels::ZERO;
-    request
-        .boxes
-        .iter()
-        .map(|inline_box| {
-            let text_width = em_width
-                * request.text[..inline_box.index]
-                    .chars()
-                    .map(|character| character.len_utf16() as f32)
-                    .sum::<f32>();
-            let positioned = PositionedInlineBox {
-                id: inline_box.id,
-                line_index: 0,
-                bounds: Bounds::new(
-                    point(
-                        text_width + preceding_width,
-                        baseline - inline_box.size.height,
-                    ),
-                    inline_box.size,
-                ),
-            };
-            preceding_width += inline_box.size.width;
-            positioned
-        })
-        .collect()
-}
-
-#[cfg(any(test, feature = "test-support"))]
-fn add_test_inline_box_advances(layout: &mut LineLayout, request: InlineLayoutRequest<'_>) {
-    for fragment in &mut layout.paint_fragments {
-        for (glyph, (index, _)) in fragment.glyphs.iter_mut().zip(request.text.char_indices()) {
-            glyph.position.x += request
-                .boxes
-                .iter()
-                .filter(|inline_box| inline_box.index <= index)
-                .map(|inline_box| inline_box.size.width)
-                .sum::<Pixels>();
-        }
-    }
-
-    let box_width = request
-        .boxes
-        .iter()
-        .map(|inline_box| inline_box.size.width)
-        .sum::<Pixels>();
-    for fragment in &mut layout.paint_fragments {
-        fragment.x_range.end += box_width;
-    }
-    layout.width += box_width;
-    if let Some(line) = layout.visual_lines.first_mut() {
-        line.advance += box_width;
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
 impl PlatformTextSystem for TestTextSystem {
     fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         Ok(())
@@ -1658,54 +1594,6 @@ impl PlatformTextSystem for TestTextSystem {
                 size: size(position + tracking, font_size),
             }),
         }
-    }
-
-    fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        let mut layout = self.layout_text(TextLayoutRequest {
-            text: request.text,
-            font_size: request.font_size,
-            runs: request.runs,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-        });
-        let metrics = self.font_metrics(FontId(0));
-        let em_width = request.font_size
-            * self
-                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
-                .unwrap()
-                .width
-            / metrics.units_per_em as f32;
-        let baseline = request
-            .boxes
-            .iter()
-            .map(|inline_box| inline_box.size.height)
-            .fold(request.line_height, Pixels::max);
-        let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
-        add_test_inline_box_advances(&mut layout, request);
-        let line_width = request.wrap_width.unwrap_or(Pixels::MAX).min(layout.width);
-        let mut inline = InlineLayout {
-            size: size(layout.width, baseline),
-            layout: Arc::new(layout),
-            lines: [InlineVisualLine {
-                origin: Point::default(),
-                size: size(line_width, baseline),
-                baseline,
-            }]
-            .into_iter()
-            .collect(),
-            boxes: positioned_boxes,
-            alignment_offset: Pixels::ZERO,
-        };
-        align_inline_boxes(
-            &mut inline.lines,
-            &mut inline.boxes,
-            &mut inline.size,
-            request.boxes,
-            &[request.text_metrics],
-            request.text_metrics,
-            request.line_height,
-        );
-        inline
     }
 
     fn recommended_rendering_mode(

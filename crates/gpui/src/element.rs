@@ -33,8 +33,7 @@
 
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
-    FocusHandle, InlineTextContent, InspectorElementId, LayoutId, Pixels, Point, SharedString,
-    Size, Style, StyledText, Text, TextStyle, VerticalAlign, Window, inline_text_content,
+    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
     util::FluentBuilder, window::with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
@@ -289,18 +288,6 @@ trait ElementObject {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels>;
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement;
-}
-
-pub(crate) struct InlineBoxMeasurement {
-    pub size: Size<Pixels>,
-    pub vertical_align: VerticalAlign,
 }
 
 /// A wrapper around an implementer of [`Element`] that allows it to be drawn in a window.
@@ -555,12 +542,12 @@ impl<E: Element> Drawable<E> {
         }
     }
 
-    fn compute_layout_as_root(
+    pub(crate) fn layout_as_root(
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, Size<Pixels>) {
+    ) -> Size<Pixels> {
         if matches!(&self.phase, ElementDrawPhase::Start) {
             self.request_layout(window, cx);
         }
@@ -604,29 +591,7 @@ impl<E: Element> Drawable<E> {
             _ => panic!("cannot measure after painting"),
         };
 
-        (layout_id, window.layout_bounds(layout_id).size)
-    }
-
-    pub(crate) fn layout_as_root(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, cx).1
-    }
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        let (layout_id, size) = self.compute_layout_as_root(available_space, window, cx);
-        InlineBoxMeasurement {
-            size,
-            vertical_align: window.layout_vertical_align(layout_id),
-        }
+        window.layout_bounds(layout_id).size
     }
 }
 
@@ -663,15 +628,6 @@ where
     ) -> Size<Pixels> {
         Drawable::layout_as_root(self, available_space, window, cx)
     }
-
-    fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        Drawable::layout_as_inline_box(self, available_space, window, cx)
-    }
 }
 
 /// A dynamically typed element that can be used to store any element type.
@@ -691,20 +647,6 @@ impl AnyElement {
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.0.inner_element().downcast_mut::<T>()
-    }
-
-    pub(crate) fn take_inline_text(&mut self, text_style: &TextStyle) -> Option<InlineTextContent> {
-        if let Some(text) = self.downcast_mut::<&'static str>() {
-            return Some(inline_text_content(SharedString::from(*text), text_style));
-        }
-        if let Some(text) = self.downcast_mut::<SharedString>() {
-            return Some(inline_text_content(text.clone(), text_style));
-        }
-        if let Some(text) = self.downcast_mut::<Text>() {
-            return Some(inline_text_content(text.text().clone(), text_style));
-        }
-        self.downcast_mut::<StyledText>()
-            .map(|text| text.take_inline_content(text_style))
     }
 
     /// Request the layout ID of the element stored in this `AnyElement`.
@@ -740,15 +682,6 @@ impl AnyElement {
         cx: &mut App,
     ) -> Size<Pixels> {
         self.0.layout_as_root(available_space, window, cx)
-    }
-
-    pub(crate) fn layout_as_inline_box(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> InlineBoxMeasurement {
-        self.0.layout_as_inline_box(available_space, window, cx)
     }
 
     /// Prepaints this element at the given absolute origin.
