@@ -7,9 +7,9 @@ use gpui::{
     A11ySubtreeBuilder, App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element,
     ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad, Pixels, Point, SharedString,
-    Size, StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
-    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
+    StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout, WeakEntity,
+    Window, WrappedLine, accesskit, fill, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -244,6 +244,12 @@ struct InteractivityPrepaint {
     caret_visible: bool,
 }
 
+struct AccessibilityPrepaint {
+    text_run: accesskit::Node,
+    anchor: usize,
+    focus: usize,
+}
+
 /// Internal type containing prepaint information used to paint the element
 #[doc(hidden)]
 pub struct PrepaintState {
@@ -251,9 +257,7 @@ pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
     elements: PrepaintElements,
-    accessible_text: String,
-    accessible_anchor: usize,
-    accessible_focus: usize,
+    accessibility: Option<AccessibilityPrepaint>,
 }
 
 impl Element for EditableTextElement {
@@ -287,27 +291,22 @@ impl Element for EditableTextElement {
         prepaint: &mut Self::PrepaintState,
         builder: &mut A11ySubtreeBuilder,
     ) {
-        let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
-        text_run.set_value(prepaint.accessible_text.clone());
-        text_run.set_character_lengths(
-            prepaint
-                .accessible_text
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
+        let accessibility = prepaint
+            .accessibility
+            .take()
+            .expect("accessibility data was prepared while building the tree");
         let text_run_id = builder.synthetic_node_id("text");
-        builder.push_child(text_run_id, text_run);
+        builder.push_child(text_run_id, accessibility.text_run);
         builder
             .parent_node()
             .set_text_selection(accesskit::TextSelection {
                 anchor: accesskit::TextPosition {
                     node: text_run_id,
-                    character_index: prepaint.accessible_anchor,
+                    character_index: accessibility.anchor,
                 },
                 focus: accesskit::TextPosition {
                     node: text_run_id,
-                    character_index: prepaint.accessible_focus,
+                    character_index: accessibility.focus,
                 },
             });
     }
@@ -449,12 +448,19 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let accessible_text = state.as_str().to_string();
-        let (accessible_anchor, accessible_focus) = accessible_selection(
-            &accessible_text,
-            state.selected_range(),
-            state.selection_direction(),
-        );
+        let accessibility = window.is_a11y_active().then(|| {
+            let metrics = state.accessibility_text_metrics();
+            let (anchor, focus) = metrics.character_indices_for_selection(state.caret_selection());
+            let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
+            text_run.set_value(state.as_str());
+            text_run.set_character_lengths(metrics.character_lengths);
+
+            AccessibilityPrepaint {
+                text_run,
+                anchor,
+                focus,
+            }
+        });
         let elements = PrepaintElements::build_elements(
             state,
             &prepaint,
@@ -469,9 +475,7 @@ impl Element for EditableTextElement {
             interactivity: prepaint,
             focus_handle,
             elements,
-            accessible_text,
-            accessible_anchor,
-            accessible_focus,
+            accessibility,
         }
     }
 
@@ -528,28 +532,6 @@ impl Element for EditableTextElement {
             cx,
             perform_paint,
         );
-    }
-}
-
-fn accessible_selection(
-    text: &str,
-    selection: Range<usize>,
-    direction: Option<NavigationDirection>,
-) -> (usize, usize) {
-    let byte_to_character = |offset: usize| text[..offset.min(text.len())].chars().count();
-    match direction {
-        Some(NavigationDirection::Forward) => (
-            byte_to_character(selection.end),
-            byte_to_character(selection.start),
-        ),
-        Some(NavigationDirection::Back) => (
-            byte_to_character(selection.start),
-            byte_to_character(selection.end),
-        ),
-        None => {
-            let caret = byte_to_character(selection.start);
-            (caret, caret)
-        }
     }
 }
 
@@ -952,22 +934,6 @@ mod tests {
         let bounds = cx.solid_quad_bounds(window, color).unwrap();
         assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
         bounds[0]
-    }
-
-    #[test]
-    fn accessibility_selection_uses_character_offsets_and_preserves_direction() {
-        let text = "A😀日本B";
-        let selection = 1.."A😀日本".len();
-
-        assert_eq!(
-            accessible_selection(text, selection.clone(), Some(NavigationDirection::Forward)),
-            (4, 1)
-        );
-        assert_eq!(
-            accessible_selection(text, selection, Some(NavigationDirection::Back)),
-            (1, 4)
-        );
-        assert_eq!(accessible_selection(text, 5..5, None), (2, 2));
     }
 
     #[test]

@@ -156,6 +156,10 @@ impl EditableTextState {
         self.selected_range.byte_range()
     }
 
+    pub(super) fn caret_selection(&self) -> CaretSelection {
+        self.selected_range
+    }
+
     pub(super) fn selection_direction(&self) -> Option<NavigationDirection> {
         match self
             .selected_range
@@ -181,6 +185,50 @@ impl EditableTextState {
     /// Returns the IME marked range for character operations.
     pub(super) fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
+    }
+
+    pub(super) fn accessibility_text_metrics(&self) -> AccessibilityTextMetrics {
+        AccessibilityTextMetrics::new(self.as_str())
+    }
+}
+
+pub(super) struct AccessibilityTextMetrics {
+    pub(super) character_lengths: Vec<u8>,
+    byte_offsets: Vec<usize>,
+}
+
+impl AccessibilityTextMetrics {
+    fn new(text: &str) -> Self {
+        let mut byte_offsets = text
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .collect::<Vec<_>>();
+
+        byte_offsets.push(text.len());
+
+        Self {
+            character_lengths: text
+                .chars()
+                .map(|character| character.len_utf8() as u8)
+                .collect(),
+            byte_offsets,
+        }
+    }
+
+    pub(super) fn character_indices_for_selection(
+        &self,
+        selection: CaretSelection,
+    ) -> (usize, usize) {
+        let byte_to_character = |offset: usize| {
+            self.byte_offsets
+                .partition_point(|byte_offset| *byte_offset <= offset)
+                .saturating_sub(1)
+        };
+
+        (
+            byte_to_character(selection.anchor.index),
+            byte_to_character(selection.focus.index),
+        )
     }
 }
 
@@ -1203,6 +1251,26 @@ mod tests {
 
     fn default_state(content: &str, cx: &mut Context<EditableTextState>) -> EditableTextState {
         EditableTextState::new(StringStorage::from(content), cx)
+    }
+
+    #[test]
+    fn accessibility_selection_uses_character_indices_and_preserves_direction() {
+        let text = "A😀日本B";
+        let metrics = AccessibilityTextMetrics::new(text);
+        let start = 1;
+        let end = "A😀日本".len();
+        let forward = CaretSelection::new(
+            CaretPosition::new(start, CaretAffinity::Downstream),
+            CaretPosition::new(end, CaretAffinity::Downstream),
+        );
+        let reversed = CaretSelection::new(forward.focus, forward.anchor);
+
+        assert_eq!(metrics.character_indices_for_selection(forward), (1, 4));
+        assert_eq!(metrics.character_indices_for_selection(reversed), (4, 1));
+        assert_eq!(
+            metrics.character_indices_for_selection(CaretSelection::from(5)),
+            (2, 2)
+        );
     }
 
     fn create_test_input(
