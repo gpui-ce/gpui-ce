@@ -2254,6 +2254,7 @@ dependencies = [
  "palette",
  "parking",
  "parking_lot",
+ "phf",
  "pin-project",
  "pollster 0.4.0",
  "postage",

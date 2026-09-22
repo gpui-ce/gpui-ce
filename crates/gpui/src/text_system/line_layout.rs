@@ -368,6 +368,30 @@ pub enum CaretAffinity {
     Upstream,
 }
 
+/// Hard line breaks that place an inserted-text caret downstream: line feed (`U+000A`),
+/// carriage return (`U+000D`), line separator (`U+2028`), and paragraph separator (`U+2029`).
+static HARD_LINE_BREAK_CHARACTERS: phf::Set<char> = phf::phf_set! {
+    '\n',
+    '\r',
+    '\u{2028}',
+    '\u{2029}',
+};
+
+impl CaretAffinity {
+    /// Returns the affinity for a caret placed after inserted text.
+    pub fn for_inserted_text(text: &str) -> Self {
+        let Some(last_character) = text.chars().next_back() else {
+            return Self::Downstream;
+        };
+
+        if HARD_LINE_BREAK_CHARACTERS.contains(&last_character) {
+            return Self::Downstream;
+        }
+
+        Self::Upstream
+    }
+}
+
 /// A byte position together with the information needed to place it visually.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CaretPosition {
@@ -1029,5 +1053,34 @@ impl<'a> Borrow<dyn AsCacheKeyRef + 'a> for Arc<CacheKey> {
 impl AsCacheKeyRef for CacheKeyRef<'_> {
     fn as_cache_key_ref(&self) -> CacheKeyRef<'_> {
         *self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CaretAffinity;
+
+    #[test]
+    fn inserted_text_affinity_tracks_trailing_hard_line_breaks() {
+        assert_eq!(
+            CaretAffinity::for_inserted_text(""),
+            CaretAffinity::Downstream
+        );
+        assert_eq!(
+            CaretAffinity::for_inserted_text("ordinary text"),
+            CaretAffinity::Upstream
+        );
+
+        for text in ["\n", "\r", "\u{2028}", "\u{2029}"] {
+            assert_eq!(
+                CaretAffinity::for_inserted_text(text),
+                CaretAffinity::Downstream
+            );
+        }
+
+        assert_eq!(
+            CaretAffinity::for_inserted_text("\nordinary text"),
+            CaretAffinity::Upstream
+        );
     }
 }
