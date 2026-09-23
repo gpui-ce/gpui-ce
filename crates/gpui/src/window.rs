@@ -5266,17 +5266,11 @@ impl Window {
 
         engine.place_inline(node_id, bounds, scale);
 
-        if let Some(fragments) = fragments {
-            engine.inline_fragments.insert(
-                node_id,
-                fragments
-                    .into_iter()
-                    .map(|mut right| {
-                        right.origin -= offset;
-                        right
-                    })
-                    .collect(),
-            );
+        if let Some(mut fragments) = fragments {
+            for fragment in &mut fragments {
+                fragment.origin -= offset;
+            }
+            engine.inline_fragments.insert(node_id, fragments.into());
         }
 
         true
