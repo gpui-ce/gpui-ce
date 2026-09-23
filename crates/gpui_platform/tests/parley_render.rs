@@ -1,4 +1,4 @@
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn main() {
     use gpui::{
         AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
@@ -109,5 +109,5 @@ fn main() {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 fn main() {}
