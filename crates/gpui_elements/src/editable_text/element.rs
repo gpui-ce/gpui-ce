@@ -1090,7 +1090,7 @@ mod tests {
             let range = anchor.min(focus)..anchor.max(focus);
             let caret = self.context.update(|context| {
                 let state = self.input.read(context);
-                assert_eq!(state.selected_range(), range);
+                assert_eq!(state.selected_byte_range(), range);
                 assert_eq!(state.caret().index, focus);
 
                 state.caret()
