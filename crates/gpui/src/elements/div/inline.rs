@@ -88,7 +88,9 @@ struct InlineParagraphCollector<'a> {
 
 impl InlineParagraphCollector<'_> {
     fn collect_element(&mut self, layout_id: LayoutId) {
-        let (display, position) = self.window.layout_display_and_position(layout_id);
+        let Some((display, position)) = self.window.layout_display_and_position(layout_id) else {
+            return;
+        };
 
         if display == Display::None {
             return;
@@ -156,7 +158,10 @@ impl InlineParagraphCollector<'_> {
                     id: box_start as u64,
                     index: text_start,
                     size: bounds.size,
-                    vertical_align: self.window.layout_vertical_align(layout_id),
+                    vertical_align: self
+                        .window
+                        .layout_vertical_align(layout_id)
+                        .unwrap_or_default(),
                 });
 
                 self.current_document.box_layout_ids.push(layout_id);

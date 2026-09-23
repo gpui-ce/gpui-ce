@@ -5203,18 +5203,20 @@ impl Window {
         &mut self,
         node_id: LayoutId,
         content: crate::InlineContent,
-    ) {
-        self.layout_engine
-            .as_mut()
-            .unwrap()
+    ) -> bool {
+        let Some(layout_engine) = self.layout_engine.as_mut() else {
+            return false;
+        };
+
+        layout_engine
             .inline_content
             .insert(node_id, Arc::new(content));
+        true
     }
 
     pub(crate) fn inline_content(&self, node_id: LayoutId) -> Option<Arc<crate::InlineContent>> {
         self.layout_engine
-            .as_ref()
-            .unwrap()
+            .as_ref()?
             .inline_content
             .get(&node_id)
             .cloned()
@@ -5223,17 +5225,15 @@ impl Window {
     pub(crate) fn layout_display_and_position(
         &self,
         node_id: LayoutId,
-    ) -> (crate::Display, crate::Position) {
+    ) -> Option<(crate::Display, crate::Position)> {
         self.layout_engine
             .as_ref()
-            .unwrap()
-            .display_and_position(node_id)
+            .map(|layout_engine| layout_engine.display_and_position(node_id))
     }
 
     pub(crate) fn inline_fragments(&self, node_id: LayoutId) -> Option<Arc<[Bounds<Pixels>]>> {
         self.layout_engine
-            .as_ref()
-            .unwrap()
+            .as_ref()?
             .inline_fragments
             .get(&node_id)
             .map(|fragments| {
@@ -5251,12 +5251,18 @@ impl Window {
         node_id: LayoutId,
         mut bounds: Bounds<Pixels>,
         fragments: Option<Vec<Bounds<Pixels>>>,
-    ) {
+    ) -> bool {
+        if self.layout_engine.is_none() {
+            return false;
+        }
+
         let offset = self.pixel_snap_point(self.element_offset());
         bounds.origin -= offset;
 
         let scale = self.scale_factor();
-        let engine = self.layout_engine.as_mut().unwrap();
+        let Some(engine) = self.layout_engine.as_mut() else {
+            return false;
+        };
 
         engine.place_inline(node_id, bounds, scale);
 
@@ -5272,13 +5278,17 @@ impl Window {
                     .collect(),
             );
         }
+
+        true
     }
 
-    pub(crate) fn layout_vertical_align(&self, layout_id: LayoutId) -> crate::VerticalAlign {
+    pub(crate) fn layout_vertical_align(
+        &self,
+        layout_id: LayoutId,
+    ) -> Option<crate::VerticalAlign> {
         self.layout_engine
             .as_ref()
-            .unwrap()
-            .vertical_align(layout_id)
+            .map(|layout_engine| layout_engine.vertical_align(layout_id))
     }
 
     /// This method should be called during `prepaint`. You can use
