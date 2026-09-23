@@ -332,16 +332,17 @@ impl EditableTextState {
                 .map(|movement| document.move_caret(caret, movement, None).0.index);
             start.min(end)..start.max(end)
         } else {
-            self.storage.offset_from_caret(
+            let start = self.storage.offset_from_caret(
                 caret.index,
                 NavigationDirection::Back,
                 TextBoundary::Line,
-            )
-                ..self.storage.offset_from_caret(
-                    caret.index,
-                    NavigationDirection::Forward,
-                    TextBoundary::Line,
-                )
+            );
+            let end = self.storage.offset_from_caret(
+                caret.index,
+                NavigationDirection::Forward,
+                TextBoundary::Line,
+            );
+            start..end
         };
 
         if range.end < self.as_str().len() {
