@@ -404,28 +404,34 @@ impl PlatformTextLayout for ParleyLayout {
             return None;
         }
 
-        let anchor = Cursor::from_byte_index(&self.layout, range.start, Affinity::Downstream);
-        let focus = Cursor::from_byte_index(&self.layout, range.end, Affinity::Upstream);
+        let cursor_at = |index, affinity| Cursor::from_byte_index(&self.layout, index, affinity);
+        let selection = Selection::new(
+            cursor_at(range.start, Affinity::Downstream),
+            cursor_at(range.end, Affinity::Upstream),
+        );
         let mut regions = Vec::new();
 
-        Selection::new(anchor, focus).geometry_with(&self.layout, |rect, idx| {
-            let Some(line) = self.layout.get(idx) else {
+        selection.geometry_with(&self.layout, |selection_bounds, line_index| {
+            let Some(line) = self.layout.get(line_index) else {
                 return;
             };
 
             let metrics = line.metrics();
 
             // Parley adds a selection-only extension after explicit newlines.
-            let right =
-                (rect.x1 as f32).min(metrics.inline_min_coord + metrics.offset + metrics.advance);
+            let clamped_right = (selection_bounds.x1 as f32)
+                .min(metrics.inline_min_coord + metrics.offset + metrics.advance);
 
-            if right > rect.x0 as f32 {
+            if clamped_right > selection_bounds.x0 as f32 {
                 regions.push(InlineRangeGeometry {
                     bounds: Bounds::from_corners(
-                        point(px(rect.x0 as f32), px(rect.y0 as f32)),
-                        point(px(right), px(rect.y1 as f32)),
+                        point(
+                            px(selection_bounds.x0 as f32),
+                            px(selection_bounds.y0 as f32),
+                        ),
+                        point(px(clamped_right), px(selection_bounds.y1 as f32)),
                     ),
-                    visual_line_index: idx,
+                    visual_line_index: line_index,
                 });
             }
         });
