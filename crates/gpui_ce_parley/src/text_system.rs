@@ -457,10 +457,7 @@ impl PlatformTextLayout for ParleyLayout {
                 let inline_line = self.inline_lines[line_index];
                 regions.push(InlineRangeGeometry {
                     bounds: Bounds::from_corners(
-                        point(
-                            px(selection_bounds.x0 as f32),
-                            inline_line.origin.y,
-                        ),
+                        point(px(selection_bounds.x0 as f32), inline_line.origin.y),
                         point(
                             px(clamped_right),
                             inline_line.origin.y + inline_line.size.height,
