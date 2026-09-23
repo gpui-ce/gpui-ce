@@ -365,42 +365,43 @@ impl InlineDivFrameState {
 
                     // Selection geometry can include boxes attached to a neighboring cluster.
                     // Remove every box first, then add exactly the boxes owned by this span.
-                    let mut ranges = vec![geometry.bounds.origin.x..geometry.bounds.right()];
-
-                    for inline_box in layout
+                    let ranges = layout
                         .boxes
                         .iter()
-                        .filter(|right| right.line_index == geometry.visual_line_index)
-                    {
-                        let left = inline_box.bounds.origin.x;
-                        let right = inline_box.bounds.right();
+                        .filter(|inline_box| inline_box.line_index == geometry.visual_line_index)
+                        .fold(
+                            vec![geometry.bounds.origin.x..geometry.bounds.right()],
+                            |ranges, inline_box| {
+                                let left = inline_box.bounds.origin.x;
+                                let right = inline_box.bounds.right();
 
-                        ranges = ranges
+                                ranges
+                                    .into_iter()
+                                    .flat_map(|range| {
+                                        [
+                                            (range.start < left)
+                                                .then_some(range.start..range.end.min(left)),
+                                            (range.end > right)
+                                                .then_some(range.start.max(right)..range.end),
+                                        ]
+                                        .into_iter()
+                                        .flatten()
+                                    })
+                                    .collect()
+                            },
+                        );
+
+                    regions.extend(
+                        ranges
                             .into_iter()
-                            .flat_map(|range| {
-                                let mut pieces = Vec::new();
-
-                                if range.start < left {
-                                    pieces.push(range.start..range.end.min(left));
-                                }
-
-                                if range.end > right {
-                                    pieces.push(range.start.max(right)..range.end);
-                                }
-
-                                pieces
-                            })
-                            .collect();
-                    }
-
-                    for range in ranges {
-                        if range.end > range.start {
-                            regions.push(Bounds::new(
-                                origin + crate::point(range.start, line.origin.y),
-                                size(range.end - range.start, line.size.height),
-                            ));
-                        }
-                    }
+                            .filter(|range| range.end > range.start)
+                            .map(|range| {
+                                Bounds::new(
+                                    origin + crate::point(range.start, line.origin.y),
+                                    size(range.end - range.start, line.size.height),
+                                )
+                            }),
+                    );
                 }
 
                 for inline_box in &layout.boxes {
@@ -460,15 +461,17 @@ impl InlineDivFrameState {
                 paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
             }
 
-            if let Some(order) = order {
-                for idx in order {
-                    if let Some(child) = children.get_mut(*idx) {
-                        child.prepaint(window, context);
+            match order {
+                Some(order) => {
+                    let child_count = children.len();
+                    for index in order.iter().copied().filter(|index| *index < child_count) {
+                        children[index].prepaint(window, context);
                     }
                 }
-            } else {
-                for child in children {
-                    child.prepaint(window, context);
+                None => {
+                    for child in children {
+                        child.prepaint(window, context);
+                    }
                 }
             }
         })
