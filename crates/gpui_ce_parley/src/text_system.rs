@@ -862,14 +862,20 @@ impl ParleyTextSystem {
 
             let last_line = result.inline_lines.last().unwrap();
             let newline_width = (result.layout.ascent + result.layout.descent) * 0.25;
-            let newline_x = last_line.origin.x + last_line.size.width;
+            let newline = if result.is_rtl {
+                last_line.origin.x - newline_width..last_line.origin.x
+            } else {
+                let newline_x = last_line.origin.x + last_line.size.width;
+
+                newline_x..newline_x + newline_width
+            };
 
             paragraphs.push(ParagraphLayout {
                 source,
                 first_line,
                 block_offset,
                 native: result.layout.platform_layout,
-                newline: newline_x..newline_x + newline_width,
+                newline,
                 is_rtl: result.is_rtl,
             });
             visual_lines.extend(result.layout.visual_lines);
