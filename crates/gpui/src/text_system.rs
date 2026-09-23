@@ -920,6 +920,10 @@ mod text_range_tests {
     #[test]
     fn contained_ranges_are_valid_utf8_slices() {
         let text = "aé日";
+        #[allow(
+            clippy::reversed_empty_ranges,
+            reason = "The reversed range is intentional invalid input for contains_range."
+        )]
         let cases = [
             ("valid ASCII", 0..1, true),
             ("valid multibyte", 1..3, true),
