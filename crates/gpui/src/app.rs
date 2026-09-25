@@ -272,7 +272,7 @@ impl Application {
         let mut context_lock = self.0.borrow_mut();
         let asset_registry = Arc::new(assets.into());
         context_lock.asset_registry = asset_registry.clone();
-        context_lock.svg_renderer = SvgRenderer::new(asset_registry);
+        context_lock.svg_renderer = SvgRenderer::new(SvgRenderer::new_font_resolver(&context_lock));
         drop(context_lock);
         self
     }
@@ -979,7 +979,7 @@ impl App {
                 foreground_executor,
                 #[cfg(feature = "profiler")]
                 foreground_journal,
-                svg_renderer: SvgRenderer::new(asset_registry.clone()),
+                svg_renderer: SvgRenderer::default(),
                 loading_assets: Default::default(),
                 asset_registry,
                 http_client,
@@ -1039,6 +1039,9 @@ impl App {
                 _ref_counts,
             }),
         });
+
+        let font_resolver = SvgRenderer::new_font_resolver(&app.borrow());
+        app.borrow_mut().svg_renderer = SvgRenderer::new(font_resolver);
 
         init_app_menus(platform.as_ref(), &app.borrow());
         SystemWindowTabController::init(&mut app.borrow_mut());

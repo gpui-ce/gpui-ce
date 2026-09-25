@@ -5053,7 +5053,8 @@ impl Window {
         let Some(tile) =
             self.sprite_atlas
                 .get_or_insert_with(&params.clone().into(), &mut || {
-                    let Some((size, bytes)) = cx.svg_renderer.render_alpha_mask(&params, data)?
+                    let Some((size, bytes)) =
+                        cx.svg_renderer.render_alpha_mask(&params, data, cx)?
                     else {
                         return Ok(None);
                     };
