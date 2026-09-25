@@ -201,6 +201,9 @@ Changelog established.
   - `App` additional global entity methods: `try_read_global()`, `try_mut_global()`
   - `impl IntoIterator<Item=(SharedString, AssetEntry)> for AssetRegistry`
   - `App::get_asset(SharedString)`
+- Color API extended from global entities. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - `App::missing_color()`
+  - `AppContextGlobal`: provided fns `insert_color()`, `get_color<T>()`, `get_color_defaulted<T>()`
 
 ### Removals
 
