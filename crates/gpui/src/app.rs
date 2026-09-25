@@ -2,8 +2,8 @@ use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, Arena, ArenaBox,
     Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
     CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
-    FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
-    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+    FocusMap, ForegroundExecutor, Global, GlobalId, HapticFeedbackStyle, KeyBinding, KeyContext,
+    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
@@ -767,12 +767,8 @@ pub struct App {
     // the tokio runtime. As any task attempting to spawn a blocking tokio task,
     // might panic.
     pub(crate) globals_by_type: TypeIdHashMap<Box<dyn Any>>,
-    // Entities which are retained until explicitly removed from the app or dropped at end of life-cycle.
-    // This is an alternative way to define "global" data which uses entities.
-    // There can be multiple entities of a given type & each `Entity<T>` is stored as `Box<dyn Any>`.
-    global_entities: Vec<AnyEntity>,
+    globals_by_id: HashMap<GlobalId, Vec<AnyEntity>>,
 
-    // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
     asset_registry: Arc<AssetRegistry>,
     pub(crate) svg_renderer: SvgRenderer,
@@ -867,7 +863,7 @@ impl App {
                 asset_registry,
                 http_client,
                 globals_by_type: Default::default(),
-                global_entities: Default::default(),
+                globals_by_id: Default::default(),
                 entities,
                 new_entity_observers: SubscriberSet::new(),
                 windows: SlotMap::with_key(),
@@ -3020,20 +3016,105 @@ impl AppContextGlobal for App {
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let any = entity.into_any();
-        if !self.global_entities.contains(&any) {
-            self.global_entities.push(any);
-        }
+        self.insert_global_by_type::<T>(entity);
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.global_entities
-            .retain(|any| any.entity_id() != entity.entity_id());
+        self.remove_global_by_type(entity);
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let mut iter = self.global_entities.iter();
+        self.iter_globals(TypeId::of::<T>())
+    }
+}
+
+impl App {
+    fn global_entry_mut(
+        &mut self,
+        id: impl collections::any::AnyHash,
+    ) -> std::collections::hash_map::Entry<'_, GlobalId, Vec<AnyEntity>> {
+        self.globals_by_id.entry(GlobalId::new(id))
+    }
+
+    pub fn insert_global_by_id<T: 'static>(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: Entity<T>,
+    ) {
+        self.global_entry_mut(GlobalId::new(id))
+            .or_default()
+            .push(entity.into_any());
+    }
+
+    pub fn remove_global_by_id(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: impl AsEntityId,
+    ) {
+        use std::collections::hash_map::Entry::*;
+        let entity_id = entity.entity_id();
+        if let Occupied(mut entry) = self.global_entry_mut(id) {
+            entry.get_mut().retain(|any| any.entity_id() != entity_id);
+        }
+    }
+
+    pub fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool {
+        self.globals_by_id.contains_key(&GlobalId::new(id))
+    }
+
+    pub fn drain_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = AnyEntity> + '_ {
+        let either = match self.globals_by_id.get_mut(&GlobalId::new(id)) {
+            Some(mut entry) => itertools::Either::Right(entry.drain(..)),
+            None => itertools::Either::Left(std::iter::empty()),
+        };
+        either.factor_into_iter().map(|either| either.into_inner())
+    }
+
+    pub fn iter_globals<T: 'static>(
+        &self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = crate::Entity<T>> + '_ {
+        let entries_by_id = self.globals_by_id.get(&GlobalId::new(id));
+        let iter = entries_by_id.into_iter().flatten();
         iter.filter_map(|any| any.clone().downcast::<T>().ok())
+    }
+
+    pub fn get_global<T: 'static>(&self, id: impl collections::any::AnyHash) -> Option<Entity<T>> {
+        self.iter_globals(id).next()
+    }
+
+    pub fn get_global_or_insert_default<T: 'static + Default>(&mut self) -> Entity<T> {
+        let id = TypeId::of::<T>();
+        if let Some(entity) = self.get_global::<T>(id) {
+            return entity;
+        }
+        let entity = self.new(|_| T::default());
+        self.insert_global_by_id(id, entity.clone());
+        entity
+    }
+
+    #[track_caller]
+    pub fn try_read_global<T: 'static>(&self) -> Option<&T> {
+        let entity = self.iter_globals(TypeId::of::<T>()).next()?;
+        Some(entity.read(self))
+    }
+
+    #[track_caller]
+    pub fn try_mut_global<T: 'static>(&mut self) -> Option<GpuiBorrow<'_, T>> {
+        let entity = self.iter_globals::<T>(TypeId::of::<T>()).next()?;
+        self.notify(entity.entity_id());
+        Some(entity.as_mut(self))
+    }
+
+    pub fn insert_global_by_type<T: 'static>(&mut self, entity: Entity<T>) {
+        self.insert_global_by_id(TypeId::of::<T>(), entity);
+    }
+
+    pub fn remove_global_by_type<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.remove_global_by_id(TypeId::of::<T>(), entity.entity_id());
     }
 }
 
