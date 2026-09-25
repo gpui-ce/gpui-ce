@@ -103,6 +103,7 @@ pub use app::*;
 pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
+pub use collections::{AnyHash, GenericId};
 pub use color::*;
 pub use context::AppContext;
 pub use ctor::ctor;
