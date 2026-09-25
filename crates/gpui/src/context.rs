@@ -258,6 +258,69 @@ pub trait AppContextGlobal {
             self.insert_asset(key, EntityBuilder::new(move |_| value));
         }
     }
+
+    /// Adds a global entity representing the provided color, at the provided global id.
+    ///
+    /// Global colors are assumed to be singular, meaning there is only one value per key.
+    /// As such, this call will drain/remove all globals at the provided id to prepare to insert the new color.
+    /// If a color is inserted at the same key as an existing color, the existing entity is
+    /// updated and returned to the globals pool (instead of being removed and a new entity being created).
+    /// If there was no color entity at the global id, a new entity is created with the provided value.
+    ///
+    /// This returns the entity that stores the provided value.
+    ///
+    /// Colors can be queried from globals by using [`get_color`](Self::get_color) or [`get_color_defaulted`](Self::get_color_defaulted).
+    fn insert_color(
+        &mut self,
+        id: impl collections::any::AnyHash + Clone,
+        color: impl palette::IntoColor<palette::Hsla>,
+    ) -> Entity<palette::Hsla>
+    where
+        Self: AppContextEntity,
+    {
+        let color = color.into_color();
+        // Draining iterators consume when dropped, so its fine to not iterate over every entry.
+        let entity = self
+            .drain_globals(id.clone())
+            .filter_map(|any| any.downcast::<palette::Hsla>().ok())
+            .next();
+        let entity = match entity {
+            Some(entity) => {
+                self.update_entity(&entity, |value, cx| {
+                    *value = color;
+                    cx.notify();
+                });
+                entity
+            }
+            None => self.new(|_| color),
+        };
+        self.insert_global_by_id(id, entity)
+    }
+
+    /// Queries the globals for the first [`Entity`] at a given global id that contains a value that is [`IntoColor`](palette::IntoColor).
+    fn get_color<T>(&self, id: impl collections::any::AnyHash) -> Option<T>
+    where
+        T: palette::IntoColor<palette::Hsla>,
+        palette::Hsla: palette::IntoColor<T>,
+        Self: AppContextEntity,
+    {
+        use palette::IntoColor;
+        let mut iter = self.iter_globals::<palette::Hsla>(id);
+        let entity_color = iter.next()?;
+        let hsla = self.read_entity(&entity_color, |color, _| color.clone());
+        Some(hsla.into_color())
+    }
+
+    /// Queries the globals for an [`Entity`] containing a value that is [`IntoColor`](palette::IntoColor) at a given global id.
+    /// If the value does not exist, the result of [`missing_color`](crate::App::missing_color) is returned.
+    fn get_color_defaulted(&self, id: impl collections::any::AnyHash) -> palette::Hsla
+    where
+        Self: AppContextEntity,
+    {
+        use palette::IntoColor;
+        self.get_color::<palette::Hsla>(id)
+            .unwrap_or_else(|| crate::App::missing_color().into_color())
+    }
 }
 
 /// Marker trait which auto implements [`AppContextEntity`] if the marked struct also implements [`UpgradeApp`].
