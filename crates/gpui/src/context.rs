@@ -1,9 +1,11 @@
 //! Module containing various [`AppContext`] subdomain traits for common accessors of [`App`].
 use crate::{
-    AnyEntity, AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityBuilder, EntityId,
-    EventEmitter, Global, GpuiBorrow, Reservation, Result, Window, WindowHandle,
+    AnyEntity, AnyView, AnyWindowHandle, App, AsEntityId, AssetEntry, Context, Entity,
+    EntityBuilder, EntityId, EventEmitter, Global, GpuiBorrow, Reservation, Result, Window,
+    WindowHandle,
     app_borrow::{BorrowApp, BorrowAppMut, UpgradeApp},
 };
+use gpui_shared_string::SharedString;
 use scheduler::Task;
 use std::any::TypeId;
 use std::ops::{Deref, DerefMut};
@@ -239,6 +241,22 @@ pub trait AppContextGlobal {
     /// Specifically useful for singleton-globals; if you have multiple globals in this group, you probably want [`iter_globals_of_type`](Self::iter_globals_of_type).
     fn get_global_by_type<T: 'static>(&self) -> Option<Entity<T>> {
         self.get_global_by_id(TypeId::of::<T>())
+    }
+
+    /// Inserts the asset a global stored by the provided path.
+    fn insert_asset(
+        &mut self,
+        path: impl Into<SharedString>,
+        entity: impl Into<EntityBuilder<AssetEntry>>,
+    ) -> Entity<AssetEntry> {
+        self.insert_global_by_id(path.into(), entity)
+    }
+
+    /// Inserts multiple assets as global entities.
+    fn extend_assets(&mut self, iter: impl IntoIterator<Item = (SharedString, AssetEntry)>) {
+        for (key, value) in iter.into_iter() {
+            self.insert_asset(key, EntityBuilder::new(move |_| value));
+        }
     }
 }
 

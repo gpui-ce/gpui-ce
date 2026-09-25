@@ -58,11 +58,7 @@ impl TestAppContext {
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
         let text_system = Arc::new(TextSystem::new(platform.text_system()));
 
-        let app = App::new_app(
-            platform.clone(),
-            AssetRegistry::default().into(),
-            http_client,
-        );
+        let app = App::new_app(platform.clone(), AssetRegistry::default(), http_client);
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {

@@ -144,7 +144,7 @@ impl SvgRenderer {
         let bundled_font_entries = bundled_font_paths()
             .into_iter()
             .filter_map(|path| {
-                let entry = cx.assets().get(path).cloned();
+                let entry = cx.get_asset(path.into()).cloned();
                 entry.map(|entry| (path, entry))
             })
             .collect::<Vec<_>>();
@@ -261,7 +261,7 @@ impl SvgRenderer {
 
         let mut bytes = bytes.map(|bytes| std::borrow::Cow::Borrowed(bytes));
         if bytes.is_none() {
-            let entry = cx.assets().get(&params.path);
+            let entry = cx.get_asset(params.path.clone());
             bytes = entry.map(|entry| entry.load()).flatten();
         }
         let Some(bytes) = bytes else { return Ok(None) };

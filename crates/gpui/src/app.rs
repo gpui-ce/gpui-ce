@@ -184,7 +184,7 @@ impl Application {
     pub fn with_platform(platform: Rc<dyn Platform>) -> Self {
         Self(App::new_app(
             platform,
-            AssetRegistry::default().into(),
+            AssetRegistry::default(),
             Arc::new(NullHttpClient),
         ))
     }
@@ -218,9 +218,11 @@ impl Application {
     /// Assigns the source of assets for the application.
     pub fn with_assets(self, assets: impl Into<AssetRegistry>) -> Self {
         let mut context_lock = self.0.borrow_mut();
-        let asset_registry = Arc::new(assets.into());
-        context_lock.asset_registry = asset_registry.clone();
-        context_lock.svg_renderer = SvgRenderer::new(SvgRenderer::new_font_resolver(&context_lock));
+        // load the assets into global_entities
+        context_lock.extend_assets(assets.into());
+        // construct the svg renderer with bundled fonts, loaded from global_entities
+        context_lock.svg_renderer =
+            SvgRenderer::new(SvgRenderer::new_font_resolver(&context_lock.0));
         drop(context_lock);
         self
     }
@@ -770,7 +772,6 @@ pub struct App {
     globals_by_id: HashMap<GlobalId, Vec<AnyEntity>>,
 
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
-    asset_registry: Arc<AssetRegistry>,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
 
@@ -821,7 +822,7 @@ impl App {
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
-        asset_registry: Arc<AssetRegistry>,
+        asset_registry: AssetRegistry,
         http_client: Arc<dyn HttpClient>,
     ) -> Rc<AppCell> {
         let background_executor = platform.background_executor();
@@ -860,7 +861,6 @@ impl App {
                 foreground_journal,
                 svg_renderer: SvgRenderer::default(),
                 loading_assets: Default::default(),
-                asset_registry,
                 http_client,
                 globals_by_type: Default::default(),
                 globals_by_id: Default::default(),
@@ -918,6 +918,8 @@ impl App {
                 _ref_counts,
             }),
         });
+
+        app.borrow_mut().extend_assets(asset_registry);
 
         let font_resolver = SvgRenderer::new_font_resolver(&app.borrow());
         app.borrow_mut().svg_renderer = SvgRenderer::new(font_resolver);
@@ -2079,11 +2081,6 @@ impl App {
         });
     }
 
-    /// Accessor for the application's asset source, which is provided when constructing the `App`.
-    pub fn assets(&self) -> &Arc<AssetRegistry> {
-        &self.asset_registry
-    }
-
     /// Accessor for the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system
@@ -3121,6 +3118,11 @@ impl App {
         let entity = self.iter_globals::<T>(TypeId::of::<T>()).next()?;
         self.notify(entity.entity_id());
         Some(entity.as_mut(self))
+    }
+
+    /// Returns an asset stored as a global entity at the provided path.
+    pub fn get_asset(&self, path: SharedString) -> Option<&crate::AssetEntry> {
+        Some(self.get_global_by_id(path)?.read(self))
     }
 }
 

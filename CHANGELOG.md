@@ -196,6 +196,11 @@ Changelog established.
   - provided fns: `remove_global_by_id()`, `get_global_by_id()`, `get_global_or_insert_default()`, `insert_global_by_type()`, `remove_global_by_type()`, `emplace_global_by_type()`, `extract_globals_of_type()`, `iter_globals_of_type()`, `get_global_by_type()`
   - `App` has additional global entity fns: `try_read_global()`, `try_mut_global()` [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
   - Added enum `EntityBuilder<T>` and updated `AppContextGlobal::insert_global_by_id()` to take `Into<EntityBuilder<T>>` instead of `Entity<T>`, which allows callers to pass lazy entity constructor fns (thereby passing raw values). [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Asset management moved into global entities api. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - `AppContextGlobal`: provided methods `insert_asset()`, `extend_assets()`
+  - `App` additional global entity methods: `try_read_global()`, `try_mut_global()`
+  - `impl IntoIterator<Item=(SharedString, AssetEntry)> for AssetRegistry`
+  - `App::get_asset(SharedString)`
 
 ### Removals
 
@@ -205,6 +210,7 @@ Changelog established.
   - `WindowOptions::linux_window_background: LinuxWindowBackground`
   - `WindowOptions::web_window_background: WebWindowBackground`
   - Added `WindowOptions::background_appearance()`
+- `App::assets()` [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Fixes
 

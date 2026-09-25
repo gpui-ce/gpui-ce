@@ -638,7 +638,8 @@ impl Asset for ImageAssetLoader {
             Resource::Path(path) => ResolvedLocation::Path(path.clone()),
             Resource::Uri(uri) => ResolvedLocation::Uri(uri.clone()),
             Resource::Embedded(path) => {
-                ResolvedLocation::Embedded(path.clone(), cx.assets().get(&path).cloned())
+                let entry = cx.get_asset(path.clone()).cloned();
+                ResolvedLocation::Embedded(path.clone(), entry)
             }
         };
 

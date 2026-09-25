@@ -95,7 +95,7 @@ impl TestApp {
 
         let app = App::new_app(
             platform.clone(),
-            AssetRegistry::from(asset_source).into(),
+            AssetRegistry::from(asset_source),
             http_client,
         );
         app.borrow_mut().mode = GpuiMode::test();
