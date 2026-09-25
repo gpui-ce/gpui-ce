@@ -3634,6 +3634,11 @@ impl App {
     pub fn get_asset(&self, path: SharedString) -> Option<&crate::AssetEntry> {
         Some(self.get_global_by_id(path)?.read(self))
     }
+
+    /// Defines the color returned when a color is requested via a global-entity's id and is missing.
+    pub const fn missing_color() -> palette::rgb::Rgba {
+        palette::rgb::Rgba::new(1f32, 0f32, 1f32, 1f32)
+    }
 }
 
 /// These effects are processed at the end of each application update cycle.
