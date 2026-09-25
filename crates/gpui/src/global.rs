@@ -1,4 +1,4 @@
-use crate::{App, BorrowAppContext};
+use crate::App;
 
 /// A marker trait for types that can be stored in GPUI's global state.
 ///
