@@ -48,6 +48,7 @@ Items are sorted by issue or pull request number.
   - Removed `Window::paint_quad_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_quad`
   - Removed `Window::paint_image_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_image`
 - `AppContext` split into multiple traits: `AppContextEntity`, `AppContextBorrowEntity`, `AppContextWindow`, `AppContextTask`, `AppContextGlobal`. Each has been added to `gpui::prelude::*` and `gpui::context::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- `SvgRenderer::new` now takes `usvg::FontSelectionFn` instead of `gpui::AssetRegistry`, which can be built by `SvgRenderer::new_font_resolver`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Additions
 

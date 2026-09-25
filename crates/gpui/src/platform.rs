@@ -3852,10 +3852,8 @@ impl From<String> for ClipboardString {
 
 #[cfg(test)]
 mod image_tests {
-    use crate::{AssetRegistry, size};
-
     use super::*;
-    use std::sync::Arc;
+    use crate::size;
 
     #[test]
     fn test_image_to_image_data_applies_exif_orientation() {
@@ -3864,9 +3862,7 @@ mod image_tests {
             include_bytes!("../examples/legacy/image/exif-orientation-rotate-180.jpg").to_vec(),
         );
 
-        let render_image = image
-            .to_image_data(SvgRenderer::new(Arc::new(AssetRegistry::default())))
-            .unwrap();
+        let render_image = image.to_image_data(SvgRenderer::default()).unwrap();
 
         assert_eq!(render_image.size(0), size(16.into(), 32.into()));
 
@@ -3885,9 +3881,7 @@ mod image_tests {
                 .to_vec(),
         );
 
-        let render_image = image
-            .to_image_data(SvgRenderer::new(Arc::new(AssetRegistry::default())))
-            .unwrap();
+        let render_image = image.to_image_data(SvgRenderer::default()).unwrap();
         let bytes = render_image.as_bytes(0).unwrap();
 
         for pixel in bytes.chunks_exact(4) {
