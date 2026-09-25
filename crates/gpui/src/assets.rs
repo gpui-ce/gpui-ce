@@ -97,7 +97,7 @@ impl AssetEntry {
     /// Returns the asset data. If the asset is static/embedded or pre-loaded,
     /// this will return [`Cow::Borrowed(&'this [u8])`] (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
     /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as [`Cow::Owned(Vec<u8>)`].
-    pub fn load(&self) -> Option<Cow<'_, [u8]>> {
+    pub fn load<'this>(&'this self) -> Option<Cow<'this, [u8]>> {
         match self {
             AssetEntry::PreLoaded(Cow::Borrowed(data)) => Some(Cow::Borrowed(data)),
             AssetEntry::PreLoaded(Cow::Owned(data)) => Some(Cow::Borrowed(data.as_bytes())),
@@ -147,6 +147,15 @@ where
                 assets.insert(key.as_ref(), value).log_err();
                 assets
             })
+    }
+}
+
+impl IntoIterator for AssetRegistry {
+    type Item = (SharedString, AssetEntry);
+    type IntoIter = <BTreeMap<SharedString, AssetEntry> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
     }
 }
 
