@@ -81,6 +81,15 @@ env_logger.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+wayland-backend = { version = "0.3.15", features = [
+  "client_system",
+  "dlopen",
+  "rwh_06",
+] }
+wayland-client = "0.31.11"
+wayland-protocols = { version = "0.32.9", features = ["client"] }
+
 [[example]]
 name = "custom_gpu"
 required-features = ["custom-gpu"]
