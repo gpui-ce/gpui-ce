@@ -8,7 +8,7 @@
 //! If all of your elements are the same height, see [`crate::UniformList`] for a simpler API
 
 use crate::{
-    AnyElement, App, AppContext, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges,
+    AnyElement, App, AppContextEntity, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges,
     Element, EntityId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     IntoElement, Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style,
     StyleRefinement, Styled, Window, point, px, size,
@@ -1753,7 +1753,7 @@ mod test {
     use std::rc::Rc;
 
     use crate::{
-        self as gpui, AppContext, Bounds, Context, Element, FollowMode, InteractiveElement,
+        self as gpui, AppContextEntity, Bounds, Context, Element, FollowMode, InteractiveElement,
         IntoElement, ListState, Render, Styled, TestAppContext, Window, canvas, div, list, point,
         px, size,
     };

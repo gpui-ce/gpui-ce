@@ -870,9 +870,8 @@ impl PlatformInput {
 
 #[cfg(test)]
 mod test {
-
     use crate::{
-        self as gpui, AppContext as _, Context, FocusHandle, InteractiveElement, IntoElement,
+        self as gpui, AppContextEntity, Context, FocusHandle, InteractiveElement, IntoElement,
         KeyBinding, Keystroke, Modifiers, ParentElement, Render, TestAppContext, Window, div,
     };
 

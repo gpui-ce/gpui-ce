@@ -1,7 +1,9 @@
 use crate::{
-    AnyView, AnyWindowHandle, AppContext, AsyncApp, DispatchPhase, EntityId, EventEmitter,
-    FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeObserver, Priority, Reservation,
-    SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, WindowHandle,
+    AnyView, AnyWindowHandle, AppContext, AppContextBorrowEntity, AppContextEntity,
+    AppContextGlobal, AppContextTask, AppContextWindow, AsyncApp, DispatchPhase, EntityId,
+    EventEmitter, FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeObserver, Priority,
+    Reservation, SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window,
+    WindowHandle,
 };
 use anyhow::Result;
 use futures::FutureExt;
@@ -1151,7 +1153,8 @@ impl<T> Context<'_, T> {
     }
 }
 
-impl<T> AppContext for Context<'_, T> {
+impl<T> AppContext for Context<'_, T> {}
+impl<T> AppContextEntity for Context<'_, T> {
     #[inline]
     fn new<U: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<U>) -> U) -> Entity<U> {
         self.app.new(build_entity)
@@ -1181,14 +1184,6 @@ impl<T> AppContext for Context<'_, T> {
     }
 
     #[inline]
-    fn as_mut<'a, E>(&'a mut self, handle: &Entity<E>) -> super::GpuiBorrow<'a, E>
-    where
-        E: 'static,
-    {
-        self.app.as_mut(handle)
-    }
-
-    #[inline]
     fn read_entity<U, R>(&self, handle: &Entity<U>, read: impl FnOnce(&U, &App) -> R) -> R
     where
         U: 'static,
@@ -1209,7 +1204,17 @@ impl<T> AppContext for Context<'_, T> {
     {
         self.app.emit(entity, event)
     }
-
+}
+impl<T> AppContextBorrowEntity for Context<'_, T> {
+    #[inline]
+    fn as_mut<'a, E>(&'a mut self, handle: &Entity<E>) -> super::GpuiBorrow<'a, E>
+    where
+        E: 'static,
+    {
+        self.app.as_mut(handle)
+    }
+}
+impl<T> AppContextWindow for Context<'_, T> {
     #[inline]
     fn update_window<R, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<R>
     where
@@ -1238,15 +1243,17 @@ impl<T> AppContext for Context<'_, T> {
     {
         self.app.read_window(window, read)
     }
-
+}
+impl<T> AppContextTask for Context<'_, T> {
     #[inline]
     fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
     where
         R: Send + 'static,
     {
-        self.app.background_executor.spawn(future)
+        self.app.background_spawn(future)
     }
-
+}
+impl<T> AppContextGlobal for Context<'_, T> {
     #[inline]
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where

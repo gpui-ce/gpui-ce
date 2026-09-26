@@ -1,5 +1,5 @@
 use crate::{
-    ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
+    ActiveTooltip, AnyView, App, AppContextEntity, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
     LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParagraphDirection, Pixels,
     Point, ShapedText, ShapedTextLayout, SharedString, Size, TextAlign, TextLayoutOptions,
