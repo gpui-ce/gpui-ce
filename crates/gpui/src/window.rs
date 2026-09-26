@@ -6746,6 +6746,25 @@ impl Window {
         self.a11y.debug_tree_json()
     }
 
+    /// The accessibility tree built by the last frame, when one was built (see
+    /// [`Self::is_a11y_active`] and [`Self::set_a11y_forced`]). Node ids are
+    /// stable while the element identity is; bounds come from
+    /// [`Self::a11y_node_bounds`].
+    pub fn a11y_tree(&self) -> Option<&accesskit::TreeUpdate> {
+        self.a11y.last_tree_update()
+    }
+
+    /// Window-space bounds, in logical pixels, of a node in the last built tree.
+    pub fn a11y_node_bounds(&self, node: accesskit::NodeId) -> Option<Bounds<Pixels>> {
+        self.a11y.last_node_bounds(node)
+    }
+
+    /// How many accessibility trees this window has built; zero before the
+    /// first. Lets a caller tell a fresh tree from the one it already read.
+    pub fn a11y_frame_number(&self) -> u64 {
+        self.a11y.frame_number()
+    }
+
     /// Register a listener for an accessibility action on a specific node.
     /// The listener will be called when a screen reader requests the given
     /// action on the node identified by `node_id`.

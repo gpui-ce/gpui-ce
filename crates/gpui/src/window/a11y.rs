@@ -298,6 +298,7 @@ impl A11y {
             self.nodes.active_descendant,
             self.window_title.as_ref(),
             frame,
+            &self.node_bounds,
         );
         #[cfg(debug_assertions)]
         self.debug.capture_node_info(&self.nodes.node_info);
@@ -306,6 +307,18 @@ impl A11y {
 
     pub(crate) fn debug_tree_json(&self) -> Option<String> {
         self.debug.to_json()
+    }
+
+    pub(crate) fn last_tree_update(&self) -> Option<&TreeUpdate> {
+        self.debug.last_tree_update()
+    }
+
+    pub(crate) fn last_node_bounds(&self, id: NodeId) -> Option<Bounds<Pixels>> {
+        self.debug.node_bounds(id)
+    }
+
+    pub(crate) fn frame_number(&self) -> u64 {
+        self.debug.frame_number()
     }
 }
 

@@ -8,7 +8,7 @@
 use accesskit::{Action, NodeId, TreeUpdate};
 use collections::FxHashMap;
 
-use crate::{Pixels, SharedString, Size};
+use crate::{Bounds, Pixels, SharedString, Size};
 
 #[derive(Default)]
 pub(crate) struct FrameDebugInfo {
@@ -63,6 +63,9 @@ pub(crate) struct A11yDebug {
     frame_number: u64,
     /// Metadata about the most recently captured frame.
     last_frame: Option<CapturedFrame>,
+    /// Window-space bounds of every node in the last update, retained here
+    /// because the live map is cleared at the start of each frame.
+    last_node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     #[cfg(debug_assertions)]
     last_node_info: FxHashMap<NodeId, NodeDebugInfo>,
 }
@@ -75,8 +78,10 @@ impl A11yDebug {
         active_descendant: Option<NodeId>,
         window_title: Option<&SharedString>,
         frame: FrameDebugInfo,
+        node_bounds: &FxHashMap<NodeId, Bounds<Pixels>>,
     ) {
         self.last_tree_update = Some(update.clone());
+        self.last_node_bounds = node_bounds.clone();
         self.last_gpui_focus = gpui_focus;
         self.last_active_descendant = active_descendant;
         self.frame_number += 1;
@@ -89,6 +94,21 @@ impl A11yDebug {
             viewport_size: frame.viewport_size,
             scale_factor: frame.scale_factor,
         });
+    }
+
+    /// The last update sent to the platform adapter, if a frame has produced one.
+    pub(crate) fn last_tree_update(&self) -> Option<&TreeUpdate> {
+        self.last_tree_update.as_ref()
+    }
+
+    /// Window-space bounds recorded for `id` in the last captured frame.
+    pub(crate) fn node_bounds(&self, id: NodeId) -> Option<Bounds<Pixels>> {
+        self.last_node_bounds.get(&id).copied()
+    }
+
+    /// Monotonic count of captured frames; zero before the first.
+    pub(crate) fn frame_number(&self) -> u64 {
+        self.frame_number
     }
 
     #[cfg(debug_assertions)]
@@ -127,7 +147,13 @@ impl A11yDebug {
                 .unwrap_or_default();
             #[cfg(not(debug_assertions))]
             let provenance = NodeProvenance::default();
-            let value = node_to_json(*id, node, &ephemeral, &provenance);
+            let value = node_to_json(
+                *id,
+                node,
+                &ephemeral,
+                &provenance,
+                self.last_node_bounds.get(id).copied(),
+            );
             nodes.insert(key, value);
         }
 
@@ -176,11 +202,23 @@ fn node_to_json(
     node: &accesskit::Node,
     ephemeral: &FxHashMap<NodeId, String>,
     provenance: &NodeProvenance,
+    bounds: Option<Bounds<Pixels>>,
 ) -> serde_json::Value {
     use serde_json::json;
 
     let mut map = serde_json::Map::new();
     map.insert("accesskit_id".into(), json!(id.0.to_string()));
+    if let Some(bounds) = bounds {
+        map.insert(
+            "bounds".into(),
+            json!({
+                "x": bounds.origin.x.0,
+                "y": bounds.origin.y.0,
+                "width": bounds.size.width.0,
+                "height": bounds.size.height.0,
+            }),
+        );
+    }
 
     let children: Vec<String> = node
         .children()
@@ -256,6 +294,15 @@ fn node_to_json(
     }
     if let Some(v) = node.role_description() {
         aria.insert("role_description".into(), json!(v));
+    }
+    if let Some(v) = node.author_id() {
+        aria.insert("author_id".into(), json!(v));
+    }
+    if let Some(v) = node.url() {
+        aria.insert("url".into(), json!(v));
+    }
+    if node.is_disabled() {
+        aria.insert("disabled".into(), json!(true));
     }
 
     // Boolean / enum states.
