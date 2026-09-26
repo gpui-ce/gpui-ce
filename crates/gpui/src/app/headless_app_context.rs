@@ -167,6 +167,17 @@ impl HeadlessAppContext {
         app.update_window(window, f)
     }
 
+    /// Returns the most recently rendered bounds for an element's debug selector.
+    pub fn debug_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        selector: &str,
+    ) -> Result<Option<Bounds<Pixels>>> {
+        self.update_window(window, |_, window, _| {
+            window.rendered_frame.debug_bounds.get(selector).copied()
+        })
+    }
+
     /// Returns the device-pixel bounds of rendered solid quads with the requested color.
     pub fn solid_quad_bounds(
         &mut self,
@@ -182,6 +193,44 @@ impl HeadlessAppContext {
                 .iter()
                 .filter(|quad| quad.background.solid == color)
                 .map(|quad| quad.bounds)
+                .collect()
+        })
+    }
+
+    /// Returns the device-pixel bounds of painted monochrome glyphs of this color.
+    pub fn glyph_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        color: Hsla,
+    ) -> Result<Vec<Bounds<ScaledPixels>>> {
+        let color = color.into();
+        self.update_window(window, |_, window, _| {
+            window
+                .rendered_frame
+                .scene
+                .monochrome_sprites
+                .iter()
+                .filter(|sprite| sprite.color == color)
+                .map(|sprite| sprite.bounds)
+                .collect()
+        })
+    }
+
+    /// Returns the device-pixel bounds of painted underlines of this color.
+    pub fn underline_bounds(
+        &mut self,
+        window: AnyWindowHandle,
+        color: Hsla,
+    ) -> Result<Vec<Bounds<ScaledPixels>>> {
+        let color = color.into();
+        self.update_window(window, |_, window, _| {
+            window
+                .rendered_frame
+                .scene
+                .underlines
+                .iter()
+                .filter(|underline| underline.color == color)
+                .map(|underline| underline.bounds)
                 .collect()
         })
     }

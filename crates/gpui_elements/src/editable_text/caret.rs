@@ -1,3 +1,6 @@
+#[cfg(test)]
+use gpui::{AppContext, TestAppContext};
+
 use gpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 use std::time::Duration;
@@ -85,13 +88,16 @@ impl Caret {
         if self.has_focus != is_focused {
             self.has_focus = is_focused;
             self.visible = is_focused;
+
             if is_focused && !self.interval.is_zero() {
                 self.restart_blink_ticker(cx);
             } else {
                 self.generation = self.generation.wrapping_add(1);
             }
+
             cx.notify();
         }
+
         is_focused && (self.interval.is_zero() || self.visible)
     }
 
@@ -108,6 +114,7 @@ impl Caret {
                 if this.generation != generation || !this.has_focus || this.interval.is_zero() {
                     return;
                 }
+
                 this.visible = !this.visible;
                 cx.notify();
                 this.restart_blink_ticker(cx);
@@ -120,7 +127,6 @@ impl Caret {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{AppContext as _, TestAppContext};
 
     struct CaretEventEmitter;
     impl EventEmitter<CaretNotify> for CaretEventEmitter {}
@@ -136,6 +142,7 @@ mod tests {
         });
 
         caret.update(cx, |caret, cx| assert!(caret.update_focus(true, cx)));
+
         cx.run_until_parked();
 
         cx.executor().advance_clock(interval);
@@ -143,6 +150,7 @@ mod tests {
         assert!(!cx.read(|cx| caret.read(cx).visible));
 
         emitter.update(cx, |_, cx| cx.emit(CaretNotify::PauseBlinking));
+
         cx.run_until_parked();
         assert!(cx.read(|cx| caret.read(cx).visible));
 
@@ -151,6 +159,7 @@ mod tests {
         assert!(!cx.read(|cx| caret.read(cx).visible));
 
         caret.update(cx, |caret, cx| assert!(!caret.update_focus(false, cx)));
+
         cx.executor().advance_clock(interval);
         cx.run_until_parked();
         assert!(!cx.read(|cx| caret.read(cx).visible));

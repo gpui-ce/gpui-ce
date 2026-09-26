@@ -1,3 +1,15 @@
+#[cfg(test)]
+use crate::editable_text::StringStorage;
+
+#[cfg(test)]
+use gpui::{
+    AppContext, Context, HeadlessAppContext, Render, ScaledPixels, TestTextSystem, div, hsla,
+    prelude::*,
+};
+
+#[cfg(test)]
+use std::collections::HashSet;
+
 use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
@@ -787,10 +799,12 @@ impl PrepaintElements {
 
         let line_height = window.line_height();
         let mut caret_point = None::<Point<Pixels>>;
+
         if let Some(document) = &state.layout_data.document {
             let line_y = scroll_offset.y;
             let line_bottom = line_y + line_height * document.line_count() as f32;
             let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
+
             if line_visible {
                 let document_origin = inner_bounds.origin + point(scroll_offset.x, line_y);
                 elements.lines.push(PrepaintLine {
@@ -883,12 +897,6 @@ fn build_quad_over_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editable_text::StringStorage;
-    use gpui::{
-        AppContext as _, Context, HeadlessAppContext, Render, ScaledPixels, TestTextSystem, div,
-        hsla, prelude::*,
-    };
-    use std::{collections::HashSet, sync::Arc};
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
     const INPUT_COLOR: Hsla = hsla(0.08, 0.55, 0.28, 1.0);
@@ -900,7 +908,11 @@ mod tests {
     }
 
     impl Render for CenteredEditableTextView {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
@@ -948,6 +960,7 @@ mod tests {
                         state.select_document(cx);
                         state
                     });
+
                     cx.new(|_| CenteredEditableTextView { extent: 0.0, input })
                 })
                 .unwrap();

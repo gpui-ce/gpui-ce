@@ -1,10 +1,11 @@
 #[cfg(target_os = "macos")]
-fn main() {
-    use gpui::{
-        AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
-        VisualTestAppContext, Window, div, px, rgb, white,
-    };
+use gpui::{
+    AppContext, Context, IntoElement, ParentElement, Render, Styled, VisualTestAppContext, Window,
+    div, px, rgb, white,
+};
 
+#[cfg(target_os = "macos")]
+fn main() {
     if std::env::var_os("GPUI_RUN_RENDERING_TESTS").is_none() {
         return;
     }

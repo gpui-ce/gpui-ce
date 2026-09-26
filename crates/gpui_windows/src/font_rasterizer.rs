@@ -1,3 +1,12 @@
+#[cfg(test)]
+use gpui::{GlyphId, PlatformTextSystem, font, rgba};
+
+#[cfg(test)]
+use gpui_parley::{ParleyTextSystem, SystemFonts};
+
+#[cfg(test)]
+use std::borrow::Cow;
+
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{
     Bounds, DevicePixels, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect,
@@ -76,6 +85,7 @@ impl WindowsGlyphRasterizer {
                 WindowsRasterBackend::Swash(SwashGlyphRasterizer::default())
             }
         };
+
         Self {
             backend,
             system_subpixel_rendering: get_system_subpixel_rendering(),
@@ -184,6 +194,7 @@ impl DirectWriteGlyphRasterizer {
                 grayscale_rendering_params.GetGrayscaleEnhancedContrast()
             },
         };
+
         Ok(Self {
             factory,
             variable_factory,
@@ -199,6 +210,7 @@ impl DirectWriteGlyphRasterizer {
         if !face.variations.is_empty() && self.variable_factory.is_none() {
             return Err(NativeRasterUnsupported::VariableAxesOnLegacyDirectWrite.into());
         }
+
         match self.faces.entry(face.font_id) {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.get().face.clone()),
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -214,6 +226,7 @@ impl DirectWriteGlyphRasterizer {
                         face.font_id, face.face_index, face.variations
                     )
                 })?;
+
                 Ok(entry.insert(native).face.clone())
             }
         }
@@ -240,6 +253,7 @@ impl DirectWriteGlyphRasterizer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
+
         let transform = raster_transform(params.scale_factor);
         let baseline = baseline_origin(params);
         let mut rendering_mode = DWRITE_RENDERING_MODE1::default();
@@ -258,6 +272,7 @@ impl DirectWriteGlyphRasterizer {
                 &mut grid_fit_mode,
             )?;
         }
+
         if rendering_mode == DWRITE_RENDERING_MODE1_OUTLINE {
             rendering_mode = DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC;
         }
@@ -273,6 +288,7 @@ impl DirectWriteGlyphRasterizer {
                 DWRITE_TEXTURE_ALIASED_1x1,
             )
         };
+
         let analysis = unsafe {
             self.factory.CreateGlyphRunAnalysis(
                 &glyph_run,
@@ -285,7 +301,9 @@ impl DirectWriteGlyphRasterizer {
                 baseline.Y,
             )
         }?;
+
         let bounds = unsafe { analysis.GetAlphaTextureBounds(texture_type) }?;
+
         Ok(GlyphAnalysis {
             analysis,
             bounds,
@@ -303,6 +321,7 @@ impl DirectWriteGlyphRasterizer {
         let Some((bounds, width, height)) = convert_bounds(glyph.bounds)? else {
             return Ok(RasterizedGlyph::empty(mode.rasterized_format()));
         };
+
         let pixel_count = width as usize * height as usize;
 
         if mode != GlyphRenderMode::Subpixel {
@@ -314,6 +333,7 @@ impl DirectWriteGlyphRasterizer {
                     &mut pixels,
                 )?;
             }
+
             return Ok(RasterizedGlyph {
                 bounds,
                 size: size(DevicePixels(width), DevicePixels(height)),
@@ -330,14 +350,16 @@ impl DirectWriteGlyphRasterizer {
                 &mut pixels[..pixel_count * 3],
             )?;
         }
-        for pixel_index in (0..pixel_count).rev() {
-            let source = pixel_index * 3;
-            let target = pixel_index * 4;
+
+        for pixel_idx in (0..pixel_count).rev() {
+            let source = pixel_idx * 3;
+            let target = pixel_idx * 4;
             let red = pixels[source];
             let green = pixels[source + 1];
             let blue = pixels[source + 2];
             pixels[target..target + 4].copy_from_slice(&[blue, green, red, 0]);
         }
+
         Ok(RasterizedGlyph {
             bounds,
             size: size(DevicePixels(width), DevicePixels(height)),
@@ -366,6 +388,7 @@ impl DirectWriteGlyphRasterizer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
+
         let transform = raster_transform(params.scale_factor);
         let baseline = baseline_origin(params);
         let enumerate = || unsafe {
@@ -384,11 +407,13 @@ impl DirectWriteGlyphRasterizer {
         let mut raster_bounds: Option<RECT> = None;
         while unsafe { enumerator.MoveNext() }?.as_bool() {
             let run = unsafe { &*enumerator.GetCurrentRun()? };
+
             if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
                 == DWRITE_GLYPH_IMAGE_FORMATS_NONE
             {
                 continue;
             }
+
             let analysis = unsafe {
                 self.factory.CreateGlyphRunAnalysis(
                     &run.Base.glyphRun,
@@ -401,11 +426,14 @@ impl DirectWriteGlyphRasterizer {
                     run.Base.baselineOriginY,
                 )
             }?;
+
             let layer_bounds =
                 unsafe { analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1) }?;
+
             if convert_bounds(layer_bounds)?.is_none() {
                 continue;
             }
+
             raster_bounds = Some(match raster_bounds {
                 Some(bounds) => RECT {
                     left: bounds.left.min(layer_bounds.left),
@@ -416,9 +444,11 @@ impl DirectWriteGlyphRasterizer {
                 None => layer_bounds,
             });
         }
+
         let Some(raster_bounds) = raster_bounds else {
             return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
         };
+
         let Some((bounds, width, height)) = convert_bounds(raster_bounds)? else {
             unreachable!("color layer bounds were validated above");
         };
@@ -427,11 +457,13 @@ impl DirectWriteGlyphRasterizer {
         let enumerator = enumerate()?;
         while unsafe { enumerator.MoveNext() }?.as_bool() {
             let run = unsafe { &*enumerator.GetCurrentRun()? };
+
             if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
                 == DWRITE_GLYPH_IMAGE_FORMATS_NONE
             {
                 continue;
             }
+
             let layer_analysis = unsafe {
                 self.factory.CreateGlyphRunAnalysis(
                     &run.Base.glyphRun,
@@ -444,11 +476,14 @@ impl DirectWriteGlyphRasterizer {
                     run.Base.baselineOriginY,
                 )
             }?;
+
             let layer_bounds =
                 unsafe { layer_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1) }?;
+
             let Some((_, layer_width, layer_height)) = convert_bounds(layer_bounds)? else {
                 continue;
             };
+
             let mut coverage = vec![0; layer_width as usize * layer_height as usize];
             unsafe {
                 layer_analysis.CreateAlphaTexture(
@@ -457,25 +492,30 @@ impl DirectWriteGlyphRasterizer {
                     &mut coverage,
                 )?;
             }
+
             let color = layer_color(run, current_color);
             for layer_y in 0..layer_height {
                 let target_y = layer_bounds.top - raster_bounds.top + layer_y;
+
                 if !(0..height).contains(&target_y) {
                     continue;
                 }
+
                 for layer_x in 0..layer_width {
                     let target_x = layer_bounds.left - raster_bounds.left + layer_x;
+
                     if !(0..width).contains(&target_x) {
                         continue;
                     }
-                    let source_index = (layer_y as usize * layer_width as usize) + layer_x as usize;
-                    let target_index = target_y as usize * width as usize + target_x as usize;
+
+                    let source_idx = (layer_y as usize * layer_width as usize) + layer_x as usize;
+                    let target_idx = target_y as usize * width as usize + target_x as usize;
                     let corrected = corrected_coverage(
-                        f32::from(coverage[source_index]) / 255.0,
+                        f32::from(coverage[source_idx]) / 255.0,
                         color,
                         &self.color_rendering,
                     );
-                    composite_color(&mut premultiplied[target_index], color, corrected);
+                    composite_color(&mut premultiplied[target_idx], color, corrected);
                 }
             }
         }
@@ -483,10 +523,12 @@ impl DirectWriteGlyphRasterizer {
         let mut pixels = Vec::with_capacity(premultiplied.len() * 4);
         for pixel in premultiplied {
             let alpha = pixel[3].clamp(0.0, 1.0);
+
             if alpha == 0.0 {
                 pixels.extend_from_slice(&[0, 0, 0, 0]);
                 continue;
             }
+
             pixels.extend_from_slice(&[
                 float_channel(pixel[2] / alpha),
                 float_channel(pixel[1] / alpha),
@@ -494,6 +536,7 @@ impl DirectWriteGlyphRasterizer {
                 float_channel(alpha),
             ]);
         }
+
         Ok(RasterizedGlyph {
             bounds,
             size: size(DevicePixels(width), DevicePixels(height)),
@@ -519,11 +562,13 @@ impl DirectWriteGlyphRasterizer {
                 &mut coverage,
             )?;
         }
+
         let mut pixels = Vec::with_capacity(pixel_count * 4);
         for alpha in coverage {
             let alpha = multiply_u8(alpha, color.alpha);
             pixels.extend_from_slice(&[color.blue, color.green, color.red, alpha]);
         }
+
         Ok(RasterizedGlyph {
             bounds,
             size: size(DevicePixels(width), DevicePixels(height)),
@@ -574,12 +619,15 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         } else {
             None
         };
+
         if color_kind == Some(ColorGlyphKind::Bitmap) {
             return Err(NativeRasterUnsupported::BitmapColorGlyph.into());
         }
+
         if color_kind == Some(ColorGlyphKind::ColrV1) {
             return Err(NativeRasterUnsupported::ColrV1Glyph.into());
         }
+
         let font_face = self.native_face(&face)?;
         match color_kind {
             Some(ColorGlyphKind::ColrV0) => self.rasterize_colr(&font_face, params),
@@ -592,6 +640,7 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
                 let Some((bounds, width, height)) = convert_bounds(glyph.bounds)? else {
                     return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
                 };
+
                 self.rasterize_native_monochrome_color(glyph, bounds, width, height, color)
             }
             _ => self.rasterize_mask(&font_face, params, params.raster_style.mode),
@@ -624,16 +673,21 @@ impl NativeFace {
                 None::<&windows::core::IUnknown>,
             )
         }?;
+
         let mut simulations = DWRITE_FONT_SIMULATIONS_NONE;
+
         if face.synthesis.embolden {
             simulations |= DWRITE_FONT_SIMULATIONS_BOLD;
         }
+
         if face.synthesis.skew_degrees.is_some() {
             simulations |= DWRITE_FONT_SIMULATIONS_OBLIQUE;
         }
+
         let native_face = if face.variations.is_empty() {
             let reference =
                 unsafe { factory.CreateFontFaceReference(&file, face.face_index, simulations) }?;
+
             unsafe { reference.CreateFontFace() }?
         } else {
             let variable_factory =
@@ -654,9 +708,12 @@ impl NativeFace {
                     &variations,
                 )
             }?;
+
             let variable_face = unsafe { reference.CreateFontFace() }?;
+
             variable_face.cast()?
         };
+
         Ok(Self {
             face: native_face,
             _data: data,
@@ -668,6 +725,7 @@ fn convert_bounds(bounds: RECT) -> Result<Option<(Bounds<DevicePixels>, i32, i32
     if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
         return Ok(None);
     }
+
     let width = bounds
         .right
         .checked_sub(bounds.left)
@@ -768,6 +826,7 @@ fn get_system_subpixel_rendering() -> bool {
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS::default(),
         )
     };
+
     let mut smoothing_type = c_uint::default();
     let type_result = unsafe {
         SystemParametersInfoW(
@@ -777,6 +836,7 @@ fn get_system_subpixel_rendering() -> bool {
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS::default(),
         )
     };
+
     enabled_result.is_ok()
         && type_result.is_ok()
         && smoothing_enabled.as_bool()
@@ -786,9 +846,6 @@ fn get_system_subpixel_rendering() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{GlyphId, PlatformTextSystem, font, rgba};
-    use gpui_parley::{ParleyTextSystem, SystemFonts};
-    use std::borrow::Cow;
 
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
@@ -817,6 +874,7 @@ mod tests {
                 scene_color: color,
                 requested_mode: mode,
             });
+
             system
                 .rasterize_glyph(&RenderGlyphParams {
                     font_id,

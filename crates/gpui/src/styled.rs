@@ -3,7 +3,8 @@ use crate::{
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
     SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
+    TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace, px, relative,
+    rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -81,32 +82,73 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the display type of the element.
+    fn display(mut self, display: Display) -> Self {
+        self.style().display = Some(display);
+        self
+    }
+
     /// Sets the display type of the element to `block`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn block(mut self) -> Self {
-        self.style().display = Some(Display::Block);
-        self
+    fn block(self) -> Self {
+        self.display(Display::Block)
     }
 
     /// Sets the display type of the element to `flex`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn flex(mut self) -> Self {
-        self.style().display = Some(Display::Flex);
-        self
+    fn flex(self) -> Self {
+        self.display(Display::Flex)
     }
 
     /// Sets the display type of the element to `grid`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn grid(mut self) -> Self {
-        self.style().display = Some(Display::Grid);
+    fn grid(self) -> Self {
+        self.display(Display::Grid)
+    }
+
+    /// Contributes this element's contents to a block parent's paragraph.
+    /// Nested inline elements wrap together without adding whitespace or breaks.
+    fn inline(self) -> Self {
+        self.display(Display::Inline)
+    }
+
+    /// Places this element in a paragraph as one atomic box with flex layout inside.
+    fn inline_flex(self) -> Self {
+        self.display(Display::InlineFlex)
+    }
+
+    /// Sets the vertical alignment of this element when it is placed in an inline layout.
+    fn vertical_align(mut self, align: VerticalAlign) -> Self {
+        self.style().vertical_align = Some(align);
         self
+    }
+
+    /// Aligns this inline element box with the surrounding text baseline.
+    fn align_baseline(self) -> Self {
+        self.vertical_align(VerticalAlign::Baseline)
+    }
+
+    /// Aligns this inline box's midpoint with the parent baseline plus half its font's x-height,
+    /// following CSS `vertical-align: middle`.
+    /// For flex or grid centering, use `self_center` on the item or `items_center` on its container.
+    fn align_middle(self) -> Self {
+        self.vertical_align(VerticalAlign::Middle)
+    }
+
+    /// Aligns this inline element box with the top of its line.
+    fn align_top(self) -> Self {
+        self.vertical_align(VerticalAlign::Top)
+    }
+
+    /// Aligns this inline element box with the bottom of its line.
+    fn align_bottom(self) -> Self {
+        self.vertical_align(VerticalAlign::Bottom)
     }
 
     /// Sets the display type of the element to `none`.
     /// [Docs](https://tailwindcss.com/docs/display)
-    fn hidden(mut self) -> Self {
-        self.style().display = Some(Display::None);
-        self
+    fn hidden(self) -> Self {
+        self.display(Display::None)
     }
 
     /// Set the space to be reserved for rendering the scrollbar.

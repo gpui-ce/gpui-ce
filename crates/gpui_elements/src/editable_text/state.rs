@@ -280,6 +280,7 @@ impl EditableTextState {
         if self.layout_data.state.last_seen_storage_version != self.storage.version() {
             return None;
         }
+
         self.layout_data.document.as_deref()
     }
 
@@ -297,7 +298,6 @@ impl EditableTextState {
                 self.current_document()?.logical_cluster_after(self.caret())
             }
         }?;
-
         (!range.is_empty() && self.as_str().contains_range(&range)).then_some(range)
     }
 
@@ -311,6 +311,7 @@ impl EditableTextState {
         let Some(document) = self.current_document() else {
             return CaretPosition::new(storage_len_utf8, CaretAffinity::Upstream);
         };
+
         document
             .closest_caret_for_position(point, line_height)
             .unwrap_or_else(|closest| closest)
@@ -325,26 +326,38 @@ impl EditableTextState {
     }
 
     fn line_range_for_cut(&self) -> Range<usize> {
-        use NavigationDirection::*;
-        use TextBoundary::*;
-
         let caret = self.caret();
         let range = if let Some(document) = self.current_document() {
             let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
                 .map(|movement| document.move_caret(caret, movement, None).0.index);
             start.min(end)..start.max(end)
         } else {
-            self.storage.offset_from_caret(caret.index, Back, Line)
-                ..self.storage.offset_from_caret(caret.index, Forward, Line)
+            let start = self.storage.offset_from_caret(
+                caret.index,
+                NavigationDirection::Back,
+                TextBoundary::Line,
+            );
+            let end = self.storage.offset_from_caret(
+                caret.index,
+                NavigationDirection::Forward,
+                TextBoundary::Line,
+            );
+            start..end
         };
 
         if range.end < self.as_str().len() {
             range.start
-                ..self
-                    .storage
-                    .offset_from_caret(range.end, Forward, Graphmeme)
+                ..self.storage.offset_from_caret(
+                    range.end,
+                    NavigationDirection::Forward,
+                    TextBoundary::Graphmeme,
+                )
         } else if range.start > 0 {
-            self.storage.offset_from_caret(range.start, Back, Graphmeme)..range.end
+            self.storage.offset_from_caret(
+                range.start,
+                NavigationDirection::Back,
+                TextBoundary::Graphmeme,
+            )..range.end
         } else {
             range
         }
@@ -480,6 +493,7 @@ impl EditableTextState {
                         }
                         _ => unreachable!(),
                     };
+
                     let target = document.move_caret(self.caret(), movement, None).0.index;
                     target.min(self.caret().index)..target.max(self.caret().index)
                 })
@@ -573,6 +587,7 @@ impl EditableTextState {
         } else {
             NavigationDirection::Forward
         };
+
         let boundary = match movement {
             TextMovement::VisualLeft | TextMovement::VisualRight => TextBoundary::Graphmeme,
             TextMovement::VisualWordLeft | TextMovement::VisualWordRight => TextBoundary::Word,
@@ -583,6 +598,7 @@ impl EditableTextState {
             | TextMovement::HardLineStart
             | TextMovement::HardLineEnd => TextBoundary::Line,
         };
+
         let horizontal = matches!(
             movement,
             TextMovement::VisualLeft
@@ -604,15 +620,18 @@ impl EditableTextState {
                     .index
                     .max(self.selected_range.anchor.index),
             };
+
             self.move_to_caret(CaretPosition::new(index, CaretAffinity::Downstream), cx);
             return;
         } else {
             self.caret().index
         };
+
         let caret = CaretPosition::new(
             self.storage.offset_from_caret(base, direction, boundary),
             CaretAffinity::Downstream,
         );
+
         if extend {
             self.select_to_caret(caret, cx);
         } else {
@@ -698,6 +717,7 @@ impl EditableTextState {
         let Some(document) = self.current_document() else {
             return false;
         };
+
         self.selected_range = document
             .selection_from_point(point, line_height, kind)
             .into();
@@ -791,6 +811,7 @@ impl EditableTextState {
             });
             new_range.into()
         };
+
         self.preferred_x = None;
     }
 }
@@ -884,6 +905,7 @@ impl EntityInputHandler for EditableTextState {
         let document = self.current_document()?;
         let start = range.start.min(document.text.len());
         let end = range.end.min(document.text.len());
+
         if start == end {
             let caret = CaretPosition::new(start, CaretAffinity::Downstream);
             let position = document.position_for_caret(caret, line_height)?;
@@ -892,6 +914,7 @@ impl EntityInputHandler for EditableTextState {
                 bounds.origin + position + point(CARET_PIXELS_EPSILON, line_height),
             ));
         }
+
         let selection = document
             .selection_bounds(start..end, line_height)
             .into_iter()
@@ -998,6 +1021,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             self.move_semantic(TextMovement::VisualLineStart, false, cx);
             return;
         }
+
         self.move_semantic(TextMovement::VisualUp, false, cx);
     }
 
@@ -1006,6 +1030,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             self.move_semantic(TextMovement::VisualLineEnd, false, cx);
             return;
         }
+
         self.move_semantic(TextMovement::VisualDown, false, cx);
     }
 
