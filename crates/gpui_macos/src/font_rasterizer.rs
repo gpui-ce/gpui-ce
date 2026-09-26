@@ -38,7 +38,11 @@ use gpui::{
 };
 use gpui_parley::{GlyphRasterizer, RasterFace};
 use objc2::rc::autoreleasepool;
-use std::{collections::HashMap, f64::consts::PI, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    f64::consts::PI,
+    sync::{Arc, OnceLock},
+};
 
 #[allow(non_upper_case_globals)]
 const kCGImageAlphaOnly: u32 = 7;
@@ -46,6 +50,7 @@ const kCGImageAlphaOnly: u32 = 7;
 /// CoreText and CoreGraphics rasterization for the exact face selected by Parley.
 pub(crate) struct MacGlyphRasterizer {
     faces: HashMap<gpui::FontId, NativeFace>,
+    sources: HashMap<u64, Arc<SendCFData>>,
 }
 
 struct NativeFace {
@@ -53,39 +58,50 @@ struct NativeFace {
     // CoreText may defer reading tables from descriptors created from in-memory data until a
     // sized CTFont first draws. Keep the descriptor's source alive for the full cached-face
     // lifetime, as the pre-Parley backend did through its retained CGFont.
-    _source_data: SendCFData,
+    _source_data: Arc<SendCFData>,
 }
 
 /// An immutable Core Foundation data object retained by the serialized macOS rasterizer.
 struct SendCFData {
-    _data: CFData,
+    data: CFData,
 }
 
 // SAFETY: CFData is immutable, and MacGlyphRasterizer only accesses native faces while its
 // enclosing mutex is held. The value is retained solely to extend the source data's lifetime.
 unsafe impl Send for SendCFData {}
+// SAFETY: CFData is immutable, so retaining it from multiple native-face entries is safe.
+unsafe impl Sync for SendCFData {}
 
 impl MacGlyphRasterizer {
     pub(crate) fn new() -> Self {
         Self {
             faces: HashMap::default(),
+            sources: HashMap::default(),
         }
     }
 
     fn native_face(&mut self, face: &RasterFace<'_>) -> Result<&NativeFace> {
-        match self.faces.entry(face.font_id) {
-            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let native = autoreleasepool(|_| NativeFace::new(face)).with_context(|| {
-                    format!(
-                        "CoreText could not create FontId {:?}, face index {}, variations {:?}",
-                        face.font_id, face.face_index, face.variations
-                    )
-                })?;
-
-                Ok(entry.insert(native))
-            }
+        if self.faces.contains_key(&face.font_id) {
+            return Ok(&self.faces[&face.font_id]);
         }
+
+        let source = self
+            .sources
+            .entry(face.source_id)
+            .or_insert_with(|| {
+                Arc::new(SendCFData {
+                    data: CFData::from_buffer(face.data),
+                })
+            })
+            .clone();
+        let native = autoreleasepool(|_| NativeFace::new(face, source)).with_context(|| {
+            format!(
+                "CoreText could not create FontId {:?}, face index {}, variations {:?}",
+                face.font_id, face.face_index, face.variations
+            )
+        })?;
+        self.faces.insert(face.font_id, native);
+        Ok(&self.faces[&face.font_id])
     }
 
     fn rasterize_inner(
@@ -258,10 +274,10 @@ impl GlyphRasterizer for MacGlyphRasterizer {
 }
 
 impl NativeFace {
-    fn new(face: &RasterFace<'_>) -> Result<Self> {
-        let data = CFData::from_buffer(face.data);
-        let descriptors_ref =
-            unsafe { CTFontManagerCreateFontDescriptorsFromData(data.as_concrete_TypeRef()) };
+    fn new(face: &RasterFace<'_>, source_data: Arc<SendCFData>) -> Result<Self> {
+        let descriptors_ref = unsafe {
+            CTFontManagerCreateFontDescriptorsFromData(source_data.data.as_concrete_TypeRef())
+        };
 
         ensure!(
             !descriptors_ref.is_null(),
@@ -309,7 +325,7 @@ impl NativeFace {
 
         Ok(Self {
             descriptor,
-            _source_data: SendCFData { _data: data },
+            _source_data: source_data,
         })
     }
 }

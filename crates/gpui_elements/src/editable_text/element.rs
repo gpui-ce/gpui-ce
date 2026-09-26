@@ -475,7 +475,7 @@ impl Element for EditableTextElement {
             let (anchor, focus) = metrics.character_indices_for_selection(state.caret_selection());
             let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
             text_run.set_value(state.as_str());
-            text_run.set_character_lengths(metrics.character_lengths);
+            text_run.set_character_lengths(metrics.character_lengths.clone());
 
             AccessibilityPrepaint {
                 text_run,

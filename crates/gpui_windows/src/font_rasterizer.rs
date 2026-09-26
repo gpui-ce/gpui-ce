@@ -144,12 +144,17 @@ pub(crate) struct DirectWriteGlyphRasterizer {
     in_memory_loader: IDWriteInMemoryFontFileLoader,
     rendering_params: IDWriteRenderingParams,
     faces: HashMap<gpui::FontId, NativeFace>,
+    sources: HashMap<u64, NativeSource>,
     color_rendering: ColorRenderingParams,
     system_subpixel_rendering: bool,
 }
 
 struct NativeFace {
     face: IDWriteFontFace3,
+}
+
+struct NativeSource {
+    file: IDWriteFontFile,
     _data: Box<[u8]>,
 }
 
@@ -201,6 +206,7 @@ impl DirectWriteGlyphRasterizer {
             in_memory_loader,
             rendering_params,
             faces: HashMap::default(),
+            sources: HashMap::default(),
             color_rendering,
             system_subpixel_rendering: get_system_subpixel_rendering(),
         })
@@ -211,25 +217,32 @@ impl DirectWriteGlyphRasterizer {
             return Err(NativeRasterUnsupported::VariableAxesOnLegacyDirectWrite.into());
         }
 
-        match self.faces.entry(face.font_id) {
-            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.get().face.clone()),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let native = NativeFace::new(
-                    &self.factory,
-                    self.variable_factory.as_ref(),
-                    &self.in_memory_loader,
-                    face,
-                )
-                .with_context(|| {
-                    format!(
-                        "DirectWrite could not create FontId {:?}, face index {}, variations {:?}",
-                        face.font_id, face.face_index, face.variations
-                    )
-                })?;
-
-                Ok(entry.insert(native).face.clone())
-            }
+        if let Some(native) = self.faces.get(&face.font_id) {
+            return Ok(native.face.clone());
         }
+
+        let source = match self.sources.entry(face.source_id) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                NativeSource::new(&self.factory, &self.in_memory_loader, face.data)
+                    .context("DirectWrite could not retain the font source")?,
+            ),
+        };
+        let native = NativeFace::new(
+            &self.factory,
+            self.variable_factory.as_ref(),
+            &source.file,
+            face,
+        )
+        .with_context(|| {
+            format!(
+                "DirectWrite could not create FontId {:?}, face index {}, variations {:?}",
+                face.font_id, face.face_index, face.variations
+            )
+        })?;
+        let native_face = native.face.clone();
+        self.faces.insert(face.font_id, native);
+        Ok(native_face)
     }
 
     fn create_glyph_analysis(
@@ -660,20 +673,9 @@ impl NativeFace {
     fn new(
         factory: &IDWriteFactory5,
         variable_factory: Option<&IDWriteFactory6>,
-        loader: &IDWriteInMemoryFontFileLoader,
+        file: &IDWriteFontFile,
         face: &RasterFace<'_>,
     ) -> Result<Self> {
-        let data: Box<[u8]> = face.data.into();
-        let data_len = u32::try_from(data.len()).context("font data exceeds DirectWrite limits")?;
-        let file = unsafe {
-            loader.CreateInMemoryFontFileReference(
-                factory,
-                data.as_ptr().cast(),
-                data_len,
-                None::<&windows::core::IUnknown>,
-            )
-        }?;
-
         let mut simulations = DWRITE_FONT_SIMULATIONS_NONE;
 
         if face.synthesis.embolden {
@@ -686,7 +688,7 @@ impl NativeFace {
 
         let native_face = if face.variations.is_empty() {
             let reference =
-                unsafe { factory.CreateFontFaceReference(&file, face.face_index, simulations) }?;
+                unsafe { factory.CreateFontFaceReference(file, face.face_index, simulations) }?;
 
             unsafe { reference.CreateFontFace() }?
         } else {
@@ -702,7 +704,7 @@ impl NativeFace {
                 .collect::<Vec<_>>();
             let reference = unsafe {
                 variable_factory.CreateFontFaceReference(
-                    &file,
+                    file,
                     face.face_index,
                     simulations,
                     &variations,
@@ -714,10 +716,28 @@ impl NativeFace {
             variable_face.cast()?
         };
 
-        Ok(Self {
-            face: native_face,
-            _data: data,
-        })
+        Ok(Self { face: native_face })
+    }
+}
+
+impl NativeSource {
+    fn new(
+        factory: &IDWriteFactory5,
+        loader: &IDWriteInMemoryFontFileLoader,
+        bytes: &[u8],
+    ) -> Result<Self> {
+        let data: Box<[u8]> = bytes.into();
+        let data_len = u32::try_from(data.len()).context("font data exceeds DirectWrite limits")?;
+        let file = unsafe {
+            loader.CreateInMemoryFontFileReference(
+                factory,
+                data.as_ptr().cast(),
+                data_len,
+                None::<&windows::core::IUnknown>,
+            )
+        }?;
+
+        Ok(Self { file, _data: data })
     }
 }
 

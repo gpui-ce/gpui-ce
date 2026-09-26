@@ -274,21 +274,60 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             return None;
         }
 
-        let mut regions = Vec::new();
+        Some(
+            self.inline_geometry_for_ranges(std::slice::from_ref(&range))
+                .pop()
+                .unwrap(),
+        )
+    }
 
-        for paragraph in &self.paragraphs {
-            let Some(local) = local_range(&range, &paragraph.source.content) else {
+    fn inline_geometry_for_ranges(&self, ranges: &[Range<usize>]) -> Vec<Vec<InlineRangeGeometry>> {
+        let mut paragraph_requests = vec![Vec::new(); self.paragraphs.len()];
+
+        for (range_idx, range) in ranges.iter().enumerate() {
+            if range.is_empty() {
                 continue;
-            };
+            }
 
-            for mut geometry in paragraph.native.inline_geometry(local).unwrap_or_default() {
-                geometry.bounds.origin.y += paragraph.block_offset;
-                geometry.visual_line_index += paragraph.first_line;
-                regions.push(geometry);
+            let first_paragraph = self.paragraph_for_index(range.start);
+
+            for (paragraph_idx, paragraph) in
+                self.paragraphs.iter().enumerate().skip(first_paragraph)
+            {
+                if paragraph.source.content.start >= range.end {
+                    break;
+                }
+
+                if let Some(local) = local_range(range, &paragraph.source.content) {
+                    paragraph_requests[paragraph_idx].push((range_idx, local));
+                }
             }
         }
 
-        Some(regions)
+        let mut output = vec![Vec::new(); ranges.len()];
+
+        for (paragraph, requests) in self.paragraphs.iter().zip(paragraph_requests) {
+            if requests.is_empty() {
+                continue;
+            }
+
+            let local_ranges = requests
+                .iter()
+                .map(|(_range_idx, range)| range.clone())
+                .collect::<Vec<_>>();
+            let local_geometry = paragraph.native.inline_geometry_for_ranges(&local_ranges);
+
+            for ((range_idx, _range), regions) in requests.into_iter().zip(local_geometry) {
+                output[range_idx].extend(regions.into_iter().map(|mut geometry| {
+                    geometry.bounds.origin.y += paragraph.block_offset;
+                    geometry.visual_line_index += paragraph.first_line;
+
+                    geometry
+                }));
+            }
+        }
+
+        output
     }
 
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {

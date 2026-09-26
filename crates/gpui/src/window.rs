@@ -10,12 +10,12 @@ use crate::{
     BoxShadow, Capslock, ColorExt, Context, Corners, CursorHideMode, CursorStyle, Decorations,
     DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
     Entity, EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global,
-    GlobalElementId, GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IsZero, KeyBinding,
-    KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex,
-    Modifiers, ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
+    GlobalElementId, GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero,
+    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp,
+    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton,
+    MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority,
+    PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
     SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
@@ -23,8 +23,8 @@ use crate::{
     TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
     Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point,
-    prelude::*, px, rems, size, transparent_black, white,
+    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point, px,
+    rems, size, transparent_black, white,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -1262,6 +1262,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
@@ -1969,6 +1970,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            collecting_inline: false,
             current_inline_fragments: None,
             root: None,
             element_id_stack: SmallVec::default(),
@@ -5240,6 +5242,9 @@ impl Window {
             .get(&node_id)
             .map(|fragments| {
                 let offset = self.pixel_snap_point(self.element_offset());
+                if offset == Point::default() {
+                    return fragments.clone();
+                }
 
                 fragments
                     .iter()
@@ -5269,8 +5274,10 @@ impl Window {
         engine.place_inline(node_id, bounds, scale);
 
         if let Some(mut fragments) = fragments {
-            for fragment in &mut fragments {
-                fragment.origin -= offset;
+            if offset != Point::default() {
+                for fragment in &mut fragments {
+                    fragment.origin -= offset;
+                }
             }
             engine.inline_fragments.insert(node_id, fragments.into());
         }
