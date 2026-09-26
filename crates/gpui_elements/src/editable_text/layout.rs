@@ -1,5 +1,5 @@
 use gpui::{Bounds, Pixels, Point, Size, WrappedLine};
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 /// Data used across successive layout requests to gauge whether layout must be recomputed.
 #[derive(Default, Clone, Copy)]
@@ -22,82 +22,11 @@ pub(super) struct EditableTextLayoutResult {
     /// The last seen scroll position and size of the element
     pub scroll_bounds: Bounds<Pixels>,
     pub state: EditableTextLayoutState,
-    /// The `ShapedLine` produced by the painter's `prepaint`.
+    /// The document layout produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
-    pub lines: Vec<TextLineSegment>,
+    pub document: Option<Arc<WrappedLine>>,
     pub line_height: Pixels,
     /// The next position the scroll view should move to.
     /// Set by the state in response to user actions.
     pub next_scroll_offset: Option<Point<Pixels>>,
-}
-
-/// A segment of text that is a single logical/document line but can take up multiple rows due to wrapping.
-pub(super) struct TextLineSegment {
-    /// The utf8 byte range in the content string that this line covers.
-    pub text_range: Range<usize>,
-    /// The shaped and wrapped text for this line, if available.
-    pub wrapped_line: Option<Arc<WrappedLine>>,
-
-    /// The y-coordinate of this segment which can be multiplied by the line_height
-    /// to get its pixel location relative to the bounds of the text area.
-    pub pos_y: usize,
-}
-
-impl TextLineSegment {
-    /// The number of visual lines this segment encapsulates,
-    /// since it can occupy multiple rows due to wrapping.
-    pub fn row_count(&self) -> usize {
-        let count = self
-            .wrapped_line
-            .as_ref()
-            .map(|line| line.wrap_boundaries().len());
-        count.unwrap_or_default() + 1
-    }
-
-    /// Returns true if the line contains a given position (e.g. for finding the line containing the caret).
-    /// If `includes_end` is true, the end of the line is treated as inclusive instead of exclusive.
-    pub fn contains_position(&self, pos: usize, include_end: bool) -> bool {
-        if self.text_range.is_empty() {
-            return pos == self.text_range.start;
-        }
-
-        if include_end {
-            (self.text_range.start..=self.text_range.end).contains(&pos)
-        } else {
-            self.text_range.contains(&pos)
-        }
-    }
-
-    /// Returns the index of the character within this segment that is closest
-    /// to the provided screen space position.
-    /// The character index returned is in absolute space; it is not relative to this segment.
-    pub fn character_index_at_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
-        let mut offset = 0usize;
-        if !self.text_range.is_empty()
-            && let Some(wrapped) = &self.wrapped_line
-        {
-            offset = wrapped
-                .closest_index_for_position(point, line_height)
-                .unwrap_or_else(|closest| closest)
-                .min(wrapped.text.len());
-        }
-        self.text_range.start + offset
-    }
-
-    /// Returns the screen space position of the character at the position provided.
-    /// The position of the character must be absolute to the string this segment
-    /// partially represents, it is converted to a relative offset internally.
-    pub fn position_for_index(
-        &self,
-        character_index: usize,
-        line_height: Pixels,
-    ) -> Option<Point<Pixels>> {
-        let wrapped = self.wrapped_line.as_ref()?;
-        // the position in the text relative to this line segment
-        let relative_text_pos = character_index
-            .saturating_sub(self.text_range.start)
-            .min(wrapped.text.len());
-        // the screen position of the character in this line segment
-        wrapped.position_for_index(relative_text_pos, line_height)
-    }
 }

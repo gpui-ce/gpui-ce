@@ -189,7 +189,7 @@ impl DirectXAtlasState {
                 bytes_per_pixel = 4;
             }
             AtlasTextureKind::Subpixel => {
-                pixel_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                pixel_format = DXGI_FORMAT_B8G8R8A8_UNORM;
                 bind_flag = D3D11_BIND_SHADER_RESOURCE;
                 bytes_per_pixel = 4;
             }

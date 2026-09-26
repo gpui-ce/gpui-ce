@@ -2356,42 +2356,27 @@ impl Element for Div {
                     return hitbox;
                 }
 
-                #[inline]
-                fn prepaint_children(
-                    children: &mut [StackSafe<AnyElement>],
-                    order_fn: Option<&dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>,
-                    window: &mut Window,
-                    cx: &mut App,
-                ) {
-                    if let Some(order_fn) = order_fn {
-                        let order = order_fn(window, cx);
-                        for idx in order {
-                            if let Some(child) = children.get_mut(idx) {
-                                child.prepaint(window, cx);
-                            }
-                        }
-                    } else {
-                        for child in children {
-                            child.prepaint(window, cx);
-                        }
-                    }
-                }
-
                 window.with_image_cache(image_cache, |window| {
                     window.with_style_transition_containing_bounds(bounds, |window| {
                         window.with_element_offset(scroll_offset, |window| {
-                            prepaint_children(
-                                &mut self.children,
-                                self.prepaint_order_fn.as_deref(),
-                                window,
-                                cx,
-                            )
+                            if let Some(order_fn) = &self.prepaint_order_fn {
+                                let order = order_fn(window, cx);
+                                for idx in order {
+                                    if let Some(child) = self.children.get_mut(idx) {
+                                        child.prepaint(window, cx);
+                                    }
+                                }
+                            } else {
+                                for child in &mut self.children {
+                                    child.prepaint(window, cx);
+                                }
+                            }
                         });
-                    });
 
-                    if let Some(listener) = self.prepaint_listener.as_ref() {
-                        listener(children_bounds, window, cx);
-                    }
+                        if let Some(listener) = self.prepaint_listener.as_ref() {
+                            listener(children_bounds, window, cx);
+                        }
+                    });
                 });
 
                 hitbox
@@ -3067,7 +3052,6 @@ impl Interactivity {
                         None,
                     )
                     .ok()
-                    .and_then(|mut text| text.pop())
                 {
                     text.paint(hitbox.origin, FONT_SIZE, TextAlign::Left, None, window, cx)
                         .ok();

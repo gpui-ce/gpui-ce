@@ -377,6 +377,30 @@ impl TaffyLayoutEngine {
         self.absolute_layout_bounds.insert(id, bounds);
         bounds
     }
+
+    /// Returns bounds whose origin and size are snapped in the coordinate space of the parent.
+    ///
+    /// Text uses this placement so its offset within a containing element remains stable when the
+    /// element moves across the device-pixel grid. Other layout boxes continue to use absolute edge
+    /// snapping through [`Self::layout_bounds`] so coincident edges still close.
+    pub(crate) fn parent_relative_layout_bounds(
+        &mut self,
+        id: LayoutId,
+        scale_factor: f32,
+    ) -> Bounds<Pixels> {
+        let Some(parent_id) = self.taffy.parent(id.0).map(LayoutId::from) else {
+            return self.layout_bounds(id, scale_factor);
+        };
+        let parent_bounds = self.layout_bounds(parent_id, scale_factor);
+        let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
+        let local_origin = Point::from(layout.location).map(round_half_toward_zero);
+        let local_size = Size::from(layout.size).map(round_half_toward_zero);
+
+        Bounds::new(
+            parent_bounds.origin + (local_origin / scale_factor).map(Pixels),
+            (local_size / scale_factor).map(Pixels),
+        )
+    }
 }
 
 /// A unique identifier for a layout node, generated when requesting a layout from Taffy

@@ -6,18 +6,16 @@ use anyhow::{Context as _, anyhow};
 use collections::FxHashMap;
 use core::fmt;
 use derive_more::{Add, Deref, FromStr, Sub};
-use itertools::Itertools;
 use palette::Hsla;
-use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 use std::{
     borrow::Cow,
-    cmp,
     fmt::{Debug, Display, Formatter},
     hash::{Hash, Hasher},
-    ops::{Deref, DerefMut, Range},
+    ops::Range,
     sync::Arc,
 };
 
@@ -25,22 +23,28 @@ mod font_fallbacks;
 mod font_features;
 mod line;
 mod line_layout;
-mod line_wrapper;
 
 pub use font_fallbacks::*;
 pub use font_features::*;
 pub use line::*;
 pub use line_layout::*;
-pub use line_wrapper::*;
+
+/// UTF-8 text range containment checks.
+pub trait TextRangeExt {
+    /// Returns whether `range` is ordered, in bounds, and lies on character boundaries.
+    fn contains_range(&self, range: &Range<usize>) -> bool;
+}
+
+impl TextRangeExt for str {
+    fn contains_range(&self, range: &Range<usize>) -> bool {
+        self.get(range.clone()).is_some()
+    }
+}
 
 /// An opaque identifier for a specific font.
 #[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FontId(pub usize);
-
-/// An opaque identifier for a specific font family.
-#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
-pub struct FontFamilyId(pub usize);
 
 /// Number of subpixel glyph variants along the X axis.
 pub const SUBPIXEL_VARIANTS_X: u8 = 4;
@@ -53,10 +57,7 @@ pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
     font_metrics: RwLock<FxHashMap<FontId, FontMetrics>>,
-    raster_bounds: RwLock<FxHashMap<RenderGlyphParams, Bounds<DevicePixels>>>,
-    wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
-    font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
-    fallback_font_stack: SmallVec<[Font; 2]>,
+    raster_metadata: RwLock<FxHashMap<RenderGlyphParams, RasterizedGlyphMetadata>>,
 }
 
 impl TextSystem {
@@ -65,38 +66,14 @@ impl TextSystem {
         TextSystem {
             platform_text_system,
             font_metrics: RwLock::default(),
-            raster_bounds: RwLock::default(),
+            raster_metadata: RwLock::default(),
             font_ids_by_font: RwLock::default(),
-            wrapper_pool: Mutex::default(),
-            font_runs_pool: Mutex::default(),
-            fallback_font_stack: smallvec![
-                // TODO: Remove this when Linux have implemented setting fallbacks.
-                font(".ZedMono"),
-                font(".ZedSans"),
-                font("Helvetica"),
-                font("Segoe UI"),     // Windows
-                font("Ubuntu"),       // Gnome (Ubuntu)
-                font("Adwaita Sans"), // Gnome 47
-                font("Cantarell"),    // Gnome
-                font("Noto Sans"),    // KDE
-                font("DejaVu Sans"),
-                font("Arial"), // macOS, Windows
-            ],
         }
     }
 
     /// Get a list of all available font names from the operating system.
     pub fn all_font_names(&self) -> Vec<String> {
-        let mut names = self.platform_text_system.all_font_names();
-        names.extend(
-            self.fallback_font_stack
-                .iter()
-                .map(|font| font.family.to_string()),
-        );
-        names.push(".SystemUIFont".to_string());
-        names.sort_unstable();
-        names.dedup();
-        names
+        self.platform_text_system.all_font_names()
     }
 
     /// Add a font's data to the text system.
@@ -136,41 +113,14 @@ impl TextSystem {
         }
     }
 
-    /// Get the Font for the Font Id.
-    pub fn get_font_for_id(&self, id: FontId) -> Option<Font> {
-        let lock = self.font_ids_by_font.read();
-        lock.iter()
-            .filter_map(|(font, result)| match result {
-                Ok(font_id) if *font_id == id => Some(font.clone()),
-                _ => None,
-            })
-            .next()
-    }
-
-    /// Resolves the specified font, falling back to the default font stack if
-    /// the font fails to load.
+    /// Resolves the specified font using backend-owned aliases and fallbacks.
     ///
     /// # Panics
     ///
-    /// Panics if the font and none of the fallbacks can be resolved.
+    /// Panics if the backend cannot resolve the font.
     pub fn resolve_font(&self, font: &Font) -> FontId {
-        if let Ok(font_id) = self.font_id(font) {
-            return font_id;
-        }
-        for fallback in &self.fallback_font_stack {
-            if let Ok(font_id) = self.font_id(fallback) {
-                return font_id;
-            }
-        }
-
-        panic!(
-            "failed to resolve font '{}' or any of the fallbacks: {}",
-            font.family,
-            self.fallback_font_stack
-                .iter()
-                .map(|fallback| &fallback.family)
-                .join(", ")
-        );
+        self.font_id(font)
+            .unwrap_or_else(|error| panic!("failed to resolve font '{}': {error}", font.family))
     }
 
     /// Prewarm any system font caches needed to shape text.
@@ -227,67 +177,11 @@ impl TextSystem {
         Ok(result * font_size)
     }
 
-    // Consider removing this?
-    /// Returns the shaped layout width of for the given character, in the given font and size.
-    pub fn layout_width(&self, font_id: FontId, font_size: Pixels, ch: char) -> Pixels {
-        let mut buffer = [0; 4];
-        let buffer = ch.encode_utf8(&mut buffer);
-        self.platform_text_system
-            .layout_line(
-                buffer,
-                font_size,
-                &[FontRun {
-                    len: buffer.len(),
-                    font_id,
-                    letter_spacing: None,
-                }],
-            )
-            .width
-    }
-
-    /// Returns the width of an `em`.
-    ///
-    /// Uses the width of the `m` character in the given font and size.
-    pub fn em_width(&self, font_id: FontId, font_size: Pixels) -> Result<Pixels> {
-        Ok(self.typographic_bounds(font_id, font_size, 'm')?.size.width)
-    }
-
-    /// Returns the advance width of an `em`.
-    ///
-    /// Uses the advance width of the `m` character in the given font and size.
-    pub fn em_advance(&self, font_id: FontId, font_size: Pixels) -> Result<Pixels> {
-        Ok(self.advance(font_id, font_size, 'm')?.width)
-    }
-
-    /// Returns the width of an `ch`.
-    ///
-    /// Uses the width of the `0` character in the given font and size.
-    pub fn ch_width(&self, font_id: FontId, font_size: Pixels) -> Result<Pixels> {
-        Ok(self.typographic_bounds(font_id, font_size, '0')?.size.width)
-    }
-
-    /// Returns the advance width of an `ch`.
-    ///
-    /// Uses the advance width of the `0` character in the given font and size.
-    pub fn ch_advance(&self, font_id: FontId, font_size: Pixels) -> Result<Pixels> {
-        Ok(self.advance(font_id, font_size, '0')?.width)
-    }
-
     /// Get the number of font size units per 'em square',
     /// Per MDN: "an abstract square whose height is the intended distance between
     /// lines of type in the same type size"
     pub fn units_per_em(&self, font_id: FontId) -> u32 {
         self.read_metrics(font_id, |metrics| metrics.units_per_em)
-    }
-
-    /// Get the height of a capital letter in the given font and size.
-    pub fn cap_height(&self, font_id: FontId, font_size: Pixels) -> Pixels {
-        self.read_metrics(font_id, |metrics| metrics.cap_height(font_size))
-    }
-
-    /// Get the height of the x character in the given font and size.
-    pub fn x_height(&self, font_id: FontId, font_size: Pixels) -> Pixels {
-        self.read_metrics(font_id, |metrics| metrics.x_height(font_size))
     }
 
     /// Get the recommended distance from the baseline for the given font
@@ -299,6 +193,11 @@ impl TextSystem {
     /// in single spaced text.
     pub fn descent(&self, font_id: FontId, font_size: Pixels) -> Pixels {
         self.read_metrics(font_id, |metrics| metrics.descent(font_size))
+    }
+
+    /// Get the x-height for the given font and font size.
+    pub fn x_height(&self, font_id: FontId, font_size: Pixels) -> Pixels {
+        self.read_metrics(font_id, |metrics| metrics.x_height(font_size))
     }
 
     /// Get the recommended baseline offset for the given font and line height.
@@ -328,48 +227,44 @@ impl TextSystem {
         }
     }
 
-    /// Returns a handle to a line wrapper, for the given font and font size.
-    pub fn line_wrapper(self: &Arc<Self>, font: Font, font_size: Pixels) -> LineWrapperHandle {
-        let lock = &mut self.wrapper_pool.lock();
-        let font_id = self.resolve_font(&font);
-        let wrappers = lock
-            .entry(FontIdWithSize { font_id, font_size })
-            .or_default();
-        let wrapper = wrappers
-            .pop()
-            .unwrap_or_else(|| LineWrapper::new(font_id, font_size, self.clone()));
+    /// Rasterizes a glyph and records only the metadata needed on later atlas hits.
+    pub fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
+        let glyph = self.platform_text_system.rasterize_glyph(params)?;
+        glyph.validate()?;
 
-        LineWrapperHandle {
-            wrapper: Some(wrapper),
-            text_system: self.clone(),
-        }
-    }
-
-    /// Get the rasterized size and location of a specific, rendered glyph.
-    pub(crate) fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        let raster_bounds = self.raster_bounds.upgradable_read();
-        if let Some(bounds) = raster_bounds.get(params) {
-            Ok(*bounds)
+        let metadata = glyph.metadata();
+        let cached = self.raster_metadata.upgradable_read();
+        if let Some(previous) = cached.get(params) {
+            anyhow::ensure!(
+                *previous == metadata,
+                "glyph raster metadata changed for the same render parameters"
+            );
         } else {
-            let mut raster_bounds = RwLockUpgradableReadGuard::upgrade(raster_bounds);
-            let bounds = self.platform_text_system.glyph_raster_bounds(params)?;
-            raster_bounds.insert(params.clone(), bounds);
-            Ok(bounds)
+            let mut cached = RwLockUpgradableReadGuard::upgrade(cached);
+            cached.insert(params.clone(), metadata);
         }
+        Ok(glyph)
     }
 
-    pub(crate) fn rasterize_glyph(
+    pub(crate) fn raster_metadata(
         &self,
         params: &RenderGlyphParams,
-    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        let raster_bounds = self.raster_bounds(params)?;
-        self.platform_text_system
-            .rasterize_glyph(params, raster_bounds)
+    ) -> Option<RasterizedGlyphMetadata> {
+        self.raster_metadata.read().get(params).copied()
     }
 
-    /// Returns the dilation level to use for a glyph painted in the given color.
-    pub(crate) fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
-        self.platform_text_system.glyph_dilation_for_color(color)
+    /// Normalizes a requested scene color and render mode into the settings which affect the
+    /// cached glyph raster.
+    pub(crate) fn prepare_raster_style(
+        &self,
+        scene_color: Hsla,
+        requested_mode: GlyphRenderMode,
+    ) -> PreparedRasterStyle {
+        self.platform_text_system
+            .prepare_raster_style(RasterStyleRequest {
+                scene_color: crate::hsla_to_rgba(scene_color),
+                requested_mode,
+            })
     }
 
     /// Returns the text rendering mode recommended by the platform for the given font and size.
@@ -381,14 +276,6 @@ impl TextSystem {
     ) -> TextRenderingMode {
         self.platform_text_system
             .recommended_rendering_mode(font_id, font_size)
-    }
-}
-
-#[cfg(test)]
-impl TextSystem {
-    /// Reach the platform shaper from crate tests (e.g. `line_wrapper`) without a [`WindowTextSystem`].
-    pub(crate) fn platform_text_system_for_tests(&self) -> Arc<dyn PlatformTextSystem> {
-        self.platform_text_system.clone()
     }
 }
 
@@ -432,122 +319,26 @@ impl WindowTextSystem {
         text: SharedString,
         font_size: Pixels,
         runs: &[TextRun],
-        force_width: Option<Pixels>,
     ) -> ShapedLine {
         debug_assert!(
             text.find('\n').is_none(),
             "text argument should not contain newlines"
         );
 
-        let mut decoration_runs = SmallVec::<[DecorationRun; 32]>::new();
-        for run in runs {
-            if let Some(last_run) = decoration_runs.last_mut()
-                && last_run.color == run.color
-                && last_run.underline == run.underline
-                && last_run.strikethrough == run.strikethrough
-                && last_run.background_color == run.background_color
-            {
-                last_run.len += run.len as u32;
-                continue;
-            }
-            decoration_runs.push(DecorationRun {
-                len: run.len as u32,
-                color: run.color,
-                background_color: run.background_color,
-                underline: run.underline,
-                strikethrough: run.strikethrough,
-            });
-        }
+        let layout = self.layout_line(&text, font_size, runs);
 
-        let layout = self.layout_line(&text, font_size, runs, force_width);
-
-        ShapedLine {
-            layout,
-            text,
-            decoration_runs,
-        }
-    }
-
-    /// Shape the given line using a caller-provided content hash as the cache key.
-    ///
-    /// This enables cache hits without materializing a contiguous `SharedString` for the text.
-    /// If the cache misses, `materialize_text` is invoked to produce the `SharedString` for shaping.
-    ///
-    /// Contract (caller enforced):
-    /// - Same `text_hash` implies identical text content (collision risk accepted by caller).
-    /// - `text_len` should be the UTF-8 byte length of the text (helps reduce accidental collisions).
-    ///
-    /// Like [`Self::shape_line`], this must be used only for single-line text (no `\n`).
-    pub fn shape_line_by_hash(
-        &self,
-        text_hash: u64,
-        text_len: usize,
-        font_size: Pixels,
-        runs: &[TextRun],
-        force_width: Option<Pixels>,
-        materialize_text: impl FnOnce() -> SharedString,
-    ) -> ShapedLine {
-        let mut decoration_runs = SmallVec::<[DecorationRun; 32]>::new();
-        for run in runs {
-            if let Some(last_run) = decoration_runs.last_mut()
-                && last_run.color == run.color
-                && last_run.underline == run.underline
-                && last_run.strikethrough == run.strikethrough
-                && last_run.background_color == run.background_color
-            {
-                last_run.len += run.len as u32;
-                continue;
-            }
-            decoration_runs.push(DecorationRun {
-                len: run.len as u32,
-                color: run.color,
-                background_color: run.background_color,
-                underline: run.underline,
-                strikethrough: run.strikethrough,
-            });
-        }
-
-        let mut used_force_width = force_width;
-        let layout = self.layout_line_by_hash(
-            text_hash,
-            text_len,
-            font_size,
-            runs,
-            used_force_width,
-            || {
-                let text = materialize_text();
-                debug_assert!(
-                    text.find('\n').is_none(),
-                    "text argument should not contain newlines"
-                );
-                text
-            },
-        );
-
-        // We only materialize actual text on cache miss; on hit we avoid allocations.
-        // Since `ShapedLine` carries a `SharedString`, use an empty placeholder for hits.
-        // NOTE: Callers must not rely on `ShapedLine.text` for content when using this API.
-        let text: SharedString = SharedString::new_static("");
-
-        ShapedLine {
-            layout,
-            text,
-            decoration_runs,
-        }
+        ShapedLine { layout, text }
     }
 
     /// Shape a multi line string of text, at the given font_size, for painting to the screen.
     /// Subsets of the text can be styled independently with the `runs` parameter,
-    /// where each run dictates the length of utf8 characters in `text` that it styles.
-    /// The length (utf8 characters) of last item in `runs` is semantically ignored as it
-    /// represents the "rest" of the `text`.
+    /// where each run gives the number of UTF-8 bytes that it styles. Runs must cover the
+    /// complete string and end on UTF-8 character boundaries.
     ///
     /// If `wrap_width` is provided, the line breaks will be adjusted to fit within the given width.
     ///
-    /// If the text provided is SharedString and does not contain new-lines,
-    /// it will be used as-is without additional allocations.
-    /// If the text provided is not a SharedString or contains new-lines, new SharedStrings
-    /// will be allocated for each substring between new-line characters (minimum of 1).
+    /// The backend receives the complete string. Hard breaks, trailing empty lines, bidi
+    /// paragraphs, wrapping, and `line_clamp` therefore share one layout model.
     pub fn shape_text<S: AsRef<str> + Into<SharedString>>(
         &self,
         text: S,
@@ -555,384 +346,26 @@ impl WindowTextSystem {
         runs: &[TextRun],
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
-    ) -> Result<SmallVec<[WrappedLine; 1]>> {
-        let mut runs = runs.iter().filter(|run| run.len > 0).cloned().peekable();
-        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+    ) -> Result<WrappedLine> {
+        let text = text.into();
+        let layout = self
+            .line_layout_cache
+            .layout_wrapped_line(&text, font_size, runs, wrap_width, line_clamp);
 
-        let mut lines = SmallVec::new();
-        let mut max_wrap_lines = line_clamp;
-        let mut wrapped_lines = 0;
-
-        let mut process_line = |line_text: SharedString, line_start, line_end| {
-            font_runs.clear();
-
-            let mut decoration_runs = <Vec<DecorationRun>>::with_capacity(32);
-            let mut run_start = line_start;
-            while run_start < line_end {
-                let Some(run) = runs.peek_mut() else {
-                    log::warn!("`TextRun`s do not cover the entire to be shaped text");
-                    break;
-                };
-
-                let run_len_within_line = cmp::min(line_end - run_start, run.len);
-
-                let decoration_changed = if let Some(last_run) = decoration_runs.last_mut()
-                    && last_run.color == run.color
-                    && last_run.underline == run.underline
-                    && last_run.strikethrough == run.strikethrough
-                    && last_run.background_color == run.background_color
-                {
-                    last_run.len += run_len_within_line as u32;
-                    false
-                } else {
-                    decoration_runs.push(DecorationRun {
-                        len: run_len_within_line as u32,
-                        color: run.color,
-                        background_color: run.background_color,
-                        underline: run.underline,
-                        strikethrough: run.strikethrough,
-                    });
-                    true
-                };
-
-                let font_id = self.resolve_font(&run.font);
-                let letter_spacing = run.letter_spacing;
-                if let Some(font_run) = font_runs.last_mut()
-                    && font_id == font_run.font_id
-                    && font_run.letter_spacing == letter_spacing
-                    && !decoration_changed
-                {
-                    font_run.len += run_len_within_line;
-                } else {
-                    font_runs.push(FontRun {
-                        len: run_len_within_line,
-                        font_id,
-                        letter_spacing,
-                    });
-                }
-
-                // Preserve the remainder of the run for the next line
-                run.len -= run_len_within_line;
-                if run.len == 0 {
-                    runs.next();
-                }
-                run_start += run_len_within_line;
-            }
-
-            let layout = self.line_layout_cache.layout_wrapped_line(
-                &line_text,
-                font_size,
-                &font_runs,
-                wrap_width,
-                max_wrap_lines.map(|max| max.saturating_sub(wrapped_lines)),
-            );
-            wrapped_lines += layout.wrap_boundaries.len();
-
-            lines.push(WrappedLine {
-                layout,
-                decoration_runs,
-                text: line_text,
-            });
-
-            // Skip `\n` character.
-            if let Some(run) = runs.peek_mut() {
-                run.len -= 1;
-                if run.len == 0 {
-                    runs.next();
-                }
-            }
-        };
-
-        let mut split_lines = text.as_ref().split('\n');
-
-        // Special case single lines to prevent allocating a sharedstring
-        if let Some(first_line) = split_lines.next()
-            && let Some(second_line) = split_lines.next()
-        {
-            let mut line_start = 0;
-            process_line(
-                SharedString::new(first_line),
-                line_start,
-                line_start + first_line.len(),
-            );
-            line_start += first_line.len() + '\n'.len_utf8();
-            process_line(
-                SharedString::new(second_line),
-                line_start,
-                line_start + second_line.len(),
-            );
-            for line_text in split_lines {
-                line_start += line_text.len() + '\n'.len_utf8();
-                process_line(
-                    SharedString::new(line_text),
-                    line_start,
-                    line_start + line_text.len(),
-                );
-            }
-        } else {
-            let end = text.as_ref().len();
-            process_line(text.into(), 0, end);
-        }
-
-        self.font_runs_pool.lock().push(font_runs);
-
-        Ok(lines)
-    }
-
-    pub(crate) fn finish_frame(&self) {
-        self.line_layout_cache.finish_frame()
+        Ok(WrappedLine { layout, text })
     }
 
     /// Layout the given line of text, at the given font_size.
     /// Subsets of the line can be styled independently with the `runs` parameter.
     /// Generally, you should prefer to use [`Self::shape_line`] instead, which
     /// can be painted directly.
-    pub fn layout_line(
-        &self,
-        text: &str,
-        font_size: Pixels,
-        runs: &[TextRun],
-        force_width: Option<Pixels>,
-    ) -> Arc<LineLayout> {
-        let mut last_run = None::<&TextRun>;
-        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
-        font_runs.clear();
-
-        for run in runs.iter() {
-            let decoration_changed = if let Some(last_run) = last_run
-                && last_run.color == run.color
-                && last_run.underline == run.underline
-                && last_run.strikethrough == run.strikethrough
-            // we do not consider differing background color relevant, as it does not affect glyphs
-            // && last_run.background_color == run.background_color
-            {
-                false
-            } else {
-                last_run = Some(run);
-                true
-            };
-
-            let font_id = self.resolve_font(&run.font);
-            let letter_spacing = run.letter_spacing;
-            if let Some(font_run) = font_runs.last_mut()
-                && font_id == font_run.font_id
-                && font_run.letter_spacing == letter_spacing
-                && !decoration_changed
-            {
-                font_run.len += run.len;
-            } else {
-                font_runs.push(FontRun {
-                    len: run.len,
-                    font_id,
-                    letter_spacing,
-                });
-            }
-        }
-
-        let layout = self.line_layout_cache.layout_line(
-            &SharedString::new(text),
-            font_size,
-            &font_runs,
-            force_width,
-        );
-
-        self.font_runs_pool.lock().push(font_runs);
-
-        layout
-    }
-
-    /// Returns the shaped layout width of for the given character, in the given font and size.
-    pub fn layout_width(&self, font_id: FontId, font_size: Pixels, ch: char) -> Pixels {
-        let mut buffer = [0; 4];
-        let buffer: &_ = ch.encode_utf8(&mut buffer);
+    pub fn layout_line(&self, text: &str, font_size: Pixels, runs: &[TextRun]) -> Arc<LineLayout> {
         self.line_layout_cache
-            .layout_line(
-                buffer,
-                font_size,
-                &[FontRun {
-                    len: buffer.len(),
-                    font_id,
-                    letter_spacing: None,
-                }],
-                None,
-            )
-            .width
+            .layout_line(&SharedString::new(text), font_size, runs)
     }
 
-    /// Returns the shaped layout width of an `em`.
-    pub fn em_layout_width(&self, font_id: FontId, font_size: Pixels) -> Pixels {
-        self.layout_width(font_id, font_size, 'm')
-    }
-
-    /// Probe the line layout cache using a caller-provided content hash, without allocating.
-    ///
-    /// Returns `Some(layout)` if the layout is already cached in either the current frame
-    /// or the previous frame. Returns `None` if it is not cached.
-    ///
-    /// Contract (caller enforced):
-    /// - Same `text_hash` implies identical text content (collision risk accepted by caller).
-    /// - `text_len` should be the UTF-8 byte length of the text (helps reduce accidental collisions).
-    pub fn try_layout_line_by_hash(
-        &self,
-        text_hash: u64,
-        text_len: usize,
-        font_size: Pixels,
-        runs: &[TextRun],
-        force_width: Option<Pixels>,
-    ) -> Option<Arc<LineLayout>> {
-        let mut last_run = None::<&TextRun>;
-        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
-        font_runs.clear();
-
-        for run in runs.iter() {
-            let decoration_changed = if let Some(last_run) = last_run
-                && last_run.color == run.color
-                && last_run.underline == run.underline
-                && last_run.strikethrough == run.strikethrough
-            // we do not consider differing background color relevant, as it does not affect glyphs
-            // && last_run.background_color == run.background_color
-            {
-                false
-            } else {
-                last_run = Some(run);
-                true
-            };
-
-            let font_id = self.resolve_font(&run.font);
-            let letter_spacing = run.letter_spacing;
-            if let Some(font_run) = font_runs.last_mut()
-                && font_id == font_run.font_id
-                && font_run.letter_spacing == letter_spacing
-                && !decoration_changed
-            {
-                font_run.len += run.len;
-            } else {
-                font_runs.push(FontRun {
-                    len: run.len,
-                    font_id,
-                    letter_spacing,
-                });
-            }
-        }
-
-        let layout = self.line_layout_cache.try_layout_line_by_hash(
-            text_hash,
-            text_len,
-            font_size,
-            &font_runs,
-            force_width,
-        );
-
-        self.font_runs_pool.lock().push(font_runs);
-
-        layout
-    }
-
-    /// Layout the given line of text using a caller-provided content hash as the cache key.
-    ///
-    /// This enables cache hits without materializing a contiguous `SharedString` for the text.
-    /// If the cache misses, `materialize_text` is invoked to produce the `SharedString` for shaping.
-    ///
-    /// Contract (caller enforced):
-    /// - Same `text_hash` implies identical text content (collision risk accepted by caller).
-    /// - `text_len` should be the UTF-8 byte length of the text (helps reduce accidental collisions).
-    pub fn layout_line_by_hash(
-        &self,
-        text_hash: u64,
-        text_len: usize,
-        font_size: Pixels,
-        runs: &[TextRun],
-        force_width: Option<Pixels>,
-        materialize_text: impl FnOnce() -> SharedString,
-    ) -> Arc<LineLayout> {
-        let mut last_run = None::<&TextRun>;
-        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
-        font_runs.clear();
-
-        for run in runs.iter() {
-            let decoration_changed = if let Some(last_run) = last_run
-                && last_run.color == run.color
-                && last_run.underline == run.underline
-                && last_run.strikethrough == run.strikethrough
-            // we do not consider differing background color relevant, as it does not affect glyphs
-            // && last_run.background_color == run.background_color
-            {
-                false
-            } else {
-                last_run = Some(run);
-                true
-            };
-
-            let font_id = self.resolve_font(&run.font);
-            let letter_spacing = run.letter_spacing;
-            if let Some(font_run) = font_runs.last_mut()
-                && font_id == font_run.font_id
-                && font_run.letter_spacing == letter_spacing
-                && !decoration_changed
-            {
-                font_run.len += run.len;
-            } else {
-                font_runs.push(FontRun {
-                    len: run.len,
-                    font_id,
-                    letter_spacing,
-                });
-            }
-        }
-
-        let layout = self.line_layout_cache.layout_line_by_hash(
-            text_hash,
-            text_len,
-            font_size,
-            &font_runs,
-            force_width,
-            materialize_text,
-        );
-
-        self.font_runs_pool.lock().push(font_runs);
-
-        layout
-    }
-}
-
-#[derive(Hash, Eq, PartialEq)]
-struct FontIdWithSize {
-    font_id: FontId,
-    font_size: Pixels,
-}
-
-/// A handle into the text system, which can be used to compute the wrapped layout of text
-pub struct LineWrapperHandle {
-    wrapper: Option<LineWrapper>,
-    text_system: Arc<TextSystem>,
-}
-
-impl Drop for LineWrapperHandle {
-    fn drop(&mut self) {
-        let mut state = self.text_system.wrapper_pool.lock();
-        let mut wrapper = self.wrapper.take().unwrap();
-        wrapper.set_letter_spacing(None);
-        state
-            .get_mut(&FontIdWithSize {
-                font_id: wrapper.font_id,
-                font_size: wrapper.font_size,
-            })
-            .unwrap()
-            .push(wrapper);
-    }
-}
-
-impl Deref for LineWrapperHandle {
-    type Target = LineWrapper;
-
-    fn deref(&self) -> &Self::Target {
-        self.wrapper.as_ref().unwrap()
-    }
-}
-
-impl DerefMut for LineWrapperHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.wrapper.as_mut().unwrap()
+    pub(crate) fn finish_frame(&self) {
+        self.line_layout_cache.finish_frame()
     }
 }
 
@@ -1057,12 +490,80 @@ pub struct TextRun {
     pub letter_spacing: Option<Pixels>,
 }
 
-#[cfg(all(target_os = "macos", test))]
-impl TextRun {
-    fn with_len(&self, len: usize) -> Self {
-        let mut this = self.clone();
-        this.len = len;
-        this
+/// Complete input for one backend-owned text document layout.
+#[derive(Clone, Copy, Debug)]
+pub struct TextLayoutRequest<'a> {
+    /// UTF-8 source text.
+    pub text: &'a str,
+    /// Font size shared by all style runs.
+    pub font_size: Pixels,
+    /// Complete shaping and paint styles covering `text`.
+    pub runs: &'a [TextRun],
+    /// Optional soft-wrap width.
+    pub wrap_width: Option<Pixels>,
+    /// Optional maximum number of visual rows.
+    pub line_clamp: Option<usize>,
+}
+
+impl Eq for TextRun {}
+
+impl Hash for TextRun {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        fn hash_float<H: Hasher>(value: f32, state: &mut H) {
+            if value == 0.0 {
+                0.0f32.to_bits().hash(state);
+            } else {
+                value.to_bits().hash(state);
+            }
+        }
+
+        fn hash_color<H: Hasher>(color: Hsla, state: &mut H) {
+            let color = crate::hsla_to_rgba(color);
+            hash_float(color.color.red, state);
+            hash_float(color.color.green, state);
+            hash_float(color.color.blue, state);
+            hash_float(color.alpha, state);
+        }
+
+        self.len.hash(state);
+        self.font.hash(state);
+        hash_color(self.color, state);
+        if let Some(color) = self.background_color {
+            hash_color(color, state);
+        }
+        self.background_color.is_some().hash(state);
+        self.underline.is_some().hash(state);
+        if let Some(underline) = self.underline {
+            hash_float(underline.thickness.into(), state);
+            underline.color.is_some().hash(state);
+            if let Some(color) = underline.color {
+                hash_color(color, state);
+            }
+            underline.wavy.hash(state);
+        }
+        self.strikethrough.is_some().hash(state);
+        if let Some(strikethrough) = self.strikethrough {
+            hash_float(strikethrough.thickness.into(), state);
+            strikethrough.color.is_some().hash(state);
+            if let Some(color) = strikethrough.color {
+                hash_color(color, state);
+            }
+        }
+        self.letter_spacing.is_some().hash(state);
+        if let Some(letter_spacing) = self.letter_spacing {
+            hash_float(letter_spacing.into(), state);
+        }
+    }
+}
+
+impl From<&TextRun> for PaintStyle {
+    fn from(run: &TextRun) -> Self {
+        Self {
+            color: run.color,
+            background_color: run.background_color,
+            underline: run.underline,
+            strikethrough: run.strikethrough,
+        }
     }
 }
 
@@ -1084,9 +585,191 @@ pub struct RenderGlyphParams {
     pub font_size: Pixels,
     pub subpixel_variant: Point<u8>,
     pub scale_factor: f32,
-    pub is_emoji: bool,
-    pub subpixel_rendering: bool,
-    pub dilation: u8,
+    pub raster_style: PreparedRasterStyle,
+}
+
+/// The kind of glyph image requested from a rasterizer.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum GlyphRenderMode {
+    /// A color-independent, one-channel coverage mask.
+    Grayscale,
+    /// A color-independent, three-channel subpixel coverage mask.
+    Subpixel,
+    /// A color glyph whose pixels include their final RGB values.
+    Color,
+}
+
+impl GlyphRenderMode {
+    /// Returns the byte format required for this render mode.
+    pub const fn rasterized_format(self) -> RasterizedGlyphFormat {
+        match self {
+            Self::Grayscale => RasterizedGlyphFormat::AlphaMask,
+            Self::Subpixel => RasterizedGlyphFormat::BgraSubpixelMask,
+            Self::Color => RasterizedGlyphFormat::BgraColor,
+        }
+    }
+}
+
+/// Eight-bit sRGB color stored in a raster cache key when a native raster path needs it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Rgba8 {
+    /// Red channel.
+    pub red: u8,
+    /// Green channel.
+    pub green: u8,
+    /// Blue channel.
+    pub blue: u8,
+    /// Alpha channel.
+    pub alpha: u8,
+}
+
+impl From<crate::Rgba> for Rgba8 {
+    fn from(color: crate::Rgba) -> Self {
+        fn channel(value: f32) -> u8 {
+            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+        }
+
+        Self {
+            red: channel(color.red),
+            green: channel(color.green),
+            blue: channel(color.blue),
+            alpha: channel(color.alpha),
+        }
+    }
+}
+
+/// A scene request before a platform rasterizer normalizes its cache-relevant settings.
+#[derive(Clone, Copy, Debug)]
+pub struct RasterStyleRequest {
+    /// The exact application color. Rasterizers may only retain a normalized derivative of it.
+    pub scene_color: crate::Rgba,
+    /// The requested kind of glyph image.
+    pub requested_mode: GlyphRenderMode,
+}
+
+/// The cache-relevant raster settings chosen by a platform rasterizer.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct PreparedRasterStyle {
+    /// The normalized render mode.
+    pub mode: GlyphRenderMode,
+    /// Any normalized color effect baked into coverage or color pixels.
+    pub color_effect: RasterColorEffect,
+}
+
+impl PreparedRasterStyle {
+    /// Creates a color-independent raster style.
+    pub const fn independent(mode: GlyphRenderMode) -> Self {
+        Self {
+            mode,
+            color_effect: RasterColorEffect::Independent,
+        }
+    }
+}
+
+/// The part of the requested color, if any, which changes rasterized pixels.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RasterColorEffect {
+    /// Coverage and color pixels do not depend on the scene color.
+    Independent,
+    /// CoreGraphics' five-level font-smoothing dilation.
+    Dilation(u8),
+    /// A quantized color consumed by a native preblending or `currentColor` path.
+    Preblend(Rgba8),
+}
+
+/// The byte layout supplied by a glyph rasterizer.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RasterizedGlyphFormat {
+    /// One byte of coverage per pixel.
+    AlphaMask,
+    /// Four bytes per pixel in blue, green, red, unused order.
+    BgraSubpixelMask,
+    /// Four bytes per pixel in blue, green, red, straight-alpha order.
+    BgraColor,
+}
+
+/// A glyph raster ready for insertion into a renderer atlas.
+#[derive(Clone, Debug)]
+pub struct RasterizedGlyph {
+    /// Placement relative to the glyph's baseline origin.
+    pub bounds: Bounds<DevicePixels>,
+    /// Pixel dimensions of the supplied buffer.
+    pub size: Size<DevicePixels>,
+    /// Byte layout of `pixels`.
+    pub format: RasterizedGlyphFormat,
+    /// Pixel bytes. Color pixels use straight alpha.
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RasterizedGlyphMetadata {
+    pub(crate) bounds: Bounds<DevicePixels>,
+    pub(crate) format: RasterizedGlyphFormat,
+}
+
+impl RasterizedGlyph {
+    /// Returns a successful empty glyph in the requested format.
+    pub fn empty(format: RasterizedGlyphFormat) -> Self {
+        Self {
+            bounds: Bounds::default(),
+            size: Size::default(),
+            format,
+            pixels: Vec::new(),
+        }
+    }
+
+    pub(crate) fn metadata(&self) -> RasterizedGlyphMetadata {
+        RasterizedGlyphMetadata {
+            bounds: self.bounds,
+            format: self.format,
+        }
+    }
+
+    /// Checks the buffer dimensions and byte count promised by `format`.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.bounds.size == self.size,
+            "glyph raster bounds size {:?} does not match buffer size {:?}",
+            self.bounds.size,
+            self.size
+        );
+        let width: usize = self
+            .size
+            .width
+            .0
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("glyph raster width is negative"))?;
+        let height: usize = self
+            .size
+            .height
+            .0
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("glyph raster height is negative"))?;
+        if width == 0 || height == 0 {
+            anyhow::ensure!(
+                width == 0 && height == 0 && self.pixels.is_empty(),
+                "empty glyph raster must have zero size and no pixels"
+            );
+            return Ok(());
+        }
+        let bytes_per_pixel = match self.format {
+            RasterizedGlyphFormat::AlphaMask => 1,
+            RasterizedGlyphFormat::BgraSubpixelMask | RasterizedGlyphFormat::BgraColor => 4,
+        };
+        let expected_len = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+            .ok_or_else(|| anyhow::anyhow!("glyph raster byte count overflow"))?;
+        anyhow::ensure!(
+            self.pixels.len() == expected_len,
+            "glyph raster format {:?} requires {expected_len} bytes for {}x{}, got {}",
+            self.format,
+            width,
+            height,
+            self.pixels.len()
+        );
+        Ok(())
+    }
 }
 
 impl Eq for RenderGlyphParams {}
@@ -1098,9 +781,7 @@ impl Hash for RenderGlyphParams {
         self.font_size.0.to_bits().hash(state);
         self.subpixel_variant.hash(state);
         self.scale_factor.to_bits().hash(state);
-        self.is_emoji.hash(state);
-        self.subpixel_rendering.hash(state);
-        self.dilation.hash(state);
+        self.raster_style.hash(state);
     }
 }
 
@@ -1232,33 +913,334 @@ impl FontMetrics {
     }
 }
 
-/// Maps well-known virtual font names to their concrete equivalents.
-#[allow(unused)]
-pub fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'a str {
-    // Note: the "Zed Plex" fonts were deprecated as we are not allowed to use "Plex"
-    // in a derived font name. They are essentially indistinguishable from IBM Plex/Lilex,
-    // and so retained here for backward compatibility.
-    match name {
-        ".SystemUIFont" => system,
-        ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
-        ".ZedMono" | "Zed Plex Mono" => "Lilex",
-        _ => name,
+#[cfg(test)]
+mod text_range_tests {
+    use super::*;
+
+    #[test]
+    fn contained_ranges_are_valid_utf8_slices() {
+        let text = "aé日";
+        #[allow(
+            clippy::reversed_empty_ranges,
+            reason = "The reversed range is intentional invalid input for contains_range."
+        )]
+        let cases = [
+            ("valid ASCII", 0..1, true),
+            ("valid multibyte", 1..3, true),
+            ("empty", 1..1, true),
+            ("out of bounds", 0..text.len() + 1, false),
+            ("reversed", 3..1, false),
+            ("split UTF-8 code point", 2..3, false),
+        ];
+
+        for (name, range, expected) in cases {
+            assert_eq!(text.contains_range(&range), expected, "{name}");
+        }
     }
 }
 
-/// Like [`font_name_with_fallbacks`] but accepts and returns [`SharedString`] references.
-#[allow(unused)]
-pub fn font_name_with_fallbacks_shared<'a>(
-    name: &'a SharedString,
-    system: &'a SharedString,
-) -> &'a SharedString {
-    // Note: the "Zed Plex" fonts were deprecated as we are not allowed to use "Plex"
-    // in a derived font name. They are essentially indistinguishable from IBM Plex/Lilex,
-    // and so retained here for backward compatibility.
-    match name.as_str() {
-        ".SystemUIFont" => system,
-        ".ZedSans" | "Zed Plex Sans" => const { &SharedString::new_static("IBM Plex Sans") },
-        ".ZedMono" | "Zed Plex Mono" => const { &SharedString::new_static("Lilex") },
-        _ => name,
+#[cfg(test)]
+mod raster_contract_tests {
+    use super::*;
+    use crate::{
+        AtlasKey, AtlasTextureKind, LineLayout, RasterColorEffect, RasterStyleRequest,
+        TestTextSystem, TextLayoutRequest, hsla, point, size,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn params(style: PreparedRasterStyle) -> RenderGlyphParams {
+        RenderGlyphParams {
+            font_id: FontId(7),
+            glyph_id: GlyphId(42),
+            font_size: px(16.0),
+            subpixel_variant: point(1, 0),
+            scale_factor: 2.0,
+            raster_style: style,
+        }
+    }
+
+    #[test]
+    fn raster_buffers_enforce_the_documented_format_contract() {
+        let cases = [
+            (
+                "alpha mask",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: point(DevicePixels(-1), DevicePixels(-2)),
+                        size: size(DevicePixels(2), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(2), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: vec![0, 255],
+                },
+                true,
+            ),
+            (
+                "subpixel mask",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: point(DevicePixels(1), DevicePixels(-2)),
+                        size: size(DevicePixels(1), DevicePixels(2)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(2)),
+                    format: RasterizedGlyphFormat::BgraSubpixelMask,
+                    pixels: vec![0; 8],
+                },
+                true,
+            ),
+            (
+                "straight-alpha color",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: point(DevicePixels(0), DevicePixels(-1)),
+                        size: size(DevicePixels(1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::BgraColor,
+                    pixels: vec![1, 2, 3, 4],
+                },
+                true,
+            ),
+            (
+                "empty glyph",
+                RasterizedGlyph::empty(RasterizedGlyphFormat::AlphaMask),
+                true,
+            ),
+            (
+                "wrong alpha stride",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(2), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(2), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: vec![0],
+                },
+                false,
+            ),
+            (
+                "wrong BGRA stride",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::BgraColor,
+                    pixels: vec![0; 3],
+                },
+                false,
+            ),
+            (
+                "partially empty dimensions",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(0), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(0), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: Vec::new(),
+                },
+                false,
+            ),
+            (
+                "negative dimensions",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(-1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(-1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: Vec::new(),
+                },
+                false,
+            ),
+            (
+                "bounds and buffer size disagree",
+                RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(2), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: vec![255],
+                },
+                false,
+            ),
+        ];
+
+        for (description, raster, valid) in cases {
+            assert_eq!(raster.validate().is_ok(), valid, "{description}");
+        }
+    }
+
+    #[test]
+    fn prepared_style_and_format_drive_atlas_keys_without_caching_pixels() {
+        let backend = Arc::new(SequencedRasterizer::default());
+        let text_system = TextSystem::new(backend.clone());
+        let style_a =
+            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.20, 1.0), GlyphRenderMode::Grayscale);
+        let style_b =
+            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.24, 1.0), GlyphRenderMode::Grayscale);
+        let style_c =
+            text_system.prepare_raster_style(hsla(0.0, 0.0, 0.30, 1.0), GlyphRenderMode::Grayscale);
+        assert_eq!(style_a, style_b, "nearby scene colors share a mask style");
+        assert_ne!(
+            style_a, style_c,
+            "different dilation levels need distinct rasters"
+        );
+
+        let first = params(style_a);
+        let second = params(style_b);
+        let third = params(style_c);
+        assert_eq!(first, second);
+        let first_raster = text_system.rasterize_glyph(&first).unwrap();
+        let reused_raster = text_system.rasterize_glyph(&second).unwrap();
+        let distinct_raster = text_system.rasterize_glyph(&third).unwrap();
+        assert_eq!(first_raster.pixels, reused_raster.pixels);
+        assert_eq!(first_raster.pixels, distinct_raster.pixels);
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            text_system.raster_metadata(&first),
+            Some(first_raster.metadata())
+        );
+        assert_eq!(
+            text_system.raster_metadata(&third),
+            Some(distinct_raster.metadata())
+        );
+
+        for (format, expected) in [
+            (
+                RasterizedGlyphFormat::AlphaMask,
+                AtlasTextureKind::Monochrome,
+            ),
+            (
+                RasterizedGlyphFormat::BgraSubpixelMask,
+                AtlasTextureKind::Subpixel,
+            ),
+            (
+                RasterizedGlyphFormat::BgraColor,
+                AtlasTextureKind::Polychrome,
+            ),
+        ] {
+            assert_eq!(
+                AtlasKey::from((first.clone(), format)).texture_kind(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn only_successful_valid_native_rasters_record_metadata() {
+        let backend = Arc::new(SequencedRasterizer {
+            attempts: AtomicUsize::new(0),
+            fail_until_valid: true,
+        });
+        let text_system = TextSystem::new(backend.clone());
+        let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
+
+        assert!(text_system.rasterize_glyph(&params).is_err());
+        assert!(text_system.raster_metadata(&params).is_none());
+        assert!(text_system.rasterize_glyph(&params).is_err());
+        assert!(text_system.raster_metadata(&params).is_none());
+        let first_success = text_system.rasterize_glyph(&params).unwrap();
+        let second_success = text_system.rasterize_glyph(&params).unwrap();
+
+        assert_eq!(first_success.pixels, [0x7f]);
+        assert_eq!(second_success.pixels, [0x7f]);
+        assert_eq!(
+            text_system.raster_metadata(&params),
+            Some(first_success.metadata())
+        );
+        assert_eq!(backend.attempts.load(Ordering::SeqCst), 4);
+    }
+
+    #[derive(Default)]
+    struct SequencedRasterizer {
+        attempts: AtomicUsize,
+        fail_until_valid: bool,
+    }
+
+    impl PlatformTextSystem for SequencedRasterizer {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+            PlatformTextSystem::font_id(&TestTextSystem, descriptor)
+        }
+
+        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+            PlatformTextSystem::font_metrics(&TestTextSystem, font_id)
+        }
+
+        fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
+            PlatformTextSystem::typographic_bounds(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
+            PlatformTextSystem::advance(&TestTextSystem, font_id, glyph_id)
+        }
+
+        fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
+            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, ch)
+        }
+
+        fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if !self.fail_until_valid {
+                return Ok(RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: vec![0x7f],
+                });
+            }
+            match attempt {
+                0 => Err(anyhow!("transient native failure")),
+                1 => Ok(RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: Vec::new(),
+                }),
+                _ => Ok(RasterizedGlyph {
+                    bounds: Bounds {
+                        origin: Point::default(),
+                        size: size(DevicePixels(1), DevicePixels(1)),
+                    },
+                    size: size(DevicePixels(1), DevicePixels(1)),
+                    format: RasterizedGlyphFormat::AlphaMask,
+                    pixels: vec![0x7f],
+                }),
+            }
+        }
+
+        fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
+            PreparedRasterStyle {
+                mode: request.requested_mode,
+                color_effect: RasterColorEffect::Dilation(
+                    (request.scene_color.red * 4.0).floor() as u8
+                ),
+            }
+        }
+
+        fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
+            PlatformTextSystem::layout_text(&TestTextSystem, request)
+        }
     }
 }

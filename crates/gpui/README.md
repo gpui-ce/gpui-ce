@@ -9,7 +9,7 @@ GPUI is still in active development as we work on the Zed code editor, and is st
 
 ```toml
 gpui = { version = "*" }
-gpui_platform = { version = "*", features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { version = "*", features = ["wayland", "x11"] }
 ```
 
 Everything in a standalone GPUI app starts with an `Application`. You can create one with `gpui_platform::application()`, which picks the windowing and text backends for the host OS, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()` and register your first root view.
@@ -26,21 +26,21 @@ fn main() {
 
 ### `gpui_platform`
 
-The features on `gpui_platform` are platform-specific, so the list above is a safe cross-platform default. If you build for a single platform, you can trim it:
+GPUI uses Parley for shaping, wrapping, hit testing, and font fallback on every platform. The features on `gpui_platform` select windowing and rendering integrations. If you build for a single platform, you can trim them:
 
-- **macOS** — Rendering uses the shared WGPU renderer over Metal and is always available, but glyph rasterization needs `font-kit`. Without it, GPUI falls back to a placeholder text system that lays text out but renders no glyphs.
+- **macOS.** Rendering uses the shared renderer over Metal, and text uses the shared Parley backend. No text feature is required.
 
     ```toml
-    gpui_platform = { version = "*", features = ["font-kit"] }
+    gpui_platform = { version = "*" }
     ```
 
-- **Linux / FreeBSD** — enable at least one windowing backend for desktop windows: `wayland`, `x11`, or both. These features also compile the renderer and text system, so no separate text feature is needed.
+- **Linux / FreeBSD.** Enable at least one windowing backend for desktop windows: `wayland`, `x11`, or both. No separate text feature is needed.
 
     ```toml
     gpui_platform = { version = "*", features = ["wayland", "x11"] }
     ```
 
-- **Windows** — no features are required. Windowing uses Win32, rendering uses the shared WGPU renderer over Direct3D 12, and text shaping uses `cosmic-text` with system fonts discovered through `font-kit`.
+- **Windows.** No features are required. Windowing uses Win32, rendering uses DirectX, and text uses the shared Parley backend.
 
 ### Additional Topics
 

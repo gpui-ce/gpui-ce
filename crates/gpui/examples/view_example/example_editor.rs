@@ -14,6 +14,7 @@ use gpui::{
     App, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
     InteractiveElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Subscription, Task,
     TextRun, UTF16Selection, Window, fill, hsla, point, prelude::*, px, relative, size,
+    utf8_to_utf16_offset, utf16_to_utf8_offset,
 };
 use unicode_segmentation::*;
 
@@ -196,40 +197,6 @@ fn next_boundary(content: &str, offset: usize) -> usize {
         .unwrap_or(content.len())
 }
 
-fn offset_from_utf16(content: &str, offset: usize) -> usize {
-    let mut utf8_offset = 0;
-    let mut utf16_count = 0;
-    for ch in content.chars() {
-        if utf16_count >= offset {
-            break;
-        }
-        utf16_count += ch.len_utf16();
-        utf8_offset += ch.len_utf8();
-    }
-    utf8_offset
-}
-
-fn offset_to_utf16(content: &str, offset: usize) -> usize {
-    let mut utf16_offset = 0;
-    let mut utf8_count = 0;
-    for ch in content.chars() {
-        if utf8_count >= offset {
-            break;
-        }
-        utf8_count += ch.len_utf8();
-        utf16_offset += ch.len_utf16();
-    }
-    utf16_offset
-}
-
-fn range_to_utf16(content: &str, range: &Range<usize>) -> Range<usize> {
-    offset_to_utf16(content, range.start)..offset_to_utf16(content, range.end)
-}
-
-fn range_from_utf16(content: &str, range_utf16: &Range<usize>) -> Range<usize> {
-    offset_from_utf16(content, range_utf16.start)..offset_from_utf16(content, range_utf16.end)
-}
-
 impl Focusable for Editor {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -245,8 +212,11 @@ impl EntityInputHandler for Editor {
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let content = self.text(cx);
-        let range = range_from_utf16(&content, &range_utf16);
-        actual_range.replace(range_to_utf16(&content, &range));
+        let range = utf16_to_utf8_offset(&content, range_utf16.start)
+            ..utf16_to_utf8_offset(&content, range_utf16.end);
+        actual_range.replace(
+            utf8_to_utf16_offset(&content, range.start)..utf8_to_utf16_offset(&content, range.end),
+        );
         Some(content[range].to_string())
     }
 
@@ -257,7 +227,7 @@ impl EntityInputHandler for Editor {
         cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         let content = self.text(cx);
-        let utf16_cursor = offset_to_utf16(&content, self.cursor);
+        let utf16_cursor = utf8_to_utf16_offset(&content, self.cursor);
         Some(UTF16Selection {
             range: utf16_cursor..utf16_cursor,
             reversed: false,
@@ -284,7 +254,10 @@ impl EntityInputHandler for Editor {
         let content = self.text(cx);
         let range = range_utf16
             .as_ref()
-            .map(|r| range_from_utf16(&content, r))
+            .map(|range| {
+                utf16_to_utf8_offset(&content, range.start)
+                    ..utf16_to_utf8_offset(&content, range.end)
+            })
             .unwrap_or(self.cursor..self.cursor);
 
         let new_content = content[..range.start].to_owned() + new_text + &content[range.end..];
@@ -421,7 +394,7 @@ impl Element for EditorText {
             vec![
                 window
                     .text_system()
-                    .shape_line(placeholder, font_size, &[run], None),
+                    .shape_line(placeholder, font_size, &[run]),
             ]
         } else {
             content
@@ -436,9 +409,7 @@ impl Element for EditorText {
                         underline: None,
                         strikethrough: None,
                     };
-                    window
-                        .text_system()
-                        .shape_line(text, font_size, &[run], None)
+                    window.text_system().shape_line(text, font_size, &[run])
                 })
                 .collect()
         };
