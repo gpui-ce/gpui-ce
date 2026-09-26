@@ -20,6 +20,9 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     let r#gen = quote! {
         impl #impl_generics gpui::AppContext for #type_name #type_generics
         #where_clause
+        {}
+        impl #impl_generics gpui::AppContextEntity for #type_name #type_generics
+        #where_clause
         {
             fn new<T: 'static>(
                 &mut self,
@@ -51,16 +54,6 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
                 self.#app_variable.update_entity(handle, update)
             }
 
-            fn as_mut<'y, 'z, T>(
-                &'y mut self,
-                handle: &'z gpui::Entity<T>,
-            ) -> gpui::GpuiBorrow<'y, T>
-            where
-                T: 'static,
-            {
-                self.#app_variable.as_mut(handle)
-            }
-
             fn read_entity<T, R>(
                 &self,
                 handle: &gpui::Entity<T>,
@@ -83,7 +76,23 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
             {
                 self.#app_variable.emit(entity, event)
             }
-
+        }
+        impl #impl_generics gpui::AppContextBorrowEntity for #type_name #type_generics
+        #where_clause
+        {
+            fn as_mut<'y, 'z, T>(
+                &'y mut self,
+                handle: &'z gpui::Entity<T>,
+            ) -> gpui::GpuiBorrow<'y, T>
+            where
+                T: 'static,
+            {
+                self.#app_variable.as_mut(handle)
+            }
+        }
+        impl #impl_generics gpui::AppContextWindow for #type_name #type_generics
+        #where_clause
+        {
             fn update_window<T, F>(&mut self, window: gpui::AnyWindowHandle, f: F) -> gpui::Result<T>
             where
                 F: FnOnce(gpui::AnyView, &mut gpui::Window, &mut gpui::App) -> T,
@@ -110,14 +119,20 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
             {
                 self.#app_variable.read_window(window, read)
             }
-
+        }
+        impl #impl_generics gpui::AppContextTask for #type_name #type_generics
+        #where_clause
+        {
             fn background_spawn<R>(&self, future: impl std::future::Future<Output = R> + Send + 'static) -> gpui::Task<R>
             where
                 R: Send + 'static,
             {
                 self.#app_variable.background_spawn(future)
             }
-
+        }
+        impl #impl_generics gpui::AppContextGlobal for #type_name #type_generics
+        #where_clause
+        {
             fn read_global<G, R>(&self, callback: impl FnOnce(&G, &gpui::App) -> R) -> R
             where
                 G: gpui::Global,

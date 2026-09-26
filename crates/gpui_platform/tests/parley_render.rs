@@ -159,6 +159,7 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         let window = cx
             .open_window(gpui::size(px(1280.0), px(800.0)), |_, cx| {
+                use gpui::AppContextEntity;
                 cx.new(|_| ParleyRenderingFixture)
             })
             .expect("failed to create the headless text window");

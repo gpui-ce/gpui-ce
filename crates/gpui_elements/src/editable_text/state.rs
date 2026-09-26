@@ -1434,15 +1434,14 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 ///     permutations of: single and multiline fields, wrap vs no-wrap, overflow scroll vs no scroll
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
-
     use super::*;
     use crate::editable_text::StringStorage;
     use gpui::{
-        AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
+        AppContextEntity, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
     use gpui_parley::{ParleyTextSystem, SystemFonts};
+    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
     type TestMovementAction =
         fn(&mut EditableTextState, &mut Window, &mut Context<'_, EditableTextState>);

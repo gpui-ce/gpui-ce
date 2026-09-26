@@ -8,12 +8,12 @@
 //! and screenshot capture via [`HeadlessAppContext::capture_screenshot`].
 
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, AssetRegistry, AssetSource,
-    BackgroundExecutor, Bounds, Context, Entity, EntityId, EventEmitter, ForegroundExecutor,
-    Global, Hsla, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation,
-    ScaledPixels, Size, Task, TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds,
-    WindowHandle, WindowOptions,
-    app::{GpuiBorrow, GpuiMode},
+    AnyView, AnyWindowHandle, App, AppCell, AppContext, AppContextEntity, AppContextGlobal,
+    AppContextTask, AppContextWindow, AssetRegistry, AssetSource, BackgroundExecutor, Bounds,
+    Context, Entity, EntityId, EventEmitter, ForegroundExecutor, Global, Hsla, Pixels,
+    PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, ScaledPixels, Size, Task,
+    TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds, WindowHandle, WindowOptions,
+    app::GpuiMode,
 };
 use anyhow::Result;
 use image::RgbaImage;
@@ -266,15 +266,14 @@ impl Drop for HeadlessAppContext {
     }
 }
 
-impl AppContext for HeadlessAppContext {
+impl AppContext for HeadlessAppContext {}
+impl AppContextEntity for HeadlessAppContext {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
-        let mut app = self.app.borrow_mut();
-        app.new(build_entity)
+        self.app.new(build_entity)
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
-        let mut app = self.app.borrow_mut();
-        app.reserve_entity()
+        self.app.reserve_entity()
     }
 
     fn insert_entity<T: 'static>(
@@ -282,8 +281,7 @@ impl AppContext for HeadlessAppContext {
         reservation: Reservation<T>,
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Entity<T> {
-        let mut app = self.app.borrow_mut();
-        app.insert_entity(reservation, build_entity)
+        self.app.insert_entity(reservation, build_entity)
     }
 
     fn update_entity<T: 'static, R>(
@@ -291,28 +289,18 @@ impl AppContext for HeadlessAppContext {
         handle: &Entity<T>,
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> R {
-        let mut app = self.app.borrow_mut();
-        app.update_entity(handle, update)
-    }
-
-    fn as_mut<'a, T>(&'a mut self, _: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        panic!("Cannot use as_mut with HeadlessAppContext. Call update() instead.")
+        self.app.update_entity(handle, update)
     }
 
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
     where
         T: 'static,
     {
-        let app = self.app.borrow();
-        app.read_entity(handle, read)
+        self.app.read_entity(handle, read)
     }
 
     fn notify(&mut self, entity_id: EntityId) {
-        let mut app = self.app.borrow_mut();
-        app.notify(entity_id);
+        self.app.notify(entity_id);
     }
 
     fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
@@ -320,16 +308,15 @@ impl AppContext for HeadlessAppContext {
         EntityType: EventEmitter<EventType>,
         EventType: 'static,
     {
-        let mut app = self.app.borrow_mut();
-        app.emit(entity, event)
+        self.app.emit(entity, event)
     }
-
+}
+impl AppContextWindow for HeadlessAppContext {
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
-        let mut lock = self.app.borrow_mut();
-        lock.update_window(window, f)
+        self.app.update_window(window, f)
     }
 
     fn with_window<R>(
@@ -337,8 +324,7 @@ impl AppContext for HeadlessAppContext {
         entity_id: EntityId,
         f: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> Option<R> {
-        let mut lock = self.app.borrow_mut();
-        lock.with_window(entity_id, f)
+        self.app.with_window(entity_id, f)
     }
 
     fn read_window<T, R>(
@@ -349,39 +335,34 @@ impl AppContext for HeadlessAppContext {
     where
         T: 'static,
     {
-        let app = self.app.borrow();
-        app.read_window(window, read)
+        self.app.read_window(window, read)
     }
-
+}
+impl AppContextTask for HeadlessAppContext {
     fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
     where
         R: Send + 'static,
     {
-        self.background_executor.spawn(future)
+        self.app.background_spawn(future)
     }
-
+}
+impl AppContextGlobal for HeadlessAppContext {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global,
     {
-        let app = self.app.borrow();
-        app.read_global(callback)
+        self.app.read_global(callback)
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let mut app = self.app.borrow_mut();
-        app.insert_global_entity(entity)
+        self.app.insert_global_entity(entity)
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        let mut app = self.app.borrow_mut();
-        app.remove_global_entity(entity)
+        self.app.remove_global_entity(entity)
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let app = self.app.borrow();
-        let iter = app.global_entities();
-        // Cloning the iterator here so that lock can be released when function is going out of scope
-        iter.collect::<Vec<_>>().into_iter()
+        self.app.global_entities().collect::<Vec<_>>().into_iter()
     }
 }

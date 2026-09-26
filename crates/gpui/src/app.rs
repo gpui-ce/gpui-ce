@@ -1,9 +1,10 @@
 use crate::{
-    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
-    ArenaBox, Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
-    CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
-    FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
-    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext,
+    AppContextBorrowEntity, AppContextEntity, AppContextGlobal, AppContextTask, AppContextWindow,
+    Arena, ArenaBox, Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem,
+    ClipboardReadError, CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload,
+    FocusHandle, FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext,
+    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
@@ -115,6 +116,123 @@ impl AppCell {
             eprintln!("borrowed {thread_id:?}");
         }
         Ok(AppRefMut(self.app.try_borrow_mut()?))
+    }
+}
+
+impl AppContext for Rc<AppCell> {}
+impl AppContextEntity for Rc<AppCell> {
+    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
+        self.borrow_mut().new(build_entity)
+    }
+
+    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
+        self.borrow_mut().reserve_entity()
+    }
+
+    fn insert_entity<T: 'static>(
+        &mut self,
+        reservation: Reservation<T>,
+        build_entity: impl FnOnce(&mut Context<T>) -> T,
+    ) -> Entity<T> {
+        self.borrow_mut().insert_entity(reservation, build_entity)
+    }
+
+    fn update_entity<T: 'static, R>(
+        &mut self,
+        handle: &Entity<T>,
+        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
+    ) -> R {
+        self.borrow_mut().update_entity(handle, update)
+    }
+
+    fn read_entity<T, R>(&self, handle: &Entity<T>, callback: impl FnOnce(&T, &App) -> R) -> R
+    where
+        T: 'static,
+    {
+        self.borrow().read_entity(handle, callback)
+    }
+
+    fn notify(&mut self, entity_id: EntityId) {
+        self.borrow_mut().notify(entity_id);
+    }
+
+    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
+    where
+        EntityType: EventEmitter<EventType>,
+        EventType: 'static,
+    {
+        self.borrow_mut().emit(entity, event)
+    }
+}
+impl AppContextWindow for Rc<AppCell> {
+    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
+    where
+        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
+    {
+        let mut lock = self.try_borrow_mut()?;
+        if lock.quitting {
+            anyhow::bail!("app is quitting");
+        }
+        lock.update_window(window, f)
+    }
+
+    fn with_window<R>(
+        &mut self,
+        entity_id: EntityId,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> Option<R> {
+        let mut lock = self.try_borrow_mut().ok()?;
+        if lock.quitting {
+            return None;
+        }
+        lock.with_window(entity_id, f)
+    }
+
+    fn read_window<T, R>(
+        &self,
+        window: &WindowHandle<T>,
+        read: impl FnOnce(Entity<T>, &App) -> R,
+    ) -> Result<R>
+    where
+        T: 'static,
+    {
+        let lock = self.borrow();
+        if lock.quitting {
+            anyhow::bail!("app is quitting");
+        }
+        lock.read_window(window, read)
+    }
+}
+impl AppContextTask for Rc<AppCell> {
+    #[track_caller]
+    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
+    where
+        R: Send + 'static,
+    {
+        self.borrow().background_executor.spawn(future)
+    }
+}
+impl AppContextGlobal for Rc<AppCell> {
+    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
+    where
+        G: Global,
+    {
+        self.borrow_mut().read_global(callback)
+    }
+
+    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
+        self.borrow_mut().insert_global_entity(entity)
+    }
+
+    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
+        self.borrow_mut().remove_global_entity(entity)
+    }
+
+    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
+        let mut app = self.borrow_mut();
+        let iter = app.global_entities();
+        // Cloning the iterator here so that lock can be released when function is going out of scope
+        iter.collect::<Vec<_>>().into_iter()
     }
 }
 
@@ -2831,7 +2949,16 @@ impl App {
     }
 }
 
-impl AppContext for App {
+impl AppContext for App {}
+impl AppContextBorrowEntity for App {
+    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
+    where
+        T: 'static,
+    {
+        GpuiBorrow::new(handle.clone(), self)
+    }
+}
+impl AppContextEntity for App {
     /// Builds an entity that is owned by the application.
     ///
     /// The given function will be invoked with a [`Context`] and must return an object representing the entity. An
@@ -2884,13 +3011,6 @@ impl AppContext for App {
             cx.entities.end_lease(entity);
             result
         })
-    }
-
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        GpuiBorrow::new(handle.clone(), self)
     }
 
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
@@ -2952,7 +3072,16 @@ impl AppContext for App {
             event,
         });
     }
-
+}
+impl AppContextTask for App {
+    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
+    where
+        R: Send + 'static,
+    {
+        self.background_executor.spawn(future)
+    }
+}
+impl AppContextWindow for App {
     fn update_window<T, F>(&mut self, handle: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -2990,14 +3119,8 @@ impl AppContext for App {
 
         Ok(read(view, self))
     }
-
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.background_executor.spawn(future)
-    }
-
+}
+impl AppContextGlobal for App {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global,
@@ -3232,6 +3355,10 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 #[cfg(test)]
 mod test {
     use super::{Application, CursorHideMode};
+    use crate::{
+        AppContext, AppContextEntity, BackgroundExecutor, Context, Empty, ForegroundExecutor,
+        IntoElement, Render, TestAppContext, TestDispatcher, TestPlatform, Window,
+    };
     use std::{
         cell::{Cell, RefCell},
         ffi::OsString,
@@ -3242,11 +3369,6 @@ mod test {
 
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
-
-    use crate::{
-        AppContext, BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
-        TestAppContext, TestDispatcher, TestPlatform, Window,
-    };
 
     fn test_application() -> (Application, TestDispatcher) {
         let dispatcher = TestDispatcher::new(0);

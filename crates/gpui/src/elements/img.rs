@@ -1,5 +1,5 @@
 use crate::{
-    AnyElement, AnyImageCache, App, AppContext, Asset, AssetLogger, Bounds, DefiniteLength,
+    AnyElement, AnyImageCache, App, AppContextEntity, Asset, AssetLogger, Bounds, DefiniteLength,
     Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId,
     InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
     RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task, Window,

@@ -621,8 +621,8 @@ impl DispatchTree {
 #[cfg(test)]
 mod tests {
     use crate::{
-        self as gpui, AppContext, DispatchResult, Element, ElementId, GlobalElementId,
-        InspectorElementId, Keystroke, LayoutId, Style,
+        self as gpui, AppContext, AppContextEntity, DispatchResult, Element, ElementId,
+        GlobalElementId, InspectorElementId, Keystroke, LayoutId, Style,
     };
     use core::panic;
     use smallvec::SmallVec;

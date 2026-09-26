@@ -1,7 +1,8 @@
 use crate::{
-    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds,
-    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext,
+    AppContextEntity, AppContextWindow, Arena, Asset, AsyncWindowContext, AtlasTile,
+    AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds, BoxShadow, Capslock, ColorExt,
+    Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
     GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero, KeyBinding, KeyContext,
@@ -7613,7 +7614,7 @@ impl<V: 'static + Render> WindowHandle<V> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn root<C>(&self, cx: &mut C) -> Result<Entity<V>>
     where
-        C: AppContext,
+        C: AppContextWindow,
     {
         cx.update_window(self.any_handle, |root_view, _, _| {
             root_view
@@ -7760,7 +7761,7 @@ impl AnyWindowHandle {
         update: impl FnOnce(AnyView, &mut Window, &mut App) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextWindow,
     {
         cx.update_window(self, update)
     }
@@ -7770,7 +7771,7 @@ impl AnyWindowHandle {
     /// This will fail if the window has been closed.
     pub fn read<T, C, R>(self, cx: &C, read: impl FnOnce(Entity<T>, &App) -> R) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextWindow,
         T: 'static,
     {
         let view = self
@@ -8079,13 +8080,18 @@ mod tests {
     use super::*;
     use crate::util::FluentBuilder;
     use crate::{
-        ColorExt, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
-        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest, InputEvent,
-        InteractiveElement, LineLayout, LongPressEvent, MouseDownEvent, ParentElement,
-        PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterStyleRequest,
-        RasterizedGlyph, RequestFrameOptions, ShaderBool, StatefulInteractiveElement, Styled,
-        TestApp, TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchId,
-        TouchPhase, canvas, div, hsla, img, linear_color_stop, linear_gradient,
+        AnyWindowHandle, AppContextEntity, AppContextWindow, Background, Bounds, BoxShadow,
+        ColorExt, Context, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
+        FileDragPaths, FileDropEvent, FocusHandle, Font, FontMetrics, ImageSource, InlineLayout,
+        InlineLayoutRequest, InputEvent, InputEvent as _, InteractiveElement,
+        InteractiveElement as _, IntoElement, LineLayout, LongPressEvent, MouseButton,
+        MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point,
+        PreparedRasterStyle, RasterColorEffect, RasterStyleRequest, RasterizedGlyph, Render,
+        RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement,
+        StatefulInteractiveElement as _, Styled, TestApp, TestAppContext, TestTextSystem,
+        TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
+        WindowAppearance, WindowOptions, canvas, div, hsla, img, linear_color_stop,
+        linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use proptest::prelude::*;
