@@ -28,7 +28,7 @@ use crate::{
 use std::{cell::Cell, rc::Weak};
 
 use crate::{
-    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Bounds, ClickEvent,
+    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContextEntity, Bounds, ClickEvent,
     CursorStyle, DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload,
     FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId,
     IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
@@ -5233,6 +5233,11 @@ impl ScrollHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        AnyWindowHandle, AppContextWindow, Context, InputEvent, Keystroke, MouseMoveEvent,
+        TestAppContext, canvas, util::FluentBuilder as _,
+    };
+    use std::{cell::Cell, rc::Weak};
 
     #[gpui::test]
     fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {

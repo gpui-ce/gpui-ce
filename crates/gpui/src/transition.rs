@@ -250,7 +250,7 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use crate::{AppContext, Context, IntoElement, Render, canvas, px, size};
+    use crate::{AppContext, AppContextEntity, Context, IntoElement, Render, canvas, px, size};
 
     use super::*;
     use gpui::TestAppContext;

@@ -1,4 +1,7 @@
-use crate::{App, AppContext, GpuiBorrow, VisualContext, Window, seal::Sealed};
+use crate::{
+    App, AppContextBorrowEntity, AppContextEntity, AppContextWindow, GpuiBorrow, VisualContext,
+    Window, seal::Sealed,
+};
 use anyhow::{Context as _, Result};
 use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
@@ -554,7 +557,7 @@ impl<T: 'static> Entity<T> {
     /// Use this when the callback needs the app as well as the value. It works with any [`AppContext`],
     /// including [`Context`] and [`AsyncApp`](crate::AsyncApp). It panics in the same cases as [`Entity::read`].
     #[inline]
-    pub fn read_with<R, C: AppContext>(&self, cx: &C, f: impl FnOnce(&T, &App) -> R) -> R {
+    pub fn read_with<R, C: AppContextEntity>(&self, cx: &C, f: impl FnOnce(&T, &App) -> R) -> R {
         cx.read_entity(self, f)
     }
 
@@ -595,7 +598,7 @@ impl<T: 'static> Entity<T> {
     /// # });
     /// ```
     #[inline]
-    pub fn update<R, C: AppContext>(
+    pub fn update<R, C: AppContextEntity>(
         &self,
         cx: &mut C,
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
@@ -609,7 +612,7 @@ impl<T: 'static> Entity<T> {
     /// as if you had called [`Context::notify`]. Use [`Entity::update`] when the change needs a
     /// [`Context`].
     #[inline]
-    pub fn as_mut<'a, C: AppContext>(&self, cx: &'a mut C) -> GpuiBorrow<'a, T> {
+    pub fn as_mut<'a, C: AppContextBorrowEntity>(&self, cx: &'a mut C) -> GpuiBorrow<'a, T> {
         cx.as_mut(self)
     }
 
@@ -626,7 +629,7 @@ impl<T: 'static> Entity<T> {
     /// assert_eq!(name.read(cx), "published");
     /// # });
     /// ```
-    pub fn write<C: AppContext>(&self, cx: &mut C, value: T) {
+    pub fn write<C: AppContextEntity>(&self, cx: &mut C, value: T) {
         self.update(cx, |entity, cx| {
             *entity = value;
             cx.notify();
@@ -972,7 +975,7 @@ impl<T: 'static> WeakEntity<T> {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity,
     {
         let entity = self.upgrade().context("entity released")?;
         Ok(cx.update_entity(&entity, update))
@@ -988,7 +991,7 @@ impl<T: 'static> WeakEntity<T> {
         update: impl FnOnce(&mut T, &mut Window, &mut Context<T>) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity + AppContextWindow,
     {
         let entity = self.upgrade().context("entity released")?;
         cx.with_window(entity.entity_id(), |window, app| {
@@ -1002,7 +1005,7 @@ impl<T: 'static> WeakEntity<T> {
     /// Use this when you only need to read the value. It works with any [`AppContext`].
     pub fn read_with<C, R>(&self, cx: &C, read: impl FnOnce(&T, &App) -> R) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity,
     {
         let entity = self.upgrade().context("entity released")?;
         Ok(cx.read_entity(&entity, read))

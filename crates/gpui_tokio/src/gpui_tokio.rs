@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use gpui::{App, AppContext, Global, ReadGlobal, Task};
+use gpui::{App, AppContext, AppContextTask, Global, ReadGlobal, Task};
 use gpui_util::defer;
 
 pub use tokio::task::JoinError;

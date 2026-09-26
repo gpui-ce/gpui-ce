@@ -313,7 +313,7 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
 mod configuration_tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, AppContext as _, FocusHandle, InteractiveElement as _, IntoElement,
+        AnyWindowHandle, AppContextWindow, FocusHandle, InteractiveElement as _, IntoElement,
         ParentElement as _, Render, Styled as _, TestAppContext, TextInputAction,
         TextInputStateChange, canvas, div,
     };

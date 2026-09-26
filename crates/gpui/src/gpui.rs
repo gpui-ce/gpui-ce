@@ -24,6 +24,7 @@ mod elements;
 mod executor;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
+pub mod context;
 mod geometry;
 mod gestures;
 mod global;
@@ -183,7 +184,22 @@ pub use pollster::block_on;
 
 /// The context trait, allows the different contexts in GPUI to be used
 /// interchangeably for certain operations.
-pub trait AppContext {
+pub trait AppContext:
+    AppContextEntity + AppContextTask + AppContextWindow + AppContextGlobal
+{
+}
+
+/// API trait used to unify multiple GPUI contexts under a single api.
+/// Exposes ways to borrow entities inline.
+pub trait AppContextBorrowEntity {
+    /// Update a entity in the app context.
+    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
+    where
+        T: 'static;
+}
+/// API trait used to unify multiple GPUI contexts under a single api.
+/// Exposes various apis for interacting with [`Entity`] in the [`App`] that aren't exposed mutable borrow (see [`AppContextBorrowEntity`]).
+pub trait AppContextEntity {
     /// Create a new entity in the app context.
     #[expect(
         clippy::wrong_self_convention,
@@ -213,11 +229,6 @@ pub trait AppContext {
     where
         T: 'static;
 
-    /// Update a entity in the app context.
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static;
-
     /// Read a entity from the app context.
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
     where
@@ -232,7 +243,10 @@ pub trait AppContext {
     where
         EntityType: EventEmitter<EventType>,
         EventType: 'static;
-
+}
+/// API trait used to unify multiple GPUI contexts under a single api.
+/// Exposes apis for interfacing with [`Window`] data.
+pub trait AppContextWindow {
     /// Update a window for the given handle.
     fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
     where
@@ -256,12 +270,18 @@ pub trait AppContext {
     ) -> Result<R>
     where
         T: 'static;
-
+}
+/// API trait used to unify multiple GPUI contexts under a single api.
+/// Exposes apis for spawning tasks.
+pub trait AppContextTask {
     /// Spawn a future on a background thread
     fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
     where
         R: Send + 'static;
-
+}
+/// API trait used to unify multiple GPUI contexts under a single api.
+/// Exposes apis for interfacing with globals (entities which are owned by the [`App`]).
+pub trait AppContextGlobal {
     /// Read a global from this app context
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
@@ -292,7 +312,7 @@ impl<T: 'static> Reservation<T> {
 
 /// This trait is used for the different visual contexts in GPUI that
 /// require a window to be present.
-pub trait VisualContext: AppContext {
+pub trait VisualContext: AppContextWindow {
     /// The result type for window operations.
     type Result<T>;
 
