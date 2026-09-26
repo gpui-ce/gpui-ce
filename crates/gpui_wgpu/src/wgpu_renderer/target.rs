@@ -10,7 +10,7 @@ pub(super) struct RenderTarget {
     maximum_dimension: u32,
     configured: bool,
     needs_redraw: bool,
-    clear_color: wgpu::Color,
+    pub(super) clear_color: wgpu::Color,
 }
 
 impl RenderTarget {

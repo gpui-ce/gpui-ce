@@ -3,7 +3,13 @@ use crate::{
     TextAlign, TextSystem, VisualLine, Window, WrappedLineLayout, fill, point, size,
 };
 use derive_more::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+static GLYPH_PAINT_ERRORS: AtomicUsize = AtomicUsize::new(0);
+const MAX_LOGGED_GLYPH_PAINT_ERRORS: usize = 20;
 
 /// A line of text that has been shaped and decorated.
 #[derive(Clone, Debug, Deref, DerefMut)]
@@ -309,8 +315,14 @@ fn paint_text_fragment(
             context.baseline_y + glyph.position.y,
         );
 
-        if glyph.is_emoji {
-            window.paint_emoji(glyph_origin, fragment.font_id, glyph.id, fragment.font_size)?;
+        let result = if glyph.is_emoji {
+            window.paint_emoji_with_color(
+                glyph_origin,
+                fragment.font_id,
+                glyph.id,
+                fragment.font_size,
+                fragment.style.color,
+            )
         } else {
             window.paint_glyph(
                 glyph_origin,
@@ -318,7 +330,20 @@ fn paint_text_fragment(
                 glyph.id,
                 fragment.font_size,
                 fragment.style.color,
-            )?;
+            )
+        };
+
+        if let Err(error) = result {
+            let error_idx = GLYPH_PAINT_ERRORS.fetch_add(1, Ordering::Relaxed);
+            if error_idx < MAX_LOGGED_GLYPH_PAINT_ERRORS {
+                log::error!(
+                    "failed to paint glyph {:?} from font {:?}: {error:#}",
+                    glyph.id,
+                    fragment.font_id
+                );
+            } else if error_idx == MAX_LOGGED_GLYPH_PAINT_ERRORS {
+                log::error!("suppressing further glyph paint errors");
+            }
         }
     }
 
