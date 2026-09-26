@@ -11,7 +11,8 @@ pub struct AnimatedSample<T> {
     /// Whether another sample may produce a different value.
     pub is_active: bool,
 
-    /// Eased progress between the interruption anchor and logical value.
+    /// Normalized presentation progress between the interruption anchor and
+    /// logical target.
     pub progress: Progress,
 }
 
@@ -48,13 +49,13 @@ where
         &self.value
     }
 
-    /// Returns eased progress at the supplied time without changing state.
+    /// Returns normalized presentation progress without changing state.
+    ///
+    /// A value with no active or previously settled run is already presenting
+    /// its logical target and therefore reports [`Progress::END`].
     pub(crate) fn progress_at(&self, now: Time) -> Progress {
         self.started_at.map_or_else(
-            || {
-                self.settled_progress
-                    .unwrap_or_else(|| self.motion.resting_progress())
-            },
+            || self.settled_progress.unwrap_or(Progress::END),
             |started_at| self.motion.sample_at(started_at, now).progress,
         )
     }
@@ -95,6 +96,18 @@ where
         self.started_at = None;
     }
 
+    /// Aligns a completed END presentation with its logical target.
+    ///
+    /// Style transitions present the authored target at this endpoint, even if
+    /// interpolation produced a different value. Keeping the same value as the
+    /// next interruption anchor prevents a jump on a later retarget.
+    pub(crate) fn adopt_completed_target(&mut self) {
+        if self.started_at.is_none() && self.settled_progress == Some(Progress::END) {
+            self.last_value = self.value.clone();
+            self.settled_progress = None;
+        }
+    }
+
     /// Restores the value used to initialize this animation.
     pub fn reset(&mut self) {
         self.value = self.initial_value.clone();
@@ -109,9 +122,7 @@ where
             return AnimatedSample {
                 value: self.last_value.clone(),
                 is_active: false,
-                progress: self
-                    .settled_progress
-                    .unwrap_or_else(|| self.motion.resting_progress()),
+                progress: self.settled_progress.unwrap_or(Progress::END),
             };
         };
 
@@ -176,7 +187,12 @@ mod tests {
         assert!(!animated.set(10.0, &motion, Duration::from_secs(2)));
 
         animated.jump_to(8.0);
-        assert_eq!(animated.sample(Duration::from_secs(2)).value, 8.0);
+        assert_sample(
+            animated.sample(Duration::from_secs(2)),
+            8.0,
+            Progress::END,
+            false,
+        );
 
         animated.scale_by(2.0);
         assert_eq!(animated.value(), &16.0);
@@ -260,6 +276,14 @@ mod tests {
             Progress::START
         );
         assert_eq!(animated.value(), &1.0);
+
+        animated.jump_to(2.0);
+        assert_sample(
+            animated.sample(Duration::from_secs(3)),
+            2.0,
+            Progress::END,
+            false,
+        );
     }
 
     #[test]
@@ -278,5 +302,88 @@ mod tests {
         assert!(animated.set(20.0, &two_seconds, Duration::from_millis(500)));
         assert_eq!(animated.sample(Duration::from_millis(500)).value, 5.0);
         assert_eq!(animated.sample(Duration::from_millis(1_500)).value, 12.5);
+    }
+
+    #[test]
+    fn delayed_retargeting_holds_the_interruption_anchor() {
+        let motion = Motion::new(Duration::from_secs(1)).with_delay(Duration::from_millis(100));
+        let mut animated = Animated::<f32, Duration>::new(0.0, motion.clone());
+
+        assert!(animated.set(10.0, &motion, Duration::ZERO));
+        assert_sample(
+            animated.sample(Duration::from_millis(100)),
+            0.0,
+            Progress::START,
+            true,
+        );
+        assert_eq!(animated.sample(Duration::from_millis(600)).value, 5.0);
+
+        assert!(animated.set(20.0, &motion, Duration::from_millis(600)));
+        for milliseconds in [600, 650, 700] {
+            assert_sample(
+                animated.sample(Duration::from_millis(milliseconds)),
+                5.0,
+                Progress::START,
+                true,
+            );
+        }
+        assert_eq!(animated.sample(Duration::from_millis(1_200)).value, 12.5);
+    }
+
+    #[test]
+    fn finite_iterations_settle_at_their_sampled_presentation() {
+        let restarting_motion = Motion::new(Duration::from_secs(1)).iterations(3);
+        let mut restarting = Animated::<f32, Duration>::new(0.0, restarting_motion.clone());
+        assert!(restarting.set(10.0, &restarting_motion, Duration::ZERO));
+        assert_sample(
+            restarting.sample(Duration::from_secs(1)),
+            0.0,
+            Progress::START,
+            true,
+        );
+        assert_sample(
+            restarting.sample(Duration::from_secs(3)),
+            10.0,
+            Progress::END,
+            false,
+        );
+
+        let alternating_motion = Motion::new(Duration::from_secs(1))
+            .iterations(2)
+            .alternate();
+        let mut idle = Animated::<f32, Duration>::new(4.0, alternating_motion.clone());
+        assert_sample(idle.sample(Duration::ZERO), 4.0, Progress::END, false);
+        idle.jump_to(6.0);
+        assert_sample(idle.sample(Duration::ZERO), 6.0, Progress::END, false);
+
+        let mut alternating = Animated::<f32, Duration>::new(0.0, alternating_motion.clone());
+        assert!(alternating.set(10.0, &alternating_motion, Duration::ZERO));
+        assert_sample(
+            alternating.sample(Duration::from_secs(1)),
+            10.0,
+            Progress::END,
+            true,
+        );
+        assert_sample(
+            alternating.sample(Duration::from_secs(2)),
+            0.0,
+            Progress::START,
+            false,
+        );
+        assert_sample(
+            alternating.sample(Duration::from_secs(20)),
+            0.0,
+            Progress::START,
+            false,
+        );
+
+        let zero_forever = Motion::new(Duration::ZERO).repeat_forever();
+        assert!(alternating.set(20.0, &zero_forever, Duration::from_secs(21)));
+        assert_sample(
+            alternating.sample(Duration::from_secs(21)),
+            0.0,
+            Progress::START,
+            false,
+        );
     }
 }
