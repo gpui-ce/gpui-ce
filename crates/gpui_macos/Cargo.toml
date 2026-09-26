@@ -63,6 +63,7 @@ pathfinder_geometry.workspace = true
 raw-window-handle.workspace = true
 semver.workspace = true
 smallvec.workspace = true
+skrifa.workspace = true
 strum.workspace = true
 uuid.workspace = true
 url.workspace = true

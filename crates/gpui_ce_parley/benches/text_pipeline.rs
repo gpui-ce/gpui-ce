@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use gpui::{
     FontFallbacks, GlyphRenderMode, PlatformTextSystem, PreparedRasterStyle, RenderGlyphParams,
-    TextLayoutRequest, TextRun, TextSystem, font, px,
+    TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, TextSystem, font, px,
 };
 use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
 use std::borrow::Cow;
@@ -50,8 +50,10 @@ fn raster_case() -> (TextSystem, RenderGlyphParams) {
         text,
         font_size: px(16.0),
         runs: &[run],
-        wrap_width: None,
-        line_clamp: None,
+        options: TextLayoutOptions {
+            text_align: TextAlign::Left,
+            ..Default::default()
+        },
     });
 
     let fragment = &layout.paint_fragments[0];
@@ -79,56 +81,41 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
         "office cafe\u{301} العربية אבג 日本語 ไทย 👩🏽‍💻 🇬🇧 one two three four".repeat(16);
 
     let mut group = criterion.benchmark_group("parley_text_pipeline");
-    group.bench_function("layout_code_warm", |bencher| {
+    for (name, text, font_size, wrap_width) in [
+        ("layout_code_warm", code.as_str(), 14.0, None),
+        (
+            "layout_multilingual_warm",
+            multilingual.as_str(),
+            16.0,
+            None,
+        ),
+        (
+            "wrap_multilingual_warm",
+            multilingual.as_str(),
+            16.0,
+            Some(px(480.0)),
+        ),
+    ] {
         let runs = [TextRun {
-            len: code.len(),
+            len: text.len(),
             ..base_run.clone()
         }];
 
-        bencher.iter(|| {
-            system.layout_text(TextLayoutRequest {
-                text: &code,
-                font_size: px(14.0),
-                runs: &runs,
-                wrap_width: None,
-                line_clamp: None,
-            })
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                system.layout_text(TextLayoutRequest {
+                    text,
+                    font_size: px(font_size),
+                    runs: &runs,
+                    options: TextLayoutOptions {
+                        wrap_width,
+                        text_align: TextAlign::Left,
+                        ..Default::default()
+                    },
+                })
+            });
         });
-    });
-
-    group.bench_function("layout_multilingual_warm", |bencher| {
-        let runs = [TextRun {
-            len: multilingual.len(),
-            ..base_run.clone()
-        }];
-
-        bencher.iter(|| {
-            system.layout_text(TextLayoutRequest {
-                text: &multilingual,
-                font_size: px(16.0),
-                runs: &runs,
-                wrap_width: None,
-                line_clamp: None,
-            })
-        });
-    });
-
-    group.bench_function("wrap_multilingual_warm", |bencher| {
-        let runs = [TextRun {
-            len: multilingual.len(),
-            ..base_run.clone()
-        }];
-
-        bencher.iter(|| {
-            system.layout_text(TextLayoutRequest {
-                text: &multilingual,
-                font_size: px(16.0),
-                runs: &runs,
-                wrap_width: Some(px(480.0)),
-                line_clamp: None,
-            })
-        });
-    });
+    }
 
     group.bench_function("layout_multilingual_cold", |bencher| {
         bencher.iter_batched(
@@ -143,8 +130,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                     text: &multilingual,
                     font_size: px(16.0),
                     runs: &runs,
-                    wrap_width: None,
-                    line_clamp: None,
+                    options: TextLayoutOptions {
+                        text_align: TextAlign::Left,
+                        ..Default::default()
+                    },
                 })
             },
             BatchSize::SmallInput,

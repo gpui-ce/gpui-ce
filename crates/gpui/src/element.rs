@@ -455,14 +455,16 @@ impl<E: Element> Drawable<E> {
                     &mut window.current_inline_fragments,
                     inline_fragments.clone(),
                 );
-                let mut prepaint = self.element.prepaint(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    bounds,
-                    &mut request_layout,
-                    window,
-                    cx,
-                );
+                let mut prepaint = window.with_layout_direction_context(layout_id, |window| {
+                    self.element.prepaint(
+                        global_id.as_ref(),
+                        inspector_id.as_ref(),
+                        bounds,
+                        &mut request_layout,
+                        window,
+                        cx,
+                    )
+                });
 
                 window.current_inline_fragments = previous_fragments;
                 window.next_frame.dispatch_tree.pop_node();
@@ -617,10 +619,9 @@ impl<E: Element> Drawable<E> {
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
     ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, context)
-            .1
+        self.compute_layout_as_root(available_space, window, cx).1
     }
 }
 
