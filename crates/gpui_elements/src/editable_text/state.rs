@@ -140,7 +140,7 @@ impl EditableTextState {
     ///
     /// Expected to be called via [`AppContext::new`] such as:
     /// ```
-    /// # use gpui::{AppContext, Window, App, Entity};
+    /// # use gpui::{context::*, Window, App, Entity};
     /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
     /// # fn new(_window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
     /// cx.new(|cx| EditableTextState::new(StringStorage::default(), cx))

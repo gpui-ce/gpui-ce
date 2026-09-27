@@ -18,14 +18,12 @@ mod bounds_tree;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+pub mod context;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 mod element;
 mod elements;
 mod executor;
-mod platform_scheduler;
-pub(crate) use platform_scheduler::PlatformScheduler;
-pub mod context;
 mod geometry;
 mod gestures;
 mod global;
@@ -38,6 +36,7 @@ mod lerp;
 mod motion;
 mod path_builder;
 mod platform;
+mod platform_scheduler;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
 pub mod profiler;
@@ -119,6 +118,7 @@ pub use gpui_macros::{
     AppContext, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, VisualContext, bench, property_test, register_action, test,
 };
+pub(crate) use platform_scheduler::PlatformScheduler;
 pub use resize::*;
 pub use spring::*;
 
@@ -164,14 +164,12 @@ pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use refineable::*;
 pub use scene::*;
 pub use shared_uri::*;
-use std::{any::Any, future::Future};
 pub use style::*;
 pub use style_transitions::*;
 pub use styled::*;
 pub use subscription::*;
 pub use svg_renderer::*;
 pub(crate) use tab_stop::*;
-use taffy::TaffyLayoutEngine;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]
 pub use test::*;
@@ -183,6 +181,9 @@ pub use window::*;
 
 #[cfg(not(target_family = "wasm"))]
 pub use pollster::block_on;
+
+use std::any::Any;
+use taffy::TaffyLayoutEngine;
 
 /// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].
 /// Allows you to obtain the [EntityId] for a entity before it is created.
