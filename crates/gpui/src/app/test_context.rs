@@ -1,13 +1,13 @@
 use crate::{
-    Action, AnyView, AnyWindowHandle, App, AppCell, AppContext, AppContextEntity, AppContextGlobal,
-    AppContextTask, AppContextWindow, AssetRegistry, AsyncApp, AvailableSpace, BackgroundExecutor,
-    BorrowAppContext, Bounds, Capslock, ClipboardItem, DrawPhase, Drawable, Element, Empty,
-    EntityId, EventEmitter, ForegroundExecutor, Global, InputEvent, Keystroke, Modifiers,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Platform, Point, Render, Result, SharedString, Size, SystemNotification,
-    SystemNotificationResponse, Task, TestDispatcher, TestPlatform, TestScreenCaptureSource,
-    TestWindow, TextSystem, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
-    app::GpuiMode, window::ElementArenaScope,
+    Action, AnyWindowHandle, App, AppCell, AppContext, AppContextEntity, AppContextWindow,
+    AssetRegistry, AsyncApp, AvailableSpace, BackgroundExecutor, BorrowAppContext, Bounds,
+    Capslock, ClipboardItem, DrawPhase, Drawable, Element, Empty, EntityId, EventEmitter,
+    ForegroundExecutor, Global, InputEvent, Keystroke, Modifiers, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Platform, Point, Render,
+    Result, SharedString, Size, SystemNotification, SystemNotificationResponse, Task,
+    TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow, TextSystem, VisualContext,
+    Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode, context::*,
+    window::ElementArenaScope,
 };
 use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
@@ -34,106 +34,21 @@ pub struct TestAppContext {
     pub app: Rc<AppCell>,
 }
 
+impl crate::app_borrow::UpgradeApp for TestAppContext {
+    fn upgrade(&self) -> impl crate::app_borrow::BorrowApp {
+        self.app.clone()
+    }
+
+    fn upgrade_mut(&mut self) -> impl crate::app_borrow::BorrowAppMut {
+        self.app.clone()
+    }
+}
+
 impl AppContext for TestAppContext {}
-impl AppContextEntity for TestAppContext {
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
-        self.app.new(build_entity)
-    }
-
-    fn reserve_entity<T: 'static>(&mut self) -> crate::Reservation<T> {
-        self.app.reserve_entity()
-    }
-
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: crate::Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T> {
-        self.app.insert_entity(reservation, build_entity)
-    }
-
-    fn update_entity<T: 'static, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R {
-        self.app.update_entity(handle, update)
-    }
-
-    fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static,
-    {
-        self.app.read_entity(handle, read)
-    }
-
-    fn notify(&mut self, entity_id: EntityId) {
-        self.app.notify(entity_id)
-    }
-
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        self.app.emit(entity, event)
-    }
-}
-impl AppContextWindow for TestAppContext {
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        self.app.update_window(window, f)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        self.app.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        self.app.read_window(window, read)
-    }
-}
-impl AppContextTask for TestAppContext {
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.app.background_spawn(future)
-    }
-}
-impl AppContextGlobal for TestAppContext {
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        self.app.read_global(callback)
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        self.app.insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.app.remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        self.app.global_entities().collect::<Vec<_>>().into_iter()
-    }
-}
+impl ImpliedAppEntity for TestAppContext {}
+impl ImpliedAppWindow for TestAppContext {}
+impl ImpliedAppTask for TestAppContext {}
+impl ImpliedAppGlobals for TestAppContext {}
 
 impl TestAppContext {
     /// Creates a new `TestAppContext`. Usually you can rely on `#[gpui::test]` to do this for you.
@@ -991,7 +906,20 @@ impl VisualTestContext {
     }
 }
 
+impl crate::app_borrow::UpgradeApp for VisualTestContext {
+    fn upgrade(&self) -> impl crate::app_borrow::BorrowApp {
+        self.app.clone()
+    }
+
+    fn upgrade_mut(&mut self) -> impl crate::app_borrow::BorrowAppMut {
+        self.app.clone()
+    }
+}
+
 impl AppContext for VisualTestContext {}
+impl ImpliedAppWindow for VisualTestContext {}
+impl ImpliedAppTask for VisualTestContext {}
+impl ImpliedAppGlobals for VisualTestContext {}
 impl AppContextEntity for VisualTestContext {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
         self.window
@@ -1043,61 +971,6 @@ impl AppContextEntity for VisualTestContext {
         EventType: 'static,
     {
         self.cx.emit(entity, event)
-    }
-}
-impl AppContextWindow for VisualTestContext {
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        self.cx.update_window(window, f)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        self.cx.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        self.cx.read_window(window, read)
-    }
-}
-impl AppContextTask for VisualTestContext {
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.cx.background_spawn(future)
-    }
-}
-impl AppContextGlobal for VisualTestContext {
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        self.cx.read_global(callback)
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        self.cx.insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.cx.remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        self.cx.global_entities()
     }
 }
 

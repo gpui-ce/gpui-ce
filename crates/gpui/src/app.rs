@@ -120,124 +120,15 @@ impl AppCell {
 }
 
 impl AppContext for Rc<AppCell> {}
-impl AppContextEntity for Rc<AppCell> {
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
-        self.borrow_mut().new(build_entity)
-    }
-
-    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
-        self.borrow_mut().reserve_entity()
-    }
-
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T> {
-        self.borrow_mut().insert_entity(reservation, build_entity)
-    }
-
-    fn update_entity<T: 'static, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R {
-        self.borrow_mut().update_entity(handle, update)
-    }
-
-    fn read_entity<T, R>(&self, handle: &Entity<T>, callback: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static,
-    {
-        self.borrow().read_entity(handle, callback)
-    }
-
-    fn notify(&mut self, entity_id: EntityId) {
-        self.borrow_mut().notify(entity_id);
-    }
-
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        self.borrow_mut().emit(entity, event)
-    }
-}
-impl AppContextWindow for Rc<AppCell> {
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        let mut lock = self.try_borrow_mut()?;
-        if lock.quitting {
-            anyhow::bail!("app is quitting");
-        }
-        lock.update_window(window, f)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        let mut lock = self.try_borrow_mut().ok()?;
-        if lock.quitting {
-            return None;
-        }
-        lock.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        let lock = self.borrow();
-        if lock.quitting {
-            anyhow::bail!("app is quitting");
-        }
-        lock.read_window(window, read)
-    }
-}
-impl AppContextTask for Rc<AppCell> {
-    #[track_caller]
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.borrow().background_executor.spawn(future)
-    }
-}
-impl AppContextGlobal for Rc<AppCell> {
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        self.borrow_mut().read_global(callback)
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        self.borrow_mut().insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.borrow_mut().remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let mut app = self.borrow_mut();
-        let iter = app.global_entities();
-        // Cloning the iterator here so that lock can be released when function is going out of scope
-        iter.collect::<Vec<_>>().into_iter()
-    }
-}
+impl crate::context::ImpliedAppEntity for Rc<AppCell> {}
+impl crate::context::ImpliedAppWindow for Rc<AppCell> {}
+impl crate::context::ImpliedAppTask for Rc<AppCell> {}
+impl crate::context::ImpliedAppGlobals for Rc<AppCell> {}
 
 #[doc(hidden)]
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRef<'a>(Ref<'a, App>);
 
 impl Drop for AppRef<'_> {
@@ -251,6 +142,8 @@ impl Drop for AppRef<'_> {
 
 #[doc(hidden)]
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRefMut<'a>(RefMut<'a, App>);
 
 impl Drop for AppRefMut<'_> {
@@ -927,7 +820,7 @@ pub struct App {
     flushing_effects: bool,
     pending_updates: usize,
     quit_mode: QuitMode,
-    quitting: bool,
+    pub(crate) quitting: bool,
 
     // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
     // Otherwise it may report false positives.

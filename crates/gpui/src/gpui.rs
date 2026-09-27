@@ -9,6 +9,7 @@ extern crate self as gpui;
 mod action;
 mod animated;
 mod app;
+pub mod app_borrow;
 
 mod arena;
 mod asset_cache;
