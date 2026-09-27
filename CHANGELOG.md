@@ -228,6 +228,7 @@ Changelog established.
 - Rendering rehauled to support WGPU/WGSL renderer. [#215](https://github.com/gpui-ce/gpui-ce/pull/215)
   - Added feature flags `gpui_apple/runtime_shaders`, `gpui_macos/runtime_shaders`, `gpui_platform/runtime_shaders`
   - Linux/FreeBSD screen capture was incorporated at some point.
+- Added `UpgradeApp` and `BorrowApp[Mut]` traits to support blanket implementation of `AppContext` traits. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Removals
 
