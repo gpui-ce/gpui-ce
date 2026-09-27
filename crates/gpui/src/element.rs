@@ -667,7 +667,7 @@ impl AnyElement {
     /// `element.implements_trait(gpui::Styled)`. A custom trait annotated with
     /// `#[gpui::reflect_trait]` has a descriptor with the same name as the trait.
     pub fn implements_trait(&self, reflected_trait: crate::ReflectedTrait) -> bool {
-        self.reflected_traits().contains(&reflected_trait)
+        crate::reflection::implements_trait(self.0.reflected_type_id(), reflected_trait)
     }
 
     /// Request the layout ID of the element stored in this `AnyElement`.
@@ -733,10 +733,6 @@ impl AnyElement {
 impl Element for AnyElement {
     type RequestLayoutState = ();
     type PrepaintState = ();
-
-    fn into_any(self) -> AnyElement {
-        self
-    }
 
     fn id(&self) -> Option<ElementId> {
         None

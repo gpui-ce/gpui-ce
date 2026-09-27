@@ -125,21 +125,21 @@ mod tests {
             style: StyleRefinement::default(),
             children: Vec::new(),
         }
-        .into_any();
+        .into_any_element();
 
         assert!(card.implements_trait(gpui::Styled));
         assert!(card.implements_trait(gpui::ParentElement));
         assert!(!card.implements_trait(gpui::InteractiveElement));
         assert!(!card.implements_trait(Draggable));
 
-        let card = card.into_any();
+        let card = card.into_any_element();
 
         assert!(card.implements_trait(gpui::Styled));
 
         let control = Control {
             interactivity: Interactivity::default(),
         }
-        .into_any();
+        .into_any_element();
 
         assert!(control.implements_trait(gpui::InteractiveElement));
         assert!(control.implements_trait(gpui::StatefulInteractiveElement));
@@ -147,7 +147,7 @@ mod tests {
         assert!(!control.implements_trait(other::Draggable));
         assert!(!control.implements_trait(gpui::Styled));
 
-        let empty = gpui::Empty.into_any();
+        let empty = gpui::Empty.into_any_element();
 
         assert!(empty.reflected_traits().is_empty());
     }

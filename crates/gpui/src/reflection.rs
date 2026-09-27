@@ -14,11 +14,15 @@ impl ReflectedTrait {
     pub const fn new(name: &'static str, type_id: fn() -> TypeId) -> Self {
         Self { name, type_id }
     }
+
+    fn trait_type_id(&self) -> TypeId {
+        (self.type_id)()
+    }
 }
 
 impl PartialEq for ReflectedTrait {
     fn eq(&self, other: &Self) -> bool {
-        (self.type_id)() == (other.type_id)()
+        self.trait_type_id() == other.trait_type_id()
     }
 }
 
@@ -45,13 +49,45 @@ pub struct ReflectionRegistration {
 
 inventory::collect!(ReflectionRegistration);
 
-static REFLECTIONS: LazyLock<HashMap<TypeId, Vec<ReflectedTrait>>> = LazyLock::new(|| {
+struct RegisteredTraits {
+    descriptors: Vec<ReflectedTrait>,
+    type_ids: Vec<TypeId>,
+}
+
+static REFLECTIONS: LazyLock<HashMap<TypeId, RegisteredTraits>> = LazyLock::new(|| {
     inventory::iter::<ReflectionRegistration>
         .into_iter()
-        .map(|registration| ((registration.type_id)(), (registration.traits)()))
+        .map(|registration| {
+            let descriptors = (registration.traits)();
+            let type_ids = descriptors
+                .iter()
+                .map(ReflectedTrait::trait_type_id)
+                .collect();
+
+            (
+                (registration.type_id)(),
+                RegisteredTraits {
+                    descriptors,
+                    type_ids,
+                },
+            )
+        })
         .collect()
 });
 
 pub(crate) fn traits_for(type_id: TypeId) -> &'static [ReflectedTrait] {
-    REFLECTIONS.get(&type_id).map(Vec::as_slice).unwrap_or(&[])
+    REFLECTIONS
+        .get(&type_id)
+        .map(|registration| registration.descriptors.as_slice())
+        .unwrap_or(&[])
+}
+
+pub(crate) fn implements_trait(type_id: TypeId, reflected_trait: ReflectedTrait) -> bool {
+    let Some(registration) = REFLECTIONS.get(&type_id) else {
+        return false;
+    };
+
+    registration
+        .type_ids
+        .contains(&reflected_trait.trait_type_id())
 }
