@@ -23,7 +23,10 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use slotmap::SlotMap;
 
-use crate::http_client::{HttpClient, NullHttpClient};
+use crate::{
+    AssetRegistry,
+    http_client::{HttpClient, NullHttpClient},
+};
 pub use async_context::*;
 #[cfg(feature = "bench-support")]
 pub use bench_context::{BenchAppContext, BenchReport, BenchWindowContext, bench_platform};
@@ -47,16 +50,16 @@ use crate::InspectorElementRegistry;
 use crate::MacActivationPolicy;
 use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
-    ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
-    CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
-    FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
-    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
-    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
-    RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
-    Subscription, SvgRenderer, SystemNotification, SystemNotificationResponse, Task,
-    TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
-    WindowHandle, WindowId, WindowInvalidator,
+    ArenaBox, Asset, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError, CursorStyle,
+    DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle, FocusMap,
+    ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap, Keystroke,
+    LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform, PlatformDisplay,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton,
+    PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation,
+    ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer,
+    SystemNotification, SystemNotificationResponse, Task, TextRenderingMode, TextSystem,
+    ThermalState, Window, WindowAppearance, WindowButtonLayout, WindowHandle, WindowId,
+    WindowInvalidator,
     colors::{Colors, GlobalColors},
     hash, init_app_menus,
 };
@@ -180,7 +183,7 @@ impl Application {
     pub fn with_platform(platform: Rc<dyn Platform>) -> Self {
         Self(App::new_app(
             platform,
-            Arc::new(()),
+            AssetRegistry::default().into(),
             Arc::new(NullHttpClient),
         ))
     }
@@ -200,12 +203,23 @@ impl Application {
         this
     }
 
+    /// Build every window's accessibility tree every frame, even when no
+    /// assistive technology is connected.
+    ///
+    /// For automation and tree inspection: [`crate::Window::debug_a11y_tree_json`]
+    /// otherwise reports nothing until a screen reader activates the platform
+    /// adapter. [`Application::new_inaccessible`] still wins when both are set.
+    pub fn with_accessibility_forced(self) -> Self {
+        self.0.borrow_mut().accessibility_forced = true;
+        self
+    }
+
     /// Assigns the source of assets for the application.
-    pub fn with_assets(self, asset_source: impl AssetSource) -> Self {
+    pub fn with_assets(self, assets: impl Into<AssetRegistry>) -> Self {
         let mut context_lock = self.0.borrow_mut();
-        let asset_source = Arc::new(asset_source);
-        context_lock.asset_source = asset_source.clone();
-        context_lock.svg_renderer = SvgRenderer::new(asset_source);
+        let asset_registry = Arc::new(assets.into());
+        context_lock.asset_registry = asset_registry.clone();
+        context_lock.svg_renderer = SvgRenderer::new(asset_registry);
         drop(context_lock);
         self
     }
@@ -759,7 +773,7 @@ pub struct App {
 
     // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
-    asset_source: Arc<dyn AssetSource>,
+    asset_registry: Arc<AssetRegistry>,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
 
@@ -792,6 +806,9 @@ pub struct App {
     /// Whether the app was created by [`Application::new_inaccessible`]. No
     /// accesskit APIs will be called when this flag is set.
     pub(crate) accessibility_force_disabled: bool,
+    /// Whether windows build their accessibility tree every frame without an
+    /// assistive-technology client. See [`Application::with_accessibility_forced`].
+    pub(crate) accessibility_forced: bool,
     flushing_effects: bool,
     pending_updates: usize,
     quit_mode: QuitMode,
@@ -807,7 +824,7 @@ impl App {
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
-        asset_source: Arc<dyn AssetSource>,
+        asset_registry: Arc<AssetRegistry>,
         http_client: Arc<dyn HttpClient>,
     ) -> Rc<AppCell> {
         let background_executor = platform.background_executor();
@@ -844,9 +861,9 @@ impl App {
                 foreground_executor,
                 #[cfg(feature = "profiler")]
                 foreground_journal,
-                svg_renderer: SvgRenderer::new(asset_source.clone()),
+                svg_renderer: SvgRenderer::new(asset_registry.clone()),
                 loading_assets: Default::default(),
-                asset_source,
+                asset_registry,
                 http_client,
                 globals_by_type: Default::default(),
                 global_entities: Default::default(),
@@ -893,6 +910,7 @@ impl App {
                 reduce_motion: false,
                 synced_animation_epoch,
                 accessibility_force_disabled: false,
+                accessibility_forced: false,
 
                 #[cfg(any(test, feature = "test-support", debug_assertions))]
                 name: None,
@@ -2062,8 +2080,8 @@ impl App {
     }
 
     /// Accessor for the application's asset source, which is provided when constructing the `App`.
-    pub fn asset_source(&self) -> &Arc<dyn AssetSource> {
-        &self.asset_source
+    pub fn assets(&self) -> &Arc<AssetRegistry> {
+        &self.asset_registry
     }
 
     /// Accessor for the text system.

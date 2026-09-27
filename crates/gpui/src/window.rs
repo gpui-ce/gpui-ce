@@ -1532,6 +1532,7 @@ impl Window {
         }
 
         let accessibility_force_disabled = cx.accessibility_force_disabled;
+        let accessibility_forced = cx.accessibility_forced;
         let a11y_active_flag = Arc::new(AtomicBool::new(false));
 
         #[cfg(not(target_family = "wasm"))]
@@ -2001,6 +2002,7 @@ impl Window {
             a11y: A11y::new(
                 a11y_active_flag,
                 accessibility_force_disabled,
+                accessibility_forced,
                 initial_window_title,
             ),
         })
@@ -6727,6 +6729,16 @@ impl Window {
     /// See the [accessibility guide](crate::_accessibility) for an overview.
     pub fn is_a11y_active(&self) -> bool {
         self.a11y.is_active()
+    }
+
+    /// Build this window's accessibility tree every frame, even with no
+    /// assistive technology connected, so [`Self::debug_a11y_tree_json`] and
+    /// the accessibility actions work for automation. Forces a redraw, since
+    /// the tree is built during prepaint. [`crate::Application::new_inaccessible`]
+    /// still wins.
+    pub fn set_a11y_forced(&mut self, forced: bool) {
+        self.a11y.set_forced(forced);
+        self.refresh();
     }
 
     /// Debug representation of the last frame's accessibility information.

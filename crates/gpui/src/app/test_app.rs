@@ -25,11 +25,11 @@
 //! ```
 
 use crate::{
-    AnyWindowHandle, App, AppCell, AppContext, AsyncApp, BackgroundExecutor, BorrowAppContext,
-    Bounds, ClipboardItem, Context, Entity, ForegroundExecutor, Global, InputEvent, Keystroke,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Platform,
-    PlatformTextSystem, Point, Render, Size, Task, TestDispatcher, TestPlatform, TextSystem,
-    Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
+    AnyWindowHandle, App, AppCell, AppContext, AssetRegistry, AsyncApp, BackgroundExecutor,
+    BorrowAppContext, Bounds, ClipboardItem, Context, Entity, ForegroundExecutor, Global,
+    InputEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Platform, PlatformTextSystem, Point, Render, Size, Task, TestDispatcher, TestPlatform,
+    TextSystem, Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
 };
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
@@ -93,7 +93,11 @@ impl TestApp {
             platform_text_system.unwrap_or_else(|| platform.text_system.clone()),
         ));
 
-        let app = App::new_app(platform.clone(), asset_source, http_client);
+        let app = App::new_app(
+            platform.clone(),
+            AssetRegistry::from(asset_source).into(),
+            http_client,
+        );
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {

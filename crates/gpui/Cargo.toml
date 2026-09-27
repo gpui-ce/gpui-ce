@@ -40,6 +40,7 @@ screen-capture = ["dep:windows-capture"]
 windows-manifest = ["dep:embed-resource"]
 profiler = ["dep:hdrhistogram"]
 stacker = ["dep:stacksafe"]
+embedded-assets = ["dep:rust-embed"]
 
 [lib]
 name = "gpui"
@@ -86,6 +87,7 @@ resvg = { version = "0.48.1", default-features = false, features = [
   "memmap-fonts",
   "raster-images",
 ] }
+rust-embed = { version = "8.12", optional = true }
 usvg = { version = "0.48.1", default-features = false }
 skrifa.workspace = true
 schemars.workspace = true
