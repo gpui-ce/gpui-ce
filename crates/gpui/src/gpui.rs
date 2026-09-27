@@ -49,7 +49,7 @@ pub mod profiler;
 ))]
 #[expect(missing_docs)]
 pub mod queue;
-mod reflection;
+pub mod reflection;
 mod scene;
 mod shared_uri;
 mod spring;
@@ -79,7 +79,6 @@ pub mod _ownership_and_data_flow;
 /// Do not touch, here be dragons for use by gpui_macros and such.
 #[doc(hidden)]
 pub mod private {
-    pub use crate::ReflectionRegistration;
     pub use anyhow;
     pub use inventory;
     pub use schemars;
@@ -114,10 +113,8 @@ pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
 pub use gpui_macros::{
-    AppContext, IntoElement, Reflect, Render, VisualContext, bench, property_test, reflect_trait,
-    register_action, test,
+    AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
-pub use reflection::*;
 pub use spring::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].

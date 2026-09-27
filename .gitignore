@@ -27,6 +27,7 @@ xcuserdata/
 # MacOS file system clutter.
 ._*
 .DS_STORE
+.DS_Store
 
 # Python
 **/venv

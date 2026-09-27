@@ -9,6 +9,7 @@ mod property_test;
 mod register_action;
 mod styles;
 mod test;
+mod trait_set;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod derive_inspector_reflection;
@@ -47,6 +48,13 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     derive_reflect::reflect_trait(args, input)
+}
+
+/// Creates a reflected trait set from trait paths separated by commas.
+/// All listed traits are required, and a trailing comma is allowed.
+#[proc_macro]
+pub fn trait_set(input: TokenStream) -> TokenStream {
+    trait_set::trait_set(input)
 }
 
 #[proc_macro_derive(Render)]

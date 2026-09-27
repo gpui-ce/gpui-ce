@@ -3,15 +3,22 @@ use gpui::{
     Interactivity, IntoElement, LayoutId, Pixels, StyleRefinement, Window,
 };
 
-#[gpui::reflect_trait]
-trait Draggable {}
+#[gpui::reflection::reflect_trait]
+trait Draggable {
+    fn draggable(self) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
+}
 
 mod other {
-    #[gpui::reflect_trait]
+    #[gpui::reflection::reflect_trait]
     pub trait Draggable {}
 }
 
-#[derive(gpui::Reflect)]
+#[derive(gpui::reflection::Reflect)]
 struct Card {
     style: StyleRefinement,
     children: Vec<AnyElement>,
@@ -29,7 +36,7 @@ impl gpui::ParentElement for Card {
     }
 }
 
-#[derive(gpui::Reflect)]
+#[derive(gpui::reflection::Reflect)]
 #[reflect(Draggable)]
 struct Control {
     interactivity: Interactivity,
@@ -116,10 +123,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reflects_preset_and_custom_traits() {
+    fn reflects_traits() {
         fn require_other_draggable<Type: other::Draggable>() {}
+        fn require_selected_traits<Traits>(traits: Traits)
+        where
+            Traits: gpui::reflection::ReflectedTraits,
+            gpui::reflection::ReflectedElement<Traits::Group>:
+                gpui::Element + gpui::Styled + gpui::ParentElement + Draggable,
+        {
+            drop(traits);
+        }
 
         require_other_draggable::<Control>();
+        require_selected_traits(gpui::reflection::trait_set!(
+            gpui::Styled,
+            gpui::ParentElement,
+            crate::Draggable,
+        ));
 
         let card = Card {
             style: StyleRefinement::default(),
@@ -132,13 +152,10 @@ mod tests {
         assert!(!card.implements_trait(gpui::InteractiveElement));
         assert!(!card.implements_trait(Draggable));
 
-        let card = card.into_any_element();
-
-        assert!(card.implements_trait(gpui::Styled));
-
         let control = Control {
             interactivity: Interactivity::default(),
         }
+        .draggable()
         .into_any_element();
 
         assert!(control.implements_trait(gpui::InteractiveElement));

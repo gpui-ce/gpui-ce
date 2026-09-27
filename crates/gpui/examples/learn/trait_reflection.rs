@@ -2,10 +2,11 @@
 
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, Empty, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, ParentElement, Pixels, Reflect, StyleRefinement, Styled, Window,
+    IntoElement, LayoutId, ParentElement, Pixels, StyleRefinement, Styled, Window,
+    reflection::{self, Reflect},
 };
 
-#[gpui::reflect_trait]
+#[reflection::reflect_trait]
 trait Draggable {}
 
 #[derive(Default, Reflect)]

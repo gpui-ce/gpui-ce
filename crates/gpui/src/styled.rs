@@ -15,7 +15,7 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
 /// Use this to opt-in to a utility CSS-like styling API.
-#[gpui_macros::reflect_trait]
+#[gpui_macros::reflect_trait(styled)]
 // gate on rust-analyzer so rust-analyzer never needs to expand this macro, it takes up to 10 seconds to expand due to inefficiencies in rust-analyzers proc-macro srv
 #[cfg_attr(
     all(any(feature = "inspector", debug_assertions), not(rust_analyzer)),
@@ -1006,5 +1006,18 @@ pub trait Styled: Sized {
     fn rounded_smoothing_ios(mut self) -> Self {
         self.style().corner_smoothing = Some(0.6);
         self
+    }
+}
+
+impl<Group> Styled for crate::reflection::ReflectedElement<Group>
+where
+    Group: crate::reflection::IncludesReflectedTrait<crate::__GpuiReflectStyled>,
+{
+    fn style(&mut self) -> &mut StyleRefinement {
+        let type_id = self.element.reflected_type_id();
+        let style =
+            crate::reflection::style_accessor(type_id).expect("element does not reflect Styled");
+
+        style(self.element.inner_element())
     }
 }

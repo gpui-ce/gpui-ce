@@ -865,7 +865,7 @@ impl Interactivity {
 
 /// A trait for elements that want to use the standard GPUI event handlers that don't
 /// require any state.
-#[gpui_macros::reflect_trait]
+#[gpui_macros::reflect_trait(interactive)]
 pub trait InteractiveElement: Sized {
     /// Retrieve the interactivity state associated with this element
     fn interactivity(&mut self) -> &mut Interactivity;
@@ -1477,7 +1477,7 @@ pub trait InteractiveElement: Sized {
 
 /// A trait for elements that want to use the standard GPUI interactivity features
 /// that require state.
-#[gpui_macros::reflect_trait]
+#[gpui_macros::reflect_trait(stateful_interactive)]
 pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the accessible role for this element.
     ///
@@ -2127,6 +2127,7 @@ pub fn div() -> Div {
 }
 
 /// A [`Div`] element, the all-in-one element for building complex UIs in GPUI
+#[derive(gpui_macros::Reflect)]
 pub struct Div {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,
@@ -4489,6 +4490,25 @@ impl GroupHitboxes {
 /// A wrapper around an element that can store state, produced after assigning an ElementId.
 pub struct Stateful<E> {
     pub(crate) element: E,
+}
+
+impl<Group> InteractiveElement for crate::reflection::ReflectedElement<Group>
+where
+    Group: crate::reflection::IncludesReflectedTrait<crate::__GpuiReflectInteractiveElement>,
+{
+    fn interactivity(&mut self) -> &mut Interactivity {
+        let type_id = self.element.reflected_type_id();
+        let interactivity = crate::reflection::interactivity_accessor(type_id)
+            .expect("element does not reflect InteractiveElement");
+
+        interactivity(self.element.inner_element())
+    }
+}
+
+impl<Group> StatefulInteractiveElement for crate::reflection::ReflectedElement<Group> where
+    Group: crate::reflection::IncludesReflectedTrait<crate::__GpuiReflectStatefulInteractiveElement>
+        + crate::reflection::IncludesReflectedTrait<crate::__GpuiReflectInteractiveElement>
+{
 }
 
 impl<E> Styled for Stateful<E>
