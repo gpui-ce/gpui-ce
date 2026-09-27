@@ -8082,16 +8082,14 @@ mod tests {
     use crate::{
         AnyWindowHandle, Background, Bounds, BoxShadow, ColorExt, Context, DispatchPhase,
         DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
-        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest,
-        InputEvent as _, InputEvent, InputEvent as _, InteractiveElement as _, InteractiveElement,
-        InteractiveElement as _, IntoElement, LineLayout, LongPressEvent, MouseButton,
-        MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point,
-        PreparedRasterStyle, RasterColorEffect, RasterStyleRequest, RasterizedGlyph, Render,
-        RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement,
-        StatefulInteractiveElement as _, Styled, TestApp, TestAppContext, TestTextSystem,
-        TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
-        WindowAppearance, WindowOptions, canvas, context::*, div, hsla, img, linear_color_stop,
-        linear_gradient, point, px, size, white,
+        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest, InputEvent,
+        InteractiveElement, IntoElement, LineLayout, LongPressEvent, MouseButton, MouseDownEvent,
+        MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point, PreparedRasterStyle,
+        RasterColorEffect, RasterStyleRequest, RasterizedGlyph, Render, RenderImage,
+        RequestFrameOptions, ShaderBool, StatefulInteractiveElement, Styled, TestApp,
+        TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId,
+        TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div, hsla, img,
+        linear_color_stop, linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use proptest::prelude::*;

@@ -118,12 +118,6 @@ impl AppCell {
     }
 }
 
-impl AppContext for Rc<AppCell> {}
-impl ImpliedAppEntity for Rc<AppCell> {}
-impl ImpliedAppWindow for Rc<AppCell> {}
-impl ImpliedAppTask for Rc<AppCell> {}
-impl ImpliedAppGlobals for Rc<AppCell> {}
-
 /// Internally wrapped reference to [`App`] for usage with [`Rc<AppCell>`].
 #[derive(Deref, DerefMut)]
 #[deref(forward)]
