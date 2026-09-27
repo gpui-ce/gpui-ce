@@ -885,10 +885,10 @@ mod tests {
     use super::*;
     use crate::editable_text::{StringStorage, actions::default_bindings};
     use gpui::{
-        AppContext as _, CaretPosition, CaretSelection, Context, EntityInputHandler,
-        HeadlessAppContext, KeyDownEvent, KeyUpEvent, Keystroke, LayoutDirection, Modifiers,
-        ModifiersChangedEvent, NavigationDirection, PlatformInput, PlatformTextSystem, Render,
-        ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*, rgba,
+        CaretPosition, CaretSelection, Context, EntityInputHandler, HeadlessAppContext,
+        KeyDownEvent, KeyUpEvent, Keystroke, LayoutDirection, Modifiers, ModifiersChangedEvent,
+        NavigationDirection, PlatformInput, PlatformTextSystem, Render, ScaledPixels,
+        TestTextSystem, WindowHandle, div, hsla, prelude::*, rgba,
     };
     use gpui_parley::{ParleyTextSystem, SystemFonts};
     use std::{borrow::Cow, collections::HashSet, sync::Arc};

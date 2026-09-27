@@ -6,7 +6,7 @@
 mod example_prelude;
 
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba, Window,
+    AnyElement, App, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba, Window,
     WindowBounds, WindowOptions, actions, div, ease_in_out, millis, prelude::*, px, rgb, size,
     spring,
 };
