@@ -865,6 +865,7 @@ impl Interactivity {
 
 /// A trait for elements that want to use the standard GPUI event handlers that don't
 /// require any state.
+#[gpui_macros::reflect_trait]
 pub trait InteractiveElement: Sized {
     /// Retrieve the interactivity state associated with this element
     fn interactivity(&mut self) -> &mut Interactivity;
@@ -1476,6 +1477,7 @@ pub trait InteractiveElement: Sized {
 
 /// A trait for elements that want to use the standard GPUI interactivity features
 /// that require state.
+#[gpui_macros::reflect_trait]
 pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the accessible role for this element.
     ///

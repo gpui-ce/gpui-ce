@@ -225,6 +225,7 @@ pub trait ParentElementTyped {
 
 /// This is a helper trait to provide a uniform interface for constructing elements that
 /// can accept any number of any kind of child elements
+#[gpui_macros::reflect_trait]
 pub trait ParentElement {
     /// Extend this element's children with the given child elements.
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>);
@@ -275,6 +276,8 @@ impl GlobalElementId {
 
 trait ElementObject {
     fn inner_element(&mut self) -> &mut dyn Any;
+
+    fn reflected_type_id(&self) -> std::any::TypeId;
 
     fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId;
 
@@ -604,6 +607,10 @@ where
         &mut self.element
     }
 
+    fn reflected_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<E>()
+    }
+
     #[inline]
     fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
         Drawable::request_layout(self, window, cx)
@@ -647,6 +654,20 @@ impl AnyElement {
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.0.inner_element().downcast_mut::<T>()
+    }
+
+    /// Returns the traits registered for this element by `#[derive(Reflect)]`.
+    pub fn reflected_traits(&self) -> &'static [crate::ReflectedTrait] {
+        crate::reflection::traits_for(self.0.reflected_type_id())
+    }
+
+    /// Returns whether this element implements the given reflected trait.
+    ///
+    /// GPUI's preset descriptors can be passed directly, for example
+    /// `element.implements_trait(gpui::Styled)`. A custom trait annotated with
+    /// `#[gpui::reflect_trait]` has a descriptor with the same name as the trait.
+    pub fn implements_trait(&self, reflected_trait: crate::ReflectedTrait) -> bool {
+        self.reflected_traits().contains(&reflected_trait)
     }
 
     /// Request the layout ID of the element stored in this `AnyElement`.
@@ -712,6 +733,10 @@ impl AnyElement {
 impl Element for AnyElement {
     type RequestLayoutState = ();
     type PrepaintState = ();
+
+    fn into_any(self) -> AnyElement {
+        self
+    }
 
     fn id(&self) -> Option<ElementId> {
         None
