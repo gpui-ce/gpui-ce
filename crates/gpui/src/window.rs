@@ -7154,8 +7154,11 @@ impl Window {
         // Fall back to built-in action handling.
         match request.action {
             accesskit::Action::Click => {
-                // Aim at the visible part of the node: its full bounds can lie
-                // under other content once a container scrolls it out of view.
+                // Elements with click listeners handle Click themselves, so this
+                // only synthesizes mouse input for nodes that listen to the mouse
+                // directly. Aim at the visible part of the node: its full bounds
+                // can lie under other content once a container scrolls it out of
+                // view.
                 if let Some(bounds) = self
                     .a11y
                     .node_visible_bounds
