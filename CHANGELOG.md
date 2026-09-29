@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Image, shadow, and filter painting methods now require a `corner_smoothing` argument, `PaintQuad` gains a `corner_smoothing` field. [#338](https://github.com/gpui-ce/gpui-ce/pull/338)
 - Removed `Deferred::with_priority` in favor of the existing `Deferred::priority` method. [#245](https://github.com/gpui-ce/gpui-ce/pull/245)
 - Replaced `asset_source` with new `AssetRegistry` API. [#259](https://github.com/gpui-ce/gpui-ce/pull/259)
+- `ClickEvent` has a new `Accessibility` variant, which breaks exhaustive matches on it [#288](https://github.com/gpui-ce/gpui-ce/pull/288)
 
 ### Additions
 - Changelog established.
@@ -61,6 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Variable font width via `.font_width(...)`. [#316](https://github.com/gpui-ce/gpui-ce/pull/316)
 - Disable an element via new `disabled` method, and set style for a disabled element via `disabled_style` method. [#339](https://github.com/gpui-ce/gpui-ce/pull/339)
 - `Window::activate_with_token` to activate a window with an external Wayland token. [#272](https://github.com/gpui-ce/gpui-ce/pull/272)
+- `ClickEvent::Accessibility` and `ClickEvent::is_accessibility()`: an accessibility click calls an element's click listeners directly [#288](https://github.com/gpui-ce/gpui-ce/pull/288)
 
 ### Removals
 - The opt-in Windows wgpu renderer. [#215](https://github.com/gpui-ce/gpui-ce/pull/215)
