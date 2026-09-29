@@ -5183,6 +5183,87 @@ mod tests {
         assert_eq!(stateful_width.get(), px(10.));
     }
 
+    struct ScrolledOutButtonTestView {
+        clicked: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for ScrolledOutButtonTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let button = |name: &'static str| {
+                let clicked = self.clicked.clone();
+                div()
+                    .id(name)
+                    .role(accesskit::Role::Button)
+                    .h(px(20.))
+                    .w_full()
+                    .flex_none()
+                    .on_click(move |_, _, _| clicked.borrow_mut().push(name))
+            };
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(
+                    div()
+                        .id("scroll")
+                        .flex()
+                        .flex_col()
+                        .h(px(100.))
+                        .flex_none()
+                        .overflow_y_scroll()
+                        .child(div().h(px(105.)).flex_none())
+                        .child(button("scrolled-out")),
+                )
+                .child(button("footer"))
+        }
+    }
+
+    #[gpui::test]
+    fn a11y_click_on_scrolled_out_node_does_not_click_what_is_drawn_there(cx: &mut TestAppContext) {
+        let clicked = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.add_window({
+            let clicked = clicked.clone();
+            move |_, _| ScrolledOutButtonTestView { clicked }
+        });
+        let window = AnyWindowHandle::from(window);
+
+        let click = |cx: &mut TestAppContext, top: Pixels| {
+            cx.update_window(window, |_, window, cx| {
+                window.set_a11y_forced(true);
+                window.draw(cx).clear(cx);
+                let target_node = window
+                    .a11y
+                    .node_bounds
+                    .iter()
+                    .find(|(_, bounds)| bounds.origin.y == top)
+                    .map(|(id, _)| *id)
+                    .expect("button node");
+                window.handle_a11y_action(
+                    accesskit::ActionRequest {
+                        action: accesskit::Action::Click,
+                        target_tree: accesskit::TreeId::ROOT,
+                        target_node,
+                        data: None,
+                    },
+                    cx,
+                );
+            })
+            .unwrap();
+        };
+
+        // The scrolled-out button's layout bounds (105..125) overlap the
+        // footer (100..120), which is what a click at their centre would hit.
+        click(cx, px(105.));
+        assert!(
+            clicked.borrow().is_empty(),
+            "clicked {:?}",
+            clicked.borrow()
+        );
+
+        click(cx, px(100.));
+        assert_eq!(*clicked.borrow(), ["footer"]);
+    }
+
     struct HoverListenerLayoutTestView {
         target_left: Pixels,
         hover_transitions: Rc<RefCell<Vec<bool>>>,
