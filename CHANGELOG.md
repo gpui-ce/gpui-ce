@@ -75,6 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Duplicate characters during web IME composition. [#236](https://github.com/gpui-ce/gpui-ce/pull/236)
 - Element opacity now applies to all descendants as one group. [#330](https://github.com/gpui-ce/gpui-ce/pull/330)
 - Incorrect RTL glyph ordering in EditableText. [#267](https://github.com/gpui-ce/gpui-ce/pull/267)
+- Accessibility click on a scrolled-out element clicks whatever is drawn at its position [#282](https://github.com/gpui-ce/gpui-ce/issues/282)
 
 ### Security Changes
 
