@@ -2260,11 +2260,18 @@ impl Element for Div {
     }
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
-        // Nodes with `GenericContainer` should never be reported to accesskit.
-        // Equivalent to an HTML div with no role.
-        self.interactivity
-            .override_role
-            .filter(|role| *role != accesskit::Role::GenericContainer)
+        match self.interactivity.override_role {
+            // Nodes with `GenericContainer` should never be reported to accesskit.
+            // Equivalent to an HTML div with no role.
+            Some(accesskit::Role::GenericContainer) => None,
+            Some(role) => Some(role),
+            // A scroll container gets a node so that assistive technology
+            // learns that it clips the nodes inside it.
+            None => self
+                .interactivity
+                .is_scroll_container()
+                .then_some(accesskit::Role::ScrollView),
+        }
     }
 
     fn is_a11y_hidden(&self) -> bool {
@@ -2874,9 +2881,41 @@ impl Interactivity {
                                 None
                             };
 
-                            let scroll_offset =
+                            let (scroll_offset, scroll_max) =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+                            let result = match self.scroll_offset.clone() {
+                                Some(offset)
+                                    if window.a11y.is_active()
+                                        && (style.overflow.x == Overflow::Scroll
+                                            || style.overflow.y == Overflow::Scroll) =>
+                                {
+                                    // Let accessibility scroll the nodes inside into
+                                    // view, along the axes that scroll.
+                                    let max_offset = point(
+                                        if style.overflow.x == Overflow::Scroll {
+                                            scroll_max.x
+                                        } else {
+                                            px(0.)
+                                        },
+                                        if style.overflow.y == Overflow::Scroll {
+                                            scroll_max.y
+                                        } else {
+                                            px(0.)
+                                        },
+                                    );
+                                    let visible_bounds = style
+                                        .overflow_mask(bounds, window.rem_size())
+                                        .map_or(bounds, |mask| mask.bounds);
+                                    crate::window::a11y::A11y::with_scroll_container(
+                                        window,
+                                        visible_bounds,
+                                        offset,
+                                        max_offset,
+                                        |window| f(&style, scroll_offset, hitbox, window, cx),
+                                    )
+                                }
+                                _ => f(&style, scroll_offset, hitbox, window, cx),
+                            };
                             (result, element_state)
                         },
                     )
@@ -2946,7 +2985,7 @@ impl Interactivity {
         style: &Style,
         window: &mut Window,
         _cx: &mut App,
-    ) -> Point<Pixels> {
+    ) -> (Point<Pixels>, Point<Pixels>) {
         fn round_to_two_decimals(pixels: Pixels) -> Pixels {
             const ROUNDING_FACTOR: f32 = 100.0;
             (pixels * ROUNDING_FACTOR).round() / ROUNDING_FACTOR
@@ -2999,9 +3038,9 @@ impl Interactivity {
                 scroll_handle_state.bounds = bounds;
             }
 
-            *scroll_offset
+            (*scroll_offset, scroll_max)
         } else {
-            Point::default()
+            (Point::default(), Point::default())
         }
     }
 
@@ -4095,7 +4134,22 @@ impl Interactivity {
         style
     }
 
+    fn is_scroll_container(&self) -> bool {
+        self.base_style.overflow.x == Some(Overflow::Scroll)
+            || self.base_style.overflow.y == Some(Overflow::Scroll)
+    }
+
     pub(crate) fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        let overflow = &self.base_style.overflow;
+        if overflow
+            .x
+            .is_some_and(|overflow| overflow != Overflow::Visible)
+            || overflow
+                .y
+                .is_some_and(|overflow| overflow != Overflow::Visible)
+        {
+            node.set_clips_children();
+        }
         if let Some(id) = &self.aria.author_id {
             node.set_author_id(id.to_string());
         }

@@ -7190,6 +7190,11 @@ impl Window {
                     self.dispatch_event(mouse_up, cx);
                 }
             }
+            accesskit::Action::ScrollIntoView => {
+                if self.a11y.scroll_into_view(request.target_node) {
+                    self.refresh();
+                }
+            }
             accesskit::Action::Focus => {
                 if let Some(focus_id) = self.a11y.focus_ids.get(&request.target_node).copied()
                     && let Some(handle) = FocusHandle::for_id(focus_id, &cx.focus_handles)
