@@ -3398,7 +3398,7 @@ mod tests {
                 down.vertical_navigation_x,
                 line_height,
             )
-            .preferred_x;
+            .vertical_navigation_x;
         assert_eq!(maintained_x, down.vertical_navigation_x);
         let selection = layout.selection_from_pixel_point(
             point(px(12.0), px(10.0)),
