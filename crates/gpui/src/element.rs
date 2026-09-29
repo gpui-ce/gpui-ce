@@ -447,6 +447,13 @@ impl<E: Element> Drawable<E> {
                                 .a11y
                                 .node_visible_bounds
                                 .insert(node_id, visible_bounds);
+                            if let Some(&container) = window.a11y.scroll_container_stack.last() {
+                                node.add_action(accesskit::Action::ScrollIntoView);
+                                window
+                                    .a11y
+                                    .node_scroll_containers
+                                    .insert(node_id, container);
+                            }
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]
                             if pushed_a11y_node {

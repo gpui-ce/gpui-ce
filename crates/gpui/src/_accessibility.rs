@@ -243,6 +243,17 @@
 //! view. An element's own [`AccessibleAction::Click`] handler, registered with
 //! `on_a11y_action`, takes its place.
 //!
+//! ## Scrolling
+//!
+//! An element that scrolls ([`overflow_y_scroll()`][StatefulInteractiveElement::overflow_y_scroll]
+//! and friends) gets a node with [`Role::ScrollView`] unless you give it a role
+//! of your own, and any element with a node that hides its overflow tells
+//! assistive technology that it clips its children. Nodes scrolled out of view
+//! are then left out of hit testing and navigation, apart from the ones next to
+//! the visible nodes, which assistive technology can move to and scroll into
+//! view with [`AccessibleAction::ScrollIntoView`]. GPUI handles that action for
+//! every node inside a scroll container.
+//!
 //! ## Synthetic children
 //!
 //! Sometimes, a custom [`Element`] may want to appear as if it is really made

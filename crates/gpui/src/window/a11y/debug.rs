@@ -384,8 +384,8 @@ fn ephemeral_id(mut index: usize) -> String {
 mod tests {
     use crate::{
         AnyWindowHandle, AppContext as _, Context, InteractiveElement as _, IntoElement,
-        ParentElement as _, Render, StatefulInteractiveElement as _, TestAppContext, Window, div,
-        util::FluentBuilder as _,
+        ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, TestAppContext,
+        Window, div, px, util::FluentBuilder as _,
     };
     use accesskit::{Role, TreeUpdate};
     use accesskit_consumer::{Tree, common_filter};
@@ -454,5 +454,209 @@ mod tests {
         set_hidden(false, &mut cx);
         let restored_update = draw_tree(any_window, &mut cx);
         assert_eq!(filtered_labels(restored_update), ["Inside", "Outside"]);
+    }
+
+    /// A button laid out `offset` pixels down a 100px-high scroll container,
+    /// or down a scroll container nested inside another one, above a footer
+    /// that has no node of its own.
+    struct ScrolledOutButtonView {
+        nested: bool,
+    }
+
+    impl Render for ScrolledOutButtonView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let scroll_container = |id: &'static str, spacer: f32| {
+                div()
+                    .id(id)
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .h(px(100.))
+                    .overflow_y_scroll()
+                    .child(div().flex_none().h(px(spacer)))
+            };
+            let button = div()
+                .id("hidden")
+                .flex_none()
+                .h(px(20.))
+                .role(Role::Button)
+                .aria_label("Hidden");
+            let content = if self.nested {
+                scroll_container("outer", 150.).child(scroll_container("inner", 150.).child(button))
+            } else {
+                scroll_container("scroll", 110.).child(button)
+            };
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(content)
+                // Drawn where the hidden button's layout bounds lie, with no
+                // accessibility node of its own, like a footer's padding.
+                .child(div().flex_none().h(px(40.)).bg(crate::red()))
+        }
+    }
+
+    fn draw_tree(window: AnyWindowHandle, cx: &mut TestAppContext) -> TreeUpdate {
+        cx.update_window(window, |_, window, cx| {
+            window.set_a11y_forced(true);
+            window.draw(cx).clear(cx);
+            window
+                .a11y_tree()
+                .cloned()
+                .expect("drawing with accessibility active should produce a tree")
+        })
+        .unwrap()
+    }
+
+    fn node_labelled(update: &TreeUpdate, label: &str) -> accesskit::NodeId {
+        update
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some(label))
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("no node labelled {label:?}"))
+    }
+
+    /// The labels of the nodes assistive technology sees, in tree order.
+    fn filtered_labels(update: TreeUpdate) -> Vec<String> {
+        fn collect(node: accesskit_consumer::Node<'_>, labels: &mut Vec<String>) {
+            for child in node.filtered_children(common_filter) {
+                labels.extend(child.label());
+                collect(child, labels);
+            }
+        }
+        let tree = Tree::new(update, false);
+        let mut labels = Vec::new();
+        collect(tree.state().root(), &mut labels);
+        labels
+    }
+
+    #[test]
+    fn scrolled_out_element_is_not_reported_where_other_content_is_drawn() {
+        let mut cx = TestAppContext::single();
+        let window: AnyWindowHandle = cx
+            .add_window(|_, _| ScrolledOutButtonView { nested: false })
+            .into();
+        let update = draw_tree(window, &mut cx);
+        let scale = cx.update_window(window, |_, window, _| window.scale_factor() as f64);
+        let scale = scale.unwrap();
+
+        let tree = Tree::new(update.clone(), false);
+        let scroll_view = tree
+            .state()
+            .root()
+            .filtered_children(common_filter)
+            .next()
+            .expect("the scroll container has a node");
+        assert_eq!(scroll_view.role(), Role::ScrollView);
+        assert!(scroll_view.clips_children());
+
+        // The hidden button lies at 110..130, below the 100px scroll
+        // container, where the footer is drawn.
+        let at_footer = tree
+            .state()
+            .root()
+            .node_at_point(
+                accesskit::Point::new(10. * scale, 120. * scale),
+                &common_filter,
+            )
+            .and_then(|node| node.label());
+        assert_eq!(at_footer, None, "hit test where the footer is drawn");
+        assert_eq!(filtered_labels(update), Vec::<String>::new());
+    }
+
+    fn scroll_into_view(nested: bool) -> (Option<crate::Bounds<crate::Pixels>>, Vec<String>) {
+        let mut cx = TestAppContext::single();
+        let window: AnyWindowHandle = cx
+            .add_window(move |_, _| ScrolledOutButtonView { nested })
+            .into();
+        let update = draw_tree(window, &mut cx);
+        let hidden = node_labelled(&update, "Hidden");
+        assert!(
+            update.nodes.iter().any(|(id, node)| *id == hidden
+                && node.supports_action(accesskit::Action::ScrollIntoView)),
+            "a node inside a scroll container supports ScrollIntoView"
+        );
+
+        cx.update_window(window, |_, window, cx| {
+            window.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::ScrollIntoView,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: hidden,
+                    data: None,
+                },
+                cx,
+            );
+        })
+        .unwrap();
+        let update = draw_tree(window, &mut cx);
+        let bounds = cx
+            .update_window(window, |_, window, _| window.a11y_node_bounds(hidden))
+            .unwrap();
+        (bounds, filtered_labels(update))
+    }
+
+    #[test]
+    fn scroll_into_view_scrolls_the_node_to_the_nearest_edge() {
+        let (bounds, labels) = scroll_into_view(false);
+        let bounds = bounds.expect("the button still has a node");
+        assert_eq!((bounds.top(), bounds.bottom()), (px(80.), px(100.)));
+        assert_eq!(labels, ["Hidden"]);
+    }
+
+    #[test]
+    fn scroll_into_view_scrolls_nested_containers() {
+        // The button lies at 300..320: 150px down an inner container that is
+        // itself 150px down the outer one.
+        let (bounds, labels) = scroll_into_view(true);
+        let bounds = bounds.expect("the button still has a node");
+        assert_eq!((bounds.top(), bounds.bottom()), (px(80.), px(100.)));
+        assert_eq!(labels, ["Hidden"]);
+    }
+
+    struct ClippingRolesView;
+
+    impl Render for ClippingRolesView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(
+                    div()
+                        .id("list")
+                        .h(px(50.))
+                        .overflow_y_scroll()
+                        .role(Role::List)
+                        .aria_label("List"),
+                )
+                .child(
+                    div()
+                        .id("clipped")
+                        .h(px(50.))
+                        .overflow_hidden()
+                        .role(Role::Group)
+                        .aria_label("Clipped"),
+                )
+        }
+    }
+
+    #[test]
+    fn clipping_elements_keep_their_role_and_clip_their_children() {
+        let mut cx = TestAppContext::single();
+        let window: AnyWindowHandle = cx.add_window(|_, _| ClippingRolesView).into();
+        let update = draw_tree(window, &mut cx);
+        let nodes = update
+            .nodes
+            .iter()
+            .filter(|(id, _)| *id != super::super::ROOT_NODE_ID)
+            .map(|(_, node)| (node.label(), node.role(), node.clips_children()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            nodes,
+            [
+                (Some("List"), Role::List, true),
+                (Some("Clipped"), Role::Group, true),
+            ]
+        );
     }
 }
