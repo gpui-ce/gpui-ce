@@ -49,6 +49,7 @@ pub mod profiler;
 ))]
 #[expect(missing_docs)]
 pub mod queue;
+pub mod reflection;
 mod scene;
 mod shared_uri;
 mod spring;

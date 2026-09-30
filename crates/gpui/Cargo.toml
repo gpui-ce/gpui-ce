@@ -212,6 +212,10 @@ name = "styling"
 path = "examples/learn/styling.rs"
 
 [[example]]
+name = "trait_reflection"
+path = "examples/learn/trait_reflection.rs"
+
+[[example]]
 name = "async_tasks"
 path = "examples/learn/async_tasks.rs"
 

@@ -2,12 +2,14 @@ mod bench;
 mod derive_action;
 mod derive_app_context;
 mod derive_into_element;
+mod derive_reflect;
 mod derive_render;
 mod derive_visual_context;
 mod property_test;
 mod register_action;
 mod styles;
 mod test;
+mod trait_set;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod derive_inspector_reflection;
@@ -34,6 +36,25 @@ pub fn register_action(ident: TokenStream) -> TokenStream {
 #[proc_macro_derive(IntoElement)]
 pub fn derive_into_element(input: TokenStream) -> TokenStream {
     derive_into_element::derive_into_element(input)
+}
+
+/// Registers the GPUI traits implemented by a concrete type for runtime lookup.
+#[proc_macro_derive(Reflect, attributes(reflect))]
+pub fn derive_reflect(input: TokenStream) -> TokenStream {
+    derive_reflect::derive_reflect(input)
+}
+
+/// Makes a trait available as a value for `AnyElement::implements_trait`.
+#[proc_macro_attribute]
+pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
+    derive_reflect::reflect_trait(args, input)
+}
+
+/// Creates a reflected trait set from trait paths separated by commas.
+/// All listed traits are required, and a trailing comma is allowed.
+#[proc_macro]
+pub fn trait_set(input: TokenStream) -> TokenStream {
+    trait_set::trait_set(input)
 }
 
 #[proc_macro_derive(Render)]
