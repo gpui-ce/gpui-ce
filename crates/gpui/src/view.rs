@@ -375,7 +375,9 @@ impl<V: View> Element for ViewElement<V> {
         if let Some(entity_id) = self.entity_id {
             // Stateful path: create a reactive boundary.
             window.with_rendered_view(entity_id, |window| {
-                let caching_disabled = window.is_inspector_picking(cx);
+                // Selectors must visit descendants even when the view could reuse its drawing.
+                let caching_disabled =
+                    window.is_inspector_picking(cx) || crate::selector::has_active_selectors();
                 match self.cached_style.as_ref() {
                     Some(style) if !caching_disabled => {
                         let mut root_style = Style::default();
@@ -384,8 +386,19 @@ impl<V: View> Element for ViewElement<V> {
                         (layout_id, None)
                     }
                     _ => {
+                        // Finish this frame through the uncached prepaint and paint paths.
+                        let cached_style = self.cached_style.take();
                         let mut element = render_view(self.view.take().unwrap(), window, cx);
-                        let layout_id = element.request_layout(window, cx);
+                        let child_layout_id = element.request_layout(window, cx);
+                        let layout_id = if let Some(style) = cached_style {
+                            let mut root_style = Style::default();
+                            root_style.refine(&style);
+
+                            window.request_layout(root_style, [child_layout_id], cx)
+                        } else {
+                            child_layout_id
+                        };
+
                         (layout_id, Some(element))
                     }
                 }

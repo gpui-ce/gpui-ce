@@ -665,18 +665,23 @@ impl UniformList {
             return Size::default();
         }
 
-        let item_ix = cmp::min(self.item_to_measure_index, self.item_count - 1);
-        let mut items = (self.render_items)(item_ix..item_ix + 1, window, cx);
-        let Some(mut item_to_measure) = items.pop() else {
-            return Size::default();
-        };
-        let available_space = size(
-            list_width.map_or(AvailableSpace::MaxContent, |width| {
-                AvailableSpace::Definite(width)
-            }),
-            AvailableSpace::MinContent,
-        );
-        item_to_measure.layout_as_root(available_space, window, cx)
+        crate::selector::with_selector_measurement(|| {
+            let item_idx = cmp::min(self.item_to_measure_index, self.item_count - 1);
+            let mut items = (self.render_items)(item_idx..item_idx + 1, window, cx);
+
+            let Some(mut item_to_measure) = items.pop() else {
+                return Size::default();
+            };
+
+            let available_space = size(
+                list_width.map_or(AvailableSpace::MaxContent, |width| {
+                    AvailableSpace::Definite(width)
+                }),
+                AvailableSpace::MinContent,
+            );
+
+            item_to_measure.layout_as_root(available_space, window, cx)
+        })
     }
 
     /// Track and render scroll state of this list with reference to the given scroll handle.

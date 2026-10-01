@@ -33,6 +33,7 @@ mod interactive;
 mod key_dispatch;
 mod keymap;
 mod lerp;
+mod matcher;
 mod motion;
 mod path_builder;
 mod platform;
@@ -51,6 +52,7 @@ pub mod profiler;
 pub mod queue;
 pub mod reflection;
 mod scene;
+mod selector;
 mod shared_uri;
 mod spring;
 mod style;
@@ -115,6 +117,7 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
+pub use selector::*;
 pub use spring::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].
@@ -150,6 +153,7 @@ pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
 pub use lerp::*;
+pub use matcher::*;
 pub use motion::*;
 pub use path_builder::*;
 pub use platform::*;

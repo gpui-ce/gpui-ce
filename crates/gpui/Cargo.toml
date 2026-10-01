@@ -216,6 +216,10 @@ name = "trait_reflection"
 path = "examples/learn/trait_reflection.rs"
 
 [[example]]
+name = "element_selectors"
+path = "examples/learn/element_selectors.rs"
+
+[[example]]
 name = "async_tasks"
 path = "examples/learn/async_tasks.rs"
 
