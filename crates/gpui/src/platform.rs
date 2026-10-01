@@ -2453,6 +2453,166 @@ mod window_background_appearance_tests {
     }
 }
 
+/// The background appearance of a macOS window, set through
+/// [`WindowOptions::macos_window_background`].
+#[cfg(target_os = "macos")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum MacosWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred, via the
+    /// system's vibrancy materials.
+    Blurred,
+}
+
+/// The background appearance of a Windows window, set through
+/// [`WindowOptions::windows_window_background`].
+#[cfg(target_os = "windows")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum WindowsWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred.
+    Blurred,
+    /// The Mica backdrop material, supported on Windows 11.
+    MicaBackdrop,
+    /// The Mica Alt backdrop material, supported on Windows 11.
+    MicaAltBackdrop,
+}
+
+/// The background appearance of a Linux window, set through
+/// [`WindowOptions::linux_window_background`]. Whether blurring is honored
+/// depends on the compositor; X11 treats it as plain transparency.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum LinuxWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred, when the
+    /// compositor supports it.
+    Blurred,
+}
+
+/// The background appearance of a web window, set through
+/// [`WindowOptions::web_window_background`]. Web windows are always opaque at
+/// the platform level.
+#[cfg(target_family = "wasm")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum WebWindowBackground {
+    /// The window background is always opaque.
+    #[default]
+    Opaque,
+}
+
+#[cfg(target_os = "macos")]
+impl From<MacosWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: MacosWindowBackground) -> Self {
+        match background {
+            MacosWindowBackground::Opaque => Self::Opaque,
+            MacosWindowBackground::Transparent => Self::Transparent,
+            MacosWindowBackground::Blurred => Self::Blurred,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl From<WindowsWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: WindowsWindowBackground) -> Self {
+        match background {
+            WindowsWindowBackground::Opaque => Self::Opaque,
+            WindowsWindowBackground::Transparent => Self::Transparent,
+            WindowsWindowBackground::Blurred => Self::Blurred,
+            WindowsWindowBackground::MicaBackdrop => Self::MicaBackdrop,
+            WindowsWindowBackground::MicaAltBackdrop => Self::MicaAltBackdrop,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+impl From<LinuxWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: LinuxWindowBackground) -> Self {
+        match background {
+            LinuxWindowBackground::Opaque => Self::Opaque,
+            LinuxWindowBackground::Transparent => Self::Transparent,
+            LinuxWindowBackground::Blurred => Self::Blurred,
+        }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl From<WebWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: WebWindowBackground) -> Self {
+        match background {
+            WebWindowBackground::Opaque => Self::Opaque,
+        }
+    }
+}
+
+#[cfg(test)]
+mod platform_window_background_tests {
+    use super::WindowBackgroundAppearance;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_backgrounds_map_to_appearances() {
+        use super::MacosWindowBackground;
+        assert_eq!(
+            WindowBackgroundAppearance::from(MacosWindowBackground::Opaque),
+            WindowBackgroundAppearance::Opaque
+        );
+        assert_eq!(
+            WindowBackgroundAppearance::from(MacosWindowBackground::Blurred),
+            WindowBackgroundAppearance::Blurred
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_backgrounds_map_to_appearances() {
+        use super::WindowsWindowBackground;
+        assert_eq!(
+            WindowBackgroundAppearance::from(WindowsWindowBackground::MicaAltBackdrop),
+            WindowBackgroundAppearance::MicaAltBackdrop
+        );
+        assert_eq!(
+            WindowBackgroundAppearance::from(WindowsWindowBackground::default()),
+            WindowBackgroundAppearance::Opaque
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn linux_backgrounds_map_to_appearances() {
+        use super::LinuxWindowBackground;
+        assert_eq!(
+            WindowBackgroundAppearance::from(LinuxWindowBackground::Transparent),
+            WindowBackgroundAppearance::Transparent
+        );
+    }
+
+    #[cfg(target_family = "wasm")]
+    #[test]
+    fn web_backgrounds_map_to_appearances() {
+        use super::WebWindowBackground;
+        assert_eq!(
+            WindowBackgroundAppearance::from(WebWindowBackground::Opaque),
+            WindowBackgroundAppearance::Opaque
+        );
+    }
+}
+
 /// The text rendering mode to use for drawing glyphs.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum TextRenderingMode {
