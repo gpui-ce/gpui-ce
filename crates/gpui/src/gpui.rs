@@ -34,6 +34,7 @@ mod key_dispatch;
 mod keymap;
 mod lerp;
 mod motion;
+pub mod paint;
 mod path_builder;
 mod platform;
 pub mod prelude;

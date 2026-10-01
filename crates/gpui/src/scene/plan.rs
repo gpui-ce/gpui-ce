@@ -40,6 +40,7 @@ pub struct ScenePlanRequirements {
     pub path_rasterization_vertex_count: usize,
     pub path_sprite_count: usize,
     pub surface_count: usize,
+    pub shader_count: usize,
     pub backdrop_filter_count: usize,
     pub isolated_filter_count: usize,
     pub isolated_target_count: usize,
@@ -182,6 +183,9 @@ impl ScenePlanRequirements {
             | PrimitiveBatch::PolychromeSprites { range, .. } => {
                 self.instance_batch_count += usize::from(!range.is_empty());
             }
+            PrimitiveBatch::Shaders(range) => {
+                self.shader_count += range.len();
+            }
             PrimitiveBatch::Surfaces(range) => self.surface_count += range.len(),
             PrimitiveBatch::BackdropFilters(range) => {
                 self.backdrop_filter_count += range.len();
@@ -198,6 +202,7 @@ impl ScenePlanRequirements {
 struct SceneLengths {
     shadows: usize,
     quads: usize,
+    shaders: usize,
     paths: usize,
     underlines: usize,
     monochrome_sprites: usize,
@@ -213,6 +218,7 @@ impl SceneLengths {
         Self {
             shadows: scene.shadows.len(),
             quads: scene.quads.len(),
+            shaders: scene.shaders.len(),
             paths: scene.paths.len(),
             underlines: scene.underlines.len(),
             monochrome_sprites: scene.monochrome_sprites.len(),
@@ -225,7 +231,8 @@ impl SceneLengths {
     }
 }
 
-/// A contiguous range of one primitive type drawn by a single pipeline invocation.
+/// A contiguous range of one primitive type in scene drawing order.
+/// A renderer may split a batch when its entries use different pipelines.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(missing_docs)]
 pub enum PrimitiveBatch {
@@ -256,6 +263,7 @@ pub enum PrimitiveBatch {
         range: Range<usize>,
         smoothed: bool,
     },
+    Shaders(Range<usize>),
     Surfaces(Range<usize>),
     BackdropFilters(Range<usize>),
     FilterBoundary(usize),
@@ -351,6 +359,7 @@ impl PrimitiveBatch {
                 range.len(),
                 texture_id.index
             ),
+            Self::Shaders(range) => format!("shaders ({})", range.len()),
             Self::Surfaces(range) => format!("surfaces ({})", range.len()),
             Self::BackdropFilters(range) => format!("backdrop filters ({})", range.len()),
             Self::FilterBoundary(index) => format!("filter boundary ({index})"),

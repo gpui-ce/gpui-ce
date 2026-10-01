@@ -65,6 +65,7 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
+    pub shaders: Vec<ShaderQuad>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
     pub monochrome_sprites: Vec<MonochromeSprite>,
@@ -87,6 +88,7 @@ impl Scene {
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
+        self.shaders.clear();
         self.underlines.clear();
         self.monochrome_sprites.clear();
         self.subpixel_sprites.clear();
@@ -188,6 +190,10 @@ impl Scene {
                 path.id = PathId(self.paths.len());
                 self.paths.push(path.clone());
             }
+            Primitive::Shader(shader) => {
+                shader.order = order;
+                self.shaders.push(shader.clone());
+            }
             Primitive::Underline(underline) => {
                 underline.order = order;
                 self.underlines.push(*underline);
@@ -253,6 +259,7 @@ impl Scene {
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
+        self.shaders.sort_by_key(|shader| shader.order);
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
         self.monochrome_sprites
@@ -382,6 +389,7 @@ pub(crate) enum PrimitiveKind {
     Shadow,
     #[default]
     Quad,
+    Shader,
     Path,
     Underline,
     MonochromeSprite,
@@ -406,6 +414,7 @@ pub(crate) enum PaintOperation {
 pub enum Primitive {
     Shadow(Shadow),
     Quad(Quad),
+    Shader(ShaderQuad),
     Path(Path<ScaledPixels>),
     Underline(Underline),
     MonochromeSprite(MonochromeSprite),
@@ -422,6 +431,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.bounds,
             Primitive::Quad(quad) => &quad.bounds,
+            Primitive::Shader(shader) => &shader.bounds,
             Primitive::Path(path) => &path.bounds,
             Primitive::Underline(underline) => &underline.bounds,
             Primitive::MonochromeSprite(sprite) => &sprite.bounds,
@@ -437,6 +447,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.content_mask,
             Primitive::Quad(quad) => &quad.content_mask,
+            Primitive::Shader(shader) => &shader.content_mask,
             Primitive::Path(path) => &path.content_mask,
             Primitive::Underline(underline) => &underline.content_mask,
             Primitive::MonochromeSprite(sprite) => &sprite.content_mask,
@@ -461,6 +472,8 @@ struct BatchIterator<'a> {
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    shaders_start: usize,
+    shaders_iter: Peekable<slice::Iter<'a, ShaderQuad>>,
     paths_start: usize,
     paths: &'a [Path<ScaledPixels>],
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
@@ -487,6 +500,8 @@ impl<'a> BatchIterator<'a> {
             shadows_iter: scene.shadows.iter().peekable(),
             quads_start: 0,
             quads_iter: scene.quads.iter().peekable(),
+            shaders_start: 0,
+            shaders_iter: scene.shaders.iter().peekable(),
             paths_start: 0,
             paths: &scene.paths,
             paths_iter: scene.paths.iter().peekable(),
@@ -530,6 +545,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
+            (
+                self.shaders_iter.peek().map(|q| q.order),
+                PrimitiveKind::Shader,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -628,6 +647,20 @@ impl<'a> Iterator for BatchIterator<'a> {
                     range: quads_start..quads_end,
                     smoothed,
                 })
+            }
+            PrimitiveKind::Shader => {
+                let start = self.shaders_start;
+                let mut end = start + 1;
+                self.shaders_iter.next();
+                while self
+                    .shaders_iter
+                    .next_if(|shader| precedes_limit(shader.order, batch_kind, max_order_and_kind))
+                    .is_some()
+                {
+                    end += 1;
+                }
+                self.shaders_start = end;
+                Some(PrimitiveBatch::Shaders(start..end))
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -782,6 +815,30 @@ impl<'a> Iterator for BatchIterator<'a> {
                 Some(PrimitiveBatch::FilterBoundary(index))
             }
         }
+    }
+}
+
+/// A procedural shader painted directly into the current scene target.
+/// Geometry and clipping use the same scaled coordinate space as ordinary quads.
+#[derive(Debug, Clone)]
+pub struct ShaderQuad {
+    /// Scene stacking order, assigned when inserted.
+    pub order: DrawOrder,
+    /// Rasterization bounds in device-scaled pixels.
+    pub bounds: Bounds<ScaledPixels>,
+    /// The active content clip.
+    pub content_mask: ContentMask<ScaledPixels>,
+    /// Typed program and immutable parameter values.
+    pub shader: crate::paint::Shader,
+    /// Inherited element opacity, applied after shader evaluation.
+    pub opacity: f32,
+    /// Converts scaled coordinates to logical shader coordinates.
+    pub scale_factor: f32,
+}
+
+impl From<ShaderQuad> for Primitive {
+    fn from(shader: ShaderQuad) -> Self {
+        Self::Shader(shader)
     }
 }
 
@@ -1343,6 +1400,19 @@ mod tests {
         }
     }
 
+    fn shader_quad() -> ShaderQuad {
+        ShaderQuad {
+            order: 0,
+            bounds: full_bounds(),
+            content_mask: mask(),
+            shader: crate::paint::PaintRoot::new()
+                .shader(|cx| cx.uniform(cx.parameter([1.0, 0.0, 0.0, 1.0])))
+                .unwrap(),
+            opacity: 1.0,
+            scale_factor: 1.0,
+        }
+    }
+
     fn shadow() -> Shadow {
         Shadow {
             order: 0,
@@ -1693,6 +1763,92 @@ mod tests {
                 "quad"
             ]
         );
+    }
+
+    #[test]
+    fn shader_batches_preserve_overlapping_interleaving() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(shader_quad());
+        scene.insert_primitive(quad());
+        scene.insert_primitive(shader_quad());
+        scene.finish();
+        assert!(matches!(
+            scene.render_commands(),
+            [RenderCommand::Batch(PrimitiveBatch::Shaders(first)),
+             RenderCommand::Batch(PrimitiveBatch::Quads { .. }),
+             RenderCommand::Batch(PrimitiveBatch::Shaders(last))]
+                if first == &(0..1) && last == &(1..2)
+        ));
+        assert_eq!(scene.render_plan().requirements().shader_count, 2);
+        assert_eq!(scene.render_plan().requirements().instance_batch_count, 1);
+        assert!(!scene.requires_offscreen_rendering());
+    }
+
+    #[test]
+    fn shader_batches_merge_equal_orders_and_respect_filter_barriers() {
+        let mut scene = Scene::default();
+        let detached_bounds = detached_quad().bounds;
+        let mut detached = shader_quad();
+        detached.bounds = detached_bounds;
+        detached.content_mask.bounds = detached_bounds;
+        scene.insert_primitive(shader_quad());
+        scene.insert_primitive(detached.clone());
+        assert_eq!(scene.shaders[0].order, scene.shaders[1].order);
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(shader_quad());
+        scene.insert_primitive(boundary(false));
+        scene.insert_primitive(detached);
+        scene.finish();
+        assert!(matches!(
+            scene.render_commands(),
+            [RenderCommand::Batch(PrimitiveBatch::Shaders(first)),
+             RenderCommand::BeginFilter { .. },
+             RenderCommand::Batch(PrimitiveBatch::Shaders(middle)),
+             RenderCommand::EndFilter { .. },
+             RenderCommand::Batch(PrimitiveBatch::Shaders(last))]
+                if first == &(0..2) && middle == &(2..3) && last == &(3..4)
+        ));
+        assert_eq!(scene.render_plan().requirements().shader_count, 4);
+    }
+
+    #[test]
+    fn shader_replay_retains_parameters_opacity_and_scale() {
+        let mut previous = Scene::default();
+        let mut shader = shader_quad();
+        shader.opacity = 0.25;
+        shader.scale_factor = 2.0;
+        previous.insert_primitive(shader);
+        previous.finish();
+        let mut scene = Scene::default();
+        scene.replay(0..previous.len(), &previous);
+        scene.finish();
+        assert_eq!(scene.render_commands(), previous.render_commands());
+        assert_eq!(scene.shaders[0].opacity, 0.25);
+        assert_eq!(scene.shaders[0].scale_factor, 2.0);
+        assert_eq!(
+            scene.shaders[0].shader.program_id(),
+            previous.shaders[0].shader.program_id()
+        );
+        assert_eq!(
+            scene.shaders[0].shader.parameter_slots(),
+            previous.shaders[0].shader.parameter_slots()
+        );
+        scene.clear();
+        scene.finish();
+        assert!(scene.shaders.is_empty());
+        assert_eq!(scene.render_plan().requirements().shader_count, 0);
+    }
+
+    #[test]
+    fn fully_clipped_shaders_do_not_enter_the_plan() {
+        let mut scene = Scene::default();
+        let mut shader = shader_quad();
+        shader.content_mask.bounds = detached_quad().bounds;
+        scene.insert_primitive(shader);
+        scene.finish();
+        assert_eq!(scene.len(), 0);
+        assert!(scene.shaders.is_empty());
+        assert!(scene.render_commands().is_empty());
     }
 
     #[test]

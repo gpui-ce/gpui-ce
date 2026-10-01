@@ -429,6 +429,14 @@ impl PlatformWindow for TestWindow {
         self.0.lock().appearance_change_callback = Some(callback);
     }
 
+    fn supports_shader_paint(&self) -> bool {
+        self.0
+            .lock()
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.supports_shader_paint())
+    }
+
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
@@ -561,5 +569,70 @@ impl PlatformAtlas for TestAtlas {
 
     fn contains(&self, key: &AtlasKey) -> bool {
         self.0.lock().tiles.contains_key(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Context, Render, TestAppContext, Window, div};
+
+    struct Empty;
+
+    impl Render for Empty {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl crate::IntoElement {
+            div()
+        }
+    }
+
+    struct CapabilityRenderer(bool);
+
+    impl PlatformHeadlessRenderer for CapabilityRenderer {
+        fn supports_shader_paint(&self) -> bool {
+            self.0
+        }
+
+        fn render_scene_to_image(
+            &mut self,
+            _scene: &Scene,
+            _size: Size<DevicePixels>,
+        ) -> anyhow::Result<RgbaImage> {
+            anyhow::bail!("capability mock does not render")
+        }
+
+        fn render_scene(
+            &mut self,
+            _scene: &Scene,
+            _size: Size<DevicePixels>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+            Arc::new(TestAtlas::new())
+        }
+    }
+
+    #[gpui::test]
+    fn headless_window_shader_support_follows_its_renderer(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let test_window = cx.test_window(window.into());
+        assert!(!test_window.supports_shader_paint());
+
+        test_window.0.lock().renderer = Some(Box::new(CapabilityRenderer(false)));
+        assert!(!test_window.supports_shader_paint());
+
+        test_window.0.lock().renderer = Some(Box::new(CapabilityRenderer(true)));
+        assert!(test_window.supports_shader_paint());
+        window
+            .update(cx, |_, window, _| assert!(window.supports_shader_paint()))
+            .unwrap();
+
+        test_window.0.lock().renderer = None;
+        assert!(!test_window.supports_shader_paint());
     }
 }

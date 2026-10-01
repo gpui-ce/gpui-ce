@@ -627,7 +627,7 @@ fn supported_dual_source_blending(device: &wgpu::Device, requested: bool) -> boo
     requested && supported
 }
 
-fn scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {
+pub(super) fn scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {
     let source_color_factor = if alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied {
         wgpu::BlendFactor::One
     } else {

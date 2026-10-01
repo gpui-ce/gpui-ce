@@ -114,6 +114,10 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Drawing example](crates/gpui/examples/learn/custom_drawing.rs)
 
+- Composable paint (experimental)
+
+  Experimental [composable paint](docs/paint-guide.md) shares typed Rust shader functions, parameters, shape coverage and retained canvas commands under one root. The guide includes a WebGPU hero example, supported renderer paths, and verification results.
+
 ## Setup
 View the [setup guide](SETUP.md) for installation instructions.
 

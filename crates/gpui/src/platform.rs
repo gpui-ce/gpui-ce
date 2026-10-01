@@ -926,6 +926,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
+    /// Whether this window can render composed shader paints through WebGPU.
+    ///
+    /// Native renderers and windows without a GPU decline shader paints before
+    /// they enter the scene. This capability is independent of raw GPU access.
+    fn supports_shader_paint(&self) -> bool {
+        false
+    }
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
@@ -1098,6 +1105,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 /// A renderer for headless windows that can produce real rendered output.
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 pub trait PlatformHeadlessRenderer {
+    /// Whether this renderer supports composed WebGPU shader paints.
+    fn supports_shader_paint(&self) -> bool {
+        false
+    }
+
     /// Render a scene and return the result as an RGBA image.
     fn render_scene_to_image(
         &mut self,

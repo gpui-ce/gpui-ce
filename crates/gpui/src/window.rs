@@ -4502,6 +4502,62 @@ impl Window {
         self.paint_quad_with_corner_smoothing(quad, 0.0);
     }
 
+    /// Whether the active renderer can paint typed procedural shaders.
+    pub fn supports_shader_paint(&self) -> bool {
+        self.platform_window.supports_shader_paint()
+    }
+
+    /// Paints a typed procedural shader at the current stacking position.
+    /// Shader coordinates are logical pixels relative to `bounds`; the active
+    /// content mask and element opacity apply as they do for ordinary quads.
+    /// Procedural geometry retains fractional coordinates so the requested logical
+    /// shader domain remains unchanged across display scale factors.
+    /// Call this only during an element's paint phase.
+    /// Empty bounds are skipped. Returns an error for invalid geometry or when
+    /// the active renderer does not support shader painting.
+    pub fn paint_shader(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shader: &crate::paint::Shader,
+    ) -> Result<(), crate::paint::ShaderError> {
+        self.invalidator.debug_assert_paint();
+        let scale_factor = self.scale_factor();
+        let coordinates = [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.size.width.0,
+            bounds.size.height.0,
+            bounds.right().0,
+            bounds.bottom().0,
+        ];
+        if !scale_factor.is_finite()
+            || scale_factor <= 0.0
+            || bounds.size.width.0 < 0.0
+            || bounds.size.height.0 < 0.0
+            || coordinates
+                .iter()
+                .any(|value| !value.is_finite() || !(value * scale_factor).is_finite())
+        {
+            return Err(crate::paint::ShaderError::InvalidGeometry);
+        }
+        if bounds.is_empty() {
+            return Ok(());
+        }
+        if !self.supports_shader_paint() {
+            return Err(crate::paint::ShaderError::UnsupportedBackend);
+        }
+        let primitive = crate::ShaderQuad {
+            order: 0,
+            bounds: bounds.scale(scale_factor),
+            content_mask: self.snapped_content_mask(),
+            shader: shader.clone(),
+            opacity: self.element_opacity(),
+            scale_factor,
+        };
+        self.next_frame.scene.insert_primitive(primitive);
+        Ok(())
+    }
+
     /// Paints `quad` with smoothed corners.
     pub fn paint_quad_with_corner_smoothing(&mut self, quad: PaintQuad, corner_smoothing: f32) {
         self.invalidator.debug_assert_paint();

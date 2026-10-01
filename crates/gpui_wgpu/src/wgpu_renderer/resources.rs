@@ -33,6 +33,7 @@ pub(super) struct WgpuResources {
     pub(super) renderer_tier: crate::RendererTier,
     pub(super) surface: Option<wgpu::Surface<'static>>,
     pub(super) pipelines: WgpuPipelines,
+    pub(super) paints: super::paint::PaintResources,
     pub(super) bind_group_layouts: WgpuBindGroupLayouts,
     pub(super) atlas_sampler: wgpu::Sampler,
     pub(super) surface_sampler: wgpu::Sampler,
@@ -173,6 +174,7 @@ impl WgpuResources {
         let resources = Self {
             instances: InstanceBufferArena::new(&device, &bind_group_layouts, renderer_tier),
             renderer_tier,
+            paints: super::paint::PaintResources::new(&device),
             device,
             queue,
             surface,

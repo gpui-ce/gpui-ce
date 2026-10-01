@@ -161,6 +161,16 @@ impl WgpuHeadlessRenderer {
         })
     }
 
+    /// GPU adapter selected for this headless renderer.
+    pub fn gpu_specs(&self) -> gpui::GpuSpecs {
+        self.renderer.gpu_specs()
+    }
+
+    /// Paint cache entries, cumulative pipeline compilations, and uniform arena bytes.
+    pub fn paint_diagnostics(&self) -> (usize, u64, u64) {
+        self.renderer.resources().paints.diagnostics()
+    }
+
     fn ensure_target(&mut self, size: Size<DevicePixels>) -> anyhow::Result<()> {
         anyhow::ensure!(
             size.width.0 > 0 && size.height.0 > 0,
@@ -202,6 +212,10 @@ impl WgpuHeadlessRenderer {
 }
 
 impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
+    fn supports_shader_paint(&self) -> bool {
+        true
+    }
+
     fn render_scene_to_image(
         &mut self,
         scene: &Scene,

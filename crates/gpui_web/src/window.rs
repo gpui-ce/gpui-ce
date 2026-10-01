@@ -836,6 +836,10 @@ impl PlatformWindow for WebWindow {
         self.inner.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
+    fn supports_shader_paint(&self) -> bool {
+        true
+    }
+
     fn draw(&self, scene: &Scene) {
         if let Some((width, height)) = self.inner.pending_physical_size.take() {
             if self.inner.canvas.width() != width || self.inner.canvas.height() != height {

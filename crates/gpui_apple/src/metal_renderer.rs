@@ -892,6 +892,10 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        anyhow::ensure!(
+            scene.shaders.is_empty(),
+            "custom shader paint requires the WebGPU renderer; Metal does not support it"
+        );
         self.prepare_intermediate_textures(scene, viewport_size);
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
@@ -1132,6 +1136,9 @@ impl MetalRenderer {
                     target: FilterRenderTarget::Inline,
                     ..
                 } => true,
+                RenderCommand::Batch(PrimitiveBatch::Shaders(_)) => {
+                    unreachable!("custom shader paints are rejected before Metal encoding")
+                }
                 RenderCommand::Batch(PrimitiveBatch::SubpixelSprites { .. }) => unreachable!(),
                 RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
                     unreachable!("filter boundaries are resolved by the render plan")
@@ -2075,6 +2082,7 @@ fn required_instance_buffer_size(scene: &Scene) -> usize {
             }
             PrimitiveBatch::Paths { .. }
             | PrimitiveBatch::SubpixelSprites { .. }
+            | PrimitiveBatch::Shaders(_)
             | PrimitiveBatch::Surfaces(_)
             | PrimitiveBatch::BackdropFilters(_)
             | PrimitiveBatch::FilterBoundary(_) => {}

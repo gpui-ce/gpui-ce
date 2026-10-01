@@ -1,0 +1,182 @@
+{
+  "adapter": "Apple M3 Pro",
+  "profile": "bench optimized",
+  "samples": 20,
+  "warm_up_seconds": 1,
+  "measurement_seconds": 3,
+  "command": "cargo bench -p gpui_ce_wgpu --no-default-features --features test-support --bench paint --offline -- 'paint_graph/(update|repeated_1000)|paint_canvas/(update_64|batched_64|chained_64)' --warm-up-time 1 --measurement-time 3 --sample-size 20",
+  "snapshot": "After final compiler audit: bounded function-call memo, Arc WGSL source, live-only uniform pruning, atomic typed batches, Arc canvas commands, shared repeated-material value updates.",
+  "environment_notes": [
+    "Other user projects had many cargo/rustc processes active; these were not interrupted.",
+    "Diagnostic timings with confidence intervals; do not infer a clean cross-run speedup or regression from the earlier snapshot.",
+    "Batched and chained updates are measured in the same current executable; repeated calls include canonical graph compilation and WGSL emission.",
+    "Single-parameter with_parameter delegates to the atomic patch API; older97ns direct-copy result does not describe this version."
+  ],
+  "results": [
+    {
+      "benchmark": "paint_canvas_batched_64_three_parameters",
+      "unit": "nanoseconds",
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 21456.76065468108,
+            "upper_bound": 28262.987353807228
+          },
+          "point_estimate": 24679.931977731765,
+          "standard_error": 1742.7957999526561
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 18519.281825657894,
+            "upper_bound": 28141.508870332884
+          },
+          "point_estimate": 21487.858931353876,
+          "standard_error": 2653.454314630736
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 21966.95579947023,
+            "upper_bound": 30386.58215707278
+          },
+          "point_estimate": 25962.174598271595,
+          "standard_error": 2151.8077984573047
+        }
+      }
+    },
+    {
+      "benchmark": "paint_canvas_chained_64_three_parameters",
+      "unit": "nanoseconds",
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 71112.27581346272,
+            "upper_bound": 89506.50991909862
+          },
+          "point_estimate": 79411.95633809267,
+          "standard_error": 4720.187375096345
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 67413.77923017842,
+            "upper_bound": 81800.89596774193
+          },
+          "point_estimate": 78019.94420006516,
+          "standard_error": 3659.8415310292517
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 64707.10220231428,
+            "upper_bound": 79538.69013528789
+          },
+          "point_estimate": 70734.76071709565,
+          "standard_error": 3784.713956155787
+        }
+      }
+    },
+    {
+      "benchmark": "paint_canvas_update_64",
+      "unit": "nanoseconds",
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 13810.854033095318,
+            "upper_bound": 16351.850243909901
+          },
+          "point_estimate": 14882.89713580281,
+          "standard_error": 660.6469465672826
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 13321.114148172324,
+            "upper_bound": 15282.764019437192
+          },
+          "point_estimate": 13933.297976501304,
+          "standard_error": 565.2546884980522
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 14001.625157599023,
+            "upper_bound": 17254.993142083502
+          },
+          "point_estimate": 15489.895435358121,
+          "standard_error": 822.8899468722053
+        }
+      }
+    },
+    {
+      "benchmark": "paint_graph_repeated_1000_calls_1000_nodes",
+      "unit": "nanoseconds",
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1120461.4168696043,
+            "upper_bound": 1345626.6866583708
+          },
+          "point_estimate": 1229582.2535893898,
+          "standard_error": 57296.76701545869
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1073809.8237179487,
+            "upper_bound": 1310162.5449862638
+          },
+          "point_estimate": 1277719.747863248,
+          "standard_error": 72287.08984570733
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1179500.0730074295,
+            "upper_bound": 1399161.6814152543
+          },
+          "point_estimate": 1285795.0680514607,
+          "standard_error": 55541.408671570694
+        }
+      }
+    },
+    {
+      "benchmark": "paint_graph_update",
+      "unit": "nanoseconds",
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 171.777124161603,
+            "upper_bound": 248.3719470167487
+          },
+          "point_estimate": 203.13360816688478,
+          "standard_error": 20.15984318405622
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 166.7403484517978,
+            "upper_bound": 187.02302434691262
+          },
+          "point_estimate": 176.16053798779714,
+          "standard_error": 5.348549260928402
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 178.46836276762028,
+            "upper_bound": 324.5010923548412
+          },
+          "point_estimate": 241.01645362731674,
+          "standard_error": 39.23013085404017
+        }
+      }
+    }
+  ]
+}
