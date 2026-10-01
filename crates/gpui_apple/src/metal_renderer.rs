@@ -2321,9 +2321,9 @@ mod tests {
             quads.insert_primitive(Quad {
                 bounds,
                 content_mask: ContentMask {
-                bounds,
-                ..Default::default()
-            },
+                    bounds,
+                    ..Default::default()
+                },
                 background,
                 ..Default::default()
             });

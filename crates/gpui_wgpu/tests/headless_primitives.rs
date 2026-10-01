@@ -539,3 +539,46 @@ fn smoothed_primitives_share_one_contour() {
     }
 }
 
+#[test]
+fn content_mask_fades_quad_edges() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let red: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xff0000));
+    scene.insert_primitive(Quad {
+        order: 0,
+        bounds: bounds(0.0, 0.0, 310.0, 100.0),
+        content_mask: ContentMask {
+            bounds: bounds(0.0, 0.0, 100.0, 100.0),
+            fade_out: Edges {
+                top: ScaledPixels(10.0),
+                right: ScaledPixels(0.0),
+                bottom: ScaledPixels(0.0),
+                left: ScaledPixels(20.0),
+            },
+        },
+        background: solid_background(red),
+        ..Default::default()
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    let pixel = |x: u32, y: u32| image.get_pixel(x, y).0;
+    let close = |x: u32, y: u32, red: u8| {
+        let actual = pixel(x, y)[0];
+        assert!(
+            actual.abs_diff(red) <= 3,
+            "at ({x},{y}) got {actual}, expected {red}"
+        );
+    };
+
+    // Fully inside both fades.
+    close(60, 50, 255);
+    // The ramp is evaluated at pixel centers (x + 0.5), so 10.5px into the
+    // 20px left fade is 52.5% coverage.
+    close(10, 50, 134);
+    // 2.5px into the 10px top fade is 25% coverage.
+    close(60, 2, 64);
+    // The unfaded right edge still clips hard at the mask boundary.
+    assert_eq!(pixel(101, 50)[0], 0);
+}
