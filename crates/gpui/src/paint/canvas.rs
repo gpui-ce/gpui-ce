@@ -188,7 +188,10 @@ impl CanvasDrawing {
         for command in self.commands.iter() {
             let mask = command.clip.map(|mut bounds| {
                 bounds.origin += origin;
-                ContentMask { bounds }
+                ContentMask {
+                    bounds,
+                    ..Default::default()
+                }
             });
             window.with_content_mask(mask, |window| {
                 window.with_element_opacity(Some(command.opacity), |window| {

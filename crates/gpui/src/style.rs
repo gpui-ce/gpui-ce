@@ -859,8 +859,8 @@ impl Style {
                 y: Overflow::Scroll,
             },
             border_color: self.border_color,
-            border_widths: self.border_widths.clone(),
-            overflow_fade: self.overflow_fade.clone(),
+            border_widths: self.border_widths,
+            overflow_fade: self.overflow_fade,
             ..Style::default()
         };
         scroll_style
