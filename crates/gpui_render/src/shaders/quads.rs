@@ -11,7 +11,7 @@ pub mod quad {
         pub border_dashed_length: f32,
         pub border_dashed_gap: f32,
         pub bounds: Bounds,
-        pub content_mask: Bounds,
+        pub content_mask: ContentMask,
         pub background: Background,
         pub border_color: Background,
         pub corner_radii: Corners,
@@ -540,7 +540,7 @@ pub mod quad {
             position: vertex.clip_position,
             border: prepare_paint(Paint::new(quad.border_color, quad.bounds)),
             quad_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
+            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask.bounds),
             fill: prepare_paint(Paint::new(quad.background, quad.bounds)),
         }
     }
@@ -600,18 +600,19 @@ pub mod quad {
             return transparent();
         }
         let quad = get!(QUADS)[input.quad_id as usize];
+        let fade = ContentMask::alpha(quad.content_mask, input.position.xy());
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
             input.position.xy(),
             PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
         );
         if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
-            return blend_color(fill_color, 1.0);
+            return blend_color(fill_color, fade);
         }
 
         let geometry = quad_geometry(quad, input.position.xy());
         if is_unaffected_background(geometry) {
-            return blend_color(fill_color, 1.0);
+            return blend_color(fill_color, fade);
         }
 
         let distances = border_distances(geometry);
@@ -633,7 +634,7 @@ pub mod quad {
                 vec4f(factor, factor, factor, factor),
             );
         }
-        blend_color(color, antialiased_coverage(distances.outer))
+        blend_color(color, antialiased_coverage(distances.outer) * fade)
     }
 
     #[derive(Wgsl)]
@@ -718,6 +719,7 @@ pub mod quad {
             return transparent();
         }
         let quad = get!(QUADS)[input.quad_id as usize];
+        let fade = ContentMask::alpha(quad.content_mask, input.position.xy());
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
             input.position.xy(),
@@ -739,7 +741,7 @@ pub mod quad {
                 prepared,
             );
 
-            return blend_color(fill_color, antialiased_coverage(distance));
+            return blend_color(fill_color, antialiased_coverage(distance) * fade);
         }
 
         let geometry = quad_geometry(quad, input.position.xy());
@@ -793,7 +795,7 @@ pub mod quad {
             && straight_border_inner_corner_to_point.y < -PIXEL_ANTIALIAS_RADIUS
             && !near_curve
         {
-            return blend_color(fill_color, 1.0);
+            return blend_color(fill_color, fade);
         }
 
         let outer = rectangle_sample.signed_distance.distance;
@@ -845,6 +847,6 @@ pub mod quad {
             );
         }
 
-        blend_color(color, antialiased_coverage(outer))
+        blend_color(color, antialiased_coverage(outer) * fade)
     }
 }

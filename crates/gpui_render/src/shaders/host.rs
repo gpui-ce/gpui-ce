@@ -15,6 +15,26 @@ impl From<gpui::Bounds<gpui::ScaledPixels>> for common::Bounds {
     }
 }
 
+impl From<gpui::Edges<gpui::ScaledPixels>> for common::Edges {
+    fn from(edges: gpui::Edges<gpui::ScaledPixels>) -> Self {
+        Self {
+            top: edges.top.0,
+            right: edges.right.0,
+            bottom: edges.bottom.0,
+            left: edges.left.0,
+        }
+    }
+}
+
+impl From<gpui::ContentMask<gpui::ScaledPixels>> for common::ContentMask {
+    fn from(mask: gpui::ContentMask<gpui::ScaledPixels>) -> Self {
+        Self {
+            bounds: mask.bounds.into(),
+            fade_out: mask.fade_out.into(),
+        }
+    }
+}
+
 impl From<gpui::Corners<gpui::ScaledPixels>> for common::Corners {
     fn from(corners: gpui::Corners<gpui::ScaledPixels>) -> Self {
         Self {

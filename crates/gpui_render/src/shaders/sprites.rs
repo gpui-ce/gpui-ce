@@ -8,7 +8,7 @@ pub mod underline {
         pub order: u32,
         pub padding: u32,
         pub bounds: Bounds,
-        pub content_mask: Bounds,
+        pub content_mask: ContentMask,
         pub color: Hsla,
         pub thickness: f32,
         pub wavy: ShaderBool,
@@ -56,7 +56,7 @@ pub mod underline {
             position: vertex.clip_position,
             color: hsla_to_rgba(underline.color),
             underline_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, underline.content_mask),
+            clip_distances: clip_distances(vertex.viewport_position, underline.content_mask.bounds),
         }
     }
 
@@ -67,11 +67,15 @@ pub mod underline {
         }
         let underline = get!(UNDERLINES)[input.underline_id as usize];
         if !is_enabled(underline.wavy) {
-            return blend_color(input.color, 1.0);
+            return blend_color(
+                input.color,
+                ContentMask::alpha(underline.content_mask, input.position.xy()),
+            );
         }
         blend_color(
             input.color,
-            wavy_underline_coverage(underline, input.position.xy()),
+            wavy_underline_coverage(underline, input.position.xy())
+                * ContentMask::alpha(underline.content_mask, input.position.xy()),
         )
     }
 }
@@ -86,7 +90,7 @@ pub mod monochrome_sprite {
         pub order: u32,
         pub padding: u32,
         pub bounds: Bounds,
-        pub content_mask: Bounds,
+        pub content_mask: ContentMask,
         pub color: Hsla,
         pub tile: AtlasTile,
         pub transformation: TransformationMatrix,
@@ -104,6 +108,9 @@ pub mod monochrome_sprite {
         #[location(1)]
         #[interpolate(flat)]
         pub color: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub sprite_id: u32,
         #[location(3)]
         pub clip_distances: Vec4f,
     }
@@ -123,7 +130,8 @@ pub mod monochrome_sprite {
                 texture_dimensions(MONOCHROME_TEXTURE),
             ),
             color: hsla_to_rgba(sprite.color),
-            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            sprite_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask.bounds),
         }
     }
 
@@ -132,6 +140,7 @@ pub mod monochrome_sprite {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+        let sprite = get!(MONOCHROME_SPRITES)[input.sprite_id as usize];
         let sample = texture_sample_level(
             MONOCHROME_TEXTURE,
             MONOCHROME_SAMPLER,
@@ -145,7 +154,10 @@ pub mod monochrome_sprite {
             get!(FONT_RASTERIZATION).grayscale_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
-        blend_color(input.color, corrected)
+        blend_color(
+            input.color,
+            corrected * ContentMask::alpha(sprite.content_mask, input.position.xy()),
+        )
     }
 }
 
@@ -162,7 +174,7 @@ pub mod polychrome_sprite {
         pub opacity: f32,
         pub corner_smoothing: f32,
         pub bounds: Bounds,
-        pub content_mask: Bounds,
+        pub content_mask: ContentMask,
         pub corner_radii: Corners,
         pub tile: AtlasTile,
     }
@@ -192,7 +204,7 @@ pub mod polychrome_sprite {
                 texture_dimensions(POLYCHROME_TEXTURE),
             ),
             sprite_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask.bounds),
         }
     }
 
@@ -249,7 +261,8 @@ pub mod polychrome_sprite {
                     input.position.xy(),
                     sprite.bounds,
                     sprite.corner_radii,
-                )),
+                ))
+                * ContentMask::alpha(sprite.content_mask, input.position.xy()),
         )
     }
 
@@ -325,7 +338,8 @@ pub mod polychrome_sprite {
                         smoothing_factors: input.smoothing_factors,
                         superellipse_power: input.superellipse_power,
                     },
-                )),
+                ))
+                * ContentMask::alpha(sprite.content_mask, input.position.xy()),
         )
     }
 }
@@ -341,7 +355,7 @@ pub mod subpixel_sprite {
         pub order: u32,
         pub padding: u32,
         pub bounds: Bounds,
-        pub content_mask: Bounds,
+        pub content_mask: ContentMask,
         pub color: Hsla,
         pub tile: AtlasTile,
         pub transformation: TransformationMatrix,
@@ -359,6 +373,9 @@ pub mod subpixel_sprite {
         #[location(1)]
         #[interpolate(flat)]
         pub color: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub sprite_id: u32,
         #[location(3)]
         pub clip_distances: Vec4f,
     }
@@ -387,7 +404,8 @@ pub mod subpixel_sprite {
                 texture_dimensions(SPRITE_TEXTURE),
             ),
             color: hsla_to_rgba(sprite.color),
-            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            sprite_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask.bounds),
         }
     }
 
@@ -399,6 +417,7 @@ pub mod subpixel_sprite {
                 alpha: transparent(),
             };
         }
+        let sprite = get!(SUBPIXEL_SPRITES)[input.sprite_id as usize];
         let sampled =
             texture_sample_level(SPRITE_TEXTURE, SPRITE_SAMPLER, input.tile_position, 0.0).rgb();
         let sample = select(
@@ -412,12 +431,13 @@ pub mod subpixel_sprite {
             get!(FONT_RASTERIZATION).subpixel_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
+        let mask_alpha = ContentMask::alpha(sprite.content_mask, input.position.xy());
         SubpixelSpriteFragmentOutput {
             foreground: vec4f(input.color.x, input.color.y, input.color.z, 1.0),
             alpha: vec4f(
-                input.color.w * alpha_corrected.x,
-                input.color.w * alpha_corrected.y,
-                input.color.w * alpha_corrected.z,
+                input.color.w * alpha_corrected.x * mask_alpha,
+                input.color.w * alpha_corrected.y * mask_alpha,
+                input.color.w * alpha_corrected.z * mask_alpha,
                 1.0,
             ),
         }

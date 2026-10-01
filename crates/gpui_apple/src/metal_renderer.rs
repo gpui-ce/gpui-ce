@@ -1855,7 +1855,7 @@ impl MetalRenderer {
 
             let surface_uniforms = SurfaceUniforms {
                 bounds: surface.bounds.into(),
-                content_mask: surface.content_mask.bounds.into(),
+                content_mask: surface.content_mask.into(),
                 color_format: SurfaceColorFormat::Yuv,
                 opacity: opacities.get(index).copied().unwrap_or(1.0),
                 padding0: 0,
