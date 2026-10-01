@@ -1883,7 +1883,7 @@ impl PlatformWindow for MacWindow {
         let mut this = self.0.as_ref().lock();
         this.background_appearance = background_appearance;
 
-        let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
+        let opaque = background_appearance.is_opaque();
         this.renderer.update_transparency(!opaque);
 
         unsafe {

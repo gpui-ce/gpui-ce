@@ -2391,6 +2391,10 @@ pub enum WindowAppearance {
 
 /// The appearance of the background of the window itself, when there is
 /// no content or the content is transparent.
+///
+/// The variants available depend on the target platform. In particular,
+/// the Mica backdrop materials are only supported on Windows 11 and are
+/// ignored elsewhere.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub enum WindowBackgroundAppearance {
     /// Opaque.
@@ -2412,6 +2416,41 @@ pub enum WindowBackgroundAppearance {
     MicaBackdrop,
     /// The Mica Alt backdrop material, supported on Windows 11.
     MicaAltBackdrop,
+}
+
+impl WindowBackgroundAppearance {
+    /// Whether the window's background hides everything behind the window,
+    /// letting the platform skip compositing the content it covers.
+    pub fn is_opaque(&self) -> bool {
+        matches!(self, Self::Opaque)
+    }
+
+    /// Whether the window's background lets content behind the window show
+    /// through, either directly, blurred, or via a system backdrop material.
+    pub fn is_transparent(&self) -> bool {
+        !self.is_opaque()
+    }
+}
+
+#[cfg(test)]
+mod window_background_appearance_tests {
+    use super::WindowBackgroundAppearance;
+
+    #[test]
+    fn only_opaque_hides_the_content_behind_the_window() {
+        assert!(WindowBackgroundAppearance::Opaque.is_opaque());
+        assert!(!WindowBackgroundAppearance::Opaque.is_transparent());
+
+        for appearance in [
+            WindowBackgroundAppearance::Transparent,
+            WindowBackgroundAppearance::Blurred,
+            WindowBackgroundAppearance::MicaBackdrop,
+            WindowBackgroundAppearance::MicaAltBackdrop,
+        ] {
+            assert!(appearance.is_transparent());
+            assert!(!appearance.is_opaque());
+        }
+    }
 }
 
 /// The text rendering mode to use for drawing glyphs.
