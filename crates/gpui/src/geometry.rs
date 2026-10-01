@@ -1823,6 +1823,50 @@ impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
         }
     }
 
+    /// Constructs `Edges` with the left and right sides set to the given value
+    /// and the top and bottom sides set to their default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::Edges;
+    /// let edges = Edges::horizontal(10.0);
+    /// assert_eq!(edges.top, 0.0);
+    /// assert_eq!(edges.right, 10.0);
+    /// assert_eq!(edges.bottom, 0.0);
+    /// assert_eq!(edges.left, 10.0);
+    /// ```
+    pub fn horizontal(value: T) -> Self {
+        Self {
+            top: T::default(),
+            right: value.clone(),
+            bottom: T::default(),
+            left: value,
+        }
+    }
+
+    /// Constructs `Edges` with the top and bottom sides set to the given value
+    /// and the left and right sides set to their default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::Edges;
+    /// let edges = Edges::vertical(10.0);
+    /// assert_eq!(edges.top, 10.0);
+    /// assert_eq!(edges.right, 0.0);
+    /// assert_eq!(edges.bottom, 10.0);
+    /// assert_eq!(edges.left, 0.0);
+    /// ```
+    pub fn vertical(value: T) -> Self {
+        Self {
+            top: value.clone(),
+            right: T::default(),
+            bottom: value,
+            left: T::default(),
+        }
+    }
+
     /// Applies a function to each field of the `Edges`, producing a new `Edges<U>`.
     ///
     /// This method allows for converting an `Edges<T>` to an `Edges<U>` by specifying a closure
