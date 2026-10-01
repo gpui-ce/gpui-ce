@@ -847,6 +847,27 @@ impl Style {
         }
     }
 
+    /// Get the content mask for a container that always clips and scrolls
+    /// vertically, like [`List`](crate::List) and
+    /// [`UniformList`](crate::UniformList): the vertical axis always clips,
+    /// the horizontal axis clips according to `overflow.x`, and
+    /// `overflow_fade` distances apply on each clipped axis.
+    pub fn scroll_mask(&self, bounds: Bounds<Pixels>, rem_size: Pixels) -> ContentMask<Pixels> {
+        let scroll_style = Style {
+            overflow: Point {
+                x: self.overflow.x,
+                y: Overflow::Scroll,
+            },
+            border_color: self.border_color,
+            border_widths: self.border_widths.clone(),
+            overflow_fade: self.overflow_fade.clone(),
+            ..Style::default()
+        };
+        scroll_style
+            .overflow_mask(bounds, rem_size)
+            .expect("vertical scrolling always clips")
+    }
+
     /// Paints the background of an element styled with this style.
     pub fn paint(
         &self,

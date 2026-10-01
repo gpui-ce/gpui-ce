@@ -1252,6 +1252,7 @@ impl StateInner {
         &mut self,
         bounds: Bounds<Pixels>,
         padding: Edges<Pixels>,
+        content_mask: ContentMask<Pixels>,
         autoscroll: bool,
         render_item: &mut RenderItemFn,
         window: &mut Window,
@@ -1282,9 +1283,7 @@ impl StateInner {
                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
                 item_origin.y -= layout_response.scroll_top.offset_in_item;
                 for item in &mut layout_response.item_layouts {
-                    window.with_content_mask(
-                        Some(ContentMask { bounds, ..Default::default() }),
-                        |window| {
+                    window.with_content_mask(Some(content_mask), |window| {
                         item.element.prepaint_at(item_origin, window, cx);
                     });
 
@@ -1439,6 +1438,17 @@ pub struct ListOffset {
     pub offset_in_item: Pixels,
 }
 
+impl List {
+    /// The list's style with vertical scrolling enabled by default, so the list
+    /// clips and masks its items even when no overflow was refined.
+    fn base_style(&self) -> Style {
+        let mut style = Style::default();
+        style.overflow.y = Overflow::Scroll;
+        style.refine(&self.style);
+        style
+    }
+}
+
 impl Element for List {
     type RequestLayoutState = ();
     type PrepaintState = ListPrepaintState;
@@ -1460,9 +1470,7 @@ impl Element for List {
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         let layout_id = match self.sizing_behavior {
             ListSizingBehavior::Infer => {
-                let mut style = Style::default();
-                style.overflow.y = Overflow::Scroll;
-                style.refine(&self.style);
+                let style = self.base_style();
                 window.with_text_style(style.text_style().cloned(), |window| {
                     let state = &mut *self.state.0.borrow_mut();
 
@@ -1537,8 +1545,8 @@ impl Element for List {
         let state = &mut *self.state.0.borrow_mut();
         state.reset = false;
 
-        let mut style = Style::default();
-        style.refine(&self.style);
+        let style = self.base_style();
+        let content_mask = style.scroll_mask(bounds, window.rem_size());
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
@@ -1562,16 +1570,31 @@ impl Element for List {
         let padding = style
             .padding
             .to_pixels(bounds.size.into(), window.rem_size());
-        let layout =
-            match state.prepaint_items(bounds, padding, true, &mut self.render_item, window, cx) {
-                Ok(layout) => layout,
-                Err(autoscroll_request) => {
-                    state.logical_scroll_top = Some(autoscroll_request);
-                    state
-                        .prepaint_items(bounds, padding, false, &mut self.render_item, window, cx)
-                        .unwrap()
-                }
-            };
+        let layout = match state.prepaint_items(
+            bounds,
+            padding,
+            content_mask,
+            true,
+            &mut self.render_item,
+            window,
+            cx,
+        ) {
+            Ok(layout) => layout,
+            Err(autoscroll_request) => {
+                state.logical_scroll_top = Some(autoscroll_request);
+                state
+                    .prepaint_items(
+                        bounds,
+                        padding,
+                        content_mask,
+                        false,
+                        &mut self.render_item,
+                        window,
+                        cx,
+                    )
+                    .unwrap()
+            }
+        };
 
         state.last_layout_bounds = Some(bounds);
         state.last_padding = Some(padding);
@@ -1615,13 +1638,15 @@ impl Element for List {
             }
         });
 
+        let style = self.base_style();
         window.with_content_mask(
-                        Some(ContentMask { bounds, ..Default::default() }),
-                        |window| {
-            for item in &mut prepaint.layout.item_layouts {
-                item.element.paint(window, cx);
-            }
-        });
+            Some(style.scroll_mask(bounds, window.rem_size())),
+            |window| {
+                for item in &mut prepaint.layout.item_layouts {
+                    item.element.paint(window, cx);
+                }
+            },
+        );
     }
 }
 
