@@ -206,14 +206,9 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(px(300.), px(300.)),
-                cx,
-            ))),
-            ..Default::default()
-        };
+        let options = WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(
+            Bounds::centered(None, size(px(300.), px(300.)), cx),
+        )));
         cx.open_window(options, |_, cx| {
             cx.activate(false);
             cx.new(|_| ImageLoadingExample {})

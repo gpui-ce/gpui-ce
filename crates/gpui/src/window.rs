@@ -1447,6 +1447,7 @@ impl Window {
         options: WindowOptions,
         cx: &mut App,
     ) -> Result<Self> {
+        let background_appearance = options.background_appearance();
         let WindowOptions {
             window_bounds,
             titlebar,
@@ -1459,7 +1460,6 @@ impl Window {
             is_resizable,
             is_minimizable,
             display_id,
-            window_background,
             app_id,
             window_min_size,
             window_decorations,
@@ -1470,6 +1470,7 @@ impl Window {
             icon,
             #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
             tabbing_identifier,
+            ..
         } = options;
 
         let initial_window_title = titlebar
@@ -1523,7 +1524,7 @@ impl Window {
 
         platform_window
             .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-        platform_window.set_background_appearance(window_background);
+        platform_window.set_background_appearance(background_appearance);
 
         match window_bounds {
             WindowBounds::Fullscreen(_) => platform_window.toggle_fullscreen(),
@@ -8041,13 +8042,9 @@ mod tests {
     fn test_window_visibility_can_be_changed(cx: &mut TestAppContext) {
         for show in [false, true] {
             let window = cx.update(|cx| {
-                cx.open_window(
-                    WindowOptions {
-                        show,
-                        ..Default::default()
-                    },
-                    |_, cx| cx.new(|_| EmptyView),
-                )
+                cx.open_window(WindowOptions::new().show(show), |_, cx| {
+                    cx.new(|_| EmptyView)
+                })
                 .unwrap()
             });
             let platform_window = cx.test_window(window.into());

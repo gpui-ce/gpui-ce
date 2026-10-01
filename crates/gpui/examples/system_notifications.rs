@@ -127,14 +127,12 @@ fn run_example() {
 
         let bounds = Bounds::centered(None, size(px(560.), px(360.)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
+            WindowOptions::new()
+                .window_bounds(Some(WindowBounds::Windowed(bounds)))
+                .titlebar(Some(gpui::TitlebarOptions {
                     title: Some("System Notifications Example".into()),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
+                })),
             move |_, _| view,
         )
         .expect("failed to open system notifications example window");

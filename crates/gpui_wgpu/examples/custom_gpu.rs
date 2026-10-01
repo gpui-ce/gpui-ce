@@ -330,18 +330,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         env_logger::init();
         application().run(|cx: &mut App| {
             cx.open_window(
-                WindowOptions {
-                    titlebar: Some(TitlebarOptions {
+                WindowOptions::new()
+                    .titlebar(Some(TitlebarOptions {
                         title: Some("Custom GPU rendering".into()),
                         ..Default::default()
-                    }),
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    }))
+                    .window_bounds(Some(WindowBounds::Windowed(Bounds::centered(
                         None,
                         size(px(800.0), px(600.0)),
                         cx,
-                    ))),
-                    ..Default::default()
-                },
+                    )))),
                 |window, cx| cx.new(|cx| CustomGpuControl::new(window, cx)),
             )
             .unwrap();

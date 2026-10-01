@@ -261,10 +261,7 @@ impl TestAppContext {
         // Some tests rely on the window size matching the bounds of the test display
         let bounds = Bounds::maximized(None, &cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| build_window(window, cx)),
         )
         .unwrap()
@@ -285,13 +282,10 @@ impl TestAppContext {
     {
         let mut cx = self.app.borrow_mut();
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: Point::default(),
-                    size: window_size,
-                })),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(Bounds {
+                origin: Point::default(),
+                size: window_size,
+            }))),
             |window, cx| cx.new(|cx| build_window(window, cx)),
         )
         .unwrap()
@@ -303,10 +297,7 @@ impl TestAppContext {
         let bounds = Bounds::maximized(None, &cx);
         let window = cx
             .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..Default::default()
-                },
+                WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |_, cx| cx.new(|_| Empty),
             )
             .unwrap();
@@ -331,10 +322,7 @@ impl TestAppContext {
         let bounds = Bounds::maximized(None, &cx);
         let window = cx
             .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..Default::default()
-                },
+                WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |window, cx| cx.new(|cx| build_root_view(window, cx)),
             )
             .unwrap();

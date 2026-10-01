@@ -80,19 +80,17 @@ fn run_example() {
             return;
         }
         cx.open_window(
-            WindowOptions {
-                titlebar: Some(TitlebarOptions {
+            WindowOptions::new()
+                .titlebar(Some(TitlebarOptions {
                     title: Some("Vulkan".into()),
                     ..Default::default()
-                }),
-                focus: true,
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                }))
+                .focus(true)
+                .window_bounds(Some(WindowBounds::Windowed(Bounds::centered(
                     None,
                     size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
                     cx,
-                ))),
-                ..Default::default()
-            },
+                )))),
             |window, cx| cx.new(|cx| PaintingViewer::new(window, cx)),
         )
         .unwrap();

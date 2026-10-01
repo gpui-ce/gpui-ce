@@ -112,12 +112,10 @@ impl VisualTestAppContext {
 
         let mut cx = self.app.borrow_mut();
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                focus: false,
-                show: true,
-                ..Default::default()
-            },
+            WindowOptions::new()
+                .window_bounds(Some(WindowBounds::Windowed(bounds)))
+                .focus(false)
+                .show(true),
             build_root,
         )
     }

@@ -56,10 +56,7 @@ fn run_example() {
         .detach();
 
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {
                 cx.activate(false);
                 cx.new(|cx| {
@@ -74,10 +71,7 @@ fn run_example() {
         bounds.origin.x += bounds.size.width;
 
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {
                 cx.new(|cx| {
                     let focus_handle = cx.focus_handle();

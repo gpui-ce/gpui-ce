@@ -71,10 +71,7 @@ fn main() {
         cx.activate(true);
         let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
         if let Err(error) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| TextTransformPreview),
         ) {
             eprintln!("failed to open preview window: {error}");

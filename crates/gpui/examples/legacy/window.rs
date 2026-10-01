@@ -85,10 +85,7 @@ impl Render for WindowDemo {
             .gap_2()
             .child(button("Normal", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new().window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -99,11 +96,9 @@ impl Render for WindowDemo {
             }))
             .child(button("Popup", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        window_bounds: Some(window_bounds),
-                        kind: WindowKind::PopUp,
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .window_bounds(Some(window_bounds))
+                        .kind(WindowKind::PopUp),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -114,11 +109,9 @@ impl Render for WindowDemo {
             }))
             .child(button("Custom Titlebar", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        titlebar: None,
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .titlebar(None)
+                        .window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: true,
@@ -129,11 +122,9 @@ impl Render for WindowDemo {
             }))
             .child(button("Invisible", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        show: false,
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .show(false)
+                        .window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -144,12 +135,10 @@ impl Render for WindowDemo {
             }))
             .child(button("Unmovable", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        is_movable: false,
-                        titlebar: None,
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .is_movable(false)
+                        .titlebar(None)
+                        .window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -160,11 +149,9 @@ impl Render for WindowDemo {
             }))
             .child(button("Unresizable", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        is_resizable: false,
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .is_resizable(false)
+                        .window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -175,11 +162,9 @@ impl Render for WindowDemo {
             }))
             .child(button("Unminimizable", move |_, cx| {
                 cx.open_window(
-                    WindowOptions {
-                        is_minimizable: false,
-                        window_bounds: Some(window_bounds),
-                        ..Default::default()
-                    },
+                    WindowOptions::new()
+                        .is_minimizable(false)
+                        .window_bounds(Some(window_bounds)),
                     |_, cx| {
                         cx.new(|_| SubWindow {
                             custom_titlebar: false,
@@ -254,10 +239,7 @@ fn run_example() {
         let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
 
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {
                 cx.new(|cx| {
                     cx.observe_window_bounds(window, move |_, window, _| {

@@ -59,17 +59,15 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(520.), px(280.)), cx);
         let handle = cx
             .open_window(
-                WindowOptions {
-                    show: false,
-                    focus: false,
-                    app_id: Some("dev.gpui.visibility-test".into()),
-                    titlebar: Some(TitlebarOptions {
+                WindowOptions::new()
+                    .show(false)
+                    .focus(false)
+                    .app_id(Some("dev.gpui.visibility-test".into()))
+                    .titlebar(Some(TitlebarOptions {
                         title: Some("GPUI visibility test".into()),
                         ..Default::default()
-                    }),
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..Default::default()
-                },
+                    }))
+                    .window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |_, cx| cx.new(|_| VisibilityExample { restores: 0 }),
             )
             .unwrap();

@@ -253,13 +253,9 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
-        cx.open_window(
-            WindowOptions {
-                focus: true,
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| GradientViewer::new()),
-        )
+        cx.open_window(WindowOptions::new().focus(true), |_, cx| {
+            cx.new(|_| GradientViewer::new())
+        })
         .unwrap();
         cx.activate(true);
     });

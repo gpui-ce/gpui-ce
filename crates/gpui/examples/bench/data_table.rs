@@ -458,15 +458,13 @@ fn run_example() {
             return;
         }
         cx.open_window(
-            WindowOptions {
-                focus: true,
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            WindowOptions::new()
+                .focus(true)
+                .window_bounds(Some(WindowBounds::Windowed(Bounds::centered(
                     None,
                     size(px(1280.0), px(1000.0)),
                     cx,
-                ))),
-                ..Default::default()
-            },
+                )))),
             |_, cx| {
                 cx.new(|_| {
                     let mut table = DataTable::new();

@@ -5,9 +5,8 @@ mod example_support;
 
 use gpui::{
     App, Bounds, Context, CursorStyle, Decorations, HitboxBehavior, MouseButton, Pixels, Point,
-    ResizeEdge, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowOptions, black, canvas, div, green, hsla, point, prelude::*, px, rgb, size,
-    transparent_black, white,
+    ResizeEdge, Size, Window, WindowBounds, WindowDecorations, WindowOptions, black, canvas, div,
+    green, hsla, point, prelude::*, px, rgb, size, transparent_black, white,
 };
 use gpui_platform::application;
 
@@ -205,12 +204,9 @@ fn run_example() {
         }
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_background: WindowBackgroundAppearance::Opaque,
-                window_decorations: Some(WindowDecorations::Client),
-                ..Default::default()
-            },
+            WindowOptions::new()
+                .window_bounds(Some(WindowBounds::Windowed(bounds)))
+                .window_decorations(Some(WindowDecorations::Client)),
             |window, cx| {
                 cx.new(|cx| {
                     cx.observe_window_appearance(window, |_, window, _| {

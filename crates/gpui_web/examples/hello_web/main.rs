@@ -444,10 +444,8 @@ fn main() {
         }
         let bounds = Bounds::centered(None, size(px(640.), px(560.)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new()
+            .window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(HelloWeb::new),
         )
         .expect("failed to open window");

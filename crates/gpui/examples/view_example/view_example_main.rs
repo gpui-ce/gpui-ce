@@ -153,10 +153,8 @@ fn run_example() {
         ]);
 
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new()
+            .window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| ViewExample::new()),
         )
         .unwrap();

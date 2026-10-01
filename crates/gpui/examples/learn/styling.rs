@@ -503,10 +503,7 @@ fn main() {
 
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| StylingExample::new(window, cx)),
         )
         .expect("Failed to open window");

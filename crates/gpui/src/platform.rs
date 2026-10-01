@@ -2086,13 +2086,17 @@ pub enum TextInputAction {
 
 /// Options for creating a window.
 ///
-/// Chain setters on [`WindowOptions::default`] to override individual fields.
-/// Optional setters accept a value or an `Option`. Pass `None` to clear the field.
+/// Chain setters on [`WindowOptions::default`] (or [`WindowOptions::new`]) to
+/// override individual fields. Optional setters accept a value or an `Option`.
+/// Pass `None` to clear the field.
+///
+/// The window background is configured per platform, so consumers explicitly
+/// decide what each target needs:
 ///
 /// ```
 /// use gpui::WindowOptions;
 ///
-/// let options = WindowOptions::default()
+/// let options = WindowOptions::new()
 ///     .focus(false)
 ///     .titlebar(None)
 ///     .app_id("org.example.app".to_owned());
@@ -2150,8 +2154,21 @@ pub struct WindowOptions {
     /// the window will be created on the main display
     pub display_id: Option<DisplayId>,
 
-    /// The appearance of the window background.
-    pub window_background: WindowBackgroundAppearance,
+    /// The background appearance of a macOS window.
+    #[cfg(target_os = "macos")]
+    pub macos_window_background: MacosWindowBackground,
+
+    /// The background appearance of a Windows window.
+    #[cfg(target_os = "windows")]
+    pub windows_window_background: WindowsWindowBackground,
+
+    /// The background appearance of a Linux window.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub linux_window_background: LinuxWindowBackground,
+
+    /// The background appearance of a web window.
+    #[cfg(target_family = "wasm")]
+    pub web_window_background: WebWindowBackground,
 
     /// Application identifier of the window. Can by used by desktop environments to group applications together.
     pub app_id: Option<String>,
@@ -2291,12 +2308,57 @@ impl Default for WindowOptions {
             is_resizable: true,
             is_minimizable: true,
             display_id: None,
-            window_background: WindowBackgroundAppearance::default(),
+            #[cfg(target_os = "macos")]
+            macos_window_background: MacosWindowBackground::default(),
+            #[cfg(target_os = "windows")]
+            windows_window_background: WindowsWindowBackground::default(),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            linux_window_background: LinuxWindowBackground::default(),
+            #[cfg(target_family = "wasm")]
+            web_window_background: WebWindowBackground::default(),
             icon: None,
             app_id: None,
             window_min_size: None,
             window_decorations: None,
             tabbing_identifier: None,
+        }
+    }
+}
+
+impl WindowOptions {
+    /// Returns window options with the platform's defaults: a focused, shown,
+    /// resizable, minimizable, movable normal window with a titlebar.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the window's background appearance for the current platform,
+    /// erased into the renderer-facing [`WindowBackgroundAppearance`].
+    pub fn background_appearance(&self) -> WindowBackgroundAppearance {
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_window_background.into()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_window_background.into()
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            self.linux_window_background.into()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self.web_window_background.into()
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            any(target_os = "linux", target_os = "freebsd"),
+            target_family = "wasm",
+        )))]
+        {
+            WindowBackgroundAppearance::default()
         }
     }
 }

@@ -167,11 +167,9 @@ fn run_example() {
 
         let bounds = Bounds::centered(None, size(px(1000.), px(760.)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                focus: true,
-                ..Default::default()
-            },
+            WindowOptions::new()
+                .window_bounds(Some(WindowBounds::Windowed(bounds)))
+                .focus(true),
             |_, cx| cx.new(|_| BackgroundShowcase),
         )
         .unwrap();

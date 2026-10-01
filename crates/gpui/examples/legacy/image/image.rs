@@ -176,20 +176,16 @@ fn run_example() {
             disabled: false,
         }]);
 
-        let window_options = WindowOptions {
-            titlebar: Some(TitlebarOptions {
+        let window_options = WindowOptions::new()
+            .titlebar(Some(TitlebarOptions {
                 title: Some(SharedString::from("Image Example")),
                 appears_transparent: false,
                 ..Default::default()
-            }),
-
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
+            }))
+            .window_bounds(Some(WindowBounds::Windowed(Bounds {
                 size: size(px(1100.), px(600.)),
                 origin: Point::new(px(200.), px(200.)),
-            })),
-
-            ..Default::default()
-        };
+            })));
 
         cx.open_window(window_options, |_, cx| {
             cx.new(|_| ImageShowcase {

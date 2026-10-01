@@ -54,17 +54,15 @@ fn open_test_window(
     ));
 
     cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            is_movable,
-            app_owns_titlebar_drag,
-            titlebar: Some(TitlebarOptions {
+        WindowOptions::new()
+            .window_bounds(Some(WindowBounds::Windowed(bounds)))
+            .is_movable(is_movable)
+            .app_owns_titlebar_drag(app_owns_titlebar_drag)
+            .titlebar(Some(TitlebarOptions {
                 title: Some(label.clone()),
                 appears_transparent,
                 ..Default::default()
-            }),
-            ..Default::default()
-        },
+            })),
         |window, cx| {
             cx.new(|cx| {
                 let focus_handle = cx.focus_handle();

@@ -793,10 +793,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
             let mut app = self.app.borrow_mut();
             let window: AnyWindowHandle = app
                 .open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
-                        ..Default::default()
-                    },
+                    WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                     |_, cx| cx.new(|_| Empty),
                 )
                 .expect("failed to open benchmark window")

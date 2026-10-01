@@ -83,10 +83,7 @@ fn run_example() {
 
         let bounds = Bounds::centered(None, size(px(480.0), px(240.0)), cx);
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| ActionsExample::new(window, cx)),
         )
         .expect("Failed to open window");
