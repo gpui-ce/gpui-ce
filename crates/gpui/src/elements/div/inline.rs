@@ -78,17 +78,16 @@ impl InlineDocument {
             return (self.clone(), probe);
         }
 
-        let mut boundaries = self
+        let boundaries = self
             .text
             .grapheme_indices(true)
-            .map(|(idx, _grapheme)| idx)
-            .collect::<Vec<_>>();
-        boundaries.push(self.text.len());
+            .map(|(index, _grapheme)| index)
+            .chain(std::iter::once(self.text.len()));
 
         let (_candidate, measurement) = truncate_with_measured_candidates(
             &self.text,
-            &boundaries,
-            boundaries.len() / 2,
+            boundaries,
+            None,
             &truncation.affix,
             &self.runs,
             truncation.source,

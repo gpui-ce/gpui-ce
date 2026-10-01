@@ -1212,7 +1212,14 @@ fn truncate_to_shaped_layout<'a>(
     let affix_width = if affix.is_empty() {
         Pixels::ZERO
     } else {
-        let candidate = make_truncation_candidate(&text, &boundaries, 0, affix, runs, direction);
+        let candidate = make_truncation_candidate(
+            &text,
+            &TruncationBoundaries::new(boundaries.iter().copied(), grapheme_count),
+            0,
+            affix,
+            runs,
+            direction,
+        );
 
         window
             .text_system()
@@ -1270,8 +1277,8 @@ fn truncate_to_shaped_layout<'a>(
 
     let (candidate, ()) = truncate_with_measured_candidates(
         &text,
-        &boundaries,
-        keep,
+        boundaries.iter().copied(),
+        Some(keep),
         affix,
         runs,
         direction,
@@ -1336,23 +1343,119 @@ impl TruncationCandidate {
     }
 }
 
+/// Keeps independent prefix and suffix iterators because middle truncation moves
+/// their cuts in opposite directions. Narrowing them with the candidate search
+/// limits rescanning without collecting offsets into a vector. Bounds remain
+/// inclusive so adjacent middle candidates can reuse the same cut.
+struct TruncationBoundaries<Boundaries> {
+    grapheme_count: usize,
+    front: BoundaryWindow<Boundaries>,
+    back: BoundaryWindow<Boundaries>,
+}
+
+impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> TruncationBoundaries<Boundaries> {
+    fn new(boundaries: Boundaries, grapheme_count: usize) -> Self {
+        Self {
+            grapheme_count,
+            front: BoundaryWindow {
+                boundaries: boundaries.clone(),
+                first: 0,
+                last: grapheme_count,
+            },
+            back: BoundaryWindow {
+                boundaries,
+                first: 0,
+                last: grapheme_count,
+            },
+        }
+    }
+
+    fn narrow(&mut self, keep: usize, direction: TruncateFrom, fits: bool) {
+        let (front_count, back_count) = match direction {
+            TruncateFrom::End => (keep, 0),
+            TruncateFrom::Start => (0, keep),
+            TruncateFrom::Middle => {
+                let front_count = keep.saturating_mul(2).div_ceil(3);
+
+                (front_count, keep - front_count)
+            }
+        };
+
+        if direction != TruncateFrom::Start {
+            if fits {
+                self.front.retain_after(front_count);
+            } else {
+                self.front.retain_before(front_count);
+            }
+        }
+
+        if direction != TruncateFrom::End {
+            let back_index = self.grapheme_count - back_count;
+
+            if fits {
+                self.back.retain_before(back_index);
+            } else {
+                self.back.retain_after(back_index);
+            }
+        }
+    }
+}
+
+struct BoundaryWindow<Boundaries> {
+    boundaries: Boundaries,
+    first: usize,
+    last: usize,
+}
+
+impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> BoundaryWindow<Boundaries> {
+    fn get(&self, index: usize) -> usize {
+        let from_start = index - self.first;
+        let from_end = self.last - index;
+
+        if from_start <= from_end {
+            self.boundaries.clone().nth(from_start)
+        } else {
+            self.boundaries.clone().nth_back(from_end)
+        }
+        .expect("grapheme boundary is present")
+    }
+
+    fn retain_after(&mut self, index: usize) {
+        if index > self.first {
+            let _boundary = self.boundaries.nth(index - self.first - 1);
+            self.first = index;
+        }
+    }
+
+    fn retain_before(&mut self, index: usize) {
+        if index < self.last {
+            let _boundary = self.boundaries.nth_back(self.last - index - 1);
+            self.last = index;
+        }
+    }
+}
+
 /// Keeps the measured candidate with its output. Even an estimated starting point must fit.
 pub(crate) fn truncate_with_measured_candidates<Layout>(
     text: &str,
-    boundaries: &[usize],
-    initial_keep: usize,
+    boundaries: impl DoubleEndedIterator<Item = usize> + Clone,
+    initial_keep: Option<usize>,
     affix: &str,
     runs: &[TextRun],
     direction: TruncateFrom,
     mut measure: impl FnMut(&TruncationCandidate) -> (Layout, bool),
 ) -> (TruncationCandidate, Layout) {
+    let boundary_count = boundaries.clone().count();
+    let grapheme_count = boundary_count.saturating_sub(1);
+    let mut boundaries = TruncationBoundaries::new(boundaries, grapheme_count);
+
     let mut lower = 0;
-    let mut upper = boundaries.len().saturating_sub(2);
-    let mut keep = initial_keep.min(upper);
+    let mut upper = boundary_count.saturating_sub(2);
+    let mut keep = initial_keep.unwrap_or(boundary_count / 2).min(upper);
     let mut best = None;
 
     loop {
-        let candidate = make_truncation_candidate(text, boundaries, keep, affix, runs, direction);
+        let candidate = make_truncation_candidate(text, &boundaries, keep, affix, runs, direction);
         let (layout, fits) = measure(&candidate);
 
         if fits {
@@ -1369,41 +1472,42 @@ pub(crate) fn truncate_with_measured_candidates<Layout>(
             return best.expect("a fitting candidate was measured");
         }
 
+        boundaries.narrow(keep, direction, fits);
         keep = lower + (upper - lower) / 2;
     }
 }
 
 fn make_truncation_candidate(
     text: &str,
-    boundaries: &[usize],
+    boundaries: &TruncationBoundaries<impl DoubleEndedIterator<Item = usize> + Clone>,
     keep: usize,
     affix: &str,
     runs: &[TextRun],
     direction: TruncateFrom,
 ) -> TruncationCandidate {
-    let grapheme_count = boundaries.len().saturating_sub(1);
+    let grapheme_count = boundaries.grapheme_count;
     let keep = keep.min(grapheme_count);
     let (front_end, back_start, affix_source) = match direction {
         TruncateFrom::End => {
-            let prefix = text[..boundaries[keep]]
+            let prefix = text[..boundaries.front.get(keep)]
                 .trim_end_matches(|ch: char| ch.is_whitespace() || ch.is_ascii_punctuation());
             let end = prefix.len();
 
             (end, text.len(), end.min(text.len().saturating_sub(1)))
         }
         TruncateFrom::Start => {
-            let start = boundaries[grapheme_count - keep];
+            let start = boundaries.back.get(grapheme_count - keep);
 
             (0, start, start.saturating_sub(1))
         }
         TruncateFrom::Middle => {
             let front_count = keep.saturating_mul(2).div_ceil(3);
             let back_count = keep - front_count;
-            let end = boundaries[front_count];
+            let end = boundaries.front.get(front_count);
 
             (
                 end,
-                boundaries[grapheme_count - back_count],
+                boundaries.back.get(grapheme_count - back_count),
                 end.saturating_sub(1),
             )
         }
@@ -1450,7 +1554,7 @@ mod truncation_tests {
     #[test]
     fn truncation_candidates_keep_complete_graphemes_and_cover_output_with_runs() {
         const FAMILY: &str = "👩‍👩‍👧‍👦";
-        let text = format!("Ae\u{301}{FAMILY}Z");
+        let text = format!("Ae\u{301}{FAMILY}🦀");
         let split = "Ae\u{301}".len();
         let runs = [
             TextRun {
@@ -1462,16 +1566,29 @@ mod truncation_tests {
                 ..Default::default()
             },
         ];
-        let mut boundaries = text
+        let boundaries = text
             .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        boundaries.push(text.len());
+            .map(|(index, _grapheme)| index)
+            .chain(std::iter::once(text.len()));
+        let grapheme_count = boundaries.clone().count().saturating_sub(1);
+        let boundaries = TruncationBoundaries::new(boundaries, grapheme_count);
 
         for (direction, keep, expected) in [
-            (TruncateFrom::Start, 2, format!("…{FAMILY}Z")),
+            (TruncateFrom::Start, 0, "…".to_owned()),
+            (TruncateFrom::End, 0, "…".to_owned()),
+            (TruncateFrom::Middle, 0, "…".to_owned()),
+            (TruncateFrom::Start, 1, "…🦀".to_owned()),
+            (TruncateFrom::Middle, 1, "A…".to_owned()),
+            (TruncateFrom::Start, 2, format!("…{FAMILY}🦀")),
             (TruncateFrom::End, 2, "Ae\u{301}…".to_owned()),
-            (TruncateFrom::Middle, 3, "Ae\u{301}…Z".to_owned()),
+            (TruncateFrom::Middle, 3, "Ae\u{301}…🦀".to_owned()),
+            (TruncateFrom::Start, usize::MAX, format!("…{text}")),
+            (TruncateFrom::End, usize::MAX, format!("{text}…")),
+            (
+                TruncateFrom::Middle,
+                usize::MAX,
+                format!("Ae\u{301}{FAMILY}…🦀"),
+            ),
         ] {
             let candidate =
                 make_truncation_candidate(&text, &boundaries, keep, "…", &runs, direction);
@@ -1482,6 +1599,66 @@ mod truncation_tests {
                 "style runs must cover {:?} after {direction:?} truncation",
                 candidate.text
             );
+        }
+    }
+
+    #[test]
+    fn measured_truncation_keeps_the_selected_output_and_marker_fallback() {
+        let text = "Ae\u{301}👩‍👩‍👧‍👦🦀";
+
+        for (text, direction, expected) in [
+            ("", TruncateFrom::Start, "…"),
+            ("", TruncateFrom::End, "…"),
+            ("", TruncateFrom::Middle, "…"),
+            ("🦀", TruncateFrom::Start, "…"),
+            ("🦀", TruncateFrom::End, "…"),
+            ("🦀", TruncateFrom::Middle, "…"),
+            (text, TruncateFrom::Start, "…🦀"),
+            (text, TruncateFrom::End, "A…"),
+            (text, TruncateFrom::Middle, "A…"),
+        ] {
+            let runs = [TextRun {
+                len: text.len(),
+                ..Default::default()
+            }];
+            let boundaries = text
+                .grapheme_indices(true)
+                .map(|(index, _grapheme)| index)
+                .chain(std::iter::once(text.len()));
+
+            for initial_keep in [None, Some(0), Some(usize::MAX)] {
+                let (candidate, measured_text) = truncate_with_measured_candidates(
+                    text,
+                    boundaries.clone(),
+                    initial_keep,
+                    "…",
+                    &runs,
+                    direction,
+                    |candidate| {
+                        let fits = candidate.text.graphemes(true).count() <= 2;
+
+                        (candidate.text.clone(), fits)
+                    },
+                );
+                assert_eq!(
+                    candidate.text.as_ref(),
+                    expected,
+                    "{text:?} {direction:?} {initial_keep:?}"
+                );
+                assert_eq!(measured_text, candidate.text);
+            }
+
+            let (candidate, measured_text) = truncate_with_measured_candidates(
+                text,
+                boundaries,
+                None,
+                "…",
+                &runs,
+                direction,
+                |candidate| (candidate.text.clone(), false),
+            );
+            assert_eq!(candidate.text.as_ref(), "…");
+            assert_eq!(measured_text, candidate.text);
         }
     }
 }
