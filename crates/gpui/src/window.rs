@@ -8139,14 +8139,15 @@ mod tests {
 
         fn prepare_raster_style(&self, mut request: RasterStyleRequest) -> PreparedRasterStyle {
             if request.requested_mode == GlyphRenderMode::Color {
-                if request.glyph_id == GlyphId(3) {
-                    request.foreground_dependency = crate::ForegroundDependency::AlphaOnly;
-                }
+                request.foreground_dependency = match request.glyph_id {
+                    GlyphId(3) => crate::ForegroundDependency::AlphaOnly,
+                    _glyph_id => request.foreground_dependency,
+                };
 
-                return PreparedRasterStyle::preblend(request);
+                PreparedRasterStyle::preblend(request)
+            } else {
+                PreparedRasterStyle::independent(request.requested_mode)
             }
-
-            PreparedRasterStyle::independent(request.requested_mode)
         }
 
         fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
@@ -8172,30 +8173,37 @@ mod tests {
                 canvas(
                     |_, _, _| (),
                     move |_, _, window, _| {
-                        for (glyph_id, origin) in [
-                            (GlyphId(1), point(px(5.13), px(10.245))),
-                            (GlyphId(2), point(px(10.0), px(15.0))),
-                        ] {
+                        for (index, glyph_id) in [GlyphId(1), GlyphId(2)].into_iter().enumerate() {
+                            let offset = px(index as f32 * 5.0);
+                            let mut origin = point(px(5.0) + offset, px(10.0) + offset);
+
+                            if index == 0 {
+                                origin += point(px(0.13), px(0.245));
+                            }
+
                             window
                                 .paint_glyph(origin, FontId(7), glyph_id, px(16.0), color)
                                 .unwrap();
                         }
 
-                        for (glyph_id, origin, foreground) in [
-                            (GlyphId(3), point(px(15.0), px(20.0)), color),
-                            (GlyphId(3), point(px(20.0), px(25.0)), alternate_color),
-                            (GlyphId(5), point(px(25.0), px(30.0)), color),
-                            (GlyphId(5), point(px(30.0), px(35.0)), alternate_color),
-                        ] {
-                            window
-                                .paint_emoji_with_color(
-                                    origin,
-                                    FontId(7),
-                                    glyph_id,
-                                    px(16.0),
-                                    foreground,
-                                )
-                                .unwrap();
+                        let mut index = 0;
+
+                        for glyph_id in [GlyphId(3), GlyphId(5)] {
+                            for foreground in [color, alternate_color] {
+                                let offset = px(index as f32 * 5.0);
+                                let origin = point(px(15.0) + offset, px(20.0) + offset);
+
+                                window
+                                    .paint_emoji_with_color(
+                                        origin,
+                                        FontId(7),
+                                        glyph_id,
+                                        px(16.0),
+                                        foreground,
+                                    )
+                                    .unwrap();
+                                index += 1;
+                            }
                         }
                     },
                 )
