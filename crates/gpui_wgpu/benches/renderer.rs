@@ -54,7 +54,10 @@ fn unplanned_quad_scene(count: usize) -> Scene {
         scene.insert_primitive(Quad {
             order: index as u32,
             bounds,
-            content_mask: ContentMask { bounds },
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
             background: solid_background(gpui::rgb(0x336699)),
             ..Default::default()
         });
@@ -78,7 +81,10 @@ fn unplanned_mixed_scene(count: usize) -> Scene {
         scene.insert_primitive(Quad {
             order: (index * 2) as u32,
             bounds,
-            content_mask: ContentMask { bounds },
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
             background: solid_background(gpui::rgb(0x336699)),
             ..Default::default()
         });
@@ -86,7 +92,10 @@ fn unplanned_mixed_scene(count: usize) -> Scene {
             order: (index * 2 + 1) as u32,
             padding: 0,
             bounds,
-            content_mask: ContentMask { bounds },
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
             color: white().into(),
             thickness: ScaledPixels(1.0),
             wavy: ShaderBool::Disabled,

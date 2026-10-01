@@ -114,6 +114,7 @@ impl DebugFrameOverlay {
                 origin: point(ScaledPixels(0.), ScaledPixels(0.)),
                 size: viewport,
             },
+            ..Default::default()
         };
 
         scene.insert_primitive(solid_quad(

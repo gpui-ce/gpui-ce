@@ -829,7 +829,7 @@ impl Style {
                     (false, false) => Bounds::from_corners(min, max),
                 };
 
-                Some(ContentMask { bounds })
+                Some(ContentMask { bounds, ..Default::default() })
             }
         }
     }

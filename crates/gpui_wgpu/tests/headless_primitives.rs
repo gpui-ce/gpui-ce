@@ -64,12 +64,14 @@ fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
 fn full_mask() -> ContentMask<ScaledPixels> {
     ContentMask {
         bounds: bounds(0.0, 0.0, 310.0, 100.0),
+        ..Default::default()
     }
 }
 
 fn mask(width: f32, height: f32) -> ContentMask<ScaledPixels> {
     ContentMask {
         bounds: bounds(0.0, 0.0, width, height),
+        ..Default::default()
     }
 }
 
@@ -536,3 +538,4 @@ fn smoothed_primitives_share_one_contour() {
             .expect("save diagnostic image");
     }
 }
+

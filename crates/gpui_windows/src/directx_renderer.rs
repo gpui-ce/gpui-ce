@@ -2905,6 +2905,7 @@ mod tests {
     fn full_mask() -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: scaled(0.0, 0.0, 200.0, 100.0),
+            ..Default::default()
         }
     }
 
