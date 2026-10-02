@@ -99,6 +99,87 @@ fn quantize_color_glyph_origin(origin: Point<ScaledPixels>) -> (Point<ScaledPixe
     )
 }
 
+const MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER: f32 = 1.0;
+const MAX_TEXT_RASTER_TRANSFORM_MULTIPLIER: f32 = 4.0;
+const TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP: f32 = 0.125;
+const SUBPIXEL_SAFE_TRANSFORM_EPSILON: f32 = 0.001;
+
+fn transform_raster_multiplier(transform: TransformationMatrix) -> f32 {
+    let [[xx, xy], [yx, yy]] = transform.rotation_scale;
+    let x_scale = xx.hypot(yx);
+    let y_scale = xy.hypot(yy);
+    let multiplier = x_scale.max(y_scale);
+
+    if !multiplier.is_finite() {
+        return MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER;
+    }
+
+    let multiplier = multiplier.clamp(
+        MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER,
+        MAX_TEXT_RASTER_TRANSFORM_MULTIPLIER,
+    );
+
+    (multiplier / TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP).round()
+        * TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP
+}
+
+fn glyph_raster_scale_factor(scale_factor: f32, transform: TransformationMatrix) -> f32 {
+    scale_factor * transform_raster_multiplier(transform)
+}
+
+fn transform_allows_subpixel_rendering(transform: TransformationMatrix) -> bool {
+    let [[xx, xy], [yx, yy]] = transform.rotation_scale;
+    let x_scale = xx.hypot(yx);
+    let y_scale = xy.hypot(yy);
+
+    if !x_scale.is_finite() || !y_scale.is_finite() {
+        return false;
+    }
+
+    if !approximately_zero(xy) || !approximately_zero(yx) {
+        return false;
+    }
+
+    if xx <= 0.0 || yy <= 0.0 || !approximately_equal(x_scale, y_scale) {
+        return false;
+    }
+
+    let rounded_scale = x_scale.round();
+    rounded_scale >= MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER
+        && approximately_equal(x_scale, rounded_scale)
+}
+
+fn approximately_zero(value: f32) -> bool {
+    value.abs() <= SUBPIXEL_SAFE_TRANSFORM_EPSILON
+}
+
+fn approximately_equal(left: f32, right: f32) -> bool {
+    (left - right).abs() <= SUBPIXEL_SAFE_TRANSFORM_EPSILON
+}
+
+fn compensate_glyph_sprite_bounds(
+    bounds: Bounds<ScaledPixels>,
+    raster_multiplier: f32,
+) -> Bounds<ScaledPixels> {
+    if raster_multiplier == MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER {
+        return bounds;
+    }
+
+    bounds.map(|value| ScaledPixels(value.0 / raster_multiplier))
+}
+
+#[cfg(test)]
+fn transformed_glyph_visual_bounds(
+    raster_bounds: Bounds<ScaledPixels>,
+    transform: TransformationMatrix,
+) -> Bounds<ScaledPixels> {
+    let raster_multiplier = transform_raster_multiplier(transform);
+    crate::scene::transform_bounds(
+        compensate_glyph_sprite_bounds(raster_bounds, raster_multiplier),
+        transform,
+    )
+}
+
 /// Default window size used when no explicit size is provided.
 pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
 
@@ -4970,6 +5051,9 @@ impl Window {
 
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
+        let current_transform = self.current_transform();
+        let raster_multiplier = transform_raster_multiplier(current_transform);
+        let effective_scale_factor = glyph_raster_scale_factor(scale_factor, current_transform);
         let glyph_origin = origin.scale(scale_factor);
 
         let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
@@ -4986,17 +5070,24 @@ impl Window {
             glyph_id,
             font_size,
             subpixel_variant,
-            scale_factor,
+            scale_factor: effective_scale_factor,
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, color, element_opacity)
+        self.paint_glyph_from_atlas(
+            integer_origin,
+            params,
+            raster_multiplier,
+            color,
+            element_opacity,
+        )
     }
 
     fn paint_glyph_from_atlas(
         &mut self,
         integer_origin: Point<ScaledPixels>,
         params: RenderGlyphParams,
+        raster_multiplier: f32,
         mask_color: Hsla,
         opacity: f32,
     ) -> Result<()> {
@@ -5033,9 +5124,16 @@ impl Window {
         };
         let metadata = uploaded_metadata.unwrap_or(metadata);
         debug_assert_eq!(metadata.bounds.size, tile.bounds.size.map(Into::into));
+        let local_bounds = compensate_glyph_sprite_bounds(
+            Bounds {
+                origin: metadata.bounds.origin.map(Into::into),
+                size: tile.bounds.size.map(Into::into),
+            },
+            raster_multiplier,
+        );
         let bounds = Bounds {
-            origin: integer_origin + metadata.bounds.origin.map(Into::into),
-            size: tile.bounds.size.map(Into::into),
+            origin: integer_origin + local_bounds.origin,
+            size: local_bounds.size,
         };
         let content_mask = self.snapped_content_mask();
 
@@ -5091,6 +5189,10 @@ impl Window {
             return false;
         }
 
+        if !transform_allows_subpixel_rendering(self.current_transform()) {
+            return false;
+        }
+
         let mode = match self.text_rendering_mode.get() {
             TextRenderingMode::PlatformDefault => self
                 .text_system()
@@ -5119,6 +5221,9 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        let current_transform = self.current_transform();
+        let raster_multiplier = transform_raster_multiplier(current_transform);
+        let effective_scale_factor = glyph_raster_scale_factor(scale_factor, current_transform);
         let glyph_origin = origin.scale(scale_factor);
         let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
         let raster_style = self
@@ -5129,11 +5234,17 @@ impl Window {
             glyph_id,
             font_size,
             subpixel_variant,
-            scale_factor,
+            scale_factor: effective_scale_factor,
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, white(), self.element_opacity())
+        self.paint_glyph_from_atlas(
+            integer_origin,
+            params,
+            raster_multiplier,
+            white(),
+            self.element_opacity(),
+        )
     }
 
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
@@ -8123,14 +8234,17 @@ pub fn outline(
 #[cfg(test)]
 mod tests {
     use super::{
-        ContentMask, DrawPhase, HitTest, Hitbox, HitboxBehavior, HitboxId, fill,
-        quantize_color_glyph_origin, quantize_glyph_origin,
+        ContentMask, DrawPhase, HitTest, Hitbox, HitboxBehavior, HitboxId,
+        compensate_glyph_sprite_bounds, fill, glyph_raster_scale_factor,
+        quantize_color_glyph_origin, quantize_glyph_origin, transform_allows_subpixel_rendering,
+        transform_raster_multiplier, transformed_glyph_visual_bounds,
     };
     use palette::Hsla;
     use proptest::prelude::*;
     use std::{
         borrow::Cow,
         cell::{Cell, RefCell},
+        hash::{Hash, Hasher},
         path::PathBuf,
         rc::Rc,
         sync::Arc,
@@ -10038,6 +10152,134 @@ mod tests {
             point(ScaledPixels(8.), ScaledPixels(16.))
         );
         assert_eq!(quad.bounds.size, size(ScaledPixels(16.), ScaledPixels(24.)));
+    }
+
+    #[test]
+    fn transform_raster_multiplier_is_quantized_and_clamped() {
+        assert_eq!(
+            transform_raster_multiplier(TransformationMatrix::unit()),
+            1.0
+        );
+        assert_eq!(
+            transform_raster_multiplier(TransformationMatrix::unit().scale(size(1.24, 1.24))),
+            1.25
+        );
+        assert_eq!(
+            transform_raster_multiplier(TransformationMatrix::unit().scale(size(1.26, 1.26))),
+            1.25
+        );
+        assert_eq!(
+            transform_raster_multiplier(TransformationMatrix::unit().scale(size(8.0, 8.0))),
+            4.0
+        );
+    }
+
+    #[test]
+    fn transform_raster_multiplier_ignores_translation() {
+        let base = TransformationMatrix::unit().scale(size(2.0, 2.0));
+        let translated = base.translate(point(ScaledPixels(100.0), ScaledPixels(50.0)));
+
+        assert_eq!(
+            transform_raster_multiplier(base),
+            transform_raster_multiplier(translated)
+        );
+
+        let base_params = RenderGlyphParams {
+            font_id: FontId(1),
+            glyph_id: GlyphId(2),
+            font_size: px(16.0),
+            subpixel_variant: point(0, 0),
+            scale_factor: glyph_raster_scale_factor(1.0, base),
+            raster_style: crate::PreparedRasterStyle::independent(
+                crate::GlyphRenderMode::Grayscale,
+            ),
+        };
+        let translated_params = RenderGlyphParams {
+            scale_factor: glyph_raster_scale_factor(1.0, translated),
+            ..base_params
+        };
+
+        assert_eq!(base_params, translated_params);
+
+        let mut base_hasher = collections::FxHasher::default();
+        base_params.hash(&mut base_hasher);
+
+        let mut translated_hasher = collections::FxHasher::default();
+        translated_params.hash(&mut translated_hasher);
+
+        assert_eq!(base_hasher.finish(), translated_hasher.finish());
+    }
+
+    #[test]
+    fn zoom_transform_increases_raster_scale_and_compensates_sprite_bounds() {
+        let zoom_transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
+        let raster_multiplier = transform_raster_multiplier(zoom_transform);
+
+        assert_eq!(
+            glyph_raster_scale_factor(1.0, TransformationMatrix::unit()),
+            1.0
+        );
+        assert_eq!(glyph_raster_scale_factor(1.0, zoom_transform), 2.0);
+
+        let raster_bounds = Bounds::new(
+            point(ScaledPixels(4.0), ScaledPixels(6.0)),
+            size(ScaledPixels(20.0), ScaledPixels(30.0)),
+        );
+        let compensated_bounds = compensate_glyph_sprite_bounds(raster_bounds, raster_multiplier);
+
+        assert_eq!(
+            compensated_bounds.origin,
+            point(ScaledPixels(2.0), ScaledPixels(3.0))
+        );
+        assert_eq!(
+            compensated_bounds.size,
+            size(ScaledPixels(10.0), ScaledPixels(15.0))
+        );
+    }
+
+    #[test]
+    fn transform_subpixel_policy_rejects_fractional_and_anisotropic_scale() {
+        assert!(!transform_allows_subpixel_rendering(
+            TransformationMatrix::unit().scale(size(1.25, 1.25))
+        ));
+        assert!(!transform_allows_subpixel_rendering(
+            TransformationMatrix::unit().scale(size(2.0, 1.0))
+        ));
+        assert!(!transform_allows_subpixel_rendering(
+            TransformationMatrix::unit().scale(size(1.0, 2.0))
+        ));
+    }
+
+    #[test]
+    fn transform_subpixel_policy_preserves_unit_and_integer_safe_scale() {
+        assert!(transform_allows_subpixel_rendering(
+            TransformationMatrix::unit()
+        ));
+        assert!(transform_allows_subpixel_rendering(
+            TransformationMatrix::unit().scale(size(2.0, 2.0))
+        ));
+        assert!(transform_allows_subpixel_rendering(
+            TransformationMatrix::unit()
+                .scale(size(2.0, 2.0))
+                .translate(point(ScaledPixels(100.0), ScaledPixels(50.0)))
+        ));
+    }
+
+    #[test]
+    fn transformed_glyph_visual_bounds_match_scaled_layout_bounds() {
+        let raster_bounds = Bounds::new(
+            point(ScaledPixels(4.0), ScaledPixels(6.0)),
+            size(ScaledPixels(20.0), ScaledPixels(30.0)),
+        );
+        let transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
+
+        assert_eq!(
+            transformed_glyph_visual_bounds(raster_bounds, transform),
+            Bounds::new(
+                point(ScaledPixels(4.0), ScaledPixels(6.0)),
+                size(ScaledPixels(20.0), ScaledPixels(30.0))
+            )
+        );
     }
 
     #[gpui::test]
