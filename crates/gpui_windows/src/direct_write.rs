@@ -1597,7 +1597,9 @@ mod tests {
             unsafe { glyph_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
 
         if character == ' ' {
-            assert_eq!(base_bounds, RECT::default());
+            // Empty bounds can retain the glyph run's translated origin.
+            assert_eq!(base_bounds.right, base_bounds.left);
+            assert_eq!(base_bounds.bottom, base_bounds.top);
         } else {
             assert!(actual.size.width.0 > base_bounds.right - base_bounds.left);
         }
