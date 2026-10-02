@@ -1,7 +1,8 @@
 use crate::{
     AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
-    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
+    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle,
+    TransformationMatrix, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -97,6 +98,64 @@ impl<V: 'static + Render> IntoElement for Entity<V> {
 
     fn into_element(self) -> Self::Element {
         ViewElement::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ScaledPixels, TransformationMatrix, point, px, size};
+
+    #[test]
+    fn cached_view_key_includes_current_transform() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
+        let content_mask = ContentMask {
+            bounds,
+            ..Default::default()
+        };
+        let text_style = TextStyle::default();
+
+        let untransformed = ViewElementCacheKey {
+            bounds,
+            content_mask,
+            text_style: text_style.clone(),
+            transform: TransformationMatrix::unit(),
+        };
+        let translated = ViewElementCacheKey {
+            bounds,
+            content_mask,
+            text_style,
+            transform: TransformationMatrix::unit()
+                .translate(point(ScaledPixels(10.), ScaledPixels(0.))),
+        };
+
+        assert!(untransformed != translated);
+    }
+
+    #[test]
+    fn cached_view_key_matches_when_transform_is_unchanged() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
+        let content_mask = ContentMask {
+            bounds,
+            ..Default::default()
+        };
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
+
+        let first = ViewElementCacheKey {
+            bounds,
+            content_mask,
+            text_style: TextStyle::default(),
+            transform,
+        };
+        let second = ViewElementCacheKey {
+            bounds,
+            content_mask,
+            text_style: TextStyle::default(),
+            transform,
+        };
+
+        assert!(first == second);
     }
 }
 
@@ -343,10 +402,12 @@ struct ViewElementState {
     accessed_entities: FxHashSet<EntityId>,
 }
 
+#[derive(PartialEq)]
 struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
+    transform: TransformationMatrix,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -426,11 +487,13 @@ impl<V: View> Element for ViewElement<V> {
                     |element_state, window| {
                         let content_mask = window.content_mask();
                         let text_style = window.text_style();
+                        let transform = window.current_transform();
 
                         if let Some(mut element_state) = element_state
                             && element_state.cache_key.bounds == bounds
                             && element_state.cache_key.content_mask == content_mask
                             && element_state.cache_key.text_style == text_style
+                            && element_state.cache_key.transform == transform
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
                         {
@@ -466,6 +529,7 @@ impl<V: View> Element for ViewElement<V> {
                                     bounds,
                                     content_mask,
                                     text_style,
+                                    transform,
                                 },
                             },
                         )
