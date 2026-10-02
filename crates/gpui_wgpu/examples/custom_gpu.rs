@@ -14,7 +14,8 @@
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 ))]
 mod custom_gpu {
     use std::borrow::Cow;
@@ -320,7 +321,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             self.render_gpu(window);
             let mut root = div().size_full();
             if let Some(target) = self.target.as_ref() {
-                root = root.child(target.surface());
+                root = root.child(target.surface().size_full());
             }
             root
         }
@@ -352,7 +353,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 ))]
 fn main() {
     custom_gpu::run();
@@ -362,8 +364,9 @@ fn main() {
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 )))]
 fn main() {
-    eprintln!("custom_gpu is supported on Linux, FreeBSD, macOS, and WASM targets only");
+    eprintln!("custom_gpu is supported on Linux, FreeBSD, macOS, Windows, and WASM targets only");
 }

@@ -16,12 +16,18 @@ use upload::UploadedTexture;
 
 pub(in crate::wgpu_renderer) struct SurfaceCache {
     textures: FxHashMap<CaptureFrameKey, CachedTexture>,
+    /// Bindings for application-rendered WGPU textures (the `custom-gpu`
+    /// compositing path; these live on the renderer's own device).
+    #[cfg(feature = "custom-gpu")]
+    custom_textures: FxHashMap<wgpu::Texture, SurfaceBinding>,
 }
 
 impl SurfaceCache {
     pub(in crate::wgpu_renderer) fn new(_device: &wgpu::Device) -> Result<Self> {
         Ok(Self {
             textures: FxHashMap::default(),
+            #[cfg(feature = "custom-gpu")]
+            custom_textures: FxHashMap::default(),
         })
     }
 }
@@ -31,12 +37,29 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
         .iter()
         .filter_map(|surface| capture_frame(surface).map(CaptureFrameKey::from_frame))
         .collect::<smallvec::SmallVec<[CaptureFrameKey; 4]>>();
+    #[cfg(feature = "custom-gpu")]
+    let active_custom_textures = surfaces
+        .iter()
+        .filter_map(|surface| match &surface.source {
+            gpui::SurfaceSource::Texture { texture, .. } => {
+                texture.downcast_ref::<wgpu::Texture>()
+            }
+            _ => None,
+        })
+        .collect::<smallvec::SmallVec<[&wgpu::Texture; 4]>>();
     renderer
         .resources()
         .surface_cache
         .borrow_mut()
         .textures
         .retain(|key, _| active_keys.contains(key));
+    #[cfg(feature = "custom-gpu")]
+    renderer
+        .resources()
+        .surface_cache
+        .borrow_mut()
+        .custom_textures
+        .retain(|texture, _| active_custom_textures.contains(&texture));
 }
 
 pub(super) fn draw_surfaces(
@@ -48,6 +71,25 @@ pub(super) fn draw_surfaces(
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
     for (index, surface) in surfaces.iter().enumerate() {
+        #[cfg(feature = "custom-gpu")]
+        if let gpui::SurfaceSource::Texture { texture, .. } = &surface.source {
+            let Some(texture) = texture.downcast_ref::<wgpu::Texture>() else {
+                log::error!("surface source is not a WGPU texture");
+                return Err(frame::DrawError::ExternalSurface);
+            };
+            let binding = cache.custom_textures.entry(texture.clone()).or_insert_with(|| {
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                SurfaceBinding::new(renderer, view.clone(), view)
+            });
+            renderer.draw_surface_binding(
+                surface,
+                SurfaceColorFormat::Rgba,
+                opacities.get(index).copied().unwrap_or(1.0),
+                binding,
+                pass,
+            )?;
+            continue;
+        }
         let Some(frame) = capture_frame(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");
             return Err(frame::DrawError::ExternalSurface);
