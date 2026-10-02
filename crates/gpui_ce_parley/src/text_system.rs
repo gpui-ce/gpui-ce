@@ -2095,7 +2095,7 @@ mod tests {
                 assert!(fragment.x_range.start <= fragment.x_range.end);
                 assert!(fragment.x_range.start >= -layout.font_size * 2.0);
                 assert!(fragment.x_range.end <= line.advance_width + layout.font_size * 2.0);
-                for glyph in fragment.glyphs.iter() {
+                for glyph in &*fragment.glyphs {
                     assert!(f32::from(glyph.position.x).is_finite());
                     assert!(f32::from(glyph.position.y).is_finite());
                 }

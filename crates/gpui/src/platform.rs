@@ -1538,6 +1538,8 @@ mod tests {
 
     fn add_test_inline_box_advances(layout: &mut LineLayout, request: InlineLayoutRequest<'_>) {
         for fragment in &mut layout.paint_fragments {
+            // This layout owns its freshly built glyphs. If they become shared,
+            // make_mut copies the slice before changing their positions.
             for (glyph, (index, _)) in Arc::make_mut(&mut fragment.glyphs)
                 .iter_mut()
                 .zip(request.text.char_indices())

@@ -500,8 +500,8 @@ impl InlineDivFrameState {
                     ));
                 }
 
-                for box_idx in span.box_range.clone() {
-                    if let Some(inline_box) = boxes_by_id.get(box_idx).and_then(|slot| *slot) {
+                for box_index in span.box_range.clone() {
+                    if let Some(inline_box) = boxes_by_id.get(box_index).and_then(|slot| *slot) {
                         regions.push(Bounds::new(
                             origin + inline_box.bounds.origin,
                             inline_box.bounds.size,

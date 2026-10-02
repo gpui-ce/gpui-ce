@@ -5400,11 +5400,13 @@ impl Window {
         engine.place_inline(node_id, bounds, scale);
 
         if let Some(mut fragments) = fragments {
+            // A zero offset leaves fragment origins unchanged, so skip those writes.
             if offset != Point::default() {
                 for fragment in &mut fragments {
                     fragment.origin -= offset;
                 }
             }
+
             engine.inline_fragments.insert(node_id, fragments.into());
         }
 
