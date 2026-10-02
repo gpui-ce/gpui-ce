@@ -63,6 +63,7 @@ pub struct Scene {
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
+    transform_stack: Vec<TransformationMatrix>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
     pub paths: Vec<Path<ScaledPixels>>,
@@ -84,6 +85,7 @@ impl Scene {
         self.paint_operations.clear();
         self.primitive_bounds.clear();
         self.layer_stack.clear();
+        self.transform_stack.clear();
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
@@ -104,11 +106,20 @@ impl Scene {
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
+        let bounds = transform_bounds(bounds, self.current_transform());
+        self.push_replayed_layer(bounds);
+    }
+
+    fn push_replayed_layer(&mut self, bounds: Bounds<ScaledPixels>) {
         self.is_finished = false;
         let order = self.primitive_bounds.insert(bounds);
         self.layer_stack.push(order);
         self.paint_operations
             .push(PaintOperation::StartLayer(bounds));
+    }
+
+    pub(crate) fn push_transformed_layer(&mut self, bounds: Bounds<ScaledPixels>) {
+        self.push_replayed_layer(bounds);
     }
 
     pub fn pop_layer(&mut self) {
@@ -128,21 +139,45 @@ impl Scene {
     }
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
-        self.insert_primitive_with_surface_opacity(primitive.into(), None);
+        self.insert_transformed_primitive(primitive, self.current_transform());
     }
 
+    pub(crate) fn insert_transformed_primitive(
+        &mut self,
+        primitive: impl Into<Primitive>,
+        transform: TransformationMatrix,
+    ) {
+        self.insert_primitive_with_surface_opacity(primitive.into(), None, transform);
+    }
+
+    #[cfg(test)]
     pub(crate) fn insert_surface(&mut self, surface: PaintSurface, opacity: f32) {
-        self.insert_primitive_with_surface_opacity(Primitive::Surface(surface), Some(opacity));
+        self.insert_transformed_surface(surface, opacity, self.current_transform());
+    }
+
+    pub(crate) fn insert_transformed_surface(
+        &mut self,
+        surface: PaintSurface,
+        opacity: f32,
+        transform: TransformationMatrix,
+    ) {
+        self.insert_primitive_with_surface_opacity(
+            Primitive::Surface(surface),
+            Some(opacity),
+            transform,
+        );
     }
 
     fn insert_primitive_with_surface_opacity(
         &mut self,
-        mut primitive: Primitive,
+        primitive: Primitive,
         surface_opacity: Option<f32>,
+        transform: TransformationMatrix,
     ) {
         self.is_finished = false;
+        let mut primitive = primitive.transform(transform);
         let clipped_bounds = primitive
-            .bounds()
+            .visual_bounds()
             .intersect(&primitive.content_mask().bounds);
 
         // Content-filter boundaries must always be inserted as matched pairs — dropping one
@@ -237,14 +272,34 @@ impl Scene {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn with_transform<R>(
+        &mut self,
+        transform: TransformationMatrix,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let transform = self.current_transform().compose(transform);
+        self.transform_stack.push(transform);
+        let result = f(self);
+        self.transform_stack.pop();
+        result
+    }
+
+    pub(crate) fn current_transform(&self) -> TransformationMatrix {
+        self.transform_stack.last().copied().unwrap_or_default()
+    }
+
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
-                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
-                PaintOperation::Surface { surface, opacity } => {
-                    self.insert_surface(surface.clone(), *opacity)
-                }
-                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                PaintOperation::Primitive(primitive) => self
+                    .insert_transformed_primitive(primitive.clone(), TransformationMatrix::unit()),
+                PaintOperation::Surface { surface, opacity } => self.insert_transformed_surface(
+                    surface.clone(),
+                    *opacity,
+                    TransformationMatrix::unit(),
+                ),
+                PaintOperation::StartLayer(bounds) => self.push_replayed_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
         }
@@ -447,6 +502,108 @@ impl Primitive {
             Primitive::FilterBoundary(boundary) => &boundary.content_mask,
         }
     }
+
+    fn visual_bounds(&self) -> Bounds<ScaledPixels> {
+        match self {
+            Primitive::MonochromeSprite(sprite) => {
+                transform_bounds(sprite.bounds, sprite.transformation)
+            }
+            Primitive::SubpixelSprite(sprite) => {
+                transform_bounds(sprite.bounds, sprite.transformation)
+            }
+            _ => *self.bounds(),
+        }
+    }
+
+    fn transform(self, transform: TransformationMatrix) -> Self {
+        if transform == TransformationMatrix::unit() {
+            return self;
+        }
+
+        match self {
+            Primitive::Shadow(mut shadow) => {
+                shadow.bounds = transform_bounds(shadow.bounds, transform);
+                shadow.element_bounds = transform_bounds(shadow.element_bounds, transform);
+                Primitive::Shadow(shadow)
+            }
+            Primitive::Quad(mut quad) => {
+                quad.bounds = transform_bounds(quad.bounds, transform);
+                Primitive::Quad(quad)
+            }
+            Primitive::Path(mut path) => {
+                path.transform(transform);
+                Primitive::Path(path)
+            }
+            Primitive::Underline(mut underline) => {
+                underline.bounds = transform_bounds(underline.bounds, transform);
+                Primitive::Underline(underline)
+            }
+            Primitive::MonochromeSprite(mut sprite) => {
+                sprite.transformation = transform.compose(sprite.transformation);
+                Primitive::MonochromeSprite(sprite)
+            }
+            Primitive::SubpixelSprite(mut sprite) => {
+                sprite.transformation = transform.compose(sprite.transformation);
+                Primitive::SubpixelSprite(sprite)
+            }
+            Primitive::PolychromeSprite(mut sprite) => {
+                sprite.bounds = transform_bounds(sprite.bounds, transform);
+                Primitive::PolychromeSprite(sprite)
+            }
+            Primitive::Surface(mut surface) => {
+                surface.bounds = transform_bounds(surface.bounds, transform);
+                Primitive::Surface(surface)
+            }
+            Primitive::BackdropFilter(mut filter) => {
+                filter.bounds = transform_bounds(filter.bounds, transform);
+                Primitive::BackdropFilter(filter)
+            }
+            Primitive::FilterBoundary(mut boundary) => {
+                boundary.bounds = transform_bounds(boundary.bounds, transform);
+                Primitive::FilterBoundary(boundary)
+            }
+        }
+    }
+}
+
+pub(crate) fn transform_bounds(
+    bounds: Bounds<ScaledPixels>,
+    transform: TransformationMatrix,
+) -> Bounds<ScaledPixels> {
+    let top_left = transform.apply_scaled(bounds.origin);
+    let top_right = transform.apply_scaled(point(bounds.right(), bounds.top()));
+    let bottom_left = transform.apply_scaled(point(bounds.left(), bounds.bottom()));
+    let bottom_right = transform.apply_scaled(point(bounds.right(), bounds.bottom()));
+
+    let left = top_left
+        .x
+        .0
+        .min(top_right.x.0)
+        .min(bottom_left.x.0)
+        .min(bottom_right.x.0);
+    let top = top_left
+        .y
+        .0
+        .min(top_right.y.0)
+        .min(bottom_left.y.0)
+        .min(bottom_right.y.0);
+    let right = top_left
+        .x
+        .0
+        .max(top_right.x.0)
+        .max(bottom_left.x.0)
+        .max(bottom_right.x.0);
+    let bottom = top_left
+        .y
+        .0
+        .max(top_right.y.0)
+        .max(bottom_left.y.0)
+        .max(bottom_right.y.0);
+
+    Bounds::from_corners(
+        point(ScaledPixels(left), ScaledPixels(top)),
+        point(ScaledPixels(right), ScaledPixels(bottom)),
+    )
 }
 
 #[cfg_attr(
@@ -961,7 +1118,7 @@ pub enum BorderStyle {
 }
 
 /// A data type representing a 2 dimensional transformation that can be applied to an element.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct TransformationMatrix {
     /// 2x2 matrix containing rotation and scale,
@@ -1054,6 +1211,17 @@ impl TransformationMatrix {
             }
         }
         Point::new(output[0].into(), output[1].into())
+    }
+
+    pub(crate) fn apply_scaled(&self, point: Point<ScaledPixels>) -> Point<ScaledPixels> {
+        let input = [point.x.0, point.y.0];
+        let mut output = self.translation;
+        for (i, output_cell) in output.iter_mut().enumerate() {
+            for (k, input_cell) in input.iter().enumerate() {
+                *output_cell += self.rotation_scale[i][k] * *input_cell;
+            }
+        }
+        Point::new(ScaledPixels(output[0]), ScaledPixels(output[1]))
     }
 }
 
@@ -1279,6 +1447,18 @@ where
     }
 }
 
+impl Path<ScaledPixels> {
+    fn transform(&mut self, transform: TransformationMatrix) {
+        self.bounds = transform_bounds(self.bounds, transform);
+        self.start = transform.apply_scaled(self.start);
+        self.current = transform.apply_scaled(self.current);
+
+        for vertex in &mut self.vertices {
+            vertex.xy_position = transform.apply_scaled(vertex.xy_position);
+        }
+    }
+}
+
 impl From<Path<ScaledPixels>> for Primitive {
     fn from(path: Path<ScaledPixels>) -> Self {
         Primitive::Path(path)
@@ -1308,7 +1488,9 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AtlasTextureKind, DevicePixels, Point, ShaderBool, Size, SurfaceSource, TileId};
+    use crate::{
+        AtlasTextureKind, DevicePixels, Point, ShaderBool, Size, SurfaceSource, TileId, size,
+    };
 
     fn sp(value: f32) -> ScaledPixels {
         ScaledPixels(value)
@@ -1783,5 +1965,188 @@ mod tests {
         assert_eq!(requirements.isolated_target_count, 1);
         assert_eq!(requirements.instance_batch_count, 1);
         assert!(requirements.uses_offscreen_target);
+    }
+
+    #[test]
+    fn transform_stack_composes_parent_then_child() {
+        let mut scene = Scene::default();
+        let parent =
+            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
+        let child = TransformationMatrix::unit().scale(size(2., 2.));
+
+        scene.with_transform(parent, |scene| {
+            scene.with_transform(child, |scene| {
+                let transformed = scene
+                    .current_transform()
+                    .apply(point(Pixels(3.), Pixels(4.)));
+
+                assert_eq!(transformed, point(Pixels(16.), Pixels(8.)));
+            });
+        });
+    }
+
+    #[test]
+    fn nested_transform_matches_direct_composed_sprite() {
+        let parent =
+            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
+        let child = TransformationMatrix::unit().scale(size(2., 2.));
+        let direct_transform = parent.compose(child);
+
+        let mut direct_scene = Scene::default();
+        direct_scene.with_transform(direct_transform, |scene| {
+            scene.insert_primitive(test_sprite());
+        });
+
+        let mut nested_scene = Scene::default();
+        nested_scene.with_transform(parent, |scene| {
+            scene.with_transform(child, |scene| {
+                scene.insert_primitive(test_sprite());
+            });
+        });
+
+        assert_eq!(direct_scene.monochrome_sprites.len(), 1);
+        assert_eq!(nested_scene.monochrome_sprites.len(), 1);
+
+        let Some(direct_sprite) = direct_scene.monochrome_sprites.first() else {
+            panic!("direct scene should emit one monochrome sprite");
+        };
+        let Some(nested_sprite) = nested_scene.monochrome_sprites.first() else {
+            panic!("nested scene should emit one monochrome sprite");
+        };
+
+        assert_eq!(nested_sprite.transformation, direct_sprite.transformation,);
+    }
+
+    #[test]
+    fn replay_preserves_previously_transformed_primitives() {
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+
+        let mut previous_scene = Scene::default();
+        previous_scene.with_transform(transform, |scene| {
+            scene.insert_primitive(test_quad());
+        });
+
+        let mut replayed_scene = Scene::default();
+        replayed_scene.with_transform(transform, |scene| {
+            scene.replay(0..previous_scene.len(), &previous_scene);
+        });
+
+        assert_eq!(previous_scene.quads.len(), 1);
+        assert_eq!(replayed_scene.quads.len(), 1);
+
+        let Some(previous_quad) = previous_scene.quads.first() else {
+            panic!("previous scene should emit one quad");
+        };
+        let Some(replayed_quad) = replayed_scene.quads.first() else {
+            panic!("replayed scene should emit one quad");
+        };
+
+        assert_eq!(replayed_quad.bounds, previous_quad.bounds);
+    }
+
+    #[test]
+    fn transformed_monochrome_sprite_is_culled_by_visual_bounds() {
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(100.), ScaledPixels(0.)));
+
+        let mut sprite = test_sprite();
+        sprite.content_mask = ContentMask {
+            bounds: Bounds::new(
+                point(ScaledPixels(100.), ScaledPixels(0.)),
+                size(ScaledPixels(10.), ScaledPixels(10.)),
+            ),
+            ..Default::default()
+        };
+
+        let mut scene = Scene::default();
+        scene.insert_transformed_primitive(sprite, transform);
+
+        assert_eq!(scene.monochrome_sprites.len(), 1);
+
+        let Some(sprite) = scene.monochrome_sprites.first() else {
+            panic!("scene should emit one transformed monochrome sprite");
+        };
+
+        assert_eq!(sprite.bounds, test_sprite().bounds);
+        assert_eq!(sprite.transformation, transform);
+    }
+
+    #[test]
+    fn transformed_subpixel_sprite_is_culled_by_visual_bounds() {
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(0.), ScaledPixels(100.)));
+
+        let mut sprite = test_subpixel_sprite();
+        sprite.content_mask = ContentMask {
+            bounds: Bounds::new(
+                point(ScaledPixels(0.), ScaledPixels(100.)),
+                size(ScaledPixels(10.), ScaledPixels(10.)),
+            ),
+            ..Default::default()
+        };
+
+        let mut scene = Scene::default();
+        scene.insert_transformed_primitive(sprite, transform);
+
+        assert_eq!(scene.subpixel_sprites.len(), 1);
+
+        let Some(sprite) = scene.subpixel_sprites.first() else {
+            panic!("scene should emit one transformed subpixel sprite");
+        };
+
+        assert_eq!(sprite.bounds, test_subpixel_sprite().bounds);
+        assert_eq!(sprite.transformation, transform);
+    }
+
+    fn test_quad() -> Quad {
+        Quad {
+            bounds: Bounds::new(
+                point(ScaledPixels(1.), ScaledPixels(2.)),
+                size(ScaledPixels(3.), ScaledPixels(4.)),
+            ),
+            content_mask: mask(),
+            ..Default::default()
+        }
+    }
+
+    fn test_sprite() -> MonochromeSprite {
+        MonochromeSprite {
+            order: 0,
+            padding: 0,
+            bounds: Bounds::new(
+                point(ScaledPixels(0.), ScaledPixels(0.)),
+                size(ScaledPixels(10.), ScaledPixels(10.)),
+            ),
+            content_mask: mask(),
+            color: SceneHsla::default(),
+            tile: AtlasTile {
+                texture_id: AtlasTextureId {
+                    index: 0,
+                    kind: AtlasTextureKind::Monochrome,
+                },
+                tile_id: TileId(0),
+                padding: 0,
+                bounds: Bounds::new(
+                    point(DevicePixels(0), DevicePixels(0)),
+                    size(DevicePixels(10), DevicePixels(10)),
+                ),
+            },
+            transformation: TransformationMatrix::unit(),
+        }
+    }
+
+    fn test_subpixel_sprite() -> SubpixelSprite {
+        let sprite = test_sprite();
+
+        SubpixelSprite {
+            order: sprite.order,
+            padding: sprite.padding,
+            bounds: sprite.bounds,
+            content_mask: sprite.content_mask,
+            color: sprite.color,
+            tile: sprite.tile,
+            transformation: sprite.transformation,
+        }
     }
 }

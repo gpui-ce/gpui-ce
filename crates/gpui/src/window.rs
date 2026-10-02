@@ -1091,6 +1091,7 @@ pub(crate) struct DeferredDraw {
     text_style_stack: Vec<TextStyleRefinement>,
     content_mask: Option<ContentMask<Pixels>>,
     rem_size: Pixels,
+    transform: TransformationMatrix,
     element: Option<AnyElement>,
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
@@ -1272,6 +1273,7 @@ pub struct Window {
     /// Inset transitions use these bounds to resolve `auto` from the child's rendered position.
     style_transition_containing_bounds: Option<Bounds<Pixels>>,
     pub(crate) element_opacity: f32,
+    pub(crate) transform_stack: Vec<TransformationMatrix>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -2022,6 +2024,7 @@ impl Window {
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             style_transition_containing_bounds: None,
+            transform_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
             requested_autoscroll: None,
@@ -3609,6 +3612,7 @@ impl Window {
                     rem_size,
                     absolute_offset,
                     prepaint_range,
+                    transform,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
@@ -3623,6 +3627,7 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        deferred_draw.transform,
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -3630,11 +3635,13 @@ impl Window {
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
                     self.with_rendered_view(current_view, |window| {
-                        window.with_rem_size(Some(rem_size), |window| {
-                            window.with_absolute_element_offset(absolute_offset, |window| {
-                                crate::DeferredPriorityStackCache::push(priority, cx);
-                                element.prepaint(window, cx);
-                                crate::DeferredPriorityStackCache::pop(cx);
+                        window.with_transform(transform, |window| {
+                            window.with_rem_size(Some(rem_size), |window| {
+                                window.with_absolute_element_offset(absolute_offset, |window| {
+                                    crate::DeferredPriorityStackCache::push(priority, cx);
+                                    element.prepaint(window, cx);
+                                    crate::DeferredPriorityStackCache::pop(cx);
+                                });
                             });
                         });
                     });
@@ -3679,11 +3686,14 @@ impl Window {
 
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
+            let transform = deferred_draw.transform;
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
-                    window.with_content_mask(content_mask, |window| {
-                        window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            element.paint(window, cx);
+                    window.with_transform(transform, |window| {
+                        window.with_content_mask(content_mask, |window| {
+                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                element.paint(window, cx);
+                            });
                         });
                     })
                 })
@@ -3757,6 +3767,7 @@ impl Window {
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     content_mask: deferred_draw.content_mask,
                     rem_size: deferred_draw.rem_size,
+                    transform: deferred_draw.transform,
                     priority: deferred_draw.priority,
                     element: None,
                     absolute_offset: deferred_draw.absolute_offset,
@@ -3879,7 +3890,9 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
         if let Some(mask) = mask {
-            let mask = mask.intersect(&self.content_mask());
+            let mask = self
+                .transform_content_mask(mask)
+                .intersect(&self.content_mask());
             self.content_mask_stack.push(mask);
             let result = f(self);
             self.content_mask_stack.pop();
@@ -3887,6 +3900,45 @@ impl Window {
         } else {
             f(self)
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_transform<R>(
+        &mut self,
+        transform: TransformationMatrix,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+
+        let transform = self.current_transform().compose(transform);
+        self.transform_stack.push(transform);
+        let result = f(self);
+        self.transform_stack.pop();
+        result
+    }
+
+    pub(crate) fn current_transform(&self) -> TransformationMatrix {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        self.transform_stack.last().copied().unwrap_or_default()
+    }
+
+    fn transform_content_mask(&self, mask: ContentMask<Pixels>) -> ContentMask<Pixels> {
+        let transform = self.current_transform();
+        if transform == TransformationMatrix::unit() {
+            return mask;
+        }
+
+        let scale_factor = self.scale_factor();
+        let bounds = crate::scene::transform_bounds(mask.bounds.scale(scale_factor), transform)
+            .map(|value| px(value.0 / scale_factor));
+
+        ContentMask { bounds, ..mask }
+    }
+
+    fn insert_primitive(&mut self, primitive: impl Into<crate::Primitive>) {
+        self.next_frame
+            .scene
+            .insert_transformed_primitive(primitive, self.current_transform());
     }
 
     /// Updates the global element offset relative to the current offset. This is used to implement
@@ -4318,6 +4370,7 @@ impl Window {
             text_style_stack: self.text_style_stack.clone(),
             content_mask,
             rem_size: self.rem_size(),
+            transform: self.current_transform(),
             priority,
             element: Some(element),
             absolute_offset,
@@ -4335,16 +4388,24 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let content_mask = self.content_mask();
-        let clipped_bounds = bounds.intersect(&content_mask.bounds);
-        if !clipped_bounds.is_empty() {
-            self.next_frame
-                .scene
-                .push_layer(self.cover_bounds(clipped_bounds));
+        let transform = self.current_transform();
+        let layer_bounds = if transform == TransformationMatrix::unit() {
+            let clipped_bounds = bounds.intersect(&content_mask.bounds);
+            (!clipped_bounds.is_empty()).then(|| self.cover_bounds(clipped_bounds))
+        } else {
+            let transformed_bounds =
+                crate::scene::transform_bounds(self.cover_bounds(bounds), transform);
+            let clipped_bounds =
+                transformed_bounds.intersect(&self.cover_bounds(content_mask.bounds));
+            (!clipped_bounds.is_empty()).then_some(clipped_bounds)
+        };
+        if let Some(layer_bounds) = layer_bounds {
+            self.next_frame.scene.push_transformed_layer(layer_bounds);
         }
 
         let result = f(self);
 
-        if !clipped_bounds.is_empty() {
+        if layer_bounds.is_some() {
             self.next_frame.scene.pop_layer();
         }
 
@@ -4387,7 +4448,7 @@ impl Window {
                 continue;
             }
             let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
-            self.next_frame.scene.insert_primitive(Shadow {
+            self.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(shadow_bounds),
@@ -4445,7 +4506,7 @@ impl Window {
                 bottom_right: (corner_radii.bottom_right - shadow.spread_radius).max(zero),
                 bottom_left: (corner_radii.bottom_left - shadow.spread_radius).max(zero),
             };
-            self.next_frame.scene.insert_primitive(Shadow {
+            self.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(hole),
@@ -4498,7 +4559,7 @@ impl Window {
             return;
         }
 
-        self.next_frame.scene.insert_primitive(BackdropFilter {
+        self.insert_primitive(BackdropFilter {
             order: 0,
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
@@ -4567,9 +4628,9 @@ impl Window {
             is_start: true,
         };
 
-        self.next_frame.scene.insert_primitive(boundary.clone());
+        self.insert_primitive(boundary.clone());
         let result = f(self);
-        self.next_frame.scene.insert_primitive(FilterBoundary {
+        self.insert_primitive(FilterBoundary {
             is_start: false,
             ..boundary
         });
@@ -4653,7 +4714,7 @@ impl Window {
         };
 
         if !quad.background.is_transparent() {
-            self.next_frame.scene.insert_primitive(quad);
+            self.insert_primitive(quad);
             return;
         }
 
@@ -4663,7 +4724,7 @@ impl Window {
         let inner_bounds = Self::largest_border_interior(&quad);
 
         if inner_bounds.is_empty() {
-            self.next_frame.scene.insert_primitive(quad);
+            self.insert_primitive(quad);
             return;
         }
 
@@ -4693,7 +4754,7 @@ impl Window {
         for strip in strips {
             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
             if !content_mask_bounds.is_empty() {
-                self.next_frame.scene.insert_primitive(Quad {
+                self.insert_primitive(Quad {
                     content_mask: ContentMask {
                         bounds: content_mask_bounds,
                         ..Default::default()
@@ -4716,9 +4777,7 @@ impl Window {
         path.content_mask = content_mask;
         let color: Background = color.into();
         path.color = color.opacity(opacity);
-        self.next_frame
-            .scene
-            .insert_primitive(path.scale(scale_factor));
+        self.insert_primitive(path.scale(scale_factor));
     }
 
     /// Paint an underline into the scene for the next frame at the current z-index.
@@ -4745,7 +4804,7 @@ impl Window {
         };
         let element_opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(Underline {
+        self.insert_primitive(Underline {
             order: 0,
             padding: 0,
             bounds,
@@ -4779,7 +4838,7 @@ impl Window {
         };
         let opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(Underline {
+        self.insert_primitive(Underline {
             order: 0,
             padding: 0,
             bounds,
@@ -4881,7 +4940,7 @@ impl Window {
 
         match metadata.format {
             RasterizedGlyphFormat::AlphaMask => {
-                self.next_frame.scene.insert_primitive(MonochromeSprite {
+                self.insert_primitive(MonochromeSprite {
                     order: 0,
                     padding: 0,
                     bounds,
@@ -4892,7 +4951,7 @@ impl Window {
                 });
             }
             RasterizedGlyphFormat::BgraSubpixelMask => {
-                self.next_frame.scene.insert_primitive(SubpixelSprite {
+                self.insert_primitive(SubpixelSprite {
                     order: 0,
                     padding: 0,
                     bounds,
@@ -4903,7 +4962,7 @@ impl Window {
                 });
             }
             RasterizedGlyphFormat::BgraColor => {
-                self.next_frame.scene.insert_primitive(PolychromeSprite {
+                self.insert_primitive(PolychromeSprite {
                     order: 0,
                     grayscale: false.into(),
                     corner_smoothing: 0.0,
@@ -5028,7 +5087,7 @@ impl Window {
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
 
-        self.next_frame.scene.insert_primitive(MonochromeSprite {
+        self.insert_primitive(MonochromeSprite {
             order: 0,
             padding: 0,
             bounds: final_bounds,
@@ -5156,7 +5215,7 @@ impl Window {
             .scale(self.scale_factor());
         let opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(PolychromeSprite {
+        self.insert_primitive(PolychromeSprite {
             order: 0,
             grayscale: grayscale.into(),
             corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
@@ -5183,7 +5242,7 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
-        self.next_frame.scene.insert_surface(
+        self.next_frame.scene.insert_transformed_surface(
             PaintSurface {
                 order: 0,
                 bounds,
@@ -5191,6 +5250,7 @@ impl Window {
                 source: source.into(),
             },
             self.element_opacity(),
+            self.current_transform(),
         );
     }
 
@@ -7938,9 +7998,10 @@ pub fn outline(
 #[cfg(test)]
 mod tests {
     use super::{
-        ContentMask, HitTest, Hitbox, HitboxBehavior, HitboxId, quantize_color_glyph_origin,
-        quantize_glyph_origin,
+        ContentMask, DrawPhase, HitTest, Hitbox, HitboxBehavior, HitboxId, fill,
+        quantize_color_glyph_origin, quantize_glyph_origin,
     };
+    use palette::Hsla;
     use proptest::prelude::*;
     use std::{
         borrow::Cow,
@@ -7952,17 +8013,19 @@ mod tests {
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Background, Bounds, BoxShadow, ColorExt as _, Context,
-        DevicePixels, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
-        FileDragPaths, FileDropEvent, FocusHandle, Font, FontId, FontMetrics, GlyphId, ImageSource,
-        InlineLayout, InlineLayoutRequest, InputEvent as _, InteractiveElement as _, IntoElement,
-        LineLayout, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
-        Pixels, PlatformTextSystem, Point, RasterizedGlyph, RasterizedGlyphFormat, Render,
-        RenderGlyphParams, RenderImage, RequestFrameOptions, SUBPIXEL_VARIANTS_X,
-        SUBPIXEL_VARIANTS_Y, ScaledPixels, ShaderBool, Size, StatefulInteractiveElement as _,
-        Styled, TestApp, TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent,
-        TouchEvent, TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div,
-        hsla, img, linear_color_stop, linear_gradient, point, px, size, white,
+        AnyWindowHandle, App, AppContext as _, Background, Bounds, BoxShadow, ColorExt as _,
+        Context, DevicePixels, DispatchPhase, DragMoveEvent, Element, ElementId, Empty,
+        ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle, Font,
+        FontId, FontMetrics, GlobalElementId, GlyphId, ImageSource, InlineLayout,
+        InlineLayoutRequest, InputEvent as _, InspectorElementId, InteractiveElement as _,
+        IntoElement, LayoutId, LineLayout, LongPressEvent, MouseButton, MouseDownEvent,
+        MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point, RasterizedGlyph,
+        RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage, RequestFrameOptions,
+        SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, ShaderBool, Size,
+        StatefulInteractiveElement as _, Style, Styled, TestApp, TestAppContext, TestTextSystem,
+        TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, TransformationMatrix,
+        Window, WindowAppearance, WindowOptions, canvas, div, hsla, img, linear_color_stop,
+        linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
@@ -9102,6 +9165,289 @@ mod tests {
             })
             .unwrap();
         assert_eq!(b_focus_count.get(), 1);
+    }
+
+    struct TestQuadElement {
+        bounds: Bounds<Pixels>,
+        color: Hsla,
+    }
+
+    impl TestQuadElement {
+        fn new(bounds: Bounds<Pixels>, color: Hsla) -> Self {
+            Self { bounds, color }
+        }
+    }
+
+    impl Element for TestQuadElement {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, Self::RequestLayoutState) {
+            let layout_id = window.request_layout(
+                Style {
+                    display: crate::Display::None,
+                    ..Default::default()
+                },
+                None,
+                cx,
+            );
+
+            (layout_id, ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            _bounds: Bounds<Pixels>,
+            _request_layout: &mut Self::RequestLayoutState,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
+
+        fn paint(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            _bounds: Bounds<Pixels>,
+            _request_layout: &mut Self::RequestLayoutState,
+            _prepaint: &mut Self::PrepaintState,
+            window: &mut Window,
+            _cx: &mut App,
+        ) {
+            window.paint_quad(fill(self.bounds, self.color));
+        }
+    }
+
+    impl IntoElement for TestQuadElement {
+        type Element = Self;
+
+        fn into_element(self) -> Self::Element {
+            self
+        }
+    }
+
+    #[gpui::test]
+    fn window_with_transform_applies_to_painted_quad(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let quads = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.scene.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+                window.with_transform(transform, |window| {
+                    window.paint_quad(fill(
+                        Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                        crate::black(),
+                    ));
+                });
+
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.scene.quads.clone()
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(quads.len(), 1);
+
+        let Some(quad) = quads.first() else {
+            panic!("window transform should emit one quad");
+        };
+        assert_eq!(
+            quad.bounds.origin,
+            point(ScaledPixels(12.), ScaledPixels(24.))
+        );
+        assert_eq!(quad.bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
+    }
+
+    #[gpui::test]
+    fn content_mask_entered_under_transform_clips_transformed_quad(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let quads = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.scene.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+                let mask = ContentMask {
+                    bounds: Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                    ..Default::default()
+                };
+
+                window.with_transform(transform, |window| {
+                    window.with_content_mask(Some(mask), |window| {
+                        window.paint_quad(fill(
+                            Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                            crate::black(),
+                        ));
+                    });
+                });
+
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+                assert_eq!(window.content_mask_stack.len(), 0);
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.scene.quads.clone()
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(quads.len(), 1);
+
+        let Some(quad) = quads.first() else {
+            panic!("transformed mask should retain the transformed quad");
+        };
+        assert_eq!(
+            quad.bounds.origin,
+            point(ScaledPixels(12.), ScaledPixels(24.))
+        );
+        assert_eq!(quad.bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
+        assert_eq!(quad.content_mask.bounds.origin, quad.bounds.origin);
+        assert_eq!(quad.content_mask.bounds.size, quad.bounds.size);
+    }
+
+    #[gpui::test]
+    fn paint_layer_under_transform_uses_transformed_content_mask(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let layer_bounds = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.scene.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+                let mask = ContentMask {
+                    bounds: Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                    ..Default::default()
+                };
+
+                window.with_transform(transform, |window| {
+                    window.with_content_mask(Some(mask), |window| {
+                        window.paint_layer(
+                            Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                            |window| {
+                                window.paint_quad(fill(
+                                    Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                                    crate::black(),
+                                ));
+                            },
+                        );
+                    });
+                });
+
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+                assert_eq!(window.content_mask_stack.len(), 0);
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.scene.paint_operations.iter().find_map(
+                    |operation| match operation {
+                        crate::scene::PaintOperation::StartLayer(bounds) => Some(*bounds),
+                        _ => None,
+                    },
+                )
+            })
+            .expect("test window should still exist");
+
+        let Some(layer_bounds) = layer_bounds else {
+            panic!("transformed paint_layer should push a layer");
+        };
+        assert_eq!(
+            layer_bounds.origin,
+            point(ScaledPixels(12.), ScaledPixels(24.))
+        );
+        assert_eq!(layer_bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
+    }
+
+    #[gpui::test]
+    fn defer_draw_under_transform_preserves_z_order_and_transform_scope(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let current_view = window.root(cx).expect("root view should exist").entity_id();
+        let window = window.into();
+
+        let quads = cx
+            .update_window(window, |_, window, cx| {
+                window.next_frame.scene.clear();
+                window.next_frame.dispatch_tree.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+                let deferred_bounds = Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.)));
+                let immediate_bounds = Bounds::new(point(px(6.), px(12.)), size(px(3.), px(4.)));
+                let parent_node = window.next_frame.dispatch_tree.push_node();
+
+                window.with_rendered_view(current_view, |window| {
+                    window.with_transform(transform, |window| {
+                        let mut element = TestQuadElement::new(deferred_bounds, crate::black())
+                            .into_any_element();
+                        element.request_layout(window, cx);
+                        window.defer_draw(element, point(px(0.), px(0.)), 0, None);
+                    });
+                });
+
+                window.next_frame.dispatch_tree.pop_node();
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+                assert_eq!(window.next_frame.deferred_draws.len(), 1);
+                assert_eq!(window.next_frame.deferred_draws[0].parent_node, parent_node);
+
+                window.prepaint_deferred_draws(cx);
+
+                window.invalidator.set_phase(DrawPhase::Paint);
+                window.paint_quad(fill(immediate_bounds, crate::black()));
+                window.paint_deferred_draws(cx);
+
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.scene.quads.clone()
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(quads.len(), 2);
+
+        let Some(immediate_quad) = quads.first() else {
+            panic!("immediate quad should be painted before deferred quad");
+        };
+        assert_eq!(
+            immediate_quad.bounds.origin,
+            point(ScaledPixels(12.), ScaledPixels(24.))
+        );
+
+        let Some(deferred_quad) = quads.get(1) else {
+            panic!("deferred quad should be painted after immediate quad");
+        };
+        assert_eq!(
+            deferred_quad.bounds.origin,
+            point(ScaledPixels(12.), ScaledPixels(24.))
+        );
+        assert_eq!(
+            deferred_quad.bounds.size,
+            size(ScaledPixels(6.), ScaledPixels(8.))
+        );
+        assert!(immediate_quad.order < deferred_quad.order);
     }
 
     #[gpui::test]
