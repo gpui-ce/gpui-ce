@@ -757,10 +757,9 @@ pub(crate) fn trace_scope() -> TraceGuard {
 #[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
 impl Drop for TraceGuard {
     fn drop(&mut self) {
-        let previous_state =
-            TRACE_STATE.try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
-                (state & TRACE_SCOPE_COUNT_MASK > 0).then_some(state - 1)
-            });
+        let previous_state = TRACE_STATE.try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            (state & TRACE_SCOPE_COUNT_MASK > 0).then_some(state - 1)
+        });
         match previous_state {
             Ok(1) => clear_trace_buffers(),
             Ok(_) => {}
