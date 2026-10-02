@@ -31,6 +31,9 @@ screen-capture = [
   "gpui_macos/screen-capture",
   "gpui_windows/screen-capture",
 ]
+# Windows windows draw with the WGPU renderer instead of DirectX. Custom GPU
+# controls also need gpui_wgpu's `custom-gpu` feature to share its device.
+windows-wgpu = ["gpui_windows/wgpu"]
 wayland = ["gpui_linux/wayland"]
 x11 = ["gpui_linux/x11"]
 

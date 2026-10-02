@@ -158,6 +158,8 @@ impl Scene {
         let is_filter_boundary = matches!(primitive, Primitive::FilterBoundary(_));
 
         if clipped_bounds.is_empty() && !is_filter_boundary {
+            if matches!(primitive, Primitive::Surface(_)) {
+                    }
             return;
         }
 

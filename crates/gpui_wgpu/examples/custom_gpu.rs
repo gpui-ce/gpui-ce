@@ -5,7 +5,12 @@
 //!
 //! Run with `--features custom-gpu` on supported targets.
 
-#[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(
+    target_family = "wasm",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
 mod custom_gpu {
     use std::borrow::Cow;
 
@@ -310,7 +315,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             self.render_gpu(window);
             let mut root = div().size_full();
             if let Some(target) = self.target.as_ref() {
-                root = root.child(target.surface());
+                root = root.child(target.surface().size_full());
             }
             root
         }
@@ -340,12 +345,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 }
 
-#[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(
+    target_family = "wasm",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
 fn main() {
     custom_gpu::run();
 }
 
-#[cfg(not(any(target_family = "wasm", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_family = "wasm",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 fn main() {
-    eprintln!("custom_gpu is supported on Linux, FreeBSD, and WASM targets only");
+    eprintln!("custom_gpu is supported on Linux, FreeBSD, Windows, and WASM targets only");
 }

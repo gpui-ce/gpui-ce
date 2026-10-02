@@ -2714,6 +2714,7 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_render",
  "gpui_ce_util",
+ "gpui_ce_wgpu",
  "image",
  "itertools 0.14.0",
  "log",

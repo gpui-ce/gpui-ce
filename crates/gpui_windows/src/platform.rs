@@ -75,6 +75,10 @@ pub(crate) struct WindowsPlatformState {
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     directx_devices: RefCell<Option<DirectXDevices>>,
+    /// The WGPU renderer context shared by every window when the `wgpu`
+    /// feature draws windows with the WGPU renderer.
+    #[cfg(feature = "wgpu")]
+    pub(crate) renderer_context: RendererContext,
 }
 
 #[derive(Default)]
@@ -102,6 +106,8 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
             directx_devices: RefCell::new(directx_devices),
+            #[cfg(feature = "wgpu")]
+            renderer_context: RendererContext::default(),
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -243,6 +249,8 @@ impl WindowsPlatform {
             platform_window_handle: self.handle,
             disable_direct_composition: self.disable_direct_composition,
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
+            #[cfg(feature = "wgpu")]
+            renderer_context: self.inner.state.renderer_context.clone(),
             invalidate_devices: self.invalidate_devices.clone(),
             draw_coordinator: self.inner.state.draw_coordinator.clone(),
         }
@@ -585,6 +593,15 @@ impl Platform for WindowsPlatform {
         self.raw_window_handles.write().push(handle.into());
 
         Ok(Box::new(window))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
+        if let Ok(reqs) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+            self.inner.state.renderer_context.set_requirements(*reqs);
+        } else {
+            log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
+        }
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -1206,6 +1223,8 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) platform_window_handle: HWND,
     pub(crate) disable_direct_composition: bool,
     pub(crate) directx_devices: DirectXDevices,
+    #[cfg(feature = "wgpu")]
+    pub(crate) renderer_context: crate::wgpu_renderer::Context,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
     pub(crate) invalidate_devices: Arc<AtomicBool>,
