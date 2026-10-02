@@ -606,6 +606,22 @@ pub(crate) fn transform_bounds(
     )
 }
 
+/// Maps bounds given in logical pixels through `transform`, which operates on scaled pixels,
+/// and returns their visual position in logical pixels. Under rotation or skew the result is
+/// the axis-aligned bounding box of the transformed rectangle.
+pub(crate) fn transform_pixel_bounds(
+    bounds: Bounds<Pixels>,
+    transform: TransformationMatrix,
+    scale_factor: f32,
+) -> Bounds<Pixels> {
+    if transform == TransformationMatrix::unit() {
+        return bounds;
+    }
+
+    transform_bounds(bounds.scale(scale_factor), transform)
+        .map(|value| Pixels(value.0 / scale_factor))
+}
+
 #[cfg_attr(
     all(
         any(target_os = "linux", target_os = "freebsd"),

@@ -4108,13 +4108,7 @@ impl Window {
         bounds: Bounds<Pixels>,
         transform: TransformationMatrix,
     ) -> Bounds<Pixels> {
-        if transform == TransformationMatrix::unit() {
-            return bounds;
-        }
-
-        let scale_factor = self.scale_factor();
-        crate::scene::transform_bounds(bounds.scale(scale_factor), transform)
-            .map(|value| px(value.0 / scale_factor))
+        crate::scene::transform_pixel_bounds(bounds, transform, self.scale_factor())
     }
 
     fn insert_primitive(&mut self, primitive: impl Into<crate::Primitive>) {
@@ -5842,10 +5836,13 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         if focus_handle.is_focused(self) {
+            let transform = self.current_transform();
+            let scale_factor = self.scale_factor();
             let cx = self.to_async(cx);
-            self.next_frame
-                .input_handlers
-                .push(Some(PlatformInputHandler::new(cx, Box::new(input_handler))));
+            self.next_frame.input_handlers.push(Some(
+                PlatformInputHandler::new(cx, Box::new(input_handler))
+                    .with_transform(transform, scale_factor),
+            ));
         }
     }
 
@@ -10330,6 +10327,263 @@ mod tests {
                 quad.content_mask.bounds.intersect(&quad.bounds),
                 quad.content_mask.bounds
             );
+        }
+    }
+
+    struct TestInputHandler {
+        range_bounds: Bounds<Pixels>,
+        received_point: Rc<Cell<Option<Point<Pixels>>>>,
+    }
+
+    impl crate::InputHandler for TestInputHandler {
+        fn selected_text_range(
+            &mut self,
+            _ignore_disabled_input: bool,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<crate::UTF16Selection> {
+            Some(crate::UTF16Selection {
+                range: 0..0,
+                reversed: false,
+            })
+        }
+
+        fn marked_text_range(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<std::ops::Range<usize>> {
+            None
+        }
+
+        fn text_for_range(
+            &mut self,
+            _range_utf16: std::ops::Range<usize>,
+            _adjusted_range: &mut Option<std::ops::Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<String> {
+            None
+        }
+
+        fn replace_text_in_range(
+            &mut self,
+            _replacement_range: Option<std::ops::Range<usize>>,
+            _text: &str,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
+
+        fn replace_and_mark_text_in_range(
+            &mut self,
+            _range_utf16: Option<std::ops::Range<usize>>,
+            _new_text: &str,
+            _new_selected_range: Option<std::ops::Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
+
+        fn unmark_text(&mut self, _window: &mut Window, _cx: &mut App) {}
+
+        fn bounds_for_range(
+            &mut self,
+            _range_utf16: std::ops::Range<usize>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Bounds<Pixels>> {
+            Some(self.range_bounds)
+        }
+
+        fn character_index_for_point(
+            &mut self,
+            point: Point<Pixels>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<usize> {
+            self.received_point.set(Some(point));
+            Some(((point.x - self.range_bounds.origin.x) / px(10.)) as usize)
+        }
+
+        fn element_bounds(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Bounds<Pixels>> {
+            Some(self.range_bounds)
+        }
+    }
+
+    struct InputGeometry {
+        range_bounds: Option<Bounds<Pixels>>,
+        ime_candidate_bounds: Option<Bounds<Pixels>>,
+        element_bounds: Option<Bounds<Pixels>>,
+        received_point: Option<Point<Pixels>>,
+    }
+
+    /// Registers a [`TestInputHandler`] reporting `range_bounds` under the given transforms,
+    /// outermost first, and returns the geometry exchanged with the platform when it sends
+    /// `platform_point`.
+    fn input_geometry_under_transforms(
+        transforms: &[TransformationMatrix],
+        range_bounds: Bounds<Pixels>,
+        platform_point: Point<Pixels>,
+        cx: &mut TestAppContext,
+    ) -> InputGeometry {
+        fn register(
+            transforms: &[TransformationMatrix],
+            focus_handle: &FocusHandle,
+            handler: TestInputHandler,
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            match transforms.split_first() {
+                Some((transform, rest)) => window.with_transform(*transform, |window| {
+                    register(rest, focus_handle, handler, window, cx)
+                }),
+                None => window.handle_input(focus_handle, handler, cx),
+            }
+        }
+
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+        let received_point = Rc::new(Cell::new(None));
+
+        let mut input_handler = cx
+            .update_window(window, |_, window, cx| {
+                let focus_handle = cx.focus_handle();
+                window.focus(&focus_handle, cx);
+                window.next_frame.input_handlers.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                register(
+                    transforms,
+                    &focus_handle,
+                    TestInputHandler {
+                        range_bounds,
+                        received_point: received_point.clone(),
+                    },
+                    window,
+                    cx,
+                );
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.input_handlers.pop().flatten()
+            })
+            .expect("test window should still exist")
+            .expect("focused input handler should be registered");
+
+        let range_bounds = input_handler.bounds_for_range(0..0);
+        let ime_candidate_bounds = input_handler.ime_candidate_bounds();
+        let element_bounds = input_handler.element_bounds();
+        assert_eq!(
+            input_handler.character_index_for_point(platform_point),
+            Some(0)
+        );
+
+        InputGeometry {
+            range_bounds,
+            ime_candidate_bounds,
+            element_bounds,
+            received_point: received_point.get(),
+        }
+    }
+
+    #[gpui::test]
+    fn input_handler_bounds_follow_transform(cx: &mut TestAppContext) {
+        let local_bounds = Bounds::new(point(px(10.), px(10.)), size(px(20.), px(5.)));
+        let visual_bounds = Bounds::new(point(px(60.), px(30.)), size(px(20.), px(5.)));
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(100.), ScaledPixels(40.)));
+
+        let geometry =
+            input_geometry_under_transforms(&[transform], local_bounds, visual_bounds.origin, cx);
+
+        assert_eq!(geometry.range_bounds, Some(visual_bounds));
+        assert_eq!(geometry.ime_candidate_bounds, Some(visual_bounds));
+        assert_eq!(geometry.element_bounds, Some(visual_bounds));
+        assert_eq!(geometry.received_point, Some(local_bounds.origin));
+    }
+
+    #[gpui::test]
+    fn input_handler_bounds_follow_nested_transforms(cx: &mut TestAppContext) {
+        let local_bounds = Bounds::new(point(px(10.), px(10.)), size(px(20.), px(5.)));
+        let visual_bounds = Bounds::new(point(px(70.), px(40.)), size(px(40.), px(10.)));
+        let parent =
+            TransformationMatrix::unit().translate(point(ScaledPixels(100.), ScaledPixels(40.)));
+        let child = TransformationMatrix::unit().scale(size(2., 2.));
+
+        let geometry = input_geometry_under_transforms(
+            &[parent, child],
+            local_bounds,
+            visual_bounds.origin,
+            cx,
+        );
+
+        assert_eq!(geometry.range_bounds, Some(visual_bounds));
+        assert_eq!(geometry.ime_candidate_bounds, Some(visual_bounds));
+        assert_eq!(geometry.element_bounds, Some(visual_bounds));
+        assert_eq!(geometry.received_point, Some(local_bounds.origin));
+    }
+
+    #[gpui::test]
+    fn input_handler_character_index_uses_local_point(cx: &mut TestAppContext) {
+        let local_bounds = Bounds::new(point(px(10.), px(10.)), size(px(40.), px(5.)));
+        let parent =
+            TransformationMatrix::unit().translate(point(ScaledPixels(100.), ScaledPixels(40.)));
+        let child = TransformationMatrix::unit().scale(size(2., 2.));
+        let received_point = Rc::new(Cell::new(None));
+
+        let window = cx.add_window(|_, _| Empty);
+        let mut input_handler = cx
+            .update_window(window.into(), |_, window, cx| {
+                let focus_handle = cx.focus_handle();
+                window.focus(&focus_handle, cx);
+                window.next_frame.input_handlers.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                window.with_transform(parent, |window| {
+                    window.with_transform(child, |window| {
+                        window.handle_input(
+                            &focus_handle,
+                            TestInputHandler {
+                                range_bounds: local_bounds,
+                                received_point: received_point.clone(),
+                            },
+                            cx,
+                        );
+                    });
+                });
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.input_handlers.pop().flatten()
+            })
+            .expect("test window should still exist")
+            .expect("focused input handler should be registered");
+
+        // The handler places one character every 10px, so the third character starts 25px into
+        // its local bounds. On screen that is 50px past the visual origin at (70px, 40px).
+        assert_eq!(
+            input_handler.character_index_for_point(point(px(120.), px(42.))),
+            Some(2)
+        );
+        assert_eq!(received_point.get(), Some(point(px(35.), px(11.))));
+    }
+
+    #[gpui::test]
+    fn input_handler_bounds_are_unchanged_without_transform(cx: &mut TestAppContext) {
+        let local_bounds = Bounds::new(point(px(10.3), px(10.7)), size(px(20.1), px(5.9)));
+        let platform_point = point(px(12.3), px(11.7));
+
+        for transforms in [&[][..], &[TransformationMatrix::unit()][..]] {
+            let geometry =
+                input_geometry_under_transforms(transforms, local_bounds, platform_point, cx);
+
+            assert_eq!(geometry.range_bounds, Some(local_bounds));
+            assert_eq!(geometry.ime_candidate_bounds, Some(local_bounds));
+            assert_eq!(geometry.element_bounds, Some(local_bounds));
+            assert_eq!(geometry.received_point, Some(platform_point));
         }
     }
 

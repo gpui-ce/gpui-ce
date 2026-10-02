@@ -48,8 +48,8 @@ use crate::{
     InlineLayoutRequest, Keymap, LineLayout, Pixels, PlatformGestures, PlatformInput, Point,
     PreparedRasterStyle, Priority, RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat,
     RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, SharedString, Size,
-    SvgRenderer, SystemWindowTab, Task, TextLayoutRequest, Window, WindowControlArea, hash, point,
-    px,
+    SvgRenderer, SystemWindowTab, Task, TextLayoutRequest, TransformationMatrix, Window,
+    WindowControlArea, hash, point, px,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -1993,6 +1993,46 @@ impl From<TileId> for etagere::AllocId {
 pub struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
+    transform: Option<InputHandlerTransform>,
+}
+
+/// The element transform an input handler was registered under, used to exchange window-space
+/// geometry with the platform while the handler keeps working in its local space.
+#[derive(Clone, Copy)]
+struct InputHandlerTransform {
+    transform: TransformationMatrix,
+    inverse_transform: Option<TransformationMatrix>,
+    scale_factor: f32,
+}
+
+impl InputHandlerTransform {
+    /// Maps bounds reported by the handler to their visual position. Under rotation or skew
+    /// that is the axis-aligned bounding box of the transformed rectangle.
+    fn visual_bounds(transform: Option<Self>, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        match transform {
+            Some(transform) => crate::scene::transform_pixel_bounds(
+                bounds,
+                transform.transform,
+                transform.scale_factor,
+            ),
+            None => bounds,
+        }
+    }
+
+    /// Maps a window-space point from the platform into the handler's local space. Returns
+    /// `None` when the transform cannot be inverted.
+    fn local_point(transform: Option<Self>, point: Point<Pixels>) -> Option<Point<Pixels>> {
+        let Some(transform) = transform else {
+            return Some(point);
+        };
+        let inverse_transform = transform.inverse_transform?;
+
+        Some(
+            inverse_transform
+                .apply_scaled(point.scale(transform.scale_factor))
+                .map(|value| Pixels(value.0 / transform.scale_factor)),
+        )
+    }
 }
 
 #[expect(missing_docs)]
@@ -2005,7 +2045,27 @@ pub struct PlatformInputHandler {
 )]
 impl PlatformInputHandler {
     pub fn new(cx: AsyncWindowContext, handler: Box<dyn InputHandler>) -> Self {
-        Self { cx, handler }
+        Self {
+            cx,
+            handler,
+            transform: None,
+        }
+    }
+
+    /// Records the element transform the handler was registered under. The unit transform
+    /// leaves the handler unmapped.
+    pub(crate) fn with_transform(
+        mut self,
+        transform: TransformationMatrix,
+        scale_factor: f32,
+    ) -> Self {
+        self.transform =
+            (transform != TransformationMatrix::unit()).then(|| InputHandlerTransform {
+                transform,
+                inverse_transform: transform.inverse(),
+                scale_factor,
+            });
+        self
     }
 
     pub fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
@@ -2090,6 +2150,7 @@ impl PlatformInputHandler {
             .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
             .ok()
             .flatten()
+            .map(|bounds| InputHandlerTransform::visual_bounds(self.transform, bounds))
     }
 
     #[allow(dead_code)]
@@ -2139,8 +2200,11 @@ impl PlatformInputHandler {
     pub fn selected_bounds(&mut self, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
         let marked_range = self.handler.marked_text_range(window, cx);
         let selection = self.handler.selected_text_range(true, window, cx)?;
+        let transform = self.transform;
         Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
-            self.handler.bounds_for_range(range, window, cx)
+            self.handler
+                .bounds_for_range(range, window, cx)
+                .map(|bounds| InputHandlerTransform::visual_bounds(transform, bounds))
         })
     }
 
@@ -2154,6 +2218,7 @@ impl PlatformInputHandler {
 
     #[allow(unused)]
     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
+        let point = InputHandlerTransform::local_point(self.transform, point)?;
         self.cx
             .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
             .ok()
@@ -2176,6 +2241,7 @@ impl PlatformInputHandler {
             .update(|window, cx| self.handler.element_bounds(window, cx))
             .ok()
             .flatten()
+            .map(|bounds| InputHandlerTransform::visual_bounds(self.transform, bounds))
     }
 
     /// See [`InputHandler::text_length_utf16`].
