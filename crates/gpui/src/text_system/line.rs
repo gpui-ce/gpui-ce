@@ -1,6 +1,7 @@
 use crate::{
-    App, Bounds, InlineLayout, LineLayout, PaintFragment, Pixels, Point, Result, SharedString,
-    TextAlign, TextSystem, VisualLine, Window, WrappedLineLayout, fill, point, size,
+    App, Bounds, InlineLayout, LineLayout, PaintFragment, Pixels, Point, Result, ScaledPixels,
+    SharedString, TextAlign, TextSystem, TransformationMatrix, VisualLine, Window,
+    WrappedLineLayout, fill, point, px, size,
 };
 use derive_more::{Deref, DerefMut};
 use std::sync::Arc;
@@ -295,7 +296,12 @@ fn paint_text_fragment(
             context.line_origin.x + glyph.position.x,
             context.line_origin.y,
         );
-        if !Bounds::new(cull_origin, max_glyph_size).intersects(&window.content_mask().bounds) {
+        if !glyph_bounds_intersects_content_mask(
+            Bounds::new(cull_origin, max_glyph_size),
+            window.content_mask().bounds,
+            window.current_transform(),
+            window.scale_factor(),
+        ) {
             continue;
         }
 
@@ -473,5 +479,55 @@ fn aligned_visual_origin_x(
         TextAlign::Left => origin_x,
         TextAlign::Center => (origin_x * 2.0 + align_width - line_width) / 2.0,
         TextAlign::Right => origin_x + align_width - line_width,
+    }
+}
+
+fn glyph_bounds_intersects_content_mask(
+    glyph_bounds: Bounds<Pixels>,
+    content_mask_bounds: Bounds<Pixels>,
+    transform: TransformationMatrix,
+    scale_factor: f32,
+) -> bool {
+    let visual_bounds = if transform == TransformationMatrix::unit() {
+        glyph_bounds
+    } else {
+        crate::scene::transform_bounds(glyph_bounds.scale(scale_factor), transform)
+            .map(|coordinate: ScaledPixels| px(coordinate.0 / scale_factor))
+    };
+
+    visual_bounds.intersects(&content_mask_bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translated_glyph_culling_uses_visual_bounds() {
+        let glyph_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0)));
+        let content_mask = Bounds::new(point(px(100.0), px(0.0)), size(px(10.0), px(10.0)));
+        let transform =
+            TransformationMatrix::unit().translate(point(ScaledPixels(100.0), ScaledPixels(0.0)));
+
+        assert!(glyph_bounds_intersects_content_mask(
+            glyph_bounds,
+            content_mask,
+            transform,
+            1.0
+        ));
+    }
+
+    #[test]
+    fn scaled_glyph_culling_uses_visual_bounds() {
+        let glyph_bounds = Bounds::new(point(px(10.0), px(10.0)), size(px(10.0), px(10.0)));
+        let content_mask = Bounds::new(point(px(20.0), px(20.0)), size(px(20.0), px(20.0)));
+        let transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
+
+        assert!(glyph_bounds_intersects_content_mask(
+            glyph_bounds,
+            content_mask,
+            transform,
+            1.0
+        ));
     }
 }
