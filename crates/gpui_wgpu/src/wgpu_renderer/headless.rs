@@ -161,6 +161,12 @@ impl WgpuHeadlessRenderer {
         })
     }
 
+    /// The shared device/queue, for tests and embedders that pre-fill
+    /// application textures the frame pipeline will composite.
+    pub fn gpu_context(&self) -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
+        self.renderer.gpu_context()
+    }
+
     fn ensure_target(&mut self, size: Size<DevicePixels>) -> anyhow::Result<()> {
         anyhow::ensure!(
             size.width.0 > 0 && size.height.0 > 0,
