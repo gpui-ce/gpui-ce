@@ -765,7 +765,17 @@ pub struct HitTest {
 
 impl HitTest {
     /// Creates a new hit-test by iterating the provided hitboxes to find all those which are not occluded.
+    #[cfg(test)]
     fn new<'a>(hitboxes: impl Iterator<Item = &'a Hitbox>, position: Point<Pixels>) -> Self {
+        Self::from_hitboxes(hitboxes, |hitbox| hitbox.contains(&position))
+    }
+
+    /// Creates a new hit-test from the hitboxes accepted by `contains_position`, stopping at the
+    /// first one that occludes the hitboxes behind it.
+    fn from_hitboxes<'a>(
+        hitboxes: impl Iterator<Item = &'a Hitbox>,
+        contains_position: impl Fn(&Hitbox) -> bool,
+    ) -> Self {
         let mut num_until_mouse_blocked = None::<usize>;
         let mut ids_until_occlusion = SmallVec::default();
         let mut entries = HashMap::default();
@@ -784,7 +794,7 @@ impl HitTest {
                 continue;
             }
 
-            if !hitbox.contains(&position) {
+            if !contains_position(hitbox) {
                 continue;
             }
 
@@ -941,6 +951,17 @@ pub struct Hitbox {
     pub tags: Vec<SharedString>,
     /// Disjoint regions of an inline element. `bounds` is their union.
     pub fragments: Option<Arc<[Bounds<Pixels>]>>,
+}
+
+/// The untransformed regions of a hitbox inserted under a transform, kept so hit testing can map
+/// the pointer back into the hitbox's local space.
+#[derive(Clone, Debug)]
+struct HitboxTransformMetadata {
+    id: HitboxId,
+    local_bounds: Bounds<Pixels>,
+    local_fragments: Option<Arc<[Bounds<Pixels>]>>,
+    inverse_transform: Option<TransformationMatrix>,
+    scale_factor: f32,
 }
 
 impl Hitbox {
@@ -1107,6 +1128,7 @@ pub(crate) struct Frame {
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
     pub(crate) hitboxes: Vec<Hitbox>,
+    hitbox_transform_metadata: Vec<HitboxTransformMetadata>,
     pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
     pub(crate) deferred_draws: Vec<DeferredDraw>,
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
@@ -1124,6 +1146,7 @@ pub(crate) struct Frame {
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
     hitboxes_index: usize,
+    hitbox_transform_metadata_index: usize,
     tooltips_index: usize,
     deferred_draws_index: usize,
     dispatch_tree_index: usize,
@@ -1153,6 +1176,7 @@ impl Frame {
             dispatch_tree,
             scene: Scene::default(),
             hitboxes: Vec::new(),
+            hitbox_transform_metadata: Vec::new(),
             window_control_hitboxes: Vec::new(),
             deferred_draws: Vec::new(),
             input_handlers: Vec::new(),
@@ -1181,6 +1205,7 @@ impl Frame {
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
         self.hitboxes.clear();
+        self.hitbox_transform_metadata.clear();
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
         self.tab_stops.clear();
@@ -1214,7 +1239,40 @@ impl Frame {
     }
 
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
-        HitTest::new(self.hitboxes.iter().rev(), position)
+        HitTest::from_hitboxes(self.hitboxes.iter().rev(), |hitbox| {
+            self.hitbox_contains_position(hitbox, position)
+        })
+    }
+
+    fn hitbox_contains_position(&self, hitbox: &Hitbox, position: Point<Pixels>) -> bool {
+        if !hitbox.contains(&position) {
+            return false;
+        }
+
+        let Some(metadata) = self
+            .hitbox_transform_metadata
+            .iter()
+            .find(|metadata| metadata.id == hitbox.id)
+        else {
+            return true;
+        };
+
+        let Some(inverse_transform) = metadata.inverse_transform else {
+            return false;
+        };
+
+        let local_position = inverse_transform
+            .apply_scaled(position.scale(metadata.scale_factor))
+            .map(|value| px(value.0 / metadata.scale_factor));
+
+        metadata.local_fragments.as_ref().map_or_else(
+            || metadata.local_bounds.contains(&local_position),
+            |fragments| {
+                fragments
+                    .iter()
+                    .any(|bounds| bounds.contains(&local_position))
+            },
+        )
     }
 
     pub(crate) fn focus_path(&self) -> SmallVec<[FocusId; 8]> {
@@ -3724,6 +3782,7 @@ impl Window {
     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
         PrepaintStateIndex {
             hitboxes_index: self.next_frame.hitboxes.len(),
+            hitbox_transform_metadata_index: self.next_frame.hitbox_transform_metadata.len(),
             tooltips_index: self.next_frame.tooltip_requests.len(),
             deferred_draws_index: self.next_frame.deferred_draws.len(),
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
@@ -3735,6 +3794,14 @@ impl Window {
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+                .iter()
+                .cloned(),
+        );
+        self.next_frame.hitbox_transform_metadata.extend(
+            self.rendered_frame.hitbox_transform_metadata[range
+                .start
+                .hitbox_transform_metadata_index
+                ..range.end.hitbox_transform_metadata_index]
                 .iter()
                 .cloned(),
         );
@@ -3940,6 +4007,20 @@ impl Window {
             .map(|value| px(value.0 / scale_factor));
 
         ContentMask { bounds, ..mask }
+    }
+
+    fn transform_hitbox_bounds(
+        &self,
+        bounds: Bounds<Pixels>,
+        transform: TransformationMatrix,
+    ) -> Bounds<Pixels> {
+        if transform == TransformationMatrix::unit() {
+            return bounds;
+        }
+
+        let scale_factor = self.scale_factor();
+        crate::scene::transform_bounds(bounds.scale(scale_factor), transform)
+            .map(|value| px(value.0 / scale_factor))
     }
 
     fn insert_primitive(&mut self, primitive: impl Into<crate::Primitive>) {
@@ -5503,15 +5584,39 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let content_mask = self.content_mask();
+        let transform = self.current_transform();
         let mut id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
+        let local_fragments = self.current_inline_fragments.clone();
+        let fragments = if transform == TransformationMatrix::unit() {
+            local_fragments
+        } else {
+            let fragments = local_fragments.as_ref().map(|fragments| {
+                fragments
+                    .iter()
+                    .map(|fragment| self.transform_hitbox_bounds(*fragment, transform))
+                    .collect()
+            });
+
+            self.next_frame
+                .hitbox_transform_metadata
+                .push(HitboxTransformMetadata {
+                    id,
+                    local_bounds: bounds,
+                    local_fragments,
+                    inverse_transform: transform.inverse(),
+                    scale_factor: self.scale_factor(),
+                });
+
+            fragments
+        };
         let hitbox = Hitbox {
             id,
-            bounds,
+            bounds: self.transform_hitbox_bounds(bounds, transform),
             content_mask,
             behavior,
             tags: Vec::default(),
-            fragments: self.current_inline_fragments.clone(),
+            fragments,
         };
         self.next_frame.hitboxes.push_mut(hitbox)
     }
@@ -8032,7 +8137,7 @@ mod tests {
         StatefulInteractiveElement as _, Style, Styled, TestApp, TestAppContext, TestTextSystem,
         TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, TransformationMatrix,
         Window, WindowAppearance, WindowOptions, canvas, div, hsla, img, linear_color_stop,
-        linear_gradient, point, px, size, white,
+        linear_gradient, point, px, radians, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
@@ -9580,6 +9685,221 @@ mod tests {
             window.invalidator.set_phase(DrawPhase::None);
         })
         .expect("test window should still exist");
+    }
+
+    #[gpui::test]
+    fn hit_test_uses_transformed_visual_region(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let (hitbox_id, hitbox_bounds, visual_hit, local_hit) = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.hitboxes.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
+                let hitbox = window.with_transform(transform, |window| {
+                    window.insert_hitbox(
+                        Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                        HitboxBehavior::Normal,
+                    )
+                });
+
+                assert_eq!(window.current_transform(), TransformationMatrix::default());
+
+                let visual_hit = window.next_frame.hit_test(point(px(6.), px(12.)));
+                let local_hit = window.next_frame.hit_test(point(px(1.), px(2.)));
+
+                window.invalidator.set_phase(DrawPhase::None);
+                (hitbox.id, hitbox.bounds, visual_hit, local_hit)
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(hitbox_bounds.origin, point(px(6.), px(12.)));
+        assert_eq!(hitbox_bounds.size, size(px(3.), px(4.)));
+        assert_eq!(visual_hit.ordered_ids.as_slice(), &[hitbox_id]);
+        assert_eq!(visual_hit.hover_hitbox_count, 1);
+        assert!(local_hit.ordered_ids.is_empty());
+        assert_eq!(local_hit.hover_hitbox_count, 0);
+    }
+
+    #[gpui::test]
+    fn hit_test_inverse_maps_scaled_visual_region(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let (hitbox_id, hitbox_bounds, inside_hit, outside_hit) = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.hitboxes.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                let transform = TransformationMatrix::unit().scale(size(2., 2.));
+                let hitbox = window.with_transform(transform, |window| {
+                    window.insert_hitbox(
+                        Bounds::new(point(px(2.), px(3.)), size(px(4.), px(5.))),
+                        HitboxBehavior::Normal,
+                    )
+                });
+
+                let inside_hit = window.next_frame.hit_test(point(px(10.), px(12.)));
+                let outside_hit = window.next_frame.hit_test(point(px(13.), px(17.)));
+
+                window.invalidator.set_phase(DrawPhase::None);
+                (hitbox.id, hitbox.bounds, inside_hit, outside_hit)
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(hitbox_bounds.origin, point(px(4.), px(6.)));
+        assert_eq!(hitbox_bounds.size, size(px(8.), px(10.)));
+        assert_eq!(inside_hit.ordered_ids.as_slice(), &[hitbox_id]);
+        assert_eq!(inside_hit.hover_hitbox_count, 1);
+        assert!(outside_hit.ordered_ids.is_empty());
+        assert_eq!(outside_hit.hover_hitbox_count, 0);
+    }
+
+    #[gpui::test]
+    fn reuse_prepaint_preserves_transformed_hitbox_inverse_metadata(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let (hitbox_id, reused_hitbox_ids, inside_hit, outside_local_hit) = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.hitboxes.clear();
+                window.next_frame.hitbox_transform_metadata.clear();
+                window.rendered_frame.hitboxes.clear();
+                window.rendered_frame.hitbox_transform_metadata.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                window.with_transform(
+                    TransformationMatrix::unit()
+                        .translate(point(ScaledPixels(100.), ScaledPixels(100.))),
+                    |window| {
+                        window.insert_hitbox(
+                            Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+                            HitboxBehavior::Normal,
+                        )
+                    },
+                );
+
+                let prepaint_start = window.prepaint_index();
+                let transform =
+                    TransformationMatrix::unit().rotate(radians(std::f32::consts::FRAC_PI_4));
+                let hitbox = window.with_transform(transform, |window| {
+                    window.insert_hitbox(
+                        Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+                        HitboxBehavior::Normal,
+                    )
+                });
+                let prepaint_end = window.prepaint_index();
+
+                window.rendered_frame.hitboxes = window.next_frame.hitboxes.clone();
+                window.rendered_frame.hitbox_transform_metadata =
+                    window.next_frame.hitbox_transform_metadata.clone();
+                window.next_frame.hitboxes.clear();
+                window.next_frame.hitbox_transform_metadata.clear();
+
+                window.reuse_prepaint(prepaint_start..prepaint_end);
+
+                let reused_hitbox_ids = window
+                    .next_frame
+                    .hitboxes
+                    .iter()
+                    .map(|hitbox| hitbox.id)
+                    .collect::<Vec<_>>();
+                let inside_hit = window.next_frame.hit_test(point(px(0.), px(7.)));
+                let outside_local_hit = window.next_frame.hit_test(point(px(6.), px(1.)));
+
+                window.invalidator.set_phase(DrawPhase::None);
+                (hitbox.id, reused_hitbox_ids, inside_hit, outside_local_hit)
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(reused_hitbox_ids.as_slice(), &[hitbox_id]);
+        assert_eq!(inside_hit.ordered_ids.as_slice(), &[hitbox_id]);
+        assert_eq!(inside_hit.hover_hitbox_count, 1);
+        assert!(outside_local_hit.ordered_ids.is_empty());
+        assert_eq!(outside_local_hit.hover_hitbox_count, 0);
+    }
+
+    #[gpui::test]
+    fn non_transformed_hit_test_still_uses_inserted_bounds(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let (hitbox_id, inside_hit, outside_hit) = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.hitboxes.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                let hitbox = window.insert_hitbox(
+                    Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
+                    HitboxBehavior::Normal,
+                );
+
+                let inside_hit = window.next_frame.hit_test(point(px(1.), px(2.)));
+                let outside_hit = window.next_frame.hit_test(point(px(6.), px(12.)));
+
+                window.invalidator.set_phase(DrawPhase::None);
+                (hitbox.id, inside_hit, outside_hit)
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(inside_hit.ordered_ids.as_slice(), &[hitbox_id]);
+        assert_eq!(inside_hit.hover_hitbox_count, 1);
+        assert!(outside_hit.ordered_ids.is_empty());
+        assert_eq!(outside_hit.hover_hitbox_count, 0);
+    }
+
+    #[gpui::test]
+    fn hit_test_maps_inline_fragments_through_transform(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let (hitbox, fragment_hit, gap_hit, local_hit) = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.hitboxes.clear();
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+
+                let fragments: Arc<[Bounds<Pixels>]> = Arc::from([
+                    Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+                    Bounds::new(point(px(30.), px(0.)), size(px(10.), px(10.))),
+                ]);
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(100.), ScaledPixels(0.)));
+
+                window.current_inline_fragments = Some(fragments);
+                let hitbox = window.with_transform(transform, |window| {
+                    window.insert_hitbox(
+                        Bounds::new(point(px(0.), px(0.)), size(px(40.), px(10.))),
+                        HitboxBehavior::Normal,
+                    )
+                });
+                window.current_inline_fragments = None;
+
+                let fragment_hit = window.next_frame.hit_test(point(px(85.), px(5.)));
+                let gap_hit = window.next_frame.hit_test(point(px(70.), px(5.)));
+                let local_hit = window.next_frame.hit_test(point(px(5.), px(5.)));
+
+                window.invalidator.set_phase(DrawPhase::None);
+                (hitbox, fragment_hit, gap_hit, local_hit)
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(hitbox.bounds.origin, point(px(50.), px(0.)));
+        assert_eq!(
+            hitbox.fragments.as_deref(),
+            Some(
+                [
+                    Bounds::new(point(px(50.), px(0.)), size(px(10.), px(10.))),
+                    Bounds::new(point(px(80.), px(0.)), size(px(10.), px(10.))),
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(fragment_hit.ordered_ids.as_slice(), &[hitbox.id]);
+        assert!(gap_hit.ordered_ids.is_empty());
+        assert!(local_hit.ordered_ids.is_empty());
     }
 
     #[gpui::test]

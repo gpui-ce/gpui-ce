@@ -1201,6 +1201,31 @@ impl TransformationMatrix {
         }
     }
 
+    pub(crate) fn inverse(self) -> Option<TransformationMatrix> {
+        let [[a, b], [c, d]] = self.rotation_scale;
+        let determinant = a * d - b * c;
+        if determinant.abs() <= f32::EPSILON {
+            return None;
+        }
+
+        let inverse_determinant = determinant.recip();
+        let rotation_scale = [
+            [d * inverse_determinant, -b * inverse_determinant],
+            [-c * inverse_determinant, a * inverse_determinant],
+        ];
+        let translation = [
+            -(rotation_scale[0][0] * self.translation[0]
+                + rotation_scale[0][1] * self.translation[1]),
+            -(rotation_scale[1][0] * self.translation[0]
+                + rotation_scale[1][1] * self.translation[1]),
+        ];
+
+        Some(TransformationMatrix {
+            rotation_scale,
+            translation,
+        })
+    }
+
     /// Apply transformation to a point, mainly useful for debugging
     pub fn apply(&self, point: Point<Pixels>) -> Point<Pixels> {
         let input = [point.x.0, point.y.0];
