@@ -2,8 +2,8 @@ use crate::{
     AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
-    PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, phi, point, px, quad, rems, size, transparent_black,
+    PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
+    TransformationMatrix, Window, black, phi, point, px, quad, rems, size, transparent_black,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -385,6 +385,9 @@ pub struct Style {
     /// The opacity of this element
     pub opacity: Option<f32>,
 
+    /// The transform applied to this element and its descendants after layout.
+    pub transform: Option<ElementTransform>,
+
     /// The grid columns of this element
     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<GridTemplate>,
@@ -403,6 +406,62 @@ pub struct Style {
     /// Whether to draw a red debugging outline around this element and all of its conforming children
     #[cfg(debug_assertions)]
     pub debug_below: bool,
+}
+
+/// A 2D transform applied to a styled element subtree after layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ElementTransform {
+    matrix: TransformationMatrix,
+    origin: Point<f32>,
+}
+
+impl ElementTransform {
+    /// Moves the transformed subtree by the given pixel offset.
+    pub fn translate(mut self, offset: Point<Pixels>) -> Self {
+        self.matrix = self.matrix.compose(TransformationMatrix {
+            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
+            translation: [offset.x.0, offset.y.0],
+        });
+        self
+    }
+
+    /// Scales the transformed subtree.
+    pub fn scale(mut self, scale: Size<f32>) -> Self {
+        self.matrix = self.matrix.scale(scale);
+        self
+    }
+
+    /// Sets the transform origin as fractions of the element bounds.
+    pub fn origin(mut self, origin: Point<f32>) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+    ) -> TransformationMatrix {
+        let origin = point(
+            ScaledPixels((bounds.origin.x.0 + bounds.size.width.0 * self.origin.x) * scale_factor),
+            ScaledPixels((bounds.origin.y.0 + bounds.size.height.0 * self.origin.y) * scale_factor),
+        );
+        let matrix = TransformationMatrix {
+            rotation_scale: self.matrix.rotation_scale,
+            translation: [
+                self.matrix.translation[0] * scale_factor,
+                self.matrix.translation[1] * scale_factor,
+            ],
+        };
+
+        TransformationMatrix::unit()
+            .translate(origin)
+            .compose(matrix)
+            .compose(
+                TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(-origin.x.0), ScaledPixels(-origin.y.0))),
+            )
+    }
 }
 
 impl Styled for StyleRefinement {
@@ -1071,6 +1130,7 @@ impl Default for Style {
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,
+            transform: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

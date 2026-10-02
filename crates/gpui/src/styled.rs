@@ -1,10 +1,10 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Edges, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures,
-    FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent,
-    Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace, px, relative,
-    rems,
+    DefiniteLength, Display, Edges, ElementTransform, Fill, Filter, FlexDirection, FlexWrap, Font,
+    FontFeatures, FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize,
+    JustifyContent, Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
+    TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace,
+    px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -644,6 +644,12 @@ pub trait Styled: Sized {
         Self: Sized,
     {
         self.style().background = Some(fill.into());
+        self
+    }
+
+    /// Sets the transform applied to this element and its descendants after layout.
+    fn transform(mut self, transform: ElementTransform) -> Self {
+        self.style().transform = Some(transform);
         self
     }
 
