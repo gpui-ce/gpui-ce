@@ -1366,13 +1366,18 @@ mod tests {
 
     #[test]
     fn color_rasterization_balances_uninitialized_sta_and_mta_apartments() -> Result<()> {
-        for apartment in [
-            None,
-            Some(COINIT_APARTMENTTHREADED),
-            Some(COINIT_MULTITHREADED),
+        for (apartment, concurrent_mta) in [
+            (None, false),
+            (None, true),
+            (Some(COINIT_APARTMENTTHREADED), false),
+            (Some(COINIT_MULTITHREADED), false),
         ] {
+            // Keep another thread's MTA alive to exercise implicit membership deterministically.
+            let _concurrent_apartment =
+                concurrent_mta.then(ColorRasterApartment::new).transpose()?;
+
             std::thread::spawn(move || -> Result<()> {
-                assert_eq!(calling_apartment().unwrap_err().code(), CO_E_NOTINITIALIZED);
+                assert_eq!(explicit_calling_apartment()?, None);
                 let caller = apartment
                     .map(|mode| -> Result<ColorRasterApartment> {
                         assert_eq!(unsafe { CoInitializeEx(None, mode) }, S_OK);
@@ -1383,7 +1388,7 @@ mod tests {
                         })
                     })
                     .transpose()?;
-                let before = calling_apartment();
+                let before = explicit_calling_apartment()?;
                 let (system, font_id) = color_test_system()?;
                 let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
                 let params = color_params(
@@ -1405,7 +1410,7 @@ mod tests {
                             .any(|pixel| pixel[..3] == [128, 192, 32])
                     );
                     assert_eq!(
-                        calling_apartment(),
+                        explicit_calling_apartment()?,
                         before,
                         "apartment changed after raster {iteration}"
                     );
@@ -1413,7 +1418,7 @@ mod tests {
 
                 drop(system);
                 drop(caller);
-                assert_eq!(calling_apartment().unwrap_err().code(), CO_E_NOTINITIALIZED);
+                assert_eq!(explicit_calling_apartment()?, None);
 
                 Ok(())
             })
@@ -1622,12 +1627,19 @@ mod tests {
         }
     }
 
-    fn calling_apartment() -> windows::core::Result<APTTYPE> {
+    fn explicit_calling_apartment() -> windows::core::Result<Option<(APTTYPE, APTTYPEQUALIFIER)>> {
         let mut apartment = APTTYPE::default();
         let mut qualifier = APTTYPEQUALIFIER::default();
-        unsafe { CoGetApartmentType(&mut apartment, &mut qualifier)? };
 
-        Ok(apartment)
+        match unsafe { CoGetApartmentType(&mut apartment, &mut qualifier) } {
+            Err(error) if error.code() == CO_E_NOTINITIALIZED => Ok(None),
+            Err(error) => Err(error),
+            // Other tests can keep the process MTA alive without initializing this thread.
+            Ok(()) if apartment == APTTYPE_MTA && qualifier == APTTYPEQUALIFIER_IMPLICIT_MTA => {
+                Ok(None)
+            }
+            Ok(()) => Ok(Some((apartment, qualifier))),
+        }
     }
 
     fn subpixel_variants() -> impl Iterator<Item = Point<u8>> {
