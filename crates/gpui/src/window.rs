@@ -4933,7 +4933,15 @@ impl Window {
             ),
         ];
 
+        // The content mask is in visual space, so each strip has to be mapped through the
+        // current transform before the two are intersected.
+        let transform = self.current_transform();
         for strip in strips {
+            let strip = if transform == TransformationMatrix::unit() {
+                strip
+            } else {
+                crate::scene::transform_bounds(strip, transform)
+            };
             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
             if !content_mask_bounds.is_empty() {
                 self.insert_primitive(Quad {
@@ -10280,6 +10288,49 @@ mod tests {
                 size(ScaledPixels(20.0), ScaledPixels(30.0))
             )
         );
+    }
+
+    #[gpui::test]
+    fn border_only_quad_under_transform_keeps_its_border_strips(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Empty);
+        let window = window.into();
+
+        let quads = cx
+            .update_window(window, |_, window, _| {
+                window.next_frame.scene.clear();
+                window.invalidator.set_phase(DrawPhase::Paint);
+
+                let transform = TransformationMatrix::unit()
+                    .translate(point(ScaledPixels(100.), ScaledPixels(0.)));
+                window.with_transform(transform, |window| {
+                    window.paint_quad(crate::outline(
+                        Bounds::new(point(px(0.), px(0.)), size(px(40.), px(40.))),
+                        crate::black(),
+                        crate::BorderStyle::Solid,
+                    ));
+                });
+
+                window.invalidator.set_phase(DrawPhase::None);
+                window.next_frame.scene.quads.clone()
+            })
+            .expect("test window should still exist");
+
+        assert_eq!(quads.len(), 4);
+
+        for quad in &quads {
+            assert_eq!(
+                quad.bounds,
+                Bounds::new(
+                    point(ScaledPixels(100.), ScaledPixels(0.)),
+                    size(ScaledPixels(80.), ScaledPixels(80.))
+                )
+            );
+            assert!(!quad.content_mask.bounds.is_empty());
+            assert_eq!(
+                quad.content_mask.bounds.intersect(&quad.bounds),
+                quad.content_mask.bounds
+            );
+        }
     }
 
     #[gpui::test]
