@@ -2860,6 +2860,10 @@ impl Interactivity {
 
                 window.with_text_style(style.text_style().cloned(), |window| {
                     window.with_style_transform(style.transform, bounds, |window| {
+                        if style.transform.is_some() {
+                            window.prepaint_style_transform = Some(window.current_transform());
+                        }
+
                         window.with_content_mask(
                             style.overflow_mask(bounds, window.rem_size()),
                             |window| {

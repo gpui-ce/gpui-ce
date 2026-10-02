@@ -273,6 +273,16 @@ impl GlobalElementId {
     }
 }
 
+/// Converts logical-pixel bounds into the scaled-pixel rectangle stored on an accessibility node.
+fn a11y_rect(bounds: Bounds<Pixels>, scale_factor: f32) -> accesskit::Rect {
+    accesskit::Rect {
+        x0: (bounds.origin.x.0 * scale_factor) as f64,
+        y0: (bounds.origin.y.0 * scale_factor) as f64,
+        x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale_factor) as f64,
+        y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale_factor) as f64,
+    }
+}
+
 trait ElementObject {
     fn inner_element(&mut self) -> &mut dyn Any;
 
@@ -431,17 +441,17 @@ impl<E: Element> Drawable<E> {
                             let node_id = global_id.accesskit_node_id();
                             let mut node = accesskit::Node::new(role);
                             let scale = window.scale_factor();
-                            node.set_bounds(accesskit::Rect {
-                                x0: (bounds.origin.x.0 * scale) as f64,
-                                y0: (bounds.origin.y.0 * scale) as f64,
-                                x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale) as f64,
-                                y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
-                            });
+                            let visual_bounds = crate::scene::transform_pixel_bounds(
+                                bounds,
+                                window.current_transform(),
+                                scale,
+                            );
+                            node.set_bounds(a11y_rect(visual_bounds, scale));
                             self.element.write_a11y_info(&mut node);
                             if hidden {
                                 node.set_hidden();
                             }
-                            window.a11y.node_bounds.insert(node_id, bounds);
+                            window.a11y.node_bounds.insert(node_id, visual_bounds);
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]
                             if pushed_a11y_node {
@@ -472,6 +482,7 @@ impl<E: Element> Drawable<E> {
                     &mut window.current_inline_fragments,
                     inline_fragments.clone(),
                 );
+                let ancestor_style_transform = window.prepaint_style_transform.take();
 
                 #[cfg(all(
                     feature = "hot-patching",
@@ -503,6 +514,26 @@ impl<E: Element> Drawable<E> {
 
                 window.current_inline_fragments = previous_fragments;
                 window.next_frame.dispatch_tree.pop_node();
+
+                let own_style_transform = mem::replace(
+                    &mut window.prepaint_style_transform,
+                    ancestor_style_transform,
+                );
+                if pushed_a11y_node
+                    && let Some(transform) = own_style_transform
+                    && let Some(global_id) = global_id.as_ref()
+                {
+                    let scale = window.scale_factor();
+                    let visual_bounds =
+                        crate::scene::transform_pixel_bounds(bounds, transform, scale);
+                    if let Some(node) = window.a11y.nodes.current_node_mut() {
+                        node.set_bounds(a11y_rect(visual_bounds, scale));
+                    }
+                    window
+                        .a11y
+                        .node_bounds
+                        .insert(global_id.accesskit_node_id(), visual_bounds);
+                }
 
                 if pushed_a11y_node {
                     if let Some(global_id) = global_id.as_ref() {

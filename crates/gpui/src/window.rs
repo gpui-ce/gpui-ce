@@ -1413,6 +1413,10 @@ pub struct Window {
     style_transition_containing_bounds: Option<Bounds<Pixels>>,
     pub(crate) element_opacity: f32,
     pub(crate) transform_stack: Vec<TransformationMatrix>,
+    /// The transform in effect inside the style transform of the element being prepainted,
+    /// when it has one. An element's accessibility node is created before its own style
+    /// transform is entered, so this carries that transform back to where the node is finished.
+    pub(crate) prepaint_style_transform: Option<TransformationMatrix>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -2164,6 +2168,7 @@ impl Window {
             element_offset_stack: Vec::new(),
             style_transition_containing_bounds: None,
             transform_stack: Vec::new(),
+            prepaint_style_transform: None,
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
             requested_autoscroll: None,
@@ -10584,6 +10589,143 @@ mod tests {
             assert_eq!(geometry.ime_candidate_bounds, Some(local_bounds));
             assert_eq!(geometry.element_bounds, Some(local_bounds));
             assert_eq!(geometry.received_point, Some(platform_point));
+        }
+    }
+
+    struct A11yTransformView {
+        outer_transform: Option<ElementTransform>,
+        inner_transform: Option<ElementTransform>,
+    }
+
+    impl Render for A11yTransformView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            use crate::util::FluentBuilder as _;
+
+            div().size_full().child(
+                div()
+                    .id("outer")
+                    .role(accesskit::Role::Group)
+                    .aria_label("Outer")
+                    .absolute()
+                    .left(px(10.))
+                    .top(px(20.))
+                    .w(px(100.))
+                    .h(px(50.))
+                    .when_some(self.outer_transform, |element, transform| {
+                        element.transform(transform)
+                    })
+                    .child(
+                        div()
+                            .id("inner")
+                            .role(accesskit::Role::Button)
+                            .aria_label("Inner")
+                            .w(px(40.))
+                            .h(px(20.))
+                            .when_some(self.inner_transform, |element, transform| {
+                                element.transform(transform)
+                            }),
+                    ),
+            )
+        }
+    }
+
+    /// Draws [`A11yTransformView`] with accessibility active and returns the bounds reported for
+    /// the node with the given label, both as stored for the window and as written on the node.
+    fn a11y_bounds_for_label(
+        label: &str,
+        outer_transform: Option<ElementTransform>,
+        inner_transform: Option<ElementTransform>,
+        cx: &mut TestAppContext,
+    ) -> (Bounds<Pixels>, accesskit::Rect) {
+        let window = cx.add_window(|_, _| A11yTransformView {
+            outer_transform,
+            inner_transform,
+        });
+
+        cx.update_window(window.into(), |_, window, cx| {
+            window.set_a11y_forced(true);
+            window.draw(cx).clear(cx);
+
+            let (node_id, node) = window
+                .a11y_tree()
+                .expect("drawing with accessibility active should produce a tree")
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .expect("labelled node should be in the tree");
+            let node_rect = node.bounds().expect("element nodes should have bounds");
+            let window_bounds = window
+                .a11y_node_bounds(*node_id)
+                .expect("node bounds should be recorded");
+
+            (window_bounds, node_rect)
+        })
+        .expect("test window should still exist")
+    }
+
+    fn a11y_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> accesskit::Rect {
+        accesskit::Rect { x0, y0, x1, y1 }
+    }
+
+    #[gpui::test]
+    fn a11y_node_bounds_follow_transform(cx: &mut TestAppContext) {
+        let transform = Some(ElementTransform::default().translate(point(px(5.), px(10.))));
+
+        let (outer_bounds, outer_rect) = a11y_bounds_for_label("Outer", transform, None, cx);
+        assert_eq!(
+            outer_bounds,
+            Bounds::new(point(px(15.), px(30.)), size(px(100.), px(50.)))
+        );
+        assert_eq!(outer_rect, a11y_rect(30., 60., 230., 160.));
+
+        let (inner_bounds, inner_rect) = a11y_bounds_for_label("Inner", transform, None, cx);
+        assert_eq!(
+            inner_bounds,
+            Bounds::new(point(px(15.), px(30.)), size(px(40.), px(20.)))
+        );
+        assert_eq!(inner_rect, a11y_rect(30., 60., 110., 100.));
+    }
+
+    #[gpui::test]
+    fn a11y_node_bounds_follow_nested_transforms(cx: &mut TestAppContext) {
+        let outer_transform = Some(ElementTransform::default().translate(point(px(5.), px(10.))));
+        let inner_transform = Some(ElementTransform::default().scale(size(2., 2.)));
+
+        let (outer_bounds, outer_rect) =
+            a11y_bounds_for_label("Outer", outer_transform, inner_transform, cx);
+        assert_eq!(
+            outer_bounds,
+            Bounds::new(point(px(15.), px(30.)), size(px(100.), px(50.)))
+        );
+        assert_eq!(outer_rect, a11y_rect(30., 60., 230., 160.));
+
+        let (inner_bounds, inner_rect) =
+            a11y_bounds_for_label("Inner", outer_transform, inner_transform, cx);
+        assert_eq!(
+            inner_bounds,
+            Bounds::new(point(px(15.), px(30.)), size(px(80.), px(40.)))
+        );
+        assert_eq!(inner_rect, a11y_rect(30., 60., 190., 140.));
+    }
+
+    #[gpui::test]
+    fn a11y_node_bounds_are_unchanged_without_transform(cx: &mut TestAppContext) {
+        for transform in [None, Some(ElementTransform::default())] {
+            let (outer_bounds, outer_rect) =
+                a11y_bounds_for_label("Outer", transform, transform, cx);
+            assert_eq!(
+                outer_bounds,
+                Bounds::new(point(px(10.), px(20.)), size(px(100.), px(50.)))
+            );
+            assert_eq!(outer_rect, a11y_rect(20., 40., 220., 140.));
+
+            let (inner_bounds, inner_rect) =
+                a11y_bounds_for_label("Inner", transform, transform, cx);
+            assert_eq!(
+                inner_bounds,
+                Bounds::new(point(px(10.), px(20.)), size(px(40.), px(20.)))
+            );
+            assert_eq!(inner_rect, a11y_rect(20., 40., 100., 80.));
         }
     }
 
