@@ -220,12 +220,16 @@ fn solid_quad(
     Quad {
         order: 0,
         border_style: BorderStyle::Solid,
+        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
         bounds,
         content_mask: *content_mask,
         background: color.into(),
         border_color: transparent_black().into(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        corner_smoothing: 0.,
+        padding: 0,
     }
 }
 
