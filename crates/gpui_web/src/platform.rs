@@ -157,12 +157,8 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system = Arc::new(gpui_parley::ParleyTextSystem::new_with_rasterizer(
-            gpui_parley::SystemFonts::Skip,
-            "IBM Plex Sans",
-            gpui_parley::SwashGlyphRasterizer::default(),
-        ));
-        let text_system: Arc<dyn PlatformTextSystem> = text_system;
+        let text_system: Arc<dyn PlatformTextSystem> =
+            Arc::new(gpui_parley::ParleyTextSystem::without_system_fonts());
         let active_display: Rc<dyn PlatformDisplay> =
             Rc::new(WebDisplay::new(browser_window.clone()));
 

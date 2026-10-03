@@ -132,10 +132,9 @@ impl LinuxCommon {
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            gpui_parley::ParleyTextSystem::new_with_rasterizer(
+            gpui_parley::ParleyTextSystem::new_with_system_font(
                 gpui_parley::SystemFonts::Load,
                 "IBM Plex Sans",
-                gpui_parley::SwashGlyphRasterizer::default(),
             )
             .with_fallback_families([
                 "Lilex",

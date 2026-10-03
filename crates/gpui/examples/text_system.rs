@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Bounds, Context, FontFallbacks, FontFeatures, FontStyle, FontWeight, HighlightStyle,
+    App, Bounds, Context, Div, FontFallbacks, FontFeatures, FontStyle, FontWeight, HighlightStyle,
     Render, StrikethroughStyle, StyledText, TextTransform, UnderlineStyle, Window, WindowBounds,
     WindowOptions, div, font, hsla, prelude::*, px, relative, rgb, size,
 };
@@ -108,11 +108,16 @@ fn sample(label: &'static str, content: impl IntoElement) -> impl IntoElement {
         .child(content)
 }
 
+fn sample_row() -> Div {
+    div().flex().flex_wrap().gap_3()
+}
+
+fn paragraph_container() -> Div {
+    div().block().w_full().min_w_0()
+}
+
 fn font_faces() -> impl IntoElement {
-    div()
-        .flex()
-        .flex_wrap()
-        .gap_3()
+    sample_row()
         .child(sample(
             "IBM Plex Sans",
             div()
@@ -213,10 +218,7 @@ fn styled_runs() -> impl IntoElement {
 fn open_type_and_spacing() -> impl IntoElement {
     let ligature_text = "!=  ==  =>  ->  >=  <=";
 
-    div()
-        .flex()
-        .flex_wrap()
-        .gap_3()
+    sample_row()
         .child(sample(
             "Default font features",
             div().font_family("Lilex").text_2xl().child(ligature_text),
@@ -283,10 +285,7 @@ fn paragraph_layout() -> impl IntoElement {
         .flex_col()
         .gap_3()
         .child(
-            div()
-                .block()
-                .w_full()
-                .min_w_0()
+            paragraph_container()
                 .rounded_md()
                 .bg(rgb(SAMPLE_SURFACE))
                 .p_4()
@@ -296,10 +295,7 @@ fn paragraph_layout() -> impl IntoElement {
                 .child(PARAGRAPH),
         )
         .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_3()
+            sample_row()
                 .child(sample(
                     "Line height 1.0",
                     div()
@@ -316,26 +312,17 @@ fn paragraph_layout() -> impl IntoElement {
                 ))
                 .child(sample(
                     "Centered",
-                    div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
+                    paragraph_container()
                         .font_family("IBM Plex Sans")
                         .text_center()
                         .child("Every visual line is centered inside the available width."),
                 )),
         )
         .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_3()
+            sample_row()
                 .child(sample(
                     "End ellipsis",
-                    div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
+                    paragraph_container()
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
@@ -343,10 +330,7 @@ fn paragraph_layout() -> impl IntoElement {
                 ))
                 .child(sample(
                     "Middle ellipsis",
-                    div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
+                    paragraph_container()
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_middle()
@@ -354,10 +338,7 @@ fn paragraph_layout() -> impl IntoElement {
                 ))
                 .child(sample(
                     "Two-line clamp",
-                    div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
+                    paragraph_container()
                         .text_ellipsis()
                         .line_clamp(2)
                         .child(PARAGRAPH),

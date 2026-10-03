@@ -46,6 +46,7 @@ GPUI uses Parley for shaping, wrapping, hit testing, and font fallback on every 
 
 - [Ownership and data flow](_ownership_and_data_flow)
 - [Accessibility](_accessibility)
+- [Direction and bidirectional text](direction.md)
 
 ### Dependencies
 
