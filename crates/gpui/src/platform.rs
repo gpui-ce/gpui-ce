@@ -1544,7 +1544,12 @@ mod tests {
 
     fn add_test_inline_box_advances(layout: &mut LineLayout, request: InlineLayoutRequest<'_>) {
         for fragment in &mut layout.paint_fragments {
-            for (glyph, (index, _)) in fragment.glyphs.iter_mut().zip(request.text.char_indices()) {
+            // This layout owns its freshly built glyphs. If they become shared,
+            // make_mut copies the slice before changing their positions.
+            for (glyph, (index, _)) in Arc::make_mut(&mut fragment.glyphs)
+                .iter_mut()
+                .zip(request.text.char_indices())
+            {
                 glyph.position.x += request
                     .boxes
                     .iter()
@@ -1681,19 +1686,16 @@ mod tests {
             .collect();
             let paint_fragments = (!glyphs.is_empty())
                 .then(|| PaintFragment {
+                    source_run: 0,
                     font_id: FontId(0),
                     font_size,
-                    glyphs,
+                    glyphs: glyphs.into(),
                     x_range: Pixels::ZERO..position + tracking,
                     style: shaping_runs
                         .first()
                         .map_or_else(PaintStyle::default, PaintStyle::from),
-                    underline_offset: shaping_runs
-                        .first()
-                        .and_then(|run| run.underline.map(|_| font_size * 0.1)),
-                    strikethrough_offset: shaping_runs
-                        .first()
-                        .and_then(|run| run.strikethrough.map(|_| -font_size * 0.3)),
+                    underline_offset: Some(font_size * 0.1),
+                    strikethrough_offset: Some(-font_size * 0.3),
                 })
                 .into_iter()
                 .collect();
