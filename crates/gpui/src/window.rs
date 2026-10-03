@@ -6969,7 +6969,8 @@ impl Window {
         target_family = "wasm",
         target_os = "linux",
         target_os = "freebsd",
-        target_os = "macos"
+        target_os = "macos",
+        target_os = "windows"
     ))]
     pub fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context_info()
