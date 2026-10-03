@@ -344,9 +344,7 @@ mod tests {
 mod custom_gpu_tests {
     use std::sync::Arc;
 
-    use gpui::{
-        Bounds, ContentMask, DevicePixels, Point, Scene, ScaledPixels, Size, SurfaceSource,
-    };
+    use gpui::{Bounds, Point, Scene, ScaledPixels, Size, SurfaceSource};
 
     use super::*;
     use crate::{WgpuContext, WgpuRenderer};
@@ -415,14 +413,14 @@ mod custom_gpu_tests {
         let mut scene = Scene::default();
         scene.insert_primitive(gpui::Quad {
             bounds: full.clone(),
-            content_mask: gpui::ContentMask { bounds: full.clone() },
+            content_mask: gpui::ContentMask { bounds: full.clone(), ..Default::default() },
             background: gpui::solid_background(gpui::white()),
             ..Default::default()
         });
         scene.insert_primitive(gpui::PaintSurface {
             order: 1,
             bounds: bounds(2.0, 2.0),
-            content_mask: gpui::ContentMask { bounds: full.clone() },
+            content_mask: gpui::ContentMask { bounds: full.clone(), ..Default::default() },
             source: SurfaceSource::Texture {
                 texture,
                 size: gpui::size(gpui::DevicePixels(2), gpui::DevicePixels(2)),

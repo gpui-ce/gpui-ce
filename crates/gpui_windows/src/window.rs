@@ -142,7 +142,7 @@ impl WindowsWindowState {
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
         #[cfg(feature = "wgpu")]
-        let _ = directx_devices;
+        let _ = (directx_devices, disable_direct_composition);
         #[cfg(feature = "wgpu")]
         let renderer = WindowRenderer::new(hwnd, renderer_context)?;
         let callbacks = Callbacks::default();
@@ -1109,13 +1109,19 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn draw(&self, scene: &Scene) {
-        // The WGPU renderer drives its own redraw hints internally; both
-        // renderer flavors log and continue after a failed frame.
         self.state
             .renderer
             .borrow_mut()
             .draw(scene, self.state.background_appearance.get())
             .log_err();
+        // The WGPU renderer flags skipped frames (device lost, recovery
+        // deferred, surface lost) so the next vsync forces a render — an
+        // unchanged scene is not re-drawn on its own, which would leave the
+        // window blank.
+        #[cfg(feature = "wgpu")]
+        if self.state.renderer.borrow().needs_redraw() {
+            self.state.force_render_pending.set(true);
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]

@@ -124,6 +124,7 @@ struct DirectXResources {
 }
 
 struct CachedSurfaceView {
+    #[cfg_attr(feature = "wgpu", allow(unfulfilled_lint_expectations))]
     #[expect(dead_code)]
     texture: ID3D11Texture2D,
     srv: Option<ID3D11ShaderResourceView>,
@@ -156,14 +157,17 @@ impl PathResources {
 /// (indexed by isolation depth), up to [`MAX_FILTER_DEPTH`], so nested content blurs isolate
 /// correctly; deeper nests render inline.
 struct BlurResources {
+    #[cfg_attr(feature = "wgpu", allow(unfulfilled_lint_expectations))]
     #[expect(dead_code)]
     scene_color: ID3D11Texture2D,
     scene_color_rtv: Option<ID3D11RenderTargetView>,
     scene_color_srv: Option<ID3D11ShaderResourceView>,
+    #[cfg_attr(feature = "wgpu", allow(unfulfilled_lint_expectations))]
     #[expect(dead_code)]
     ping: ID3D11Texture2D,
     ping_rtv: Option<ID3D11RenderTargetView>,
     ping_srv: Option<ID3D11ShaderResourceView>,
+    #[cfg_attr(feature = "wgpu", allow(unfulfilled_lint_expectations))]
     #[expect(dead_code)]
     pong: ID3D11Texture2D,
     pong_rtv: Option<ID3D11RenderTargetView>,

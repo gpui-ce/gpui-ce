@@ -3,11 +3,12 @@
 //! The control owns its buffers, pipeline, and offscreen target. GPUI owns the
 //! device and queue, so those resources are recreated after device loss.
 //!
-//! Run with `--features custom-gpu` on supported targets. macOS windows also
-//! need the WGPU renderer:
+//! Run with `--features custom-gpu` on supported targets. macOS and Windows
+//! windows also need the WGPU renderer:
 //!
 //! ```sh
-//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/macos-wgpu
+//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/macos-wgpu   # macOS
+//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/windows-wgpu # Windows
 //! ```
 
 #[cfg(any(
