@@ -442,6 +442,11 @@ impl<E: Element> Drawable<E> {
                                 node.set_hidden();
                             }
                             window.a11y.node_bounds.insert(node_id, bounds);
+                            let visible_bounds = bounds.intersect(&window.content_mask().bounds);
+                            window
+                                .a11y
+                                .node_visible_bounds
+                                .insert(node_id, visible_bounds);
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]
                             if pushed_a11y_node {
