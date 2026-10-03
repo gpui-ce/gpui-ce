@@ -8,7 +8,7 @@ mod directx_devices;
 // Kept compiled under the `wgpu` feature too: `direct_write` shares its
 // shader/emoji-rasterization internals. When the `wgpu` feature selects the
 // WGPU renderer, `DirectXRenderer` is simply never instantiated.
-#[cfg_attr(feature = "wgpu", allow(dead_code))]
+#[cfg_attr(feature = "wgpu", allow(dead_code, unfulfilled_lint_expectations))]
 mod directx_renderer;
 mod dispatcher;
 mod display;

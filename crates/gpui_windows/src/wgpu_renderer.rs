@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use gpui::{GpuSpecs, Scene, Size, WindowBackgroundAppearance};
 use gpui_wgpu::{
-    GpuContext, WgpuAtlas, WgpuContextHandle, WgpuDeviceRequirements, WgpuRenderer,
+    GpuContext, WgpuContextHandle, WgpuDeviceRequirements, WgpuRenderer,
     WgpuSurfaceConfig, wgpu,
 };
 use windows::Win32::Foundation::HWND;
@@ -28,12 +28,6 @@ impl Context {
     fn requirements(&self) -> Option<WgpuDeviceRequirements> {
         self.requirements.borrow().clone()
     }
-}
-
-pub type Renderer = WindowsWgpuRenderer;
-
-pub fn new_renderer(hwnd: HWND, context: &Context) -> anyhow::Result<Renderer> {
-    WindowsWgpuRenderer::new(hwnd, context)
 }
 
 fn raw_window_handle_from_hwnd(hwnd: HWND) -> raw_window_handle::RawWindowHandle {
@@ -67,6 +61,10 @@ pub struct WindowsWgpuRenderer {
     raw_window_handle: raw_window_handle::RawWindowHandle,
     size: Size<gpui::DevicePixels>,
     transparent: bool,
+    /// Set when the last frame was skipped (device lost, recovery deferred,
+    /// surface lost): the caller must schedule another frame, or the window
+    /// stays blank because an unchanged scene stops being re-drawn.
+    needs_redraw: std::cell::Cell<bool>,
 }
 
 impl WindowsWgpuRenderer {
@@ -89,6 +87,7 @@ impl WindowsWgpuRenderer {
             raw_window_handle,
             size,
             transparent: false,
+            needs_redraw: std::cell::Cell::new(false),
         })
     }
 
@@ -125,28 +124,19 @@ impl WindowsWgpuRenderer {
     /// state to clear.
     pub fn mark_drawable(&mut self) {}
 
-    pub fn update_drawable_size(&mut self, size: Size<gpui::DevicePixels>) {
-        self.renderer.update_drawable_size(size);
-    }
-
-    /// The surface's alpha mode decides how DWM composites the swapchain, so
-    /// transparency changes go through WGPU rather than window styles.
-    pub fn update_transparency(&mut self, transparent: bool) {
-        self.renderer.update_transparency(transparent);
-    }
-
-    pub fn destroy(&mut self) {
-        self.renderer.destroy();
-    }
-
     /// Draws `scene`, recovering the device first if it was lost. Sizes the
     /// surface to the window's client rect, which Windows changes without
-    /// telling the renderer.
+    /// telling the renderer. When the frame is skipped (device lost, recovery
+    /// deferred, surface lost), [`Self::needs_redraw`] turns on so the caller
+    /// schedules another frame — Windows requests frames with
+    /// `require_presentation: false`, so an unchanged scene is not re-drawn
+    /// on its own and a skipped frame would otherwise leave the window blank.
     pub fn draw(
         &mut self,
         scene: &Scene,
         background_appearance: WindowBackgroundAppearance,
     ) -> anyhow::Result<()> {
+        self.needs_redraw.set(false);
         let transparent = background_appearance != WindowBackgroundAppearance::Opaque;
         if transparent != self.transparent {
             self.transparent = transparent;
@@ -156,6 +146,7 @@ impl WindowsWgpuRenderer {
         if size != self.size {
             self.size = size;
             self.renderer.update_drawable_size(size);
+            self.needs_redraw.set(true);
         }
         if self.renderer.device_lost() {
             if let Err(error) = self
@@ -165,11 +156,22 @@ impl WindowsWgpuRenderer {
                 log::warn!("GPU recovery failed, will retry on next frame: {error}");
             }
             if self.renderer.device_lost() {
+                self.needs_redraw.set(true);
                 return Ok(());
             }
+            self.needs_redraw.set(true);
         }
-        self.renderer.draw(scene);
+        if !self.renderer.draw(scene) {
+            // The frame was not presented (surface lost/outdated and the
+            // automatic reconfigure has not taken effect yet).
+            self.needs_redraw.set(true);
+        }
         Ok(())
+    }
+
+    /// Whether the last frame was skipped and another one must be scheduled.
+    pub fn needs_redraw(&self) -> bool {
+        self.needs_redraw.get()
     }
 
     pub fn gpu_specs(&self) -> anyhow::Result<GpuSpecs> {

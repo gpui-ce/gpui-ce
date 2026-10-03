@@ -106,7 +106,9 @@ impl WgpuRenderer {
     /// Creates a renderer presenting to a native window identified only by its
     /// raw window handle, for platforms whose window types do not implement
     /// `HasWindowHandle` (the Win32 `HWND` path). Windows shares one device
-    /// through `gpu_context` like [`Self::new`].
+    /// through `gpu_context` like [`Self::new`]; DXGI requires the instance to
+    /// carry a (stateless) Windows display handle, so this path synthesizes
+    /// one instead of taking it from the window.
     #[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
     pub fn new_for_raw_window_handle(
         gpu_context: GpuContext,
@@ -114,31 +116,13 @@ impl WgpuRenderer {
         config: WgpuSurfaceConfig,
         extra_requirements: Option<WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self> {
-        let mut context_slot = gpu_context.borrow_mut();
-        let (context, surface) = match context_slot.as_mut() {
-            Some(context) => {
-                let surface = create_surface(&context.instance, raw_window_handle)?;
-                context.check_compatible_with_surface(&surface)?;
-                (context, surface)
-            }
-            None => {
-                let (context, surface) = initialize_context_and_surface_raw(
-                    raw_window_handle,
-                    SoftwareAdapterPolicy::Allow,
-                    extra_requirements.as_ref(),
-                )?;
-                (context_slot.insert(context), surface)
-            }
-        };
-        let atlas = Arc::new(WgpuAtlas::from_context(context));
-        Self::new_internal(
-            Some(Rc::clone(&gpu_context)),
-            context,
-            Some(surface),
+        Self::new_for_target(
+            gpu_context,
+            &|| Some(Box::new(WindowsDisplayHandleSource) as _),
+            NativeSurfaceTarget::Window(raw_window_handle),
             config,
             None,
             extra_requirements,
-            atlas,
         )
     }
 
@@ -148,78 +132,10 @@ impl WgpuRenderer {
         &mut self,
         raw_window_handle: raw_window_handle::RawWindowHandle,
     ) -> anyhow::Result<()> {
-        let gpu_context = self.context.as_ref().expect("recover requires gpu_context");
-        let needs_new_context = gpu_context
-            .borrow()
-            .as_ref()
-            .is_none_or(WgpuContext::device_lost);
-        if needs_new_context {
-            let now = std::time::Instant::now();
-            match self.faults.recovery_not_before {
-                None => {
-                    self.faults.recovery_not_before =
-                        Some(now + std::time::Duration::from_millis(350));
-                    anyhow::bail!("waiting for the GPU driver to stabilize before recovery");
-                }
-                Some(not_before) if now < not_before => {
-                    anyhow::bail!("waiting for the GPU driver to stabilize before recovery");
-                }
-                Some(_) => self.faults.recovery_not_before = None,
-            }
-        } else {
-            self.faults.recovery_not_before = None;
-        }
-
-        let surface = if needs_new_context {
-            log::warn!("GPU device lost, recreating context...");
-            self.resources = None;
-            *gpu_context.borrow_mut() = None;
-            let (new_context, surface) = match initialize_context_and_surface_raw(
-                raw_window_handle,
-                SoftwareAdapterPolicy::Reject,
-                self.extra_requirements.as_ref(),
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    self.faults.recovery_not_before =
-                        Some(std::time::Instant::now() + std::time::Duration::from_millis(350));
-                    return Err(error);
-                }
-            };
-            *gpu_context.borrow_mut() = Some(new_context);
-            surface
-        } else {
-            let context_slot = gpu_context.borrow();
-            let instance = &context_slot
-                .as_ref()
-                .expect("a recovered context must exist")
-                .instance;
-            create_surface(instance, raw_window_handle)?
-        };
-
-        let config = self.target.recovery_config();
-        let gpu_context = Rc::clone(gpu_context);
-        let context_slot = gpu_context.borrow();
-        let context = context_slot.as_ref().expect("context should exist");
-        self.resources = None;
-        self.atlas.handle_device_lost(context);
-
-        let font_rasterization = self.rendering_params.font_rasterization;
-        let subpixel_order = self.subpixel_order;
-        let mut recovered = Self::new_internal(
-            Some(Rc::clone(&gpu_context)),
-            context,
-            Some(surface),
-            config,
-            self.compositor_gpu,
-            self.extra_requirements.clone(),
-            Arc::clone(&self.atlas),
-        )?;
-        recovered.set_font_rasterization_settings(font_rasterization);
-        recovered.set_subpixel_order(subpixel_order);
-        *self = recovered;
-        log::info!("GPU recovery complete");
-        Ok(())
+        self.recover_target(
+            &|| Some(Box::new(WindowsDisplayHandleSource) as _),
+            NativeSurfaceTarget::Window(raw_window_handle),
+        )
     }
 
     #[cfg(target_family = "wasm")]
@@ -534,28 +450,6 @@ fn initialize_context_and_surface(
             instance,
             &surface,
             compositor_gpu,
-            adapter_policy,
-            extra_requirements,
-        )?;
-        Ok((context, surface))
-    })
-}
-
-/// The Windows HWND path: DXGI enumerates adapters without a display handle,
-/// so the wgpu instance is created without one.
-#[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
-fn initialize_context_and_surface_raw(
-    raw_window_handle: raw_window_handle::RawWindowHandle,
-    adapter_policy: SoftwareAdapterPolicy,
-    extra_requirements: Option<&WgpuDeviceRequirements>,
-) -> anyhow::Result<(WgpuContext, wgpu::Surface<'static>)> {
-    NativeBackend::try_in_preference_order("a GPU context for the window", |backend| {
-        let instance = backend.instance(Some(Box::new(WindowsDisplayHandleSource)));
-        let surface = create_surface(&instance.raw, raw_window_handle)?;
-        let context = WgpuContext::new_with_adapter_policy(
-            instance,
-            &surface,
-            None,
             adapter_policy,
             extra_requirements,
         )?;
