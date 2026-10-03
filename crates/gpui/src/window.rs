@@ -2430,6 +2430,23 @@ impl Window {
         self.platform_window.set_input_region(region);
     }
 
+    /// Linux (Wayland) only: set the keyboard interactivity of this window's
+    /// layer-shell surface.
+    ///
+    /// `Exclusive` requests exclusive keyboard focus for the layer-shell
+    /// surface; `OnDemand` lets the compositor focus it like a normal window;
+    /// `None` prevents it from receiving keyboard focus. Actual focus behavior
+    /// follows layer-shell compositor semantics. `OnDemand` requires
+    /// layer-shell v4 and falls back to `None` on older compositors.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn set_keyboard_interactivity(
+        &self,
+        interactivity: crate::layer_shell::KeyboardInteractivity,
+    ) {
+        self.platform_window
+            .set_keyboard_interactivity(interactivity);
+    }
+
     /// Return the `WindowBounds` to indicate that how a window should be opened
     /// after it has been closed
     pub fn window_bounds(&self) -> WindowBounds {
