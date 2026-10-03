@@ -149,17 +149,17 @@ impl WindowsWgpuRenderer {
             self.needs_redraw.set(true);
         }
         if self.renderer.device_lost() {
+            self.needs_redraw.set(true);
             if let Err(error) = self
                 .renderer
                 .recover_raw_window_handle(self.raw_window_handle)
             {
                 log::warn!("GPU recovery failed, will retry on next frame: {error}");
             }
-            if self.renderer.device_lost() {
-                self.needs_redraw.set(true);
-                return Ok(());
-            }
-            self.needs_redraw.set(true);
+            // Never draw with the pre-recovery scene: recovery cleared the
+            // atlas, so its sprite tile references are gone. The forced frame
+            // requested via needs_redraw rebuilds the scene and presents it.
+            return Ok(());
         }
         if !self.renderer.draw(scene) {
             // The frame was not presented (surface lost/outdated and the
