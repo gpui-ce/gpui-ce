@@ -73,6 +73,9 @@ mod source {
         LinearGradient = 1,
         PatternSlash = 2,
         Checkerboard = 3,
+        RadialGradient = 4,
+        AngularGradient = 5,
+        DiamondGradient = 6,
     }
 
     #[repr(u32)]
@@ -632,7 +635,11 @@ mod source {
     pub fn prepare_paint(paint: Paint) -> PreparedPaint {
         let mut prepared = PreparedPaint::new(transparent(), transparent(), transparent());
 
-        if paint.background.tag == BackgroundTag::LinearGradient {
+        if paint.background.tag == BackgroundTag::LinearGradient
+            || paint.background.tag == BackgroundTag::RadialGradient
+            || paint.background.tag == BackgroundTag::AngularGradient
+            || paint.background.tag == BackgroundTag::DiamondGradient
+        {
             prepared.color0 = hsla_to_rgba(paint.background.colors[0usize].color);
             prepared.color1 = hsla_to_rgba(paint.background.colors[1usize].color);
             if paint.background.color_space == ColorSpace::Srgb {
@@ -649,24 +656,44 @@ mod source {
         prepared
     }
 
-    pub fn linear_gradient_ratio(paint: Paint, position: Vec2f) -> f32 {
+    pub fn gradient_ratio(paint: Paint, position: Vec2f) -> f32 {
         let radians = (paint.background.gradient_angle_or_pattern_height % FULL_TURN_DEGREES
             - CSS_GRADIENT_OFFSET_DEGREES)
             * PI
             / HALF_TURN_DEGREES;
-        let mut direction = vec2f(cos(radians), sin(radians));
-        if paint.bounds.size.x > paint.bounds.size.y {
-            direction.y *= paint.bounds.size.y / paint.bounds.size.x;
-        } else {
-            direction.x *= paint.bounds.size.x / paint.bounds.size.y;
-        }
-
         let half_size = Bounds::half_size(paint.bounds);
-        let mut ratio = dot(position - Bounds::center(paint.bounds), direction) / length(direction);
-        if abs(direction.x) > abs(direction.y) {
-            ratio = (ratio + half_size.x) / paint.bounds.size.x;
+        let delta = position - Bounds::center(paint.bounds);
+        let mut ratio = 0.0;
+        if paint.background.tag == BackgroundTag::RadialGradient {
+            let normalized = delta / max(half_size, vec2f(0.0001, 0.0001));
+            ratio = length(normalized);
+        } else if paint.background.tag == BackgroundTag::AngularGradient {
+            // At the center there is no angle; use the first stop deterministically.
+            if dot(delta, delta) > 0.0 {
+                ratio = fract((atan2(delta.y, delta.x) - radians) / (2.0 * PI) + 1.0);
+            }
+        } else if paint.background.tag == BackgroundTag::DiamondGradient {
+            let normalized = delta / max(half_size, vec2f(0.0001, 0.0001));
+            let cosine = cos(radians);
+            let sine = sin(radians);
+            let rotated = vec2f(
+                normalized.x * cosine + normalized.y * sine,
+                -normalized.x * sine + normalized.y * cosine,
+            );
+            ratio = abs(rotated.x) + abs(rotated.y);
         } else {
-            ratio = (ratio + half_size.y) / paint.bounds.size.y;
+            let mut direction = vec2f(cos(radians), sin(radians));
+            if paint.bounds.size.x > paint.bounds.size.y {
+                direction.y *= paint.bounds.size.y / paint.bounds.size.x;
+            } else {
+                direction.x *= paint.bounds.size.x / paint.bounds.size.y;
+            }
+            ratio = dot(delta, direction) / length(direction);
+            if abs(direction.x) > abs(direction.y) {
+                ratio = (ratio + half_size.x) / paint.bounds.size.x;
+            } else {
+                ratio = (ratio + half_size.y) / paint.bounds.size.y;
+            }
         }
 
         let first_stop = paint.background.colors[0usize].percentage;
@@ -687,8 +714,8 @@ mod source {
         )
     }
 
-    pub fn linear_gradient_color(paint: Paint, position: Vec2f, prepared: PreparedPaint) -> Vec4f {
-        let ratio = linear_gradient_ratio(paint, position);
+    pub fn gradient_color(paint: Paint, position: Vec2f, prepared: PreparedPaint) -> Vec4f {
+        let ratio = gradient_ratio(paint, position);
         let ratio4 = vec4f(ratio, ratio, ratio, ratio);
         let interpolated = mix(prepared.color0, prepared.color1, ratio4);
         let mut color = transparent();
@@ -735,7 +762,16 @@ mod source {
                 color = prepared.solid;
             }
             BackgroundTag::LinearGradient => {
-                color = linear_gradient_color(paint, position, prepared);
+                color = gradient_color(paint, position, prepared);
+            }
+            BackgroundTag::RadialGradient => {
+                color = gradient_color(paint, position, prepared);
+            }
+            BackgroundTag::AngularGradient => {
+                color = gradient_color(paint, position, prepared);
+            }
+            BackgroundTag::DiamondGradient => {
+                color = gradient_color(paint, position, prepared);
             }
             BackgroundTag::PatternSlash => {
                 color = slash_pattern_color(paint, position, prepared.solid);
