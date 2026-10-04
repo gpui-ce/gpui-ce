@@ -1926,7 +1926,7 @@ mod tests {
         let mut style = Style::default();
         style.refine(&StyleRefinement::default().text_size(px(20.0)));
         style.refine(&StyleRefinement::default().font_weight(FontWeight::SEMIBOLD));
-        style.refine(&StyleRefinement::default().font_width(FontWidth::SEMI_CONDENSED));
+        style.refine(&StyleRefinement::default().font_width(87.5));
 
         assert_eq!(
             Some(AbsoluteLength::from(px(20.0))),

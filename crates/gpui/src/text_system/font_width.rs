@@ -1,18 +1,19 @@
+use derive_more::{Add, FromStr, Sub};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     fmt::{self, Display, Formatter},
     hash::{Hash, Hasher},
 };
 
-/// Font width as a positive finite percentage, with 100 representing normal width.
+/// Font width as a percentage, with 100 representing normal width.
 ///
 /// Selects static width variants or a variable font's `wdth` axis. Requests outside
 /// a variable font's axis range are clamped to that range by the text backend.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize, Add, Sub, FromStr)]
 #[serde(transparent)]
-pub struct FontWidth(f32);
+pub struct FontWidth(pub f32);
 
 impl FontWidth {
     /// Ultra-condensed width, 50% of normal.
@@ -33,24 +34,11 @@ impl FontWidth {
     pub const EXTRA_EXPANDED: Self = Self(150.0);
     /// Ultra-expanded width, 200% of normal.
     pub const ULTRA_EXPANDED: Self = Self(200.0);
+}
 
-    /// Creates a width from a percentage of normal width.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the percentage is nonfinite or not positive.
-    pub fn from_percentage(percentage: f32) -> Self {
-        assert!(
-            percentage.is_finite() && percentage > 0.0,
-            "font width must be a positive finite percentage"
-        );
-
-        Self(percentage)
-    }
-
-    /// Returns the width as a percentage of normal width.
-    pub const fn percentage(self) -> f32 {
-        self.0
+impl From<f32> for FontWidth {
+    fn from(width: f32) -> Self {
+        Self(width)
     }
 }
 
@@ -74,22 +62,6 @@ impl Display for FontWidth {
     }
 }
 
-impl<'de> Deserialize<'de> for FontWidth {
-    fn deserialize<DeserializerType: Deserializer<'de>>(
-        deserializer: DeserializerType,
-    ) -> Result<Self, DeserializerType::Error> {
-        let percentage = f32::deserialize(deserializer)?;
-
-        if !percentage.is_finite() || percentage <= 0.0 {
-            return Err(DeserializerType::Error::custom(
-                "font width must be a positive finite percentage",
-            ));
-        }
-
-        Ok(Self(percentage))
-    }
-}
-
 impl JsonSchema for FontWidth {
     fn schema_name() -> Cow<'static, str> {
         "FontWidth".into()
@@ -108,24 +80,16 @@ impl JsonSchema for FontWidth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::catch_unwind;
 
     #[test]
-    fn percentages_serialize_and_reject_invalid_cache_keys() {
-        for percentage in [0.5, 75.0, 87.5, 100.0, 250.0] {
-            let width = FontWidth::from_percentage(percentage);
+    fn custom_widths_convert_parse_and_serialize() {
+        for percentage in [0.5, 75.0, 82.5, 100.0, 250.0] {
+            let width = FontWidth(percentage);
             let json = serde_json::to_string(&width).unwrap();
 
+            assert_eq!(FontWidth::from(percentage), width);
+            assert_eq!(json.parse::<FontWidth>().unwrap(), width);
             assert_eq!(serde_json::from_str::<FontWidth>(&json).unwrap(), width);
-            assert_eq!(width.percentage(), percentage);
-        }
-
-        for percentage in [0.0, -0.0, -75.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            assert!(catch_unwind(|| FontWidth::from_percentage(percentage)).is_err());
-            let deserializer =
-                serde::de::value::F32Deserializer::<serde::de::value::Error>::new(percentage);
-
-            assert!(FontWidth::deserialize(deserializer).is_err());
         }
 
         assert_eq!(FontWidth::default(), FontWidth::NORMAL);

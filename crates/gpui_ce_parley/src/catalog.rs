@@ -86,7 +86,7 @@ pub(crate) fn resolve_face(
         FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
     }));
     query.set_attributes(Attributes::new(
-        FontWidth::from_percentage(width.percentage()),
+        FontWidth::from_percentage(width.0),
         style,
         FontWeight::new(weight),
     ));

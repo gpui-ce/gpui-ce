@@ -1892,7 +1892,7 @@ impl ParleyTextSystem {
                     StyleProperty::FontFamily(FontFamily::from(family_lists[run_index].as_slice())),
                     StyleProperty::FontWeight(FontWeight::new(descriptor.weight.0)),
                     StyleProperty::FontWidth(parley::FontWidth::from_percentage(
-                        descriptor.width.percentage(),
+                        descriptor.width.0,
                     )),
                     StyleProperty::FontStyle(match descriptor.style {
                         gpui::FontStyle::Normal => FontStyle::Normal,
@@ -4176,7 +4176,7 @@ mod tests {
         run.font.weight = GpuiFontWeight(725.0);
         let normal_id = backend.font_id(&run.font).unwrap();
         let normal = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
-        run.font.width = gpui::FontWidth::CONDENSED;
+        run.font.width = gpui::FontWidth(82.5);
         let condensed_id = backend.font_id(&run.font).unwrap();
         let condensed = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
 

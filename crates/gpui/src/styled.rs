@@ -738,8 +738,10 @@ pub trait Styled: Sized {
     }
 
     /// Sets the font width of this element and its children.
-    fn font_width(mut self, width: FontWidth) -> Self {
-        self.text_style().font_width = Some(width);
+    ///
+    /// Accepts a percentage or a [`FontWidth`] preset.
+    fn font_width(mut self, width: impl Into<FontWidth>) -> Self {
+        self.text_style().font_width = Some(width.into());
 
         self
     }
