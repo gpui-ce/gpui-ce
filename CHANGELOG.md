@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Additions
 
 - Changelog established
+- Default text layout system switched to [parley](https://github.com/linebender/parley) [#267](https://github.com/gpui-ce/gpui-ce/pull/267)
 
 ### Removals
 
@@ -27,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Contributors
 
 Thanks to the people who made this release happen!
+
+- Cameron Campbell (@cameronpcampbell)
 
 ## [0.2.2] - 2026-08-28
 
