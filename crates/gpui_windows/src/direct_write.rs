@@ -955,8 +955,8 @@ mod tests {
 
     use super::*;
     use gpui::{
-        FontStyle, FontWeight, ForegroundDependency, Point, RasterizedGlyphFormat, Rgba, font, px,
-        rgba,
+        FontStyle, FontWeight, FontWidth, ForegroundDependency, Point, RasterizedGlyphFormat, Rgba,
+        font, px, rgba,
     };
     use gpui_parley::FontSynthesis;
 
@@ -966,10 +966,17 @@ mod tests {
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf");
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
+    const NOTO_SANS: &[u8] =
+        include_bytes!("../../../assets/fonts/noto-sans/NotoSans[wdth,wght].subset.ttf");
+
     #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
         let system = DirectWriteTextSystem::new_headless()?;
-        system.add_fonts(vec![Cow::Borrowed(IBM_PLEX), Cow::Borrowed(SOURCE_SERIF)])?;
+        system.add_fonts(vec![
+            Cow::Borrowed(IBM_PLEX),
+            Cow::Borrowed(SOURCE_SERIF),
+            Cow::Borrowed(NOTO_SANS),
+        ])?;
 
         let regular_id = system.font_id(&font("IBM Plex Sans"))?;
         let regular_glyph = system
@@ -1056,31 +1063,38 @@ mod tests {
         let mut bold = light.clone();
         bold.weight = FontWeight::BOLD;
         bold.style = FontStyle::Normal;
-        let light_id = system.font_id(&light)?;
-        let bold_id = system.font_id(&bold)?;
-        let light_glyph = system
-            .glyph_for_char(light_id, 'A')
-            .context("light Source Serif has no A glyph")?;
-        let bold_glyph = system
-            .glyph_for_char(bold_id, 'A')
-            .context("bold Source Serif has no A glyph")?;
-        let light = rasterize(
-            &system,
-            light_id,
-            light_glyph,
-            GlyphRenderMode::Grayscale,
-            point(0, 0),
-            2.0,
-        )?;
-        let bold = rasterize(
-            &system,
-            bold_id,
-            bold_glyph,
-            GlyphRenderMode::Grayscale,
-            point(0, 0),
-            2.0,
-        )?;
-        assert_ne!((light.bounds, light.pixels), (bold.bounds, bold.pixels));
+        let rasterize_font = |descriptor: &gpui::Font| {
+            let font_id = system.font_id(descriptor)?;
+            let glyph_id = system
+                .glyph_for_char(font_id, 'A')
+                .context("fixture has no A glyph")?;
+
+            rasterize(
+                &system,
+                font_id,
+                glyph_id,
+                GlyphRenderMode::Grayscale,
+                point(0, 0),
+                2.0,
+            )
+        };
+
+        for (first, second) in [
+            (light, bold),
+            (
+                font("Noto Sans"),
+                gpui::Font {
+                    width: FontWidth::CONDENSED,
+                    ..font("Noto Sans")
+                },
+            ),
+        ] {
+            let first = rasterize_font(&first)?;
+            let second = rasterize_font(&second)?;
+            first.validate()?;
+            second.validate()?;
+            assert_ne!((first.bounds, first.pixels), (second.bounds, second.pixels));
+        }
 
         Ok(())
     }

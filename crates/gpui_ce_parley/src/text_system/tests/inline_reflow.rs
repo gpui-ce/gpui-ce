@@ -1,4 +1,6 @@
 use super::*;
+use crate::font_fixtures::NOTO_SANS;
+use gpui::FontWidth;
 
 const SCALE_FACTOR: f32 = 1.5;
 
@@ -243,6 +245,7 @@ fn headless() -> HeadlessAppContext {
         .add_fonts(vec![
             Cow::Borrowed(IBM_PLEX.data),
             Cow::Borrowed(IBM_PLEX_SEMIBOLD.data),
+            Cow::Borrowed(NOTO_SANS.data),
         ])
         .unwrap();
     HeadlessAppContext::new(Arc::new(system))
@@ -345,6 +348,7 @@ const LINE_CLAMP_TEXT: &str = "A paragraph can wrap at word boundaries while kee
 
 struct OverflowParagraph {
     text: &'static str,
+    font: Font,
     width: f32,
     direction: gpui::TruncateFrom,
     max_lines: Option<usize>,
@@ -359,6 +363,7 @@ impl OverflowParagraph {
     fn new(direction: gpui::TruncateFrom) -> Self {
         Self {
             text: OVERFLOW_TEXT,
+            font: font(IBM_PLEX.family),
             width: 180.,
             direction,
             max_lines: None,
@@ -377,7 +382,7 @@ impl Render for OverflowParagraph {
             .block()
             .w_full()
             .min_w_0()
-            .font_family("IBM Plex Sans")
+            .font(self.font.clone())
             .text_size(px(14.))
             .line_height(px(24.))
             .text_color(first_group_color());
@@ -620,6 +625,37 @@ fn block_paragraph_remeasures_nowrap_overflow_and_restores_original_text() {
     }
 
     assert_eq!(painted.borrow()[0].0, initial);
+
+    update_view(&mut cx, window, |view| {
+        view.text = "hello gpui-ce";
+        view.font = font(NOTO_SANS.family);
+        view.width = 500.;
+    });
+    let normal = painted.borrow()[0].1.size.width;
+    update_view(&mut cx, window, |view| {
+        view.font.width = FontWidth::CONDENSED
+    });
+    let condensed = painted.borrow()[0].1.size.width;
+    let available_width = f32::from((normal + condensed) / 2.0);
+    assert!(condensed < normal);
+
+    for width in [
+        FontWidth::CONDENSED,
+        FontWidth::NORMAL,
+        FontWidth::CONDENSED,
+    ] {
+        update_view(&mut cx, window, |view| {
+            view.font.width = width;
+            view.width = available_width;
+        });
+        let captured = painted.borrow();
+        let (text, layout) = &captured[0];
+        assert_paragraph_fits(text, layout, available_width, 1);
+        assert_eq!(
+            text.as_ref() == "hello gpui-ce",
+            width == FontWidth::CONDENSED
+        );
+    }
 }
 
 #[test]
@@ -724,6 +760,7 @@ fn quads(
 
 struct NestedWrapping {
     width: f32,
+    font_width: FontWidth,
     flat: bool,
 }
 
@@ -737,7 +774,8 @@ impl Render for NestedWrapping {
         let mut paragraph = div()
             .block()
             .w(px(self.width))
-            .font_family("IBM Plex Sans")
+            .font_family(NOTO_SANS.family)
+            .font_width(self.font_width)
             .text_size(px(17.))
             .line_height(px(23.))
             .debug_selector(|| "paragraph".into());
@@ -759,6 +797,7 @@ impl Render for NestedWrapping {
                         color: Some(second_group_color()),
                         background_color: Some(second_group_color()),
                         font_weight: Some(GpuiFontWeight::SEMIBOLD),
+                        font_width: Some(FontWidth::NORMAL),
                         ..Default::default()
                     },
                 ),
@@ -776,6 +815,7 @@ impl Render for NestedWrapping {
                             div()
                                 .inline()
                                 .font_weight(GpuiFontWeight::SEMIBOLD)
+                                .font_width(FontWidth::NORMAL)
                                 .text_color(second_group_color())
                                 .text_bg(second_group_color())
                                 .child(INNER),
@@ -796,6 +836,7 @@ fn nested_spans_wrap_like_flat_styled_text_without_boundary_breaks() {
             window.set_scale_factor(SCALE_FACTOR);
             cx.new(|_| NestedWrapping {
                 width: 130.,
+                font_width: FontWidth::NORMAL,
                 flat: false,
             })
         })
@@ -805,16 +846,25 @@ fn nested_spans_wrap_like_flat_styled_text_without_boundary_breaks() {
             window.set_scale_factor(SCALE_FACTOR);
             cx.new(|_| NestedWrapping {
                 width: 130.,
+                font_width: FontWidth::NORMAL,
                 flat: true,
             })
         })
         .unwrap();
 
-    for width in [130., 179., 240., 310.] {
+    for (width, font_width) in [
+        (130., FontWidth::NORMAL),
+        (130., FontWidth::CONDENSED),
+        (130., FontWidth::NORMAL),
+        (179., FontWidth::NORMAL),
+        (240., FontWidth::CONDENSED),
+        (310., FontWidth::NORMAL),
+    ] {
         for window in [nested, flat] {
             window
                 .update(&mut cx, |view, _, cx| {
                     view.width = width;
+                    view.font_width = font_width;
                     cx.notify();
                 })
                 .unwrap();

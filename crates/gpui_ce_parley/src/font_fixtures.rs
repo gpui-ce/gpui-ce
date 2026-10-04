@@ -18,6 +18,11 @@ pub(crate) const SOURCE_SERIF: FontFixture = FontFixture {
     data: include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf"),
 };
 
+pub(crate) const NOTO_SANS: FontFixture = FontFixture {
+    family: "Noto Sans",
+    data: include_bytes!("../../../assets/fonts/noto-sans/NotoSans[wdth,wght].subset.ttf"),
+};
+
 pub(crate) const NOTO_ARABIC: FontFixture = FontFixture {
     family: "Noto Sans Arabic",
     data: include_bytes!("../../../assets/fonts/noto-sans-arabic/NotoSansArabic-Regular.ttf"),

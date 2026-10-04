@@ -763,6 +763,7 @@ mod renderer {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use gpui::FontWidth;
 
         const IBM_PLEX: &[u8] =
             include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
@@ -770,6 +771,9 @@ mod renderer {
             include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf");
         const SOURCE_SERIF: &[u8] =
             include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
+        const NOTO_SANS: &[u8] =
+            include_bytes!("../../../assets/fonts/noto-sans/NotoSans[wdth,wght].subset.ttf");
+
         #[test]
         fn collection_faces_are_selected_and_compacted_by_physical_index() {
             let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX, IBM_PLEX_ITALIC]);
@@ -884,9 +888,12 @@ mod renderer {
                 "Source Serif 4",
                 MacGlyphRenderer::new(),
             );
-            system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)]).unwrap();
-            let font_id = system.font_id(&gpui_font("Source Serif 4")).unwrap();
-            let render_pass = || {
+            system
+                .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF), Cow::Borrowed(NOTO_SANS)])
+                .unwrap();
+            let render_pass = |descriptor: &gpui::Font| {
+                let font_id = system.font_id(descriptor).unwrap();
+
                 "Ag&"
                     .chars()
                     .enumerate()
@@ -911,13 +918,16 @@ mod renderer {
                             glyph.pixels.iter().any(|&coverage| coverage != 0),
                             "'{character}' produced an empty coverage mask"
                         );
+
                         glyph
                     })
                     .collect::<Vec<_>>()
             };
 
-            let first_pass = render_pass();
-            let second_pass = render_pass();
+            let descriptor = gpui_font("Source Serif 4");
+            let first_pass = render_pass(&descriptor);
+            let second_pass = render_pass(&descriptor);
+
             for (character, (expected, actual)) in
                 "Ag&".chars().zip(first_pass.iter().zip(&second_pass))
             {
@@ -929,6 +939,17 @@ mod renderer {
                     actual.pixels, expected.pixels,
                     "pixels changed for '{character}'"
                 );
+            }
+
+            let normal = render_pass(&gpui_font("Noto Sans"));
+            let condensed = render_pass(&gpui::Font {
+                width: FontWidth::CONDENSED,
+                ..gpui_font("Noto Sans")
+            });
+
+            for (normal, condensed) in normal.iter().zip(&condensed) {
+                assert!(condensed.size.width < normal.size.width);
+                assert_ne!(condensed.pixels, normal.pixels);
             }
         }
 

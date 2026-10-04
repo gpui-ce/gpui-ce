@@ -1,10 +1,10 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Edges, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures,
-    FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent,
-    LayoutDirection, Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
-    TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle, UnicodeBidi, VerticalAlign,
-    WhiteSpace, px, relative, rems,
+    FontStyle, FontWeight, FontWidth, GridPlacement, GridTemplate, GridTemplateMinSize,
+    JustifyContent, LayoutDirection, Length, Pixels, SharedString, StrikethroughStyle,
+    StyleRefinement, TextAlign, TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle,
+    UnicodeBidi, VerticalAlign, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -737,6 +737,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the font width of this element and its children.
+    fn font_width(mut self, width: FontWidth) -> Self {
+        self.text_style().font_width = Some(width);
+
+        self
+    }
+
     /// Sets the background color of this element.
     ///
     /// This value cascades to its child elements.
@@ -936,6 +943,7 @@ pub trait Styled: Sized {
             features,
             fallbacks,
             weight,
+            width,
             style,
         } = font;
 
@@ -943,6 +951,7 @@ pub trait Styled: Sized {
         text_style.font_family = Some(family);
         text_style.font_features = Some(features);
         text_style.font_weight = Some(weight);
+        text_style.font_width = Some(width);
         text_style.font_style = Some(style);
         text_style.font_fallbacks = fallbacks;
 

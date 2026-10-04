@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
-    PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, phi, point, px, quad, rems, size, transparent_black,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, Pixels,
+    Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
+    Window, black, phi, point, px, quad, rems, size, transparent_black,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -689,6 +689,9 @@ pub struct TextStyle {
     /// The font weight, e.g. bold
     pub font_weight: FontWeight,
 
+    /// The font width as a percentage of normal width.
+    pub font_width: FontWidth,
+
     /// The font style, e.g. italic
     pub font_style: FontStyle,
 
@@ -733,6 +736,7 @@ impl Default for TextStyle {
             font_size: rems(1.).into(),
             line_height: phi().into(),
             font_weight: FontWeight::default(),
+            font_width: FontWidth::default(),
             font_style: FontStyle::default(),
             background_color: None,
             underline: None,
@@ -754,6 +758,11 @@ impl TextStyle {
         if let Some(weight) = style.font_weight {
             self.font_weight = weight;
         }
+
+        if let Some(width) = style.font_width {
+            self.font_width = width;
+        }
+
         if let Some(style) = style.font_style {
             self.font_style = style;
         }
@@ -788,6 +797,7 @@ impl TextStyle {
             features: self.font_features.clone(),
             fallbacks: self.font_fallbacks.clone(),
             weight: self.font_weight,
+            width: self.font_width,
             style: self.font_style,
         }
     }
@@ -806,6 +816,7 @@ impl TextStyle {
                 features: self.font_features.clone(),
                 fallbacks: self.font_fallbacks.clone(),
                 weight: self.font_weight,
+                width: self.font_width,
                 style: self.font_style,
             },
             color: self.color,
@@ -831,6 +842,9 @@ pub struct HighlightStyle {
 
     /// The font weight, e.g. bold
     pub font_weight: Option<FontWeight>,
+
+    /// The font width as a percentage of normal width.
+    pub font_width: Option<FontWidth>,
 
     /// The font style, e.g. italic
     pub font_style: Option<FontStyle>,
@@ -1239,6 +1253,7 @@ impl From<&TextStyle> for HighlightStyle {
         Self {
             color: Some(other.color),
             font_weight: Some(other.font_weight),
+            font_width: Some(other.font_width),
             font_style: Some(other.font_style),
             background_color: other.background_color,
             underline: other.underline,
@@ -1272,6 +1287,7 @@ impl HighlightStyle {
                 })
                 .or(self.color),
             font_weight: other.font_weight.or(self.font_weight),
+            font_width: other.font_width.or(self.font_width),
             font_style: other.font_style.or(self.font_style),
             background_color: other.background_color.or(self.background_color),
             underline: other.underline.or(self.underline),
@@ -1743,6 +1759,7 @@ mod tests {
             fade_out: Some(0.),
             font_style: Some(FontStyle::Italic),
             font_weight: Some(FontWeight(300.)),
+            font_width: Some(FontWidth::CONDENSED),
             background_color: Some(yellow()),
             underline: Some(UnderlineStyle {
                 thickness: px(2.),
@@ -1751,6 +1768,11 @@ mod tests {
             }),
         };
         let expected_style = style_b;
+
+        assert_eq!(
+            TextStyle::default().highlight(style_b).font_width,
+            FontWidth::CONDENSED
+        );
 
         let style_a = style_a.highlight(style_b);
         assert_eq!(
@@ -1775,6 +1797,7 @@ mod tests {
             fade_out: Some(0.),
             font_style: Some(FontStyle::Oblique),
             font_weight: Some(FontWeight(800.)),
+            font_width: Some(FontWidth::EXPANDED),
             background_color: Some(green()),
             underline: Some(UnderlineStyle {
                 thickness: px(4.),
@@ -1793,6 +1816,7 @@ mod tests {
             fade_out: Some(0.),
             font_style: Some(FontStyle::Oblique),
             font_weight: Some(FontWeight(800.)),
+            font_width: Some(FontWidth::EXPANDED),
             background_color: Some(green()),
             underline: Some(UnderlineStyle {
                 thickness: px(4.),
@@ -1902,6 +1926,7 @@ mod tests {
         let mut style = Style::default();
         style.refine(&StyleRefinement::default().text_size(px(20.0)));
         style.refine(&StyleRefinement::default().font_weight(FontWeight::SEMIBOLD));
+        style.refine(&StyleRefinement::default().font_width(FontWidth::SEMI_CONDENSED));
 
         assert_eq!(
             Some(AbsoluteLength::from(px(20.0))),
@@ -1912,6 +1937,22 @@ mod tests {
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
         );
+
+        let mut resolved = TextStyle::default();
+        resolved.refine(style.text_style().unwrap());
+        let inherited = resolved.highlight(HighlightStyle::color(red()));
+
+        assert_eq!(inherited.font().width, FontWidth::SEMI_CONDENSED);
+        assert_eq!(inherited.to_run(4).font.width, FontWidth::SEMI_CONDENSED);
+        assert_eq!(
+            HighlightStyle::from(&inherited).font_width,
+            Some(FontWidth::SEMI_CONDENSED)
+        );
+
+        let mut element = crate::div()
+            .font_width(FontWidth::CONDENSED)
+            .font(crate::font("IBM Plex Sans"));
+        assert_eq!(element.text_style().font_width, Some(FontWidth::NORMAL));
     }
 
     #[test]

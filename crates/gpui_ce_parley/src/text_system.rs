@@ -1493,6 +1493,7 @@ impl ParleyTextSystem {
             resolve_face(
                 &mut state.font_context,
                 &families,
+                descriptor.width,
                 descriptor.weight.0,
                 descriptor.style,
             )
@@ -1890,6 +1891,9 @@ impl ParleyTextSystem {
                 for property in [
                     StyleProperty::FontFamily(FontFamily::from(family_lists[run_index].as_slice())),
                     StyleProperty::FontWeight(FontWeight::new(descriptor.weight.0)),
+                    StyleProperty::FontWidth(parley::FontWidth::from_percentage(
+                        descriptor.width.percentage(),
+                    )),
                     StyleProperty::FontStyle(match descriptor.style {
                         gpui::FontStyle::Normal => FontStyle::Normal,
                         gpui::FontStyle::Italic => FontStyle::Italic,
@@ -2471,7 +2475,7 @@ impl PlatformTextSystem for ParleyTextSystem {
 mod tests {
     use super::*;
     use crate::font_fixtures::{
-        IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW,
+        IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS,
         SOURCE_SERIF,
     };
     use crate::{FontSynthesis, FontVariation, RasterFace};
@@ -2519,6 +2523,7 @@ mod tests {
                 Cow::Borrowed(IBM_PLEX_SEMIBOLD.data),
                 Cow::Borrowed(LILEX.data),
                 Cow::Borrowed(SOURCE_SERIF.data),
+                Cow::Borrowed(NOTO_SANS.data),
                 Cow::Borrowed(NOTO_COLOR_EMOJI.data),
                 Cow::Borrowed(NOTO_ARABIC.data),
                 Cow::Borrowed(NOTO_HEBREW.data),
@@ -3969,12 +3974,34 @@ mod tests {
     fn paragraph_caches_preserve_shaping_across_widths_and_edits() {
         let system = test_system();
         let text = "one two three four five";
-        let runs = [text_run(text, "IBM Plex Sans")];
-        layout_wrapped(&system, text, px(18.0), &runs, px(80.0), None);
-        layout_wrapped(&system, text, px(18.0), &runs, px(140.0), None);
+        let runs = [text_run(text, NOTO_SANS.family)];
+        let normal = layout_line(&system, text, px(18.0), &runs);
+        let mut condensed_runs = runs.clone();
+        condensed_runs[0].font.width = gpui::FontWidth::CONDENSED;
+        let condensed = layout_line(&system, text, px(18.0), &condensed_runs);
+        let wrap_width = (normal.width + condensed.width) / 2.0;
 
-        assert_eq!(system.paragraph_cache.lock().entries.len(), 1);
-        assert_eq!(system.paragraph_result_cache.lock().entries.len(), 2);
+        assert!(condensed.width < normal.width);
+        assert_eq!(
+            layout_wrapped(&system, text, px(18.0), &runs, wrap_width, None)
+                .visual_lines
+                .len(),
+            2
+        );
+        assert_eq!(
+            layout_wrapped(&system, text, px(18.0), &condensed_runs, wrap_width, None)
+                .visual_lines
+                .len(),
+            1
+        );
+        assert_eq!(system.paragraph_cache.lock().entries.len(), 2);
+        assert_eq!(system.paragraph_result_cache.lock().entries.len(), 4);
+
+        let restored = layout_line(&system, text, px(18.0), &runs);
+        assert!(Arc::ptr_eq(
+            &normal.platform_layout,
+            &restored.platform_layout
+        ));
 
         let first = "stable paragraph\nfirst ending";
         let second = "stable paragraph\nsecond ending";
@@ -4009,6 +4036,8 @@ mod tests {
         let text = "left right";
         let mut left = text_run("left ", "IBM Plex Sans");
         let mut right = text_run("right", "IBM Plex Sans");
+        left.font.family = NOTO_SANS.family.into();
+        left.font.width = gpui::FontWidth::CONDENSED;
         let first = layout_line(&system, text, px(18.0), &[left.clone(), right.clone()]);
 
         left.color = hsla(0.0, 0.8, 0.4, 1.0);
@@ -4117,7 +4146,10 @@ mod tests {
         let fallback_id = before.paint_fragments[0].font_id;
 
         backend
-            .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
+            .add_fonts(vec![
+                Cow::Borrowed(SOURCE_SERIF.data),
+                Cow::Borrowed(NOTO_SANS.data),
+            ])
             .unwrap();
         let after = window_text_system
             .shape_text(text, px(18.0), &[run], None, None)
@@ -4139,6 +4171,30 @@ mod tests {
         let variable_id = backend.font_id(&variable).unwrap();
         let source_serif_regular = backend.font_id(&font(SOURCE_SERIF.family)).unwrap();
         assert_ne!(source_serif_regular, variable_id);
+
+        let mut run = text_run("H", NOTO_SANS.family);
+        run.font.weight = GpuiFontWeight(725.0);
+        let normal_id = backend.font_id(&run.font).unwrap();
+        let normal = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
+        run.font.width = gpui::FontWidth::CONDENSED;
+        let condensed_id = backend.font_id(&run.font).unwrap();
+        let condensed = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
+
+        assert_eq!(condensed.paint_fragments[0].font_id, condensed_id);
+        assert_ne!(normal_id, condensed_id);
+        assert!(condensed.width < normal.width);
+
+        let glyph_id = condensed.paint_fragments[0].glyphs[0].id;
+        let advance = backend.advance(condensed_id, glyph_id).unwrap().width;
+        let units_per_em = backend.font_metrics(condensed_id).units_per_em as f32;
+        assert!((condensed.width - px(advance / units_per_em * 32.0)).abs() < px(0.01));
+
+        run.font.width = gpui::FontWidth::EXPANDED;
+        assert_eq!(backend.font_id(&run.font).unwrap(), normal_id);
+
+        let mut static_font = font(IBM_PLEX.family);
+        static_font.width = gpui::FontWidth::CONDENSED;
+        assert_eq!(backend.font_id(&static_font).unwrap(), regular);
     }
 
     #[test]

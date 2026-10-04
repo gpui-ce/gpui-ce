@@ -70,6 +70,7 @@ pub(crate) fn family_names(context: &mut FontContext) -> Vec<String> {
 pub(crate) fn resolve_face(
     context: &mut FontContext,
     families: &[FontFamilyName<'_>],
+    width: gpui::FontWidth,
     weight: f32,
     style: gpui::FontStyle,
 ) -> Option<QueryFont> {
@@ -85,7 +86,7 @@ pub(crate) fn resolve_face(
         FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
     }));
     query.set_attributes(Attributes::new(
-        FontWidth::NORMAL,
+        FontWidth::from_percentage(width.percentage()),
         style,
         FontWeight::new(weight),
     ));
@@ -103,21 +104,40 @@ pub(crate) fn resolve_face(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font_fixtures::{IBM_PLEX, IBM_PLEX_SEMIBOLD_ITALIC, LILEX};
+    use crate::font_fixtures::{
+        IBM_PLEX, IBM_PLEX_SEMIBOLD_ITALIC, LILEX, WIDTH_CONDENSED, WIDTH_REGULAR,
+    };
 
     #[test]
     fn registered_fonts_are_enumerated_and_resolved() {
         let mut context = new_font_context(SystemFonts::Skip);
         register_bytes(
             &mut context,
-            &[IBM_PLEX.data, IBM_PLEX_SEMIBOLD_ITALIC.data, LILEX.data],
+            &[
+                IBM_PLEX.data,
+                IBM_PLEX_SEMIBOLD_ITALIC.data,
+                LILEX.data,
+                WIDTH_REGULAR.data,
+                WIDTH_CONDENSED.data,
+            ],
         )
         .unwrap();
 
-        assert_eq!(family_names(&mut context), [IBM_PLEX.family, LILEX.family]);
+        assert_eq!(
+            family_names(&mut context),
+            [WIDTH_REGULAR.family, IBM_PLEX.family, LILEX.family]
+        );
 
         let families = [FontFamilyName::Named(IBM_PLEX.family.into())];
-        let mut resolve = |weight, style| resolve_face(&mut context, &families, weight, style);
+        let mut resolve = |weight, style| {
+            resolve_face(
+                &mut context,
+                &families,
+                gpui::FontWidth::NORMAL,
+                weight,
+                style,
+            )
+        };
         let latin = resolve(400.0, gpui::FontStyle::Normal).unwrap();
         assert_eq!(latin.blob.as_ref(), IBM_PLEX.data);
 
@@ -125,6 +145,24 @@ mod tests {
 
         let semibold_italic = resolve(600.0, gpui::FontStyle::Italic).unwrap();
         assert_eq!(semibold_italic.blob.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC.data);
+
+        let families = [FontFamilyName::Named(WIDTH_REGULAR.family.into())];
+
+        for (width, fixture) in [
+            (gpui::FontWidth::NORMAL, WIDTH_REGULAR),
+            (gpui::FontWidth::CONDENSED, WIDTH_CONDENSED),
+        ] {
+            let resolved = resolve_face(
+                &mut context,
+                &families,
+                width,
+                400.0,
+                gpui::FontStyle::Normal,
+            )
+            .unwrap();
+
+            assert_eq!(resolved.blob.as_ref(), fixture.data);
+        }
     }
 
     #[test]
@@ -137,6 +175,15 @@ mod tests {
         assert_eq!(family_names(&mut context), families_before);
 
         let families = [FontFamilyName::Named(IBM_PLEX.family.into())];
-        assert!(resolve_face(&mut context, &families, 400.0, gpui::FontStyle::Normal).is_none());
+        assert!(
+            resolve_face(
+                &mut context,
+                &families,
+                gpui::FontWidth::NORMAL,
+                400.0,
+                gpui::FontStyle::Normal,
+            )
+            .is_none()
+        );
     }
 }

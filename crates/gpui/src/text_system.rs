@@ -30,11 +30,13 @@ use std::{
 
 mod font_fallbacks;
 mod font_features;
+mod font_width;
 mod line;
 mod line_layout;
 
 pub use font_fallbacks::*;
 pub use font_features::*;
+pub use font_width::*;
 pub use line::*;
 pub use line_layout::*;
 
@@ -984,6 +986,9 @@ pub struct Font {
     /// The font weight.
     pub weight: FontWeight,
 
+    /// The font width. Exhaustive font literals must supply this field.
+    pub width: FontWidth,
+
     /// The font style.
     pub style: FontStyle,
 }
@@ -1000,6 +1005,7 @@ pub fn font(family: impl Into<SharedString>) -> Font {
         family: family.into(),
         features: FontFeatures::default(),
         weight: FontWeight::default(),
+        width: FontWidth::default(),
         style: FontStyle::default(),
         fallbacks: None,
     }
