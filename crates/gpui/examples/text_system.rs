@@ -7,9 +7,9 @@ use std::borrow::Cow;
 
 use example_prelude::init_example;
 use gpui::{
-    App, Bounds, Context, Div, FontFallbacks, FontFeatures, FontStyle, FontWeight, HighlightStyle,
-    Render, StrikethroughStyle, StyledText, TextTransform, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, div, font, hsla, prelude::*, px, relative, rgb, size,
+    App, Bounds, Context, Div, FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth,
+    HighlightStyle, Render, StrikethroughStyle, StyledText, TextTransform, UnderlineStyle, Window,
+    WindowBounds, WindowOptions, div, font, hsla, prelude::*, px, relative, rgb, size,
 };
 
 const IBM_PLEX_REGULAR: &[u8] =
@@ -22,6 +22,8 @@ const IBM_PLEX_SEMIBOLD_ITALIC: &[u8] =
     include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf");
 const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf");
+const NOTO_SANS: &[u8] =
+    include_bytes!("../../../assets/fonts/noto-sans/NotoSans[wdth,wght].subset.ttf");
 const NOTO_SANS_ARABIC: &[u8] =
     include_bytes!("../../../assets/fonts/noto-sans-arabic/NotoSansArabic-Regular.ttf");
 const NOTO_SANS_HEBREW: &[u8] =
@@ -48,6 +50,7 @@ fn register_fonts(cx: &App) {
             Cow::Borrowed(IBM_PLEX_SEMIBOLD_ITALIC),
             Cow::Borrowed(LILEX_REGULAR),
             Cow::Borrowed(LILEX_BOLD),
+            Cow::Borrowed(NOTO_SANS),
             Cow::Borrowed(NOTO_SANS_ARABIC),
             Cow::Borrowed(NOTO_SANS_HEBREW),
             Cow::Borrowed(NOTO_COLOR_EMOJI),
@@ -155,6 +158,26 @@ fn font_faces() -> impl IntoElement {
                         .child("let answer = Some(42);"),
                 ),
         ))
+}
+
+fn variable_font_widths() -> impl IntoElement {
+    sample_row().children(
+        [
+            ("Extra-condensed (62.5%)", FontWidth::EXTRA_CONDENSED),
+            ("Condensed (75%)", FontWidth::CONDENSED),
+            ("Normal (100%)", FontWidth::NORMAL),
+        ]
+        .map(|(label, width)| {
+            sample(
+                label,
+                div()
+                    .font_family("Noto Sans")
+                    .font_width(width)
+                    .text_2xl()
+                    .child("hello gpui-ce"),
+            )
+        }),
+    )
 }
 
 fn styled_runs() -> impl IntoElement {
@@ -440,6 +463,11 @@ impl Render for TextSystemExample {
                             "Font families and faces",
                             "Select a family, weight, and style through inherited element styles.",
                             font_faces(),
+                        ))
+                        .child(section(
+                            "Variable font width",
+                            "Noto Sans at different widths, with the same text, weight, and font size.",
+                            variable_font_widths(),
                         ))
                         .child(section(
                             "Styled runs",
