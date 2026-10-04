@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixes
 
+- Text selection is not cleared when editable-text looses focus [#250](https://github.com/gpui-ce/gpui-ce/issues/250)
+
 ### Security Changes
 
 ### Deprecations
