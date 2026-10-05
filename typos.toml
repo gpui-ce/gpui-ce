@@ -22,6 +22,10 @@ extend-ignore-re = [
   # Stripped version of reserved keyword `type`
   "typ",
   "\\\\u\\{[0-9A-Fa-f]+\\}",
+  # OpenType width axis references and the Noto Sans variable font filename.
+  "`wdth`",
+  "'wdth'",
+  'NotoSans\[wdth,wght\]\.subset\.ttf',
 ]
 check-filename = true
 
