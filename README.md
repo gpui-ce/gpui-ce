@@ -115,9 +115,11 @@ It's mostly API compatible with upstream, but that is changing!
   [Drawing example](crates/gpui/examples/learn/custom_drawing.rs)
 
 ## Setup
+
 View the [setup guide](SETUP.md) for installation instructions.
 
 ## FAQ
+
 - Q: What is our AI Policy?
   A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
 
@@ -126,3 +128,16 @@ View the [setup guide](SETUP.md) for installation instructions.
 
 - Q: How does the project compare to other forks in the ecosystem?
   A: Other forks often develop around the applications that use them. GPUI-CE aims to support a broad range of applications, with a focus on stability.
+
+## License
+
+gpui-ce is free, open source and permissively licensed! All code in this repository is dual-licensed under either:
+
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))
+
+at your option. This means you can select the license you prefer! This dual-licensing approach is the de-facto standard in the Rust ecosystem and there are [very good reasons](https://github.com/bevyengine/bevy/issues/2373) to include both.
+
+### Your contributions
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
