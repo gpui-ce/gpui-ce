@@ -14,7 +14,7 @@ pub use compile::{CompiledPaint, Program, ShaderError};
 pub use expr::{
     Bool, Expr, Scalar, Vec2, Vec3, Vec4, constant, iterate, iterate_until, vec2, vec3, vec4,
 };
-pub use library::{prelude, shape};
+pub use library::{noise, prelude, shape};
 pub use paint::{Paint, Pixel, backdrop, color, paint, rgba};
 pub use prelude::Fragment;
 pub use value::{Arith, CpuValue, Float, Operand, Value, Vector, Widen};

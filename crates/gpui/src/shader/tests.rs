@@ -158,11 +158,68 @@ fn scalars_widen_across_vectors() {
 }
 
 #[test]
+fn shapes_clip_paints_and_fall_back_with_hard_edges() {
+    let dot = paint(|px| {
+        let ring = shape::circle(px.centered(), 30.0).abs() - 4.0;
+        let blob = shape::smooth_union(ring, shape::circle(px.centered(), 8.0), 6.0);
+        color(rgb(0xff8800)).clip(blob)
+    });
+    let at = |uv| dot.evaluate(fragment(uv, [100.0, 100.0])).unwrap().w;
+    // Derivatives are zero on the CPU, so coverage is all or nothing.
+    assert_eq!(at([0.5, 0.5]), 1.0, "the core");
+    assert_eq!(at([0.5, 0.2]), 1.0, "on the ring");
+    assert_eq!(at([0.5, 0.35]), 0.0, "between ring and core");
+    assert_eq!(at([0.0, 0.0]), 0.0, "outside");
+    assert!(dot.compile().unwrap().program.source().contains("fwidth"));
+}
+
+#[test]
+fn triangles_point_up_with_their_corners_at_the_radius() {
+    let distance = |x: f32, y: f32| prelude::Shape::triangle(vec2f(x, y), 100.0);
+    assert!(distance(0.0, -100.0).abs() < 1e-3, "apex");
+    assert!(
+        (distance(0.0, 0.0) + 50.0).abs() < 1e-3,
+        "center, an inradius in"
+    );
+    assert!((distance(0.0, 60.0) - 10.0).abs() < 1e-3, "below the base");
+    assert!(distance(0.0, -110.0) > 9.9, "above the apex");
+}
+
+#[test]
+fn raymarched_spheres_hit_where_expected() {
+    let scene = |p: &Vec3| p.length() - 1.0;
+    let lit = paint(|px| {
+        let origin = Vec3::constant(vec3f(0.0, 0.0, -3.0));
+        let ray = (px.uv() - 0.5).extend(1.0).normalize();
+        let t = shape::raymarch(&origin, &ray, 10.0, 64, scene);
+        let normal = shape::normal(&(&origin + &ray * &t), scene);
+        rgba(t * 0.1, -normal.z(), 0.0, 1.0)
+    });
+    let center = lit.evaluate(fragment([0.5, 0.5], [1.0, 1.0])).unwrap();
+    assert!((center.x - 0.2).abs() < 1e-3, "two units to the surface");
+    assert!((center.y - 1.0).abs() < 1e-3, "facing the camera");
+    lit.compile().unwrap();
+}
+
+#[test]
 fn uniform_derivatives_fold_to_zero() {
     let flat = rgba(Scalar::uniform(3.0).fwidth(), 0.0, 0.0, 1.0);
     let compiled = flat.compile().unwrap();
     assert_eq!(compiled.program.parameter_slots(), 1);
     assert_eq!(compiled.params[0][0], 0.0);
+}
+
+#[test]
+fn value_noise_is_bounded_and_continuous_across_cells() {
+    let grain = paint(|px| rgba(noise::value(px.position()), 0.0, 0.0, 1.0));
+    let sample = |x, y| grain.evaluate(fragment([x, y], [1.0, 1.0])).unwrap().x;
+    assert_eq!(sample(0.0, 0.0), 0.0);
+    for (x, y) in [(3.25, -1.5), (-2.3, 4.8), (0.5, 0.5)] {
+        assert!((0.0..1.0).contains(&sample(x, y)));
+    }
+    assert!((sample(1.0 - 1e-4, 0.3) - sample(1.0 + 1e-4, 0.3)).abs() < 1e-4);
+    assert_ne!(sample(0.25, 0.5), sample(0.75, 0.5));
+    grain.compile().unwrap();
 }
 
 #[test]
