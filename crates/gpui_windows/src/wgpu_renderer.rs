@@ -22,6 +22,11 @@ pub struct Context {
 
 impl Context {
     pub fn set_requirements(&self, requirements: WgpuDeviceRequirements) {
+        if self.gpu.borrow().is_some() {
+            log::warn!(
+                "set_gpu_requirements: the device already exists, so these requirements                  apply only if it is recreated; call it before opening the first window"
+            );
+        }
         *self.requirements.borrow_mut() = Some(requirements);
     }
 
