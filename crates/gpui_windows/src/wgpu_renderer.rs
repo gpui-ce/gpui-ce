@@ -105,21 +105,6 @@ impl WindowsWgpuRenderer {
         Ok(())
     }
 
-    /// The platform broadcasts device loss; the WGPU renderer self-heals on
-    /// the next draw, so this only attempts an immediate recovery.
-    pub fn handle_device_lost(
-        &mut self,
-        _directx_devices: &crate::DirectXDevices,
-    ) -> anyhow::Result<()> {
-        if let Err(error) = self
-            .renderer
-            .recover_raw_window_handle(self.raw_window_handle)
-        {
-            log::warn!("immediate GPU recovery deferred: {error}");
-        }
-        Ok(())
-    }
-
     /// DirectX-specific bookkeeping; the WGPU renderer has no skipped-draw
     /// state to clear.
     pub fn mark_drawable(&mut self) {}

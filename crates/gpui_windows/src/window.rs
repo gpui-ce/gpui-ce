@@ -110,7 +110,7 @@ pub(crate) struct WindowsWindowInner {
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
-        directx_devices: &DirectXDevices,
+        #[cfg(not(feature = "wgpu"))] directx_devices: &DirectXDevices,
         #[cfg(feature = "wgpu")] renderer_context: &RendererContext,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
@@ -142,7 +142,7 @@ impl WindowsWindowState {
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
         #[cfg(feature = "wgpu")]
-        let _ = (directx_devices, disable_direct_composition);
+        let _ = disable_direct_composition;
         #[cfg(feature = "wgpu")]
         let renderer = WindowRenderer::new(hwnd, renderer_context)?;
         let callbacks = Callbacks::default();
@@ -257,6 +257,7 @@ impl WindowsWindowInner {
     fn new(context: &mut WindowCreateContext, hwnd: HWND, cs: &CREATESTRUCTW) -> Result<Rc<Self>> {
         let state = WindowsWindowState::new(
             hwnd,
+            #[cfg(not(feature = "wgpu"))]
             &context.directx_devices,
             #[cfg(feature = "wgpu")]
             &context.renderer_context,
@@ -414,6 +415,7 @@ struct WindowCreateContext {
     platform_window_handle: HWND,
     appearance: WindowAppearance,
     disable_direct_composition: bool,
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: DirectXDevices,
     #[cfg(feature = "wgpu")]
     renderer_context: RendererContext,
@@ -444,6 +446,7 @@ impl WindowsWindow {
             main_receiver,
             platform_window_handle,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
             #[cfg(feature = "wgpu")]
             renderer_context,
@@ -531,6 +534,7 @@ impl WindowsWindow {
             platform_window_handle,
             appearance,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
             #[cfg(feature = "wgpu")]
             renderer_context,
