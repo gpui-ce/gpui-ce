@@ -110,6 +110,8 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
         | CursorStyle::ResizeRow => (&SIZENS, IDC_SIZENS),
         CursorStyle::ResizeUpLeftDownRight => (&SIZENWSE, IDC_SIZENWSE),
         CursorStyle::ResizeUpRightDownLeft => (&SIZENESW, IDC_SIZENESW),
+        CursorStyle::ResizeUpLeft | CursorStyle::ResizeDownRight => (&SIZENWSE, IDC_SIZENWSE),
+        CursorStyle::ResizeUpRight | CursorStyle::ResizeDownLeft => (&SIZENESW, IDC_SIZENESW),
         CursorStyle::OperationNotAllowed => (&NO, IDC_NO),
         _ => (&ARROW, IDC_ARROW),
     };
