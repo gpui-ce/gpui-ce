@@ -159,6 +159,7 @@ buffer_data! {
     gpui::MonochromeSprite => "MonochromeSprite",
     gpui::SubpixelSprite => "SubpixelSprite",
     gpui::PolychromeSprite => "PolychromeSprite",
+    [f32; 4] => "vec4<f32>",
 }
 
 pub const SCENE_STORAGE_ABI: &[StorageAbi] = &[

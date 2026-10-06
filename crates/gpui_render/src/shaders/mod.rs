@@ -22,7 +22,7 @@ pub use emoji::emoji_rasterization;
 pub use filters::{blur, surface};
 pub use linkage::base;
 pub use paths::{path, path_rasterization};
-pub use programs::paint_hook;
+pub use programs::{paint_glue, paint_hook, pipeline_glue};
 pub use quads::quad;
 pub use shadows::shadow;
 pub use sprites::{monochrome_sprite, polychrome_sprite, subpixel_sprite, underline};

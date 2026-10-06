@@ -3,6 +3,7 @@
 pub mod artifacts;
 pub mod blur;
 mod instances;
+pub mod link;
 pub mod path_types;
 pub mod shaders;
 
