@@ -114,6 +114,10 @@ impl MacWgpuRenderer {
         self.renderer.device_lost()
     }
 
+    pub fn supports_shader_paint(&self) -> bool {
+        self.renderer.supports_shader_paint()
+    }
+
     pub fn gpu_context_info(&self) -> Option<WgpuContextHandle> {
         self.renderer.gpu_context_info()
     }

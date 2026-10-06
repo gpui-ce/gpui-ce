@@ -206,6 +206,10 @@ impl WgpuHeadlessRenderer {
 }
 
 impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
+    fn supports_shader_paint(&self) -> bool {
+        self.renderer.supports_shader_paint()
+    }
+
     fn render_scene_to_image(
         &mut self,
         scene: &Scene,

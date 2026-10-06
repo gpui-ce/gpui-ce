@@ -2175,6 +2175,11 @@ impl PlatformWindow for MacWindow {
     }
 
     #[cfg(feature = "wgpu")]
+    fn supports_shader_paint(&self) -> bool {
+        self.0.lock().renderer.supports_shader_paint()
+    }
+
+    #[cfg(feature = "wgpu")]
     fn gpu_device_lost(&self) -> Option<bool> {
         // Only loads an atomic flag, so it is safe mid-recovery.
         Some(self.0.lock().renderer.device_lost())

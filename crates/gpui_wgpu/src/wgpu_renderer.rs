@@ -23,6 +23,7 @@ mod headless;
 mod path_types;
 mod pipelines;
 mod platform;
+mod programs;
 mod resources;
 mod settings;
 mod surfaces;
@@ -195,6 +196,11 @@ impl WgpuRenderer {
             self.rendering_params.path_sample_count,
             self.dual_source_blending,
             resources.renderer_tier,
+        );
+        resources.programs = programs::ProgramPipelines::new(
+            &resources.device,
+            &resources.bind_group_layouts,
+            pipelines::scene_target(config.format, config.alpha_mode),
         );
     }
 

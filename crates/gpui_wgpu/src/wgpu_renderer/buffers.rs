@@ -137,6 +137,34 @@ impl InstanceUpload {
         Some(self.batch(offset, stride, count, range_offset))
     }
 
+    /// Write `count` blocks of `block` slots, aligned so the batch's blocks are
+    /// `first..first + count` in units of `block` slots. Returns `first`.
+    pub(super) fn write_blocks(
+        &mut self,
+        block: u32,
+        count: u32,
+        values: impl IntoIterator<Item = [f32; 4]>,
+    ) -> Option<u32> {
+        const SLOT: u64 = std::mem::size_of::<[f32; 4]>() as u64;
+        let stride = u64::from(block) * SLOT;
+        let size = stride.checked_mul(u64::from(count))?;
+        let (offset, _) = self.allocate_batch(size, stride, count)?;
+        let staging = self.staging.as_mut()?;
+        let mut destination = staging.slice(offset as usize..(offset + size) as usize);
+        let mut written = 0;
+        for value in values {
+            let start = written * SLOT;
+            if start + SLOT > size {
+                return None;
+            }
+            destination
+                .slice(start as usize..(start + SLOT) as usize)
+                .copy_from_slice(shader_interface::bytes_of(&value));
+            written += 1;
+        }
+        (written * SLOT == size).then(|| u32::try_from(offset / stride).ok())?
+    }
+
     /// Reserves an aligned batch region, allocating its downlevel range slot.
     fn allocate_batch(&mut self, size: u64, stride: u64, elements: u32) -> Option<(u64, u32)> {
         let align = self.transport.batch_alignment(stride);
@@ -445,6 +473,7 @@ struct TexturedBindGroups {
         (WgpuTextureIdentity, wgpu::BindGroup),
     >,
     path: FxHashMap<shader_interface::DataLayout, wgpu::BindGroup>,
+    paint: FxHashMap<Option<wgpu::TextureView>, wgpu::BindGroup>,
 }
 
 impl InstanceBufferArena {
@@ -685,6 +714,45 @@ impl InstanceBufferArena {
                     texture,
                     sampler,
                 )
+            })
+            .clone()
+    }
+
+    /// Group 2 of a shader quad pipeline: this buffer as parameter slots, and
+    /// the backdrop when the program reads it.
+    pub(super) fn paint_bind_group(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        backdrop: Option<(&wgpu::TextureView, &wgpu::Sampler)>,
+    ) -> wgpu::BindGroup {
+        let InstanceStorage::Buffer(buffer) = &self.storage else {
+            unreachable!("shader paints require storage-buffer transport");
+        };
+        let mut cache = self.textured_bind_groups.borrow_mut();
+        cache
+            .paint
+            .entry(backdrop.map(|(view, _)| view.clone()))
+            .or_insert_with(|| {
+                let mut entries = vec![wgpu::BindGroupEntry {
+                    binding: gpui_render::link::bindings::PARAMS,
+                    resource: wgpu::BindingResource::Buffer(whole_buffer(buffer)),
+                }];
+                if let Some((view, sampler)) = backdrop {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: gpui_render::link::bindings::BACKDROP,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: gpui_render::link::bindings::BACKDROP_SAMPLER,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    });
+                }
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("shader_paint"),
+                    layout,
+                    entries: &entries,
+                })
             })
             .clone()
     }

@@ -5,8 +5,9 @@ use super::{
     path_types,
 };
 use gpui::{
-    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PipelineDraw, PolychromeSprite,
-    PrimitiveBatch, Quad, RenderCommand, Scene, ShaderQuad, Shadow, SubpixelSprite, Underline,
+    Bounds, FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PipelineDraw,
+    PolychromeSprite, PrimitiveBatch, Quad, RenderCommand, ScaledPixels, Scene, ShaderQuad, Shadow,
+    SubpixelSprite, Underline,
 };
 use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
 use gpui_render::shaders::{
@@ -51,6 +52,8 @@ pub(super) struct ReadbackCopy<'a> {
 
 struct PreparedTargets {
     active: wgpu::TextureView,
+    /// The active target's texture, when it is offscreen and can be copied.
+    active_texture: Option<wgpu::Texture>,
     presentation: wgpu::TextureView,
     offscreen: Option<wgpu::TextureView>,
     instances: InstanceUpload,
@@ -94,9 +97,17 @@ impl PreparedTargets {
         if requirements.uses_path_target {
             renderer.ensure_path_textures();
         }
-        if requirements.uses_offscreen_target {
+        if requirements.uses_filter_targets {
             renderer.ensure_filter_textures(requirements.isolated_target_count);
+        } else if requirements.uses_offscreen_target {
+            renderer.ensure_scene_color_texture();
         }
+        if requirements.uses_backdrop_paint {
+            renderer.ensure_backdrop_texture();
+        }
+        let resources = renderer.resources_mut();
+        let device = resources.device.clone();
+        resources.programs.prepare(&device, scene);
         write_shader_globals(renderer);
 
         if requirements.uses_offscreen_target {
@@ -104,10 +115,11 @@ impl PreparedTargets {
             let offscreen = resources
                 .scene_color_view
                 .as_ref()
-                .expect("blur texture preparation must create a scene target")
+                .expect("offscreen preparation must create a scene target")
                 .clone();
             Some(Self {
                 active: offscreen.clone(),
+                active_texture: resources.scene_color_texture.clone(),
                 presentation: frame_view.clone(),
                 offscreen: Some(offscreen),
                 instances,
@@ -115,6 +127,7 @@ impl PreparedTargets {
         } else {
             Some(Self {
                 active: frame_view.clone(),
+                active_texture: None,
                 presentation: frame_view.clone(),
                 offscreen: None,
                 instances,
@@ -338,6 +351,8 @@ struct FrameEncoder<'a> {
     scene: &'a Scene,
     encoder: wgpu::CommandEncoder,
     targets: TargetStack,
+    /// What changed in the current target since the backdrop snapshot.
+    backdrop_damage: Damage,
     offscreen: Option<wgpu::TextureView>,
     presentation: wgpu::TextureView,
     instances: InstanceUpload,
@@ -356,7 +371,8 @@ impl<'a> FrameEncoder<'a> {
             renderer,
             scene,
             encoder,
-            targets: TargetStack::new(targets.active),
+            targets: TargetStack::new(targets.active, targets.active_texture),
+            backdrop_damage: Damage::Everything,
             offscreen: targets.offscreen,
             presentation: targets.presentation,
             instances: targets.instances,
@@ -408,6 +424,12 @@ impl<'a> FrameEncoder<'a> {
         );
 
         for command in self.scene.render_commands() {
+            if !matches!(
+                command,
+                RenderCommand::Batch(PrimitiveBatch::ShaderQuads { .. })
+            ) {
+                self.backdrop_damage = Damage::Everything;
+            }
             match command {
                 RenderCommand::Batch(PrimitiveBatch::Paths {
                     range,
@@ -455,6 +477,33 @@ impl<'a> FrameEncoder<'a> {
                         wgpu::LoadOp::Load,
                     );
                 }
+                RenderCommand::Batch(PrimitiveBatch::ShaderQuads { range, smoothed }) => {
+                    let quads = &self.scene.shader_quads[range.clone()];
+                    let mut backdrop = None;
+                    if quads[0].program.uses_backdrop() {
+                        drop(pass);
+                        self.capture_backdrop()?;
+                        backdrop = self.renderer.resources().backdrop_view.as_ref();
+                        pass = begin_scene_render_pass(
+                            self.renderer,
+                            &mut self.encoder,
+                            "after_backdrop_capture",
+                            self.targets.current(),
+                            wgpu::LoadOp::Load,
+                        );
+                    }
+                    self.renderer.draw_shader_quads(
+                        quads,
+                        *smoothed,
+                        backdrop,
+                        &mut self.instances,
+                        &mut pass,
+                    )?;
+                    for quad in quads {
+                        self.backdrop_damage
+                            .include(quad.quad.bounds.intersect(&quad.quad.content_mask.bounds));
+                    }
+                }
                 RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
                     unreachable!("filter boundaries must be compiled into render commands")
                 }
@@ -470,9 +519,10 @@ impl<'a> FrameEncoder<'a> {
                     ..
                 } => {
                     drop(pass);
-                    let target =
-                        self.renderer.resources().filter_group_views[index.as_usize()].clone();
-                    self.targets.enter(target);
+                    let resources = self.renderer.resources();
+                    let target = resources.filter_group_views[index.as_usize()].clone();
+                    let texture = resources.filter_group_textures[index.as_usize()].clone();
+                    self.targets.enter(target, texture);
                     pass = begin_scene_render_pass(
                         self.renderer,
                         &mut self.encoder,
@@ -525,6 +575,75 @@ impl<'a> FrameEncoder<'a> {
         self.targets.assert_balanced();
         Ok(())
     }
+
+    /// Bring the backdrop snapshot up to date with the current target.
+    fn capture_backdrop(&mut self) -> DrawResult {
+        let resources = self.renderer.resources();
+        let (Some(source), Some(snapshot)) = (
+            self.targets.current_texture(),
+            resources.backdrop_texture.as_ref(),
+        ) else {
+            return Err(DrawError::MissingIntermediateTarget);
+        };
+        let size = snapshot.size();
+        let [x, y, width, height] = match std::mem::replace(&mut self.backdrop_damage, Damage::None)
+        {
+            Damage::None => return Ok(()),
+            Damage::Everything => [0, 0, size.width, size.height],
+            Damage::Region(bounds) => {
+                let left = (bounds.origin.x.0.floor().max(0.0) as u32).min(size.width);
+                let top = (bounds.origin.y.0.floor().max(0.0) as u32).min(size.height);
+                let right = (bounds.right().0.ceil().max(0.0) as u32).min(size.width);
+                let bottom = (bounds.bottom().0.ceil().max(0.0) as u32).min(size.height);
+                [
+                    left,
+                    top,
+                    right.saturating_sub(left),
+                    bottom.saturating_sub(top),
+                ]
+            }
+        };
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        let origin = wgpu::Origin3d { x, y, z: 0 };
+        self.encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                origin,
+                ..source.as_image_copy()
+            },
+            wgpu::TexelCopyTextureInfo {
+                origin,
+                ..snapshot.as_image_copy()
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        Ok(())
+    }
+}
+
+/// Pixels of a target that changed since a snapshot of it.
+enum Damage {
+    None,
+    Region(Bounds<ScaledPixels>),
+    Everything,
+}
+
+impl Damage {
+    fn include(&mut self, bounds: Bounds<ScaledPixels>) {
+        if bounds.is_empty() {
+            return;
+        }
+        *self = match self {
+            Self::None => Self::Region(bounds),
+            Self::Region(region) => Self::Region(region.union(&bounds)),
+            Self::Everything => Self::Everything,
+        };
+    }
 }
 
 fn begin_scene_render_pass<'a>(
@@ -543,26 +662,33 @@ fn begin_scene_render_pass<'a>(
     pass
 }
 
+/// A render target and, when offscreen, its texture.
+type Target = (wgpu::TextureView, Option<wgpu::Texture>);
+
 struct TargetStack {
-    current: wgpu::TextureView,
-    parents: smallvec::SmallVec<[wgpu::TextureView; MAX_FILTER_GROUP_DEPTH]>,
+    current: Target,
+    parents: smallvec::SmallVec<[Target; MAX_FILTER_GROUP_DEPTH]>,
 }
 
 impl TargetStack {
-    fn new(root: wgpu::TextureView) -> Self {
+    fn new(root: wgpu::TextureView, texture: Option<wgpu::Texture>) -> Self {
         Self {
-            current: root,
+            current: (root, texture),
             parents: smallvec::SmallVec::new(),
         }
     }
 
     fn current(&self) -> &wgpu::TextureView {
-        &self.current
+        &self.current.0
     }
 
-    fn enter(&mut self, next: wgpu::TextureView) {
+    fn current_texture(&self) -> Option<&wgpu::Texture> {
+        self.current.1.as_ref()
+    }
+
+    fn enter(&mut self, next: wgpu::TextureView, texture: wgpu::Texture) {
         self.parents
-            .push(std::mem::replace(&mut self.current, next));
+            .push(std::mem::replace(&mut self.current, (next, Some(texture))));
     }
 
     fn exit(&mut self) -> (wgpu::TextureView, &wgpu::TextureView) {
@@ -570,8 +696,8 @@ impl TargetStack {
             .parents
             .pop()
             .expect("render plan ended an isolated filter without beginning one");
-        let filtered = std::mem::replace(&mut self.current, parent);
-        (filtered, &self.current)
+        let (filtered, _) = std::mem::replace(&mut self.current, parent);
+        (filtered, &self.current.0)
     }
 
     fn assert_balanced(&self) {
@@ -632,14 +758,16 @@ fn encode_inline_batch(
             instances,
             pass,
         ),
-        // Shader support is enabled when the program renderer is installed.
-        PrimitiveBatch::ShaderQuads { .. } | PrimitiveBatch::Pipelines(_) => Ok(()),
+        PrimitiveBatch::Pipelines(range) => {
+            renderer.draw_pipelines(&scene.pipeline_draws[range.clone()], instances, pass)
+        }
         PrimitiveBatch::Surfaces(range) => renderer.draw_surfaces(
             &scene.surfaces[range.clone()],
             &scene.surface_opacities()[range.clone()],
             pass,
         ),
         PrimitiveBatch::Paths { .. }
+        | PrimitiveBatch::ShaderQuads { .. }
         | PrimitiveBatch::BackdropFilters(_)
         | PrimitiveBatch::FilterBoundary(_) => {
             unreachable!("pass-interrupting batches are handled by FrameEncoder")

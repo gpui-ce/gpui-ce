@@ -2832,6 +2832,7 @@ dependencies = [
  "etagere",
  "gpui-ce",
  "gpui_ce_collections",
+ "gpui_ce_parley",
  "gpui_ce_platform",
  "gpui_ce_render",
  "gpui_ce_util",

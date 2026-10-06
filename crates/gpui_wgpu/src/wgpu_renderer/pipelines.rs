@@ -390,7 +390,7 @@ impl WgpuPipelines {
             &bind_group_layouts.blur,
         );
 
-        let scene_target = color_target(surface_format, Some(scene_blend_state(alpha_mode)));
+        let scene_target = scene_target(surface_format, alpha_mode);
         let path_rasterization_target = color_target(
             surface_format,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -561,7 +561,7 @@ fn create_pipeline_layout(
     })
 }
 
-fn create_render_pipeline(
+pub(super) fn create_render_pipeline(
     device: &wgpu::Device,
     specification: shader::Pipeline,
     layout: &wgpu::PipelineLayout,
@@ -625,6 +625,14 @@ fn supported_dual_source_blending(device: &wgpu::Device, requested: bool) -> boo
         );
     }
     requested && supported
+}
+
+/// The color target ordinary scene primitives blend into.
+pub(super) fn scene_target(
+    format: wgpu::TextureFormat,
+    alpha_mode: wgpu::CompositeAlphaMode,
+) -> wgpu::ColorTargetState {
+    color_target(format, Some(scene_blend_state(alpha_mode)))
 }
 
 fn scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {

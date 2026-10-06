@@ -19,6 +19,7 @@ use super::{
     buffers::{DynamicUniformBuffer, InstanceBufferArena},
     filters::FrameUniformRequirements,
     pipelines::{WgpuBindGroupLayouts, WgpuPipelines},
+    programs::ProgramPipelines,
     settings::RenderingParameters,
     surfaces::SurfaceCache,
 };
@@ -33,6 +34,7 @@ pub(super) struct WgpuResources {
     pub(super) renderer_tier: crate::RendererTier,
     pub(super) surface: Option<wgpu::Surface<'static>>,
     pub(super) pipelines: WgpuPipelines,
+    pub(super) programs: ProgramPipelines,
     pub(super) bind_group_layouts: WgpuBindGroupLayouts,
     pub(super) atlas_sampler: wgpu::Sampler,
     pub(super) surface_sampler: wgpu::Sampler,
@@ -60,6 +62,9 @@ pub(super) struct WgpuResources {
     pub(super) path_msaa_view: Option<wgpu::TextureView>,
     pub(super) scene_color_texture: Option<wgpu::Texture>,
     pub(super) scene_color_view: Option<wgpu::TextureView>,
+    /// Snapshot of the target that backdrop-reading paints sample.
+    pub(super) backdrop_texture: Option<wgpu::Texture>,
+    pub(super) backdrop_view: Option<wgpu::TextureView>,
     pub(super) blur_ping_texture: Option<wgpu::Texture>,
     pub(super) blur_ping_view: Option<wgpu::TextureView>,
     pub(super) blur_pong_texture: Option<wgpu::Texture>,
@@ -170,8 +175,14 @@ impl WgpuResources {
             },
             last_error,
         };
+        let programs = ProgramPipelines::new(
+            &device,
+            &bind_group_layouts,
+            super::pipelines::scene_target(surface_config.format, surface_config.alpha_mode),
+        );
         let resources = Self {
             instances: InstanceBufferArena::new(&device, &bind_group_layouts, renderer_tier),
+            programs,
             renderer_tier,
             device,
             queue,
@@ -193,6 +204,8 @@ impl WgpuResources {
             path_msaa_view: None,
             scene_color_texture: None,
             scene_color_view: None,
+            backdrop_texture: None,
+            backdrop_view: None,
             blur_ping_texture: None,
             blur_ping_view: None,
             blur_pong_texture: None,
@@ -212,6 +225,8 @@ impl WgpuResources {
         self.path_msaa_view = None;
         self.scene_color_texture = None;
         self.scene_color_view = None;
+        self.backdrop_texture = None;
+        self.backdrop_view = None;
         self.blur_ping_texture = None;
         self.blur_ping_view = None;
         self.blur_pong_texture = None;
@@ -272,7 +287,51 @@ impl WgpuRenderer {
         }
     }
 
+    /// The full-size offscreen scene target, for filters and backdrop paints.
+    pub(super) fn ensure_scene_color_texture(&mut self) {
+        let (format, width, height) = (
+            self.target.format(),
+            self.target.width(),
+            self.target.height(),
+        );
+        let resources = self.resources_mut();
+        if resources.scene_color_texture.is_none() {
+            let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+            resources.scene_color_texture = Some(texture);
+            resources.scene_color_view = Some(view);
+        }
+    }
+
+    /// The snapshot backdrop-reading paints sample, copied from the target.
+    pub(super) fn ensure_backdrop_texture(&mut self) {
+        let (format, width, height) = (
+            self.target.format(),
+            self.target.width(),
+            self.target.height(),
+        );
+        let resources = self.resources_mut();
+        if resources.backdrop_texture.is_none() {
+            let texture = resources.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("backdrop_snapshot"),
+                size: wgpu::Extent3d {
+                    width: width.max(1),
+                    height: height.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            resources.backdrop_view = Some(texture.create_view(&Default::default()));
+            resources.backdrop_texture = Some(texture);
+        }
+    }
+
     pub(super) fn ensure_filter_textures(&mut self, isolated_target_count: usize) {
+        self.ensure_scene_color_texture();
         let format = self.target.format();
         let width = self.target.width();
         let height = self.target.height();
@@ -280,10 +339,7 @@ impl WgpuRenderer {
         let blur_height = downsampled_dimension(height);
         let resources = self.resources_mut();
 
-        if resources.scene_color_texture.is_none() {
-            let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
-            resources.scene_color_texture = Some(texture);
-            resources.scene_color_view = Some(view);
+        if resources.blur_ping_texture.is_none() {
             let (texture, view) =
                 sampled_render_texture(&resources.device, format, blur_width, blur_height);
             resources.blur_ping_texture = Some(texture);
@@ -358,7 +414,10 @@ fn sampled_render_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        // Backdrop paints snapshot whichever offscreen target is current.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
