@@ -756,6 +756,10 @@ impl DirectXRenderer {
                     target: FilterRenderTarget::Inline,
                     ..
                 } => Ok(()),
+                // Windows paint shader fallbacks on renderers that cannot run them.
+                RenderCommand::Batch(
+                    PrimitiveBatch::ShaderQuads { .. } | PrimitiveBatch::Pipelines(_),
+                ) => Ok(()),
                 RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
                     unreachable!("filter boundaries are resolved by the render plan")
                 }

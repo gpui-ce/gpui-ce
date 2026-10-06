@@ -203,6 +203,10 @@ fn shader_discriminants_match_scene_types() {
         gpui::BackgroundTag::Checkerboard as u32
     );
     assert_eq!(
+        common::BackgroundTag::Shader as u32,
+        gpui::BackgroundTag::Shader as u32
+    );
+    assert_eq!(
         common::ColorSpace::Srgb as u32,
         gpui::ColorSpace::Srgb as u32
     );
@@ -246,7 +250,7 @@ fn linear_gradients_preserve_native_dithering() {
                 percentage: 1.0,
             },
         ],
-        padding: 0,
+        shader_params: 0,
     };
     let bounds = Bounds {
         origin: vec2f(0.0, 0.0),

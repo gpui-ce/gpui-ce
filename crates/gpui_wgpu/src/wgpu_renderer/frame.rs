@@ -5,8 +5,8 @@ use super::{
     path_types,
 };
 use gpui::{
-    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PolychromeSprite, PrimitiveBatch,
-    Quad, RenderCommand, Scene, Shadow, SubpixelSprite, Underline,
+    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PipelineDraw, PolychromeSprite,
+    PrimitiveBatch, Quad, RenderCommand, Scene, ShaderQuad, Shadow, SubpixelSprite, Underline,
 };
 use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
 use gpui_render::shaders::{
@@ -239,6 +239,8 @@ pub(super) struct FrameRequirements {
     isolated_target_count: usize,
     uses_path_target: bool,
     uses_offscreen_target: bool,
+    uses_filter_targets: bool,
+    uses_backdrop_paint: bool,
 }
 
 impl FrameRequirements {
@@ -265,6 +267,22 @@ impl FrameRequirements {
                 }
                 PrimitiveBatch::Quads { range, .. } => {
                     reserve(std::mem::size_of::<Quad>(), range.len())
+                }
+                PrimitiveBatch::ShaderQuads { range, .. } => {
+                    let quads = &scene.shader_quads[range.clone()];
+                    let slots = quads.iter().map(ShaderQuad::parameter_slots).sum();
+                    reserve(std::mem::size_of::<[f32; 4]>(), slots);
+                    reserve(std::mem::size_of::<Quad>(), quads.len());
+                }
+                PrimitiveBatch::Pipelines(range) => {
+                    let draws = &scene.pipeline_draws[range.clone()];
+                    let block = draws[0].pipeline.instance_slots() as usize + 1;
+                    let count = draws.iter().map(|draw| draw.count as usize).sum();
+                    reserve(
+                        std::mem::size_of::<[f32; 4]>(),
+                        PipelineDraw::HEADER_SLOTS * draws.len(),
+                    );
+                    reserve(std::mem::size_of::<[f32; 4]>() * block, count);
                 }
                 PrimitiveBatch::Paths {
                     rasterization_vertex_count,
@@ -309,6 +327,8 @@ impl FrameRequirements {
             isolated_target_count: planned.isolated_target_count,
             uses_path_target: planned.uses_path_target,
             uses_offscreen_target: planned.uses_offscreen_target,
+            uses_filter_targets: planned.backdrop_filter_count + planned.isolated_target_count > 0,
+            uses_backdrop_paint: planned.uses_backdrop_paint,
         }
     }
 }
@@ -612,6 +632,8 @@ fn encode_inline_batch(
             instances,
             pass,
         ),
+        // Shader support is enabled when the program renderer is installed.
+        PrimitiveBatch::ShaderQuads { .. } | PrimitiveBatch::Pipelines(_) => Ok(()),
         PrimitiveBatch::Surfaces(range) => renderer.draw_surfaces(
             &scene.surfaces[range.clone()],
             &scene.surface_opacities()[range.clone()],

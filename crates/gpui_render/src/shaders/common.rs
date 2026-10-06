@@ -1,5 +1,6 @@
 #[wgsl_rs::wgsl]
 mod source {
+    use super::super::paint_hook::*;
     use wgsl_rs::std::*;
 
     // Defined here as a literal so the Rust-to-WGSL translator emits it, not `std`.
@@ -73,6 +74,7 @@ mod source {
         LinearGradient = 1,
         PatternSlash = 2,
         Checkerboard = 3,
+        Shader = 4,
     }
 
     #[repr(u32)]
@@ -232,7 +234,7 @@ mod source {
         pub solid: Hsla,
         pub gradient_angle_or_pattern_height: f32,
         pub colors: [LinearColorStop; 2],
-        pub padding: u32,
+        pub shader_params: u32,
     }
     #[derive(Clone, Copy, Wgsl)]
     pub struct AtlasTextureId {
@@ -742,6 +744,14 @@ mod source {
             }
             BackgroundTag::Checkerboard => {
                 color = checkerboard_color(paint, position, prepared.solid);
+            }
+            BackgroundTag::Shader => {
+                color = shader_paint(
+                    paint.bounds.origin,
+                    paint.bounds.size,
+                    paint.background.shader_params,
+                    position,
+                );
             }
         }
         color

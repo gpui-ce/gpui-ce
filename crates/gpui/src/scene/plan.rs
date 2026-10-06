@@ -40,6 +40,10 @@ pub struct ScenePlanRequirements {
     pub path_rasterization_vertex_count: usize,
     pub path_sprite_count: usize,
     pub surface_count: usize,
+    pub shader_quad_count: usize,
+    pub shader_parameter_slots: usize,
+    pub pipeline_draw_count: usize,
+    pub uses_backdrop_paint: bool,
     pub backdrop_filter_count: usize,
     pub isolated_filter_count: usize,
     pub isolated_target_count: usize,
@@ -124,7 +128,7 @@ impl ScenePlan {
                     }
                 }
                 batch => {
-                    requirements.include_batch(&batch);
+                    requirements.include_batch(scene, &batch);
                     commands.push(RenderCommand::Batch(batch));
                 }
             }
@@ -158,7 +162,7 @@ impl ScenePlan {
 }
 
 impl ScenePlanRequirements {
-    fn include_batch(&mut self, batch: &PrimitiveBatch) {
+    fn include_batch(&mut self, scene: &Scene, batch: &PrimitiveBatch) {
         match batch {
             PrimitiveBatch::Shadows { range, .. }
             | PrimitiveBatch::Quads { range, .. }
@@ -182,6 +186,25 @@ impl ScenePlanRequirements {
             | PrimitiveBatch::PolychromeSprites { range, .. } => {
                 self.instance_batch_count += usize::from(!range.is_empty());
             }
+            PrimitiveBatch::ShaderQuads { range, .. } => {
+                let quads = &scene.shader_quads[range.clone()];
+                self.shader_quad_count += quads.len();
+                self.shader_parameter_slots += quads
+                    .iter()
+                    .map(super::ShaderQuad::parameter_slots)
+                    .sum::<usize>();
+                // One batch for the parameter blocks, one for the quads.
+                self.instance_batch_count += 2;
+                if quads[0].program.uses_backdrop() {
+                    self.uses_backdrop_paint = true;
+                    self.uses_offscreen_target = true;
+                }
+            }
+            PrimitiveBatch::Pipelines(range) => {
+                self.pipeline_draw_count += range.len();
+                // One batch for the draw headers, one for the instances.
+                self.instance_batch_count += 2;
+            }
             PrimitiveBatch::Surfaces(range) => self.surface_count += range.len(),
             PrimitiveBatch::BackdropFilters(range) => {
                 self.backdrop_filter_count += range.len();
@@ -198,12 +221,14 @@ impl ScenePlanRequirements {
 struct SceneLengths {
     shadows: usize,
     quads: usize,
+    shader_quads: usize,
     paths: usize,
     underlines: usize,
     monochrome_sprites: usize,
     subpixel_sprites: usize,
     polychrome_sprites: usize,
     surfaces: usize,
+    pipeline_draws: usize,
     backdrop_filters: usize,
     filter_boundaries: usize,
 }
@@ -213,12 +238,14 @@ impl SceneLengths {
         Self {
             shadows: scene.shadows.len(),
             quads: scene.quads.len(),
+            shader_quads: scene.shader_quads.len(),
             paths: scene.paths.len(),
             underlines: scene.underlines.len(),
             monochrome_sprites: scene.monochrome_sprites.len(),
             subpixel_sprites: scene.subpixel_sprites.len(),
             polychrome_sprites: scene.polychrome_sprites.len(),
             surfaces: scene.surfaces.len(),
+            pipeline_draws: scene.pipeline_draws.len(),
             backdrop_filters: scene.backdrop_filters.len(),
             filter_boundaries: scene.filter_boundaries.len(),
         }
@@ -234,6 +261,11 @@ pub enum PrimitiveBatch {
         smoothed: bool,
     },
     Quads {
+        range: Range<usize>,
+        smoothed: bool,
+    },
+    /// Shader quads sharing one program (and at most one backdrop read).
+    ShaderQuads {
         range: Range<usize>,
         smoothed: bool,
     },
@@ -257,6 +289,8 @@ pub enum PrimitiveBatch {
         smoothed: bool,
     },
     Surfaces(Range<usize>),
+    /// Draws of one custom pipeline.
+    Pipelines(Range<usize>),
     BackdropFilters(Range<usize>),
     FilterBoundary(usize),
 }
@@ -329,6 +363,11 @@ impl PrimitiveBatch {
                 if *smoothed { "smoothed " } else { "" },
                 range.len()
             ),
+            Self::ShaderQuads { range, smoothed } => format!(
+                "{}shader quads ({})",
+                if *smoothed { "smoothed " } else { "" },
+                range.len()
+            ),
             Self::Paths { range, .. } => format!("paths ({})", range.len()),
             Self::Underlines(range) => format!("underlines ({})", range.len()),
             Self::MonochromeSprites { texture_id, range } => format!(
@@ -352,6 +391,7 @@ impl PrimitiveBatch {
                 texture_id.index
             ),
             Self::Surfaces(range) => format!("surfaces ({})", range.len()),
+            Self::Pipelines(range) => format!("pipeline draws ({})", range.len()),
             Self::BackdropFilters(range) => format!("backdrop filters ({})", range.len()),
             Self::FilterBoundary(index) => format!("filter boundary ({index})"),
         }

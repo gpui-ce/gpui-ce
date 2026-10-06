@@ -254,6 +254,8 @@ pub enum BackgroundTag {
     PatternSlash = 2,
     /// Alternating colored and transparent squares.
     Checkerboard = 3,
+    /// A [shader paint](crate::shader::Paint), evaluated by the renderer.
+    Shader = 4,
 }
 
 /// A color space for color interpolation.
@@ -289,8 +291,8 @@ pub struct Background {
     pub(crate) solid: crate::SceneHsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
     pub(crate) colors: [LinearColorStop; 2],
-    /// Padding for alignment for repr(C) layout.
-    pub(crate) padding: u32,
+    /// For [`BackgroundTag::Shader`], the first parameter slot of the paint.
+    pub(crate) shader_params: u32,
 }
 
 impl std::fmt::Debug for Background {
@@ -312,6 +314,7 @@ impl std::fmt::Debug for Background {
                 "Checkerboard({:?}, {})",
                 self.solid, self.gradient_angle_or_pattern_height
             ),
+            BackgroundTag::Shader => write!(f, "Shader({})", self.shader_params),
         }
     }
 }
@@ -325,7 +328,7 @@ impl Default for Background {
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
             colors: [LinearColorStop::default(), LinearColorStop::default()],
-            padding: 0,
+            shader_params: 0,
         }
     }
 }
@@ -447,6 +450,11 @@ pub enum BackgroundKind {
         /// The width and height of each square, in logical pixels.
         size: f32,
     },
+    /// A shader paint whose parameters start at this slot.
+    Shader {
+        /// The first parameter slot, assigned by the renderer.
+        params: u32,
+    },
 }
 
 impl Background {
@@ -484,6 +492,19 @@ impl Background {
                 color: self.solid.into(),
                 size: self.gradient_angle_or_pattern_height,
             },
+            BackgroundTag::Shader => BackgroundKind::Shader {
+                params: self.shader_params,
+            },
+        }
+    }
+
+    /// A shader paint whose parameters start at `params`. Renderers assign
+    /// the slot when they upload the paint's parameters.
+    pub fn shader(params: u32) -> Self {
+        Self {
+            tag: BackgroundTag::Shader,
+            shader_params: params,
+            ..Default::default()
         }
     }
 
@@ -519,6 +540,7 @@ impl Background {
             BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.a == 0.),
             BackgroundTag::PatternSlash => self.solid.a == 0.,
             BackgroundTag::Checkerboard => self.solid.a == 0.,
+            BackgroundTag::Shader => false,
         }
     }
 }

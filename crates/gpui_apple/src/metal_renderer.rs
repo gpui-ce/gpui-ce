@@ -1133,6 +1133,10 @@ impl MetalRenderer {
                     ..
                 } => true,
                 RenderCommand::Batch(PrimitiveBatch::SubpixelSprites { .. }) => unreachable!(),
+                // Windows paint shader fallbacks on renderers that cannot run them.
+                RenderCommand::Batch(
+                    PrimitiveBatch::ShaderQuads { .. } | PrimitiveBatch::Pipelines(_),
+                ) => true,
                 RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
                     unreachable!("filter boundaries are resolved by the render plan")
                 }
@@ -2075,6 +2079,8 @@ fn required_instance_buffer_size(scene: &Scene) -> usize {
             }
             PrimitiveBatch::Paths { .. }
             | PrimitiveBatch::SubpixelSprites { .. }
+            | PrimitiveBatch::ShaderQuads { .. }
+            | PrimitiveBatch::Pipelines(_)
             | PrimitiveBatch::Surfaces(_)
             | PrimitiveBatch::BackdropFilters(_)
             | PrimitiveBatch::FilterBoundary(_) => {}

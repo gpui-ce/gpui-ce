@@ -14,6 +14,7 @@ use std::{
     iter::Peekable,
     ops::{Add, Range, Sub},
     slice,
+    sync::Arc,
 };
 
 mod plan;
@@ -65,6 +66,7 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
+    pub shader_quads: Vec<ShaderQuad>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
     pub monochrome_sprites: Vec<MonochromeSprite>,
@@ -72,6 +74,7 @@ pub struct Scene {
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
     surface_opacities: Vec<f32>,
+    pub pipeline_draws: Vec<PipelineDraw>,
     pub backdrop_filters: Vec<BackdropFilter>,
     pub filter_boundaries: Vec<FilterBoundary>,
     render_plan: ScenePlan,
@@ -87,12 +90,14 @@ impl Scene {
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
+        self.shader_quads.clear();
         self.underlines.clear();
         self.monochrome_sprites.clear();
         self.subpixel_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.surface_opacities.clear();
+        self.pipeline_draws.clear();
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
         self.render_plan.clear();
@@ -156,12 +161,16 @@ impl Scene {
         // marker is inserted (see below) — otherwise a later non-overlapping sibling could reuse a
         // low order that lands inside the start..end range and be swept into the group.
         let is_filter_boundary = matches!(primitive, Primitive::FilterBoundary(_));
+        // A paint reading the backdrop may sample anywhere in the target, so no draw may move
+        // across it, however far apart their bounds are.
+        let reads_backdrop =
+            matches!(&primitive, Primitive::ShaderQuad(quad) if quad.program.uses_backdrop());
 
         if clipped_bounds.is_empty() && !is_filter_boundary {
             return;
         }
 
-        let order = if is_filter_boundary {
+        let order = if is_filter_boundary || reads_backdrop {
             let order_bounds = if clipped_bounds.is_empty() {
                 *primitive.bounds()
             } else {
@@ -172,8 +181,12 @@ impl Scene {
             self.layer_stack
                 .last()
                 .copied()
+                .map(|order| order.max(self.primitive_bounds.order_floor()))
                 .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds))
         };
+        if reads_backdrop {
+            self.primitive_bounds.set_order_floor(order + 1);
+        }
         match &mut primitive {
             Primitive::Shadow(shadow) => {
                 shadow.order = order;
@@ -182,6 +195,10 @@ impl Scene {
             Primitive::Quad(quad) => {
                 quad.order = order;
                 self.quads.push(*quad);
+            }
+            Primitive::ShaderQuad(shader_quad) => {
+                shader_quad.quad.order = order;
+                self.shader_quads.push(shader_quad.clone());
             }
             Primitive::Path(path) => {
                 path.order = order;
@@ -212,6 +229,10 @@ impl Scene {
             Primitive::BackdropFilter(filter) => {
                 filter.order = order;
                 self.backdrop_filters.push(filter.clone());
+            }
+            Primitive::Pipeline(draw) => {
+                draw.order = order;
+                self.pipeline_draws.push(draw.clone());
             }
             Primitive::FilterBoundary(boundary) => {
                 boundary.order = order;
@@ -253,6 +274,8 @@ impl Scene {
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
+        self.shader_quads
+            .sort_by_key(|shader_quad| shader_quad.quad.order);
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
         self.monochrome_sprites
@@ -275,6 +298,7 @@ impl Scene {
         self.surfaces = surfaces;
         self.surface_opacities = surface_opacities;
         self.backdrop_filters.sort_by_key(|filter| filter.order);
+        self.pipeline_draws.sort_by_key(|draw| draw.order);
         // Markers normally get distinct, monotonically-increasing orders (children overlap
         // their group bounds and so sort strictly between the start and end). The `!is_start`
         // tiebreak only matters for a degenerate empty group whose start and end tie: it keeps
@@ -382,12 +406,14 @@ pub(crate) enum PrimitiveKind {
     Shadow,
     #[default]
     Quad,
+    ShaderQuad,
     Path,
     Underline,
     MonochromeSprite,
     SubpixelSprite,
     PolychromeSprite,
     Surface,
+    Pipeline,
     BackdropFilter,
     // Highest discriminant: at an equal order, a group-end is emitted after the group's content
     // so the renderer composites the filtered group only once every child has been drawn.
@@ -406,12 +432,14 @@ pub(crate) enum PaintOperation {
 pub enum Primitive {
     Shadow(Shadow),
     Quad(Quad),
+    ShaderQuad(ShaderQuad),
     Path(Path<ScaledPixels>),
     Underline(Underline),
     MonochromeSprite(MonochromeSprite),
     SubpixelSprite(SubpixelSprite),
     PolychromeSprite(PolychromeSprite),
     Surface(PaintSurface),
+    Pipeline(PipelineDraw),
     BackdropFilter(BackdropFilter),
     FilterBoundary(FilterBoundary),
 }
@@ -422,12 +450,14 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.bounds,
             Primitive::Quad(quad) => &quad.bounds,
+            Primitive::ShaderQuad(shader_quad) => &shader_quad.quad.bounds,
             Primitive::Path(path) => &path.bounds,
             Primitive::Underline(underline) => &underline.bounds,
             Primitive::MonochromeSprite(sprite) => &sprite.bounds,
             Primitive::SubpixelSprite(sprite) => &sprite.bounds,
             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
             Primitive::Surface(surface) => &surface.bounds,
+            Primitive::Pipeline(draw) => &draw.bounds,
             Primitive::BackdropFilter(filter) => &filter.bounds,
             Primitive::FilterBoundary(boundary) => &boundary.bounds,
         }
@@ -437,12 +467,14 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.content_mask,
             Primitive::Quad(quad) => &quad.content_mask,
+            Primitive::ShaderQuad(shader_quad) => &shader_quad.quad.content_mask,
             Primitive::Path(path) => &path.content_mask,
             Primitive::Underline(underline) => &underline.content_mask,
             Primitive::MonochromeSprite(sprite) => &sprite.content_mask,
             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
+            Primitive::Pipeline(draw) => &draw.content_mask,
             Primitive::BackdropFilter(filter) => &filter.content_mask,
             Primitive::FilterBoundary(boundary) => &boundary.content_mask,
         }
@@ -461,6 +493,8 @@ struct BatchIterator<'a> {
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    shader_quads_start: usize,
+    shader_quads_iter: Peekable<slice::Iter<'a, ShaderQuad>>,
     paths_start: usize,
     paths: &'a [Path<ScaledPixels>],
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
@@ -474,6 +508,8 @@ struct BatchIterator<'a> {
     polychrome_sprites_iter: Peekable<slice::Iter<'a, PolychromeSprite>>,
     surfaces_start: usize,
     surfaces_iter: Peekable<slice::Iter<'a, PaintSurface>>,
+    pipeline_draws_start: usize,
+    pipeline_draws_iter: Peekable<slice::Iter<'a, PipelineDraw>>,
     backdrop_filters_start: usize,
     backdrop_filters_iter: Peekable<slice::Iter<'a, BackdropFilter>>,
     filter_boundaries_start: usize,
@@ -487,6 +523,8 @@ impl<'a> BatchIterator<'a> {
             shadows_iter: scene.shadows.iter().peekable(),
             quads_start: 0,
             quads_iter: scene.quads.iter().peekable(),
+            shader_quads_start: 0,
+            shader_quads_iter: scene.shader_quads.iter().peekable(),
             paths_start: 0,
             paths: &scene.paths,
             paths_iter: scene.paths.iter().peekable(),
@@ -500,6 +538,8 @@ impl<'a> BatchIterator<'a> {
             polychrome_sprites_iter: scene.polychrome_sprites.iter().peekable(),
             surfaces_start: 0,
             surfaces_iter: scene.surfaces.iter().peekable(),
+            pipeline_draws_start: 0,
+            pipeline_draws_iter: scene.pipeline_draws.iter().peekable(),
             backdrop_filters_start: 0,
             backdrop_filters_iter: scene.backdrop_filters.iter().peekable(),
             filter_boundaries_start: 0,
@@ -530,6 +570,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
+            (
+                self.shader_quads_iter.peek().map(|q| q.quad.order),
+                PrimitiveKind::ShaderQuad,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -550,6 +594,10 @@ impl<'a> Iterator for BatchIterator<'a> {
             (
                 self.surfaces_iter.peek().map(|s| s.order),
                 PrimitiveKind::Surface,
+            ),
+            (
+                self.pipeline_draws_iter.peek().map(|d| d.order),
+                PrimitiveKind::Pipeline,
             ),
             (
                 self.backdrop_filters_iter.peek().map(|f| f.order),
@@ -626,6 +674,31 @@ impl<'a> Iterator for BatchIterator<'a> {
                 self.quads_start = quads_end;
                 Some(PrimitiveBatch::Quads {
                     range: quads_start..quads_end,
+                    smoothed,
+                })
+            }
+            PrimitiveKind::ShaderQuad => {
+                let first = self.shader_quads_iter.next().unwrap();
+                let smoothed = has_corner_smoothing(first.quad.corner_smoothing);
+                let start = self.shader_quads_start;
+                let mut end = start + 1;
+                // One program per batch, and one quad per backdrop read: each sees the last.
+                if !first.program.uses_backdrop() {
+                    while self
+                        .shader_quads_iter
+                        .next_if(|next| {
+                            precedes_limit(next.quad.order, batch_kind, max_order_and_kind)
+                                && next.program.id() == first.program.id()
+                                && has_corner_smoothing(next.quad.corner_smoothing) == smoothed
+                        })
+                        .is_some()
+                    {
+                        end += 1;
+                    }
+                }
+                self.shader_quads_start = end;
+                Some(PrimitiveBatch::ShaderQuads {
+                    range: start..end,
                     smoothed,
                 })
             }
@@ -757,6 +830,25 @@ impl<'a> Iterator for BatchIterator<'a> {
                 self.surfaces_start = surfaces_end;
                 Some(PrimitiveBatch::Surfaces(surfaces_start..surfaces_end))
             }
+            PrimitiveKind::Pipeline => {
+                let first = self.pipeline_draws_iter.next().unwrap();
+                let start = self.pipeline_draws_start;
+                let mut end = start + 1;
+                while self
+                    .pipeline_draws_iter
+                    .next_if(|next| {
+                        precedes_limit(next.order, batch_kind, max_order_and_kind)
+                            && next.pipeline.id() == first.pipeline.id()
+                            && next.pipeline.topology() == first.pipeline.topology()
+                            && next.pipeline.vertex_count() == first.pipeline.vertex_count()
+                    })
+                    .is_some()
+                {
+                    end += 1;
+                }
+                self.pipeline_draws_start = end;
+                Some(PrimitiveBatch::Pipelines(start..end))
+            }
             PrimitiveKind::BackdropFilter => {
                 let backdrop_filters_start = self.backdrop_filters_start;
                 let mut backdrop_filters_end = backdrop_filters_start + 1;
@@ -825,6 +917,102 @@ impl Default for Quad {
 impl From<Quad> for Primitive {
     fn from(quad: Quad) -> Self {
         Primitive::Quad(quad)
+    }
+}
+
+/// A quad whose background and/or border is a [shader paint](crate::shader::Paint).
+///
+/// Renderers draw it with the ordinary quad pipeline, specialized for its
+/// program: corners, borders, dashes, and clipping behave exactly as for a
+/// [`Quad`]. Each shader-painted side reads a parameter block whose first slot
+/// is `[scale_factor, opacity, 0, 0]`, followed by the paint's parameters;
+/// renderers write the block's index into the side's [`Background::shader`].
+#[derive(Debug, Clone)]
+pub struct ShaderQuad {
+    /// Geometry and clipping. Shader-painted sides are [`Background::shader`].
+    pub quad: Quad,
+    /// The program shared by the shader-painted sides.
+    pub program: crate::shader::Program,
+    /// The background paint's parameters, if the background is a shader.
+    pub background: Option<Arc<[[f32; 4]]>>,
+    /// The border paint's parameters, if the border is a shader.
+    pub border: Option<Arc<[[f32; 4]]>>,
+    /// Inherited element opacity, applied after the paint.
+    pub opacity: f32,
+    /// Device pixels per logical pixel.
+    pub scale_factor: f32,
+}
+
+impl ShaderQuad {
+    /// A quad painting `background` and/or `border` (which must share a
+    /// program) on its [`Background::shader`] sides.
+    pub fn new(
+        quad: Quad,
+        background: Option<crate::shader::CompiledPaint>,
+        border: Option<crate::shader::CompiledPaint>,
+        opacity: f32,
+        scale_factor: f32,
+    ) -> Self {
+        let program = background
+            .as_ref()
+            .or(border.as_ref())
+            .expect("a shader quad paints at least one side")
+            .program
+            .clone();
+        debug_assert!(
+            [&background, &border]
+                .into_iter()
+                .flatten()
+                .all(|paint| paint.program.id() == program.id())
+        );
+        Self {
+            quad,
+            program,
+            background: background.map(|paint| paint.params),
+            border: border.map(|paint| paint.params),
+            opacity,
+            scale_factor,
+        }
+    }
+
+    /// Parameter slots this quad reads, including each side's header slot.
+    pub fn parameter_slots(&self) -> usize {
+        [&self.background, &self.border]
+            .into_iter()
+            .flatten()
+            .map(|params| 1 + params.len())
+            .sum()
+    }
+
+    /// The parameter blocks, in slot order: background first, then border.
+    pub fn parameters(&self) -> impl Iterator<Item = [f32; 4]> + '_ {
+        let header = [self.scale_factor, self.opacity, 0., 0.];
+        [&self.background, &self.border]
+            .into_iter()
+            .flatten()
+            .flat_map(move |params| std::iter::once(header).chain(params.iter().copied()))
+    }
+
+    /// The quad, its shader sides pointing at [`Self::parameters`] written from slot `base`.
+    pub fn bind(&self, base: u32) -> Quad {
+        let mut quad = self.quad;
+        let mut next = base;
+        for (params, side) in [
+            (&self.background, &mut quad.background),
+            (&self.border, &mut quad.border_color),
+        ] {
+            if let Some(params) = params {
+                *side = Background::shader(next);
+                next += 1 + params.len() as u32;
+            }
+        }
+        quad
+    }
+}
+
+impl From<ShaderQuad> for Primitive {
+    fn from(shader_quad: ShaderQuad) -> Self {
+        Primitive::ShaderQuad(shader_quad)
     }
 }
 
@@ -1128,6 +1316,74 @@ pub struct PaintSurface {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub source: crate::SurfaceSource,
+}
+
+/// Instances of a custom [`Pipeline`](crate::shader::Pipeline).
+#[derive(Debug, Clone)]
+pub struct PipelineDraw {
+    /// Scene stacking order, assigned when inserted.
+    pub order: DrawOrder,
+    /// Bounds of the drawn geometry, for ordering and culling. Geometry is
+    /// positioned relative to their origin.
+    pub bounds: Bounds<ScaledPixels>,
+    /// The active content clip.
+    pub content_mask: ContentMask<ScaledPixels>,
+    /// The pipeline.
+    pub pipeline: crate::shader::Pipeline,
+    /// Packed instance parameters, [`Pipeline::instance_slots`] per instance.
+    ///
+    /// [`Pipeline::instance_slots`]: crate::shader::Pipeline::instance_slots
+    pub instances: Arc<[[f32; 4]]>,
+    /// Number of instances.
+    pub count: u32,
+    /// Inherited element opacity.
+    pub opacity: f32,
+    /// Device pixels per logical pixel.
+    pub scale_factor: f32,
+}
+
+impl PipelineDraw {
+    /// Slots in this draw's header.
+    pub const HEADER_SLOTS: usize = 3;
+
+    /// The header each instance points at: `[scale_factor, opacity, origin]`
+    /// with the device-pixel origin of [`PipelineDraw::bounds`], which
+    /// geometry is relative to, then the content mask's device-pixel bounds,
+    /// and its fade distances.
+    pub fn header(&self) -> [[f32; 4]; Self::HEADER_SLOTS] {
+        let bounds = self.content_mask.bounds;
+        let fade = self.content_mask.fade_out;
+        let origin = self.bounds.origin;
+        [
+            [self.scale_factor, self.opacity, origin.x.0, origin.y.0],
+            [
+                bounds.origin.x.0,
+                bounds.origin.y.0,
+                bounds.size.width.0,
+                bounds.size.height.0,
+            ],
+            [fade.top.0, fade.right.0, fade.bottom.0, fade.left.0],
+        ]
+    }
+
+    /// Instance slots as uploaded: each instance's parameters, then a slot
+    /// holding the index of its header slot (bit-cast to `f32`).
+    pub fn instance_blocks(&self, header: u32) -> impl Iterator<Item = [f32; 4]> + '_ {
+        let slots = self.pipeline.instance_slots() as usize;
+        let header = [f32::from_bits(header), 0., 0., 0.];
+        (0..self.count as usize).flat_map(move |index| {
+            self.instances[index * slots..(index + 1) * slots]
+                .iter()
+                .copied()
+                .chain(std::iter::once(header))
+        })
+    }
+}
+
+impl From<PipelineDraw> for Primitive {
+    fn from(draw: PipelineDraw) -> Self {
+        Primitive::Pipeline(draw)
+    }
 }
 
 impl From<PaintSurface> for Primitive {
@@ -1465,6 +1721,102 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    fn shader_quad(paint: &crate::shader::Paint, quad: Quad) -> ShaderQuad {
+        let compiled = paint.compile().expect("test paints compile");
+        ShaderQuad {
+            quad: Quad {
+                background: Background::shader(0),
+                ..quad
+            },
+            program: compiled.program,
+            background: Some(compiled.params),
+            border: None,
+            opacity: 1.0,
+            scale_factor: 1.0,
+        }
+    }
+
+    #[test]
+    fn shader_quads_batch_by_program_and_smoothing() {
+        use crate::shader::{paint, rgba};
+        let ramp = |phase: f32| paint(move |px| rgba(px.uv().x() + phase, 0.0, 0.0, 1.0));
+        let other = paint(|px| rgba(0.0, px.uv().y(), 0.0, 1.0));
+        let smoothed = Quad {
+            corner_smoothing: 0.6,
+            ..quad()
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(shader_quad(&ramp(0.0), quad()));
+        scene.insert_primitive(shader_quad(&ramp(0.5), quad()));
+        scene.insert_primitive(shader_quad(&other, quad()));
+        scene.insert_primitive(shader_quad(&other, smoothed));
+        scene.finish();
+        assert!(matches!(
+            scene.render_commands(),
+            [RenderCommand::Batch(PrimitiveBatch::ShaderQuads { range: a, smoothed: false }),
+             RenderCommand::Batch(PrimitiveBatch::ShaderQuads { range: b, smoothed: false }),
+             RenderCommand::Batch(PrimitiveBatch::ShaderQuads { range: c, smoothed: true })]
+                if a == &(0..2) && b == &(2..3) && c == &(3..4)
+        ));
+        let requirements = scene.render_plan().requirements();
+        assert_eq!(requirements.shader_quad_count, 4);
+        assert_eq!(requirements.shader_parameter_slots, 4 * 2);
+        assert!(!requirements.uses_offscreen_target);
+    }
+
+    #[test]
+    fn backdrop_reads_are_global_order_barriers_even_inside_layers() {
+        let glass = crate::shader::paint(|px| px.backdrop(px.uv()));
+        for layered in [false, true] {
+            let mut scene = Scene::default();
+            if layered {
+                scene.push_layer(full_bounds().union(&detached_quad().bounds));
+            }
+            scene.insert_primitive(detached_quad());
+            scene.insert_primitive(shader_quad(&glass, quad()));
+            scene.insert_primitive(detached_quad());
+            scene.insert_primitive(shader_quad(&glass, quad()));
+            scene.insert_primitive(detached_quad());
+            if layered {
+                scene.pop_layer();
+            }
+            scene.finish();
+
+            assert!(scene.quads[0].order < scene.shader_quads[0].quad.order);
+            assert!(scene.shader_quads[0].quad.order < scene.quads[1].order);
+            assert!(scene.quads[1].order < scene.shader_quads[1].quad.order);
+            assert!(scene.shader_quads[1].quad.order < scene.quads[2].order);
+            assert!(scene.render_plan().requirements().uses_backdrop_paint);
+
+            let mut replay = Scene::default();
+            replay.replay(0..scene.len(), &scene);
+            replay.finish();
+            assert_eq!(replay.render_commands(), scene.render_commands());
+        }
+    }
+
+    #[test]
+    fn shader_quad_parameters_follow_their_bound_slots() {
+        let a = crate::shader::color(crate::red());
+        let mut shader_quad = shader_quad(&a, quad());
+        shader_quad.border = shader_quad.background.clone();
+        shader_quad.quad.border_color = Background::shader(0);
+        shader_quad.opacity = 0.5;
+        assert_eq!(shader_quad.parameter_slots(), 4);
+        let bound = shader_quad.bind(10);
+        assert_eq!(
+            bound.background.kind(),
+            crate::BackgroundKind::Shader { params: 10 }
+        );
+        assert_eq!(
+            bound.border_color.kind(),
+            crate::BackgroundKind::Shader { params: 12 }
+        );
+        let parameters: Vec<_> = shader_quad.parameters().collect();
+        assert_eq!(parameters[0], [1.0, 0.5, 0.0, 0.0]);
+        assert_eq!(parameters[2], [1.0, 0.5, 0.0, 0.0]);
     }
 
     fn boundary(is_start: bool) -> FilterBoundary {

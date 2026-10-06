@@ -124,6 +124,11 @@ where
         self.order_floor = self.order_floor.max(floor);
     }
 
+    /// Minimum ordering for new content, including content in a retained layer.
+    pub fn order_floor(&self) -> u32 {
+        self.order_floor
+    }
+
     /// The highest ordering assigned to any bounds so far (0 if empty).
     pub fn max_order(&self) -> u32 {
         self.max_leaf.map_or(0, |idx| self.nodes[idx].max_order)
@@ -135,7 +140,9 @@ where
     /// with unrelated non-overlapping content that reuses low orderings) and to raise the order
     /// floor before painting deferred draws (so overlays always sort above the main scene).
     pub fn insert_above_all(&mut self, new_bounds: Bounds<U>) -> u32 {
-        let ordering = self.max_order() + 1;
+        // A layer may reuse the floor without inserting a leaf for each draw;
+        // barriers must sort strictly above that content too.
+        let ordering = self.max_order().max(self.order_floor) + 1;
         let new_leaf_idx = self.insert_leaf(new_bounds, ordering);
         self.max_leaf = Some(new_leaf_idx);
         ordering
