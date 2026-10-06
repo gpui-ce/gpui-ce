@@ -340,6 +340,11 @@ impl TestAppContext {
         &self.text_system
     }
 
+    /// Returns the cursor most recently applied to the test platform.
+    pub fn cursor_style(&self) -> crate::CursorStyle {
+        self.test_platform.cursor_style()
+    }
+
     /// Simulates writing to the platform clipboard
     pub fn write_to_clipboard(&self, item: ClipboardItem) {
         self.test_platform.write_to_clipboard(item)
