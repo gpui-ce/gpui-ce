@@ -488,7 +488,10 @@ mod tests {
         let mut scene = Scene::default();
         scene.insert_primitive(Quad {
             bounds,
-            content_mask: gpui::ContentMask { bounds },
+            content_mask: gpui::ContentMask {
+                bounds,
+                ..Default::default()
+            },
             background: gpui::solid_background(gpui::red()),
             ..Default::default()
         });
