@@ -135,6 +135,21 @@ pub mod quad {
         }
     }
 
+    /// Interpolate straight-alpha colors in premultiplied space, so a
+    /// transparent fill does not darken the inner edge of its border.
+    pub fn mix_premultiplied_colors(below: Vec4f, above: Vec4f, factor: f32) -> Vec4f {
+        let alpha = mix(below.w, above.w, factor);
+        if alpha <= 0.0 {
+            return transparent();
+        }
+        let rgb = mix(
+            below.rgb() * below.w,
+            above.rgb() * above.w,
+            vec3f(factor, factor, factor),
+        ) / alpha;
+        vec4f(rgb.x, rgb.y, rgb.z, alpha)
+    }
+
     pub fn dash_period_per_border_width(quad: Quad) -> f32 {
         max(quad.border_dashed_length, 0.0) + max(quad.border_dashed_gap, 0.0)
     }
@@ -628,11 +643,7 @@ pub mod quad {
             }
             let blended_border = over(fill_color, border_color);
             let factor = antialiased_coverage(distances.inner);
-            color = mix(
-                fill_color,
-                blended_border,
-                vec4f(factor, factor, factor, factor),
-            );
+            color = mix_premultiplied_colors(fill_color, blended_border, factor);
         }
         blend_color(color, antialiased_coverage(distances.outer) * fade)
     }
@@ -840,11 +851,7 @@ pub mod quad {
             let blended_border = over(fill_color, border_color);
             let factor = antialiased_coverage(inner);
 
-            color = mix(
-                fill_color,
-                blended_border,
-                vec4f(factor, factor, factor, factor),
-            );
+            color = mix_premultiplied_colors(fill_color, blended_border, factor);
         }
 
         blend_color(color, antialiased_coverage(outer) * fade)

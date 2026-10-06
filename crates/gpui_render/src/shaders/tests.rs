@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn transparent_border_interpolation_preserves_color() {
+    use wgsl_rs::std::vec4f;
+
+    let clear = vec4f(0.0, 0.0, 0.0, 0.0);
+    let white = vec4f(1.0, 1.0, 1.0, 1.0);
+    assert_eq!(
+        quad::mix_premultiplied_colors(clear, white, 0.5),
+        vec4f(1.0, 1.0, 1.0, 0.5)
+    );
+    assert_eq!(quad::mix_premultiplied_colors(clear, clear, 0.5), clear);
+}
+
+#[test]
 fn validates_subpixel_shader() {
     let generated = subpixel_sprite::WGSL_SOURCE.wgsl_source().unwrap();
     wgsl_rs::validate_wgsl_source(&format!("enable dual_source_blending;\n{generated}")).unwrap();
