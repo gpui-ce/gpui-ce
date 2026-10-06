@@ -179,7 +179,7 @@ libc = "0.2"
 smol = "2.0"
 util = { path = "crates/gpui_zed_util", version = "0.2.2", package = "gpui_ce_zed_util" }
 wgpu = "29.0.3"
-wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = [
+wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "1a6315d6efb0810c628b1525c65f0548a6a9203f", default-features = false, features = [
   "validation",
 ] }
 criterion = { version = "0.5", features = ["html_reports"] }

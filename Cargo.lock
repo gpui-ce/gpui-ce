@@ -7195,8 +7195,8 @@ dependencies = [
 
 [[package]]
 name = "wgsl-rs"
-version = "0.1.0"
-source = "git+https://github.com/schell/wgsl-rs?rev=b2de16a1b81e67d76bc265c296184f882864badb#b2de16a1b81e67d76bc265c296184f882864badb"
+version = "0.1.0-beta.2"
+source = "git+https://github.com/schell/wgsl-rs?rev=1a6315d6efb0810c628b1525c65f0548a6a9203f#1a6315d6efb0810c628b1525c65f0548a6a9203f"
 dependencies = [
  "glam",
  "half",
@@ -7209,13 +7209,13 @@ dependencies = [
 
 [[package]]
 name = "wgsl-rs-ir"
-version = "0.1.0"
-source = "git+https://github.com/schell/wgsl-rs?rev=b2de16a1b81e67d76bc265c296184f882864badb#b2de16a1b81e67d76bc265c296184f882864badb"
+version = "0.1.0-beta.1"
+source = "git+https://github.com/schell/wgsl-rs?rev=1a6315d6efb0810c628b1525c65f0548a6a9203f#1a6315d6efb0810c628b1525c65f0548a6a9203f"
 
 [[package]]
 name = "wgsl-rs-macros"
-version = "0.1.0"
-source = "git+https://github.com/schell/wgsl-rs?rev=b2de16a1b81e67d76bc265c296184f882864badb#b2de16a1b81e67d76bc265c296184f882864badb"
+version = "0.1.0-beta.1"
+source = "git+https://github.com/schell/wgsl-rs?rev=1a6315d6efb0810c628b1525c65f0548a6a9203f#1a6315d6efb0810c628b1525c65f0548a6a9203f"
 dependencies = [
  "itertools 0.14.0",
  "proc-macro2",
