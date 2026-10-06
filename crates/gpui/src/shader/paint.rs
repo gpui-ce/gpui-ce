@@ -20,7 +20,7 @@ use super::{
     value::{Val, sealed::Sealed},
 };
 
-/// A premultiplied fragment color built from typed shader expressions.
+/// A color that can vary per fragment, usable anywhere GPUI accepts a fill.
 ///
 /// Immutable expressions built with ordinary Rust helpers and control flow.
 /// Compilation caches one fragment program per expression structure; changing
@@ -34,7 +34,7 @@ use super::{
 ///     })
 /// }
 ///
-/// let compiled = waves(phase).compile()?;
+/// div().bg(waves(phase)).border_2().border_color(waves(phase + 1.0).opacity(0.5))
 /// ```
 #[derive(Clone)]
 pub struct Paint {

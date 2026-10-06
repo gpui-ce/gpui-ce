@@ -1,8 +1,8 @@
 use scheduler::Instant;
 
 use crate::{
-    AbsoluteLength, Animated, AnimatedSample, AnyMotion, Background, Bounds, DefiniteLength, Fill,
-    Hsla, Length, Lerp, Pixels, Progress, RingColor,
+    AbsoluteLength, Animated, AnimatedSample, AnyMotion, Bounds, DefiniteLength, Fill, Hsla,
+    Length, Lerp, Pixels, Progress, RingColor,
 };
 
 #[derive(Clone, Copy)]
@@ -194,7 +194,7 @@ pub(crate) struct StyleTransitionState {
     flex_grow: Option<StyleTransitionPropertyState<f32>>,
     flex_shrink: Option<StyleTransitionPropertyState<f32>>,
     background: Option<StyleTransitionPropertyState<Fill>>,
-    border_color: Option<StyleTransitionPropertyState<Background>>,
+    border_color: Option<StyleTransitionPropertyState<Fill>>,
     ring: RingStyleTransitionState,
     inset_ring: RingStyleTransitionState,
     text: TextStyleTransitionState,

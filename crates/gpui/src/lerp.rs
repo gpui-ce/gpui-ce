@@ -228,6 +228,9 @@ impl Lerp for Fill {
     fn lerp(&self, to: &Self, delta: f32) -> Self {
         match (self, to) {
             (Self::Color(from), Self::Color(to)) => Self::Color(from.lerp(to, delta)),
+            // Shader transitions switch fills when the transition completes.
+            _ if delta >= 1.0 => to.clone(),
+            _ => self.clone(),
         }
     }
 }

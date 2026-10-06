@@ -49,7 +49,9 @@ pub enum Topology {
 /// ```
 ///
 /// Each instance's parameters (here a center and a radius) reach both stages,
-/// so they never need to travel through varyings.
+/// so they never need to travel through varyings. Draw with
+/// [`Window::paint_pipeline`](crate::Window::paint_pipeline); consecutive draws
+/// of one pipeline share a single instanced draw call.
 #[derive(Clone)]
 pub struct Pipeline {
     program: Arc<PipelineProgram>,

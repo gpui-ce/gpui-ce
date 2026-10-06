@@ -429,6 +429,14 @@ impl PlatformWindow for TestWindow {
         self.0.lock().appearance_change_callback = Some(callback);
     }
 
+    fn supports_shader_paint(&self) -> bool {
+        self.0
+            .lock()
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.supports_shader_paint())
+    }
+
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
@@ -606,5 +614,109 @@ impl PlatformAtlas for TestAtlas {
                 .is_some_and(|entry| entry.format == *format),
             _ => state.tiles.contains_key(key),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AppContext as _, BackgroundKind, Context, IntoElement, ParentElement, Render, Styled,
+        TestAppContext, Window, div, px, red,
+        shader::{Paint, color, paint, rgba},
+    };
+
+    struct Swatch(Paint, Paint);
+
+    impl Render for Swatch {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size(px(40.))
+                .bg(self.0.clone())
+                .child(div().size(px(20.)).border_2().border_color(self.1.clone()))
+        }
+    }
+
+    /// A renderer that only reports whether it runs shader paints.
+    struct CapabilityRenderer(bool);
+
+    impl PlatformHeadlessRenderer for CapabilityRenderer {
+        fn supports_shader_paint(&self) -> bool {
+            self.0
+        }
+
+        fn render_scene_to_image(
+            &mut self,
+            _: &Scene,
+            _: Size<DevicePixels>,
+        ) -> anyhow::Result<RgbaImage> {
+            anyhow::bail!("capability mock does not render")
+        }
+
+        fn render_scene(&mut self, _: &Scene, _: Size<DevicePixels>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+            Arc::new(TestAtlas::new())
+        }
+    }
+
+    fn ramp() -> Paint {
+        paint(|px| rgba(px.uv().x(), 0.5, 0.25, 1.0))
+    }
+
+    #[crate::test]
+    fn shader_fills_become_shader_quads_on_shader_renderers(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Swatch(ramp(), color(red())));
+        let test_window = cx.test_window(window.into());
+        assert!(!test_window.supports_shader_paint());
+
+        test_window.0.lock().renderer = Some(Box::new(CapabilityRenderer(true)));
+        cx.update_window(window.into(), |_, window, cx| {
+            assert!(window.supports_shader_paint());
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        window
+            .update(cx, |_, window, _| {
+                let scene = &window.rendered_frame.scene;
+                // The ramp uses one program; four border strips share another.
+                let programs: Vec<_> = scene
+                    .shader_quads
+                    .iter()
+                    .map(|quad| quad.program.id())
+                    .collect();
+                assert_eq!(programs.len(), 5);
+                assert!(programs[1..].iter().all(|&id| id == programs[1]));
+                assert_ne!(programs[0], programs[1]);
+            })
+            .unwrap();
+    }
+
+    #[crate::test]
+    fn shader_fills_paint_their_fallback_elsewhere(cx: &mut TestAppContext) {
+        let fallback = color(red()).mix(color(crate::blue()), 0.5);
+        let window = cx.add_window(move |_, _| Swatch(ramp().fallback(crate::green()), fallback));
+        window
+            .update(cx, |_, window, _| {
+                let scene = &window.rendered_frame.scene;
+                assert!(scene.shader_quads.is_empty());
+                let backgrounds: Vec<_> = scene
+                    .quads
+                    .iter()
+                    .flat_map(|quad| [quad.background.kind(), quad.border_color.kind()])
+                    .collect();
+                assert!(backgrounds.contains(&BackgroundKind::Solid(crate::green())));
+                // Without an explicit fallback, the paint is evaluated on the CPU.
+                assert!(backgrounds.iter().any(|kind| match kind {
+                    BackgroundKind::Solid(color) => {
+                        let rgba = crate::hsla_to_rgba(*color);
+                        (rgba.color.red - 0.5).abs() < 0.01 && (rgba.color.blue - 0.5).abs() < 0.01
+                    }
+                    _ => false,
+                }));
+            })
+            .unwrap();
     }
 }

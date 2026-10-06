@@ -768,10 +768,11 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
     }
 
     let output = quote! {
-        /// Sets the background painted into the border of the element.
+        /// Sets the fill painted into the border of the element: a color,
+        /// gradient, or shader paint.
         #visibility fn border_color<C>(mut self, border_color: C) -> Self
         where
-            C: Into<gpui::Background>,
+            C: Into<gpui::Fill>,
             Self: Sized,
         {
             self.style().border_color = Some(border_color.into());

@@ -3,21 +3,22 @@ use crate::{
     AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds,
     BoxShadow, Capslock, ColorExt, Context, Corners, CursorHideMode, CursorStyle, Decorations,
     DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
-    Entity, EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global,
+    Entity, EntityId, EventEmitter, FileDropEvent, Fill, Filter, FilterBoundary, FontId, Global,
     GlobalElementId, GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero,
     KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp,
     LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton,
     MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay,
-    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority,
-    PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, ResolvedDirection,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Primitive,
+    Priority, PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, ResolvedDirection,
     SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
-    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
-    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
-    TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
-    Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    Scene, ShaderQuad, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextInputConfiguration, TextInputStateChange, TextRenderingMode,
+    TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix, Transition,
+    TransitionState, Underline, UnderlineStyle, UnicodeBidi, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
+    WindowParams, WindowTextSystem,
     gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer},
     interactive::TouchEvent,
     point, px, rems, size, transparent_black,
@@ -43,7 +44,7 @@ use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 use refineable::Refineable;
 use scheduler::Instant;
 use slotmap::SlotMap;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use std::{
     any::{Any, TypeId},
     borrow::Cow,
@@ -2760,6 +2761,12 @@ impl Window {
         self.rendered_frame.scene.quads.clone()
     }
 
+    /// Returns the render commands of the most recently rendered frame.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn rendered_scene_commands(&self) -> Vec<crate::RenderCommand> {
+        self.rendered_frame.scene.render_commands().to_vec()
+    }
+
     /// Set the content size of the window.
     pub fn resize(&mut self, size: Size<Pixels>) {
         self.platform_window.resize(size);
@@ -4661,16 +4668,17 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let opacity = self.element_opacity();
-        let snapped_bounds = self.snap_bounds(quad.bounds);
-        let snapped_border_widths = self.snap_border_widths(quad.border_widths);
+        let size = quad.bounds.size;
+        let (background, background_paint) = self.resolve_fill(quad.background, size, opacity);
+        let (border_color, border_paint) = self.resolve_fill(quad.border_color, size, opacity);
         let quad = Quad {
             order: 0,
-            bounds: snapped_bounds,
+            bounds: self.snap_bounds(quad.bounds),
             content_mask: self.snapped_content_mask(),
-            background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity),
+            background,
+            border_color,
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
-            border_widths: snapped_border_widths,
+            border_widths: self.snap_border_widths(quad.border_widths),
             border_style: quad.border_style,
             border_dashed_length: quad.border_dashed_length,
             border_dashed_gap: quad.border_dashed_gap,
@@ -4678,21 +4686,77 @@ impl Window {
             padding: 0,
         };
 
-        if !quad.background.is_transparent() {
-            self.next_frame.scene.insert_primitive(quad);
-            return;
+        let scale_factor = self.scale_factor();
+        let shader_quad = |quad, background, border| {
+            ShaderQuad::new(quad, background, border, opacity, scale_factor).into()
+        };
+        let clear = Background::from(crate::transparent_black());
+        let quads: SmallVec<[Primitive; 2]> = match (background_paint, border_paint) {
+            (None, None) => smallvec![quad.into()],
+            // Two programs cannot share a pipeline: paint the background, then the border.
+            (Some(back), Some(front)) if back.program.id() != front.program.id() => {
+                let mut lower = quad;
+                lower.border_color = clear;
+                let mut upper = quad;
+                upper.background = clear;
+                smallvec![
+                    shader_quad(lower, Some(back), None),
+                    shader_quad(upper, None, Some(front)),
+                ]
+            }
+            (back, front) => smallvec![shader_quad(quad, back, front)],
+        };
+        for primitive in quads {
+            self.insert_quad(primitive);
         }
+    }
 
-        // Splitting a border-only quad around its empty interior avoids shading
-        // every transparent pixel inside large outlines.
-        let outer_bounds = quad.bounds;
+    /// Whether the active renderer runs [shader paints](crate::shader::Paint).
+    /// Where it does not, paints draw their fallback backgrounds.
+    pub fn supports_shader_paint(&self) -> bool {
+        self.platform_window.supports_shader_paint()
+    }
+
+    /// A fill as a quad side: a packed color, or [`Background::shader`] and the
+    /// compiled paint. Renderers without shader support get the fallback.
+    fn resolve_fill(
+        &self,
+        fill: Fill,
+        size: Size<Pixels>,
+        opacity: f32,
+    ) -> (Background, Option<crate::shader::CompiledPaint>) {
+        let paint = match fill {
+            Fill::Color(color) => return (color.opacity(opacity), None),
+            Fill::Shader(paint) => paint,
+        };
+        if self.supports_shader_paint() {
+            match paint.compile() {
+                Ok(compiled) => return (Background::shader(0), Some(compiled)),
+                Err(error) => log::error!("shader paint failed to compile: {error}"),
+            }
+        }
+        (paint.fallback_background(size).opacity(opacity), None)
+    }
+
+    /// Insert a quad, splitting a border-only quad around its empty interior
+    /// so large outlines do not shade every transparent pixel inside them.
+    fn insert_quad(&mut self, mut primitive: Primitive) {
+        let (quad, splittable) = match &mut primitive {
+            Primitive::Quad(quad) => (quad, true),
+            // Each strip of a backdrop read would capture the strips before it.
+            Primitive::ShaderQuad(shader_quad) => {
+                (&mut shader_quad.quad, !shader_quad.program.uses_backdrop())
+            }
+            _ => unreachable!("only quads are painted as quads"),
+        };
+        let quad = *quad;
         let inner_bounds = Self::largest_border_interior(&quad);
-
-        if inner_bounds.is_empty() {
-            self.next_frame.scene.insert_primitive(quad);
+        if !splittable || !quad.background.is_transparent() || inner_bounds.is_empty() {
+            self.next_frame.scene.insert_primitive(primitive);
             return;
         }
 
+        let outer_bounds = quad.bounds;
         let strips = [
             // Top
             Bounds::from_corners(
@@ -4719,15 +4783,63 @@ impl Window {
         for strip in strips {
             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
             if !content_mask_bounds.is_empty() {
-                self.next_frame.scene.insert_primitive(Quad {
-                    content_mask: ContentMask {
-                        bounds: content_mask_bounds,
-                        ..Default::default()
-                    },
-                    ..quad
-                });
+                let content_mask = ContentMask {
+                    bounds: content_mask_bounds,
+                    ..Default::default()
+                };
+                let mut primitive = primitive.clone();
+                match &mut primitive {
+                    Primitive::Quad(quad) => quad.content_mask = content_mask,
+                    Primitive::ShaderQuad(shader_quad) => {
+                        shader_quad.quad.content_mask = content_mask
+                    }
+                    _ => unreachable!(),
+                }
+                self.next_frame.scene.insert_primitive(primitive);
             }
         }
+    }
+
+    /// Draw instances of a custom [`Pipeline`](crate::shader::Pipeline) at the
+    /// current stacking position. Vertex positions are logical pixels from the
+    /// origin of `bounds`, which should contain the geometry. The content mask
+    /// and element opacity apply as they do for quads.
+    ///
+    /// Renderers without shader support draw nothing. Instances whose types do
+    /// not match the pipeline are reported and skipped.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_pipeline<I: crate::shader::Instance>(
+        &mut self,
+        pipeline: &crate::shader::Pipeline,
+        bounds: Bounds<Pixels>,
+        instances: impl IntoIterator<Item = I>,
+    ) {
+        self.invalidator.debug_assert_paint();
+        if !self.supports_shader_paint() {
+            return;
+        }
+        let (instances, count) = match pipeline.pack(instances) {
+            Ok(packed) => packed,
+            Err(error) => {
+                log::error!("cannot draw pipeline: {error}");
+                return;
+            }
+        };
+        if count == 0 {
+            return;
+        }
+        let scale_factor = self.scale_factor();
+        self.next_frame.scene.insert_primitive(crate::PipelineDraw {
+            order: 0,
+            bounds: bounds.scale(scale_factor),
+            content_mask: self.snapped_content_mask(),
+            pipeline: pipeline.clone(),
+            instances,
+            count,
+            opacity: self.element_opacity(),
+            scale_factor,
+        });
     }
 
     /// Paint the given `Path` into the scene for the next frame at the current z-index.
@@ -7923,12 +8035,12 @@ pub struct PaintQuad {
     pub bounds: Bounds<Pixels>,
     /// The radii of the quad's corners.
     pub corner_radii: Corners<Pixels>,
-    /// The background color of the quad.
-    pub background: Background,
+    /// The fill of the quad: a color, gradient, or shader paint.
+    pub background: Fill,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The background painted into the quad's borders.
-    pub border_color: Background,
+    /// The fill painted into the quad's borders.
+    pub border_color: Fill,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
     /// The length of each border dash, as a multiple of the border width.
@@ -7954,16 +8066,16 @@ impl PaintQuad {
         }
     }
 
-    /// Sets the background painted into the quad's borders.
-    pub fn border_color(self, border_color: impl Into<Background>) -> Self {
+    /// Sets the fill painted into the quad's borders.
+    pub fn border_color(self, border_color: impl Into<Fill>) -> Self {
         PaintQuad {
             border_color: border_color.into(),
             ..self
         }
     }
 
-    /// Sets the background color of the quad.
-    pub fn background(self, background: impl Into<Background>) -> Self {
+    /// Sets the fill of the quad.
+    pub fn background(self, background: impl Into<Fill>) -> Self {
         PaintQuad {
             background: background.into(),
             ..self
@@ -7991,9 +8103,9 @@ impl PaintQuad {
 pub fn quad(
     bounds: Bounds<Pixels>,
     corner_radii: impl Into<Corners<Pixels>>,
-    background: impl Into<Background>,
+    background: impl Into<Fill>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl Into<Background>,
+    border_color: impl Into<Fill>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -8008,8 +8120,9 @@ pub fn quad(
     }
 }
 
-/// Creates a filled quad with the given bounds and background color.
-pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>) -> PaintQuad {
+/// Creates a filled quad with the given bounds and fill: a color, gradient, or
+/// [shader paint](crate::shader::Paint).
+pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Fill>) -> PaintQuad {
     PaintQuad {
         bounds: bounds.into(),
         corner_radii: (0.).into(),
@@ -8025,7 +8138,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
 /// Creates a rectangle outline with the given bounds, border color, and a 1px border width
 pub fn outline(
     bounds: impl Into<Bounds<Pixels>>,
-    border_color: impl Into<Background>,
+    border_color: impl Into<Fill>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
