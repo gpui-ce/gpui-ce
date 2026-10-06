@@ -112,7 +112,7 @@ unicode-bidi.workspace = true
 hdrhistogram = { workspace = true, optional = true }
 waker-fn = "1.2.0"
 lyon = "1.0"
-naga = { version = "29.0.4", features = ["wgsl-in", "wgsl-out"] }
+naga = { version = "29.0.4", features = ["glsl-in", "wgsl-in", "wgsl-out"] }
 pin-project = "1.1.10"
 spin = "0.10.0"
 pollster.workspace = true

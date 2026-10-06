@@ -15,6 +15,7 @@ use wgsl_rs::{
 };
 
 use super::{
+    function::Foreign,
     library::fragment_at,
     prelude::Fragment,
     value::{
@@ -71,6 +72,8 @@ pub(crate) enum Op {
     Binary(ir::BinOp, Eval),
     /// A builtin or prelude function, and its CPU twin.
     Call(Callee, Eval),
+    /// A function from a foreign WGSL, GLSL, or `#[wgsl]` source.
+    Foreign(Arc<Foreign>),
     /// `vecN(args..)` for the node type; one argument splats.
     Construct,
     /// WGSL `select(if_false, if_true, condition)`.
@@ -117,6 +120,7 @@ impl Node {
             Op::Constant(_) => (Rate::Constant, true),
             Op::Fragment => (Rate::Fragment, true),
             Op::Backdrop => (Rate::Fragment, false),
+            Op::Foreign(foreign) => (Rate::Constant, foreign.cpu.is_some()),
             Op::Invalid(_) => (Rate::Fragment, false),
             Op::Member(_)
             | Op::Unary(..)

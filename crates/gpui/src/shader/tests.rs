@@ -142,6 +142,96 @@ fn excessive_depth_is_rejected_without_overflowing() {
 }
 
 #[test]
+fn foreign_wgsl_is_namespaced_and_typed() {
+    let a = Function::<fn(Vec2f) -> f32>::wgsl(
+        "fn over(p: vec2<f32>) -> f32 { return p.x * 2.0; }",
+        "over",
+    )
+    .unwrap();
+    let b = Function::<fn(Vec2f) -> f32>::wgsl(
+        "fn over(p: vec2<f32>) -> f32 { return Color_over(vec4f(p, 0.0, 1.0), vec4f(0.0)).y; }",
+        "over",
+    )
+    .unwrap();
+    let paint = paint(|px| rgba(a.call(px.uv()), b.call(px.uv()), 0.0, 1.0));
+    let compiled = paint.compile().unwrap();
+    let source = compiled.program.source();
+    let prefixes: collections::FxHashSet<_> = source
+        .match_indices("_over(")
+        .map(|(at, _)| &source[source[..at].rfind([' ', '(']).unwrap() + 1..at])
+        .filter(|prefix| !prefix.ends_with("_Color"))
+        .collect();
+    assert_eq!(prefixes.len(), 2, "both sources keep their own `over`");
+
+    let wrong = Function::<fn(f32) -> f32>::wgsl("fn f(p: vec2<f32>) -> f32 { return p.x; }", "f");
+    assert!(matches!(wrong, Err(ShaderError::Source(_))));
+    assert!(Library::wgsl("@group(0) @binding(0) var<uniform> x: f32;").is_err());
+}
+
+#[test]
+fn glsl_functions_compose() {
+    let ripple = Function::<fn(Vec2f, f32) -> f32>::glsl(
+        "float ripple(vec2 uv, float t) { return sin(length(uv) * 20.0 - t) * 0.5 + 0.5; }",
+        "ripple",
+    )
+    .unwrap();
+    let paint = paint(|px| color(hsla(0.6, 0.8, 0.5, 1.0)).mask(ripple.call((px.uv(), 2.0))));
+    paint.compile().unwrap();
+}
+
+#[allow(missing_docs)]
+#[wgsl_rs::wgsl]
+pub mod effects {
+    use crate::shader::prelude::*;
+    use wgsl_rs::std::*;
+
+    pub fn stripes(fragment: Fragment, count: f32) -> Vec4f {
+        let band = step(0.5, fract(fragment.uv.x * count));
+        vec4f(band, band, band, 1.0)
+    }
+
+    pub fn double(x: f32) -> f32 {
+        x * 2.0
+    }
+}
+
+#[test]
+fn wgsl_modules_bring_their_cpu_twins() {
+    let double = crate::wgsl_fn!(effects::double).unwrap();
+    // Uniform arguments fold through the Rust implementation.
+    let folded = rgba(double.call(0.25), 0.0, 0.0, 1.0).compile().unwrap();
+    assert_eq!(folded.params[0][0], 0.5);
+    assert!(!folded.program.source().contains("double"));
+
+    let stripes = Shader::module(&effects::WGSL_SOURCE).err();
+    assert!(stripes.is_some(), "the module has no `paint` entry point");
+    let stripes = Library::module(&effects::WGSL_SOURCE)
+        .unwrap()
+        .shader("stripes")
+        .unwrap();
+    let paint = stripes.with(4.0).over(color(rgb(0x101318)));
+    paint.compile().unwrap();
+    // The same function runs on the CPU.
+    let band = effects::stripes(fragment([0.4, 0.0], [1.0, 1.0]), 4.0);
+    assert_eq!(band.x, 1.0);
+    assert!(stripes.with(Pixel.uv()).compile().is_err());
+}
+
+#[test]
+fn raw_shader_files_take_typed_parameters() {
+    let shader = Shader::wgsl(
+        "fn paint(fragment: Fragment, center: vec2<f32>, radius: f32) -> vec4<f32> {
+            let d = Shape_circle(fragment.position - center, radius);
+            return vec4<f32>(1.0, 0.5, 0.0, Shape_coverage(d, fwidth(d)));
+        }",
+    )
+    .unwrap();
+    let compiled = shader.with(([32.0, 32.0], 16.0)).compile().unwrap();
+    assert_eq!(compiled.params[0], [32.0, 32.0, 16.0, 0.0]);
+    assert!(shader.with(1.0).compile().is_err());
+}
+
+#[test]
 fn scalars_widen_across_vectors() {
     let widened = paint(|px| {
         let uv = (px.uv() * 2.0 - 0.5).clamp(0.0, 1.0);
@@ -227,10 +317,18 @@ fn paints_are_operands() {
     let left = color(rgb(0xff0000));
     let right = paint(|px| rgba(0.0, px.uv().y(), 1.0, 1.0));
     let split = paint(|px| left.select(px.uv().x().lt(0.5), &right));
+    let tint = Function::<fn(Vec4f) -> Vec4f>::wgsl(
+        "fn tint(color: vec4<f32>) -> vec4<f32> { return color.bgra; }",
+        "tint",
+    )
+    .unwrap();
+    let swapped = Paint::premultiplied(tint.call(&split));
     let at = |paint: &Paint, uv| paint.evaluate(fragment(uv, [10.0, 10.0]));
     assert_eq!(at(&split, [0.25, 0.5]).unwrap(), vec4f(1.0, 0.0, 0.0, 1.0));
     assert_eq!(at(&split, [0.75, 0.5]).unwrap(), vec4f(0.0, 0.5, 1.0, 1.0));
-    split.compile().unwrap();
+    // Foreign WGSL without a Rust twin only runs on the GPU.
+    assert!(at(&swapped, [0.25, 0.5]).is_none());
+    swapped.compile().unwrap();
 }
 
 #[test]

@@ -20,6 +20,7 @@ use wgsl_rs::ir;
 
 use super::{
     expr::{Callee, Node, Op, Rate, eval_construct, eval_member, eval_select},
+    function::Foreign,
     prelude::{self, Fragment},
     value::{Ty, Val, sealed::Sealed},
 };
@@ -286,6 +287,7 @@ impl Evaluator {
                     Op::Fragment => Val::Fragment(self.fragment?),
                     Op::Member(name) => eval_member(name, args[0]),
                     Op::Unary(_, eval) | Op::Binary(_, eval) | Op::Call(_, eval) => eval(&args),
+                    Op::Foreign(foreign) => foreign.cpu.as_ref()?(&args),
                     Op::Construct => eval_construct(node.ty, &args),
                     Op::Select => eval_select(&args),
                     Op::Backdrop | Op::Invalid(_) => return None,
@@ -317,6 +319,7 @@ enum OpCode {
     Unary(ir::UnOp),
     Binary(ir::BinOp),
     Call(Callee),
+    Foreign(u64),
     Construct,
     Select,
     Apply,
@@ -335,6 +338,7 @@ struct Canonical {
     /// carries its own value.
     interned: FxHashMap<Code, u32>,
     params: Vec<Val>,
+    foreign: Vec<Arc<Foreign>>,
     /// Levels of the loops being visited, one bit each.
     looping: u32,
 }
@@ -394,6 +398,12 @@ impl Canonical {
                     Op::Unary(op, _) => OpCode::Unary(*op),
                     Op::Binary(op, _) => OpCode::Binary(*op),
                     Op::Call(callee, _) => OpCode::Call(*callee),
+                    Op::Foreign(foreign) => {
+                        if !self.foreign.iter().any(|known| known.id == foreign.id) {
+                            self.foreign.push(foreign.clone());
+                        }
+                        OpCode::Foreign(foreign.id)
+                    }
                     Op::Construct => OpCode::Construct,
                     Op::Select => OpCode::Select,
                     Op::Apply => OpCode::Apply,
@@ -443,6 +453,7 @@ impl Canonical {
 
         let mut lowering = Lowering {
             codes: &self.codes,
+            foreign: &self.foreign,
             params: {
                 let mut next = lanes.iter();
                 self.codes
@@ -473,7 +484,15 @@ impl Canonical {
         let root = self.codes.len() as u32 - 1;
         lowering.function("paint_program".into(), root);
 
-        let source = ir::render_items(&lowering.items);
+        let mut source = ir::render_items(&lowering.items);
+        let mut chunks = SmallVec::<[u64; 2]>::new();
+        for foreign in &self.foreign {
+            if !chunks.contains(&foreign.chunk_id) {
+                chunks.push(foreign.chunk_id);
+                source.push('\n');
+                source.push_str(&foreign.chunk);
+            }
+        }
         if source.len() > MAX_SOURCE_BYTES {
             return Err(ShaderError::SourceTooLarge);
         }
@@ -492,6 +511,7 @@ impl Canonical {
 
 struct Lowering<'a> {
     codes: &'a [Code],
+    foreign: &'a [Arc<Foreign>],
     /// Parameter location of each code, if it is a parameter.
     params: Vec<Option<Lanes>>,
     /// Levels of the loops each code reads the state or index of, one bit each.
@@ -697,6 +717,19 @@ impl Lowering<'_> {
                         type_args: vec![],
                         params: args,
                     },
+                    OpCode::Foreign(foreign_id) => {
+                        let foreign = self
+                            .foreign
+                            .iter()
+                            .find(|foreign| foreign.id == *foreign_id)
+                            .expect("canonical foreign functions are recorded");
+                        for (arg, &child) in args.iter_mut().zip(&code.args) {
+                            if self.codes[child as usize].ty == Ty::Fragment {
+                                *arg = foreign.convert_fragment(arg);
+                            }
+                        }
+                        call(&foreign.name, args)
+                    }
                     OpCode::Construct => call(vector_constructor(code.ty), args),
                     OpCode::Select => call("select", args),
                     OpCode::Backdrop => {
