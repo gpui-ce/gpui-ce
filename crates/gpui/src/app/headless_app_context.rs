@@ -8,10 +8,10 @@
 //! and screenshot capture via [`HeadlessAppContext::capture_screenshot`].
 
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, AppContextWindow, AssetRegistry,
-    AssetSource, BackgroundExecutor, Bounds, Entity, ForegroundExecutor, Hsla, Pixels,
-    PlatformHeadlessRenderer, PlatformTextSystem, Render, ScaledPixels, Size, TestDispatcher,
-    TestPlatform, TextSystem, Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
+    AnyView, AnyWindowHandle, App, AppCell, AssetRegistry, AssetSource, BackgroundExecutor, Bounds,
+    Entity, ForegroundExecutor, Hsla, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render,
+    ScaledPixels, Size, TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds,
+    WindowHandle, WindowOptions, app::GpuiMode, context::*,
 };
 use anyhow::Result;
 use image::RgbaImage;

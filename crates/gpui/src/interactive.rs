@@ -871,8 +871,8 @@ impl PlatformInput {
 #[cfg(test)]
 mod test {
     use crate::{
-        self as gpui, AppContextEntity, Context, FocusHandle, InteractiveElement, IntoElement,
-        KeyBinding, Keystroke, Modifiers, ParentElement, Render, TestAppContext, Window, div,
+        self as gpui, Context, FocusHandle, InteractiveElement, IntoElement, KeyBinding, Keystroke,
+        Modifiers, ParentElement, Render, TestAppContext, Window, context::AppContextEntity, div,
     };
 
     struct TestView {

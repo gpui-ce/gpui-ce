@@ -6,12 +6,11 @@
 //! on your own views, so that your code can coordinate directly with the list element's cached state.
 //!
 //! If all of your elements are the same height, see [`crate::UniformList`] for a simpler API
-
 use crate::{
-    AnyElement, App, AppContextEntity, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges,
-    Element, EntityId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    IntoElement, Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style,
-    StyleRefinement, Styled, Window, point, px, size,
+    AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
+    FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
+    Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
+    Window, context::AppContextEntity, point, px, size,
 };
 use collections::VecDeque;
 use refineable::Refineable as _;
@@ -1753,9 +1752,9 @@ mod test {
     use std::rc::Rc;
 
     use crate::{
-        self as gpui, AppContextEntity, Bounds, Context, Element, FollowMode, InteractiveElement,
-        IntoElement, ListState, Render, Styled, TestAppContext, Window, canvas, div, list, point,
-        px, size,
+        self as gpui, Bounds, Context, Element, FollowMode, InteractiveElement, IntoElement,
+        ListState, Render, Styled, TestAppContext, Window, canvas, context::AppContextEntity, div,
+        list, point, px, size,
     };
 
     #[gpui::test]

@@ -18,7 +18,7 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
 
     let r#gen = quote! {
-        impl #impl_generics gpui::AppContext for #type_name #type_generics
+        impl #impl_generics gpui::context::AppContext for #type_name #type_generics
         #where_clause
         {}
 
@@ -66,7 +66,7 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
         impl #impl_generics gpui::context::ImpliedAppEntity for #type_name #type_generics
         #where_clause
         {}
-        impl #impl_generics gpui::AppContextBorrowEntity for #type_name #type_generics
+        impl #impl_generics gpui::context::AppContextBorrowEntity for #type_name #type_generics
         #where_clause
         {
             fn as_mut<'y, 'z, T>(
@@ -81,13 +81,13 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
         }
         impl #impl_generics gpui::context::ImpliedAppWindow for #type_name #type_generics
         #where_clause
-        {        }
+        {}
         impl #impl_generics gpui::context::ImpliedAppTask for #type_name #type_generics
         #where_clause
-        {        }
+        {}
         impl #impl_generics gpui::context::ImpliedAppGlobals for #type_name #type_generics
         #where_clause
-        {        }
+        {}
     };
 
     r#gen.into()

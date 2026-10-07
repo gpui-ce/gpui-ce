@@ -1,8 +1,7 @@
 use crate::{
-    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext,
-    AppContextEntity, AppContextWindow, Arena, Asset, AsyncWindowContext, AtlasTile,
-    AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds, BoxShadow, Capslock, ColorExt,
-    Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, Arena, Asset,
+    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds,
+    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
     GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero, KeyBinding, KeyContext,
@@ -19,6 +18,7 @@ use crate::{
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
     Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    context::*,
     gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer},
     interactive::TouchEvent,
     point, px, rems, size, transparent_black,
@@ -8080,17 +8080,17 @@ mod tests {
     use super::*;
     use crate::util::FluentBuilder;
     use crate::{
-        AnyWindowHandle, AppContextEntity, AppContextWindow, Background, Bounds, BoxShadow,
-        ColorExt, Context, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
-        FileDragPaths, FileDropEvent, FocusHandle, Font, FontMetrics, ImageSource, InlineLayout,
-        InlineLayoutRequest, InputEvent, InputEvent as _, InteractiveElement,
+        AnyWindowHandle, Background, Bounds, BoxShadow, ColorExt, Context, DispatchPhase,
+        DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
+        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest,
+        InputEvent as _, InputEvent, InputEvent as _, InteractiveElement as _, InteractiveElement,
         InteractiveElement as _, IntoElement, LineLayout, LongPressEvent, MouseButton,
         MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point,
         PreparedRasterStyle, RasterColorEffect, RasterStyleRequest, RasterizedGlyph, Render,
         RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement,
         StatefulInteractiveElement as _, Styled, TestApp, TestAppContext, TestTextSystem,
         TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
-        WindowAppearance, WindowOptions, canvas, div, hsla, img, linear_color_stop,
+        WindowAppearance, WindowOptions, canvas, context::*, div, hsla, img, linear_color_stop,
         linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
