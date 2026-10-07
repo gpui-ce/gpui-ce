@@ -165,7 +165,9 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
 
 /// Wrapper methods to make alpha operations more convenient
 pub trait ColorExt {
-    /// Performs a SrcAlpha x (1 - SrcAlpha) blend
+    /// Lays `other` over `self`, weighted by `other`'s alpha; the result keeps
+    /// `self`'s alpha. An opaque `other` replaces `self`, a fully transparent
+    /// one leaves it unchanged.
     fn blend(&self, other: &Self) -> Self
     where
         Self: Sized;
@@ -208,10 +210,19 @@ pub trait ColorExt {
 }
 impl ColorExt for Rgba {
     fn blend(&self, other: &Self) -> Self {
-        use palette::blend::{BlendWith, Equations, Parameter};
-        let blend_mode =
-            Equations::from_parameters(Parameter::OneMinusSourceAlpha, Parameter::SourceAlpha);
-        self.blend_with(*other, blend_mode)
+        let alpha = other.alpha;
+        if alpha >= 1.0 {
+            *other
+        } else if alpha <= 0.0 {
+            *self
+        } else {
+            Rgba::new(
+                self.red * (1.0 - alpha) + other.red * alpha,
+                self.green * (1.0 - alpha) + other.green * alpha,
+                self.blue * (1.0 - alpha) + other.blue * alpha,
+                self.alpha,
+            )
+        }
     }
 
     fn fade_out(&mut self, factor: f32) {
@@ -226,6 +237,11 @@ impl ColorExt for Rgba {
 }
 impl ColorExt for Hsla {
     fn blend(&self, other: &Self) -> Self {
+        if other.alpha >= 1.0 {
+            return *other;
+        } else if other.alpha <= 0.0 {
+            return *self;
+        }
         let this: Rgba = (*self).into_color();
         let other: Rgba = (*other).into_color();
         this.blend(&other).into_color()
@@ -536,6 +552,25 @@ impl<T: IntoColor<Hsla>> From<T> for Background {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_blend_weights_by_the_color_laid_over() {
+        let white = rgba(0xffffffff);
+        let black = rgba(0x000000ff);
+        // A translucent color over an opaque one: mixed by the top color's
+        // alpha, the result as opaque as the bottom one.
+        let gray = white.blend(&black.opacity(0.25));
+        assert!((gray.red - 0.75).abs() < 1e-6, "{gray:?}");
+        assert!((gray.alpha - 1.0).abs() < 1e-6, "{gray:?}");
+        // Opaque over anything: the top color; transparent: the bottom one.
+        assert_eq!(white.blend(&black), black);
+        assert_eq!(white.blend(&black.opacity(0.0)), white);
+
+        let background = hsla(0.0, 0.0, 1.0, 1.0);
+        let tinted = background.blend(&hsla(0.6, 0.5, 0.5, 0.15));
+        assert!((tinted.alpha - 1.0).abs() < 1e-6, "{tinted:?}");
+        assert!(tinted.lightness > 0.9, "{tinted:?}");
+    }
 
     #[test]
     fn test_background_solid() {
