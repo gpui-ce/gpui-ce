@@ -1,6 +1,6 @@
 use crate::{
     App, AppContext, AsEntityId, AsyncApp, AsyncWindowContext, DispatchPhase, Entity, EntityId,
-    EventEmitter, FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeEvent, KeystrokeObserver,
+    EventEmitter, FocusHandle, FocusOutEvent, Focusable, KeystrokeEvent, KeystrokeObserver,
     Priority, SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, context::*,
 };
 use futures::FutureExt;
@@ -1026,7 +1026,9 @@ impl<'a, T: 'static> Context<'a, T> {
     /// Pass the window this entity is shown in. If that window is unavailable, for example during a nested
     /// update of it, the callback is skipped for that change and stays registered. The callback stops
     /// once this entity is released.
-    pub fn observe_global_in<G: Global>(
+    #[deprecated(note = "migrating to entity-based globals")]
+    #[allow(deprecated)]
+    pub fn observe_global_in<G: crate::Global>(
         &mut self,
         window: &Window,
         mut f: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
