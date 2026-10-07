@@ -14,29 +14,17 @@
 //! as several associated traits. Together, these provide the full suite of Dom-like events
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
-
-#[cfg(debug_assertions)]
-use crate::{PaintQuad, TextAlign};
-
-#[cfg(test)]
 use crate::{
-    AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, StyledText, TestAppContext,
-    canvas, hsla, util::FluentBuilder,
-};
-
-#[cfg(test)]
-use std::{cell::Cell, rc::Weak};
-
-use crate::{
-    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContextEntity, Bounds, ClickEvent,
-    CursorStyle, DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload,
-    FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId,
-    IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
-    LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
-    PinchEvent, Pixels, Point, PointerChangeCause, Render, ScrollWheelEvent, SharedString, Size,
-    Style, StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled,
-    Task, TooltipId, Visibility, Window, WindowControlArea, point, px, size,
+    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, CursorStyle,
+    DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, FocusHandle,
+    Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, ImageCacheProvider,
+    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
+    KeyboardClickEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
+    OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, PointerChangeCause, Render,
+    ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, StyleTransitionContext,
+    StyleTransitionState, StyleTransitions, Styled, Task, TooltipId, Visibility, Window,
+    WindowControlArea, context::AppContextEntity, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -54,8 +42,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
-use super::ImageCacheProvider;
 
 mod inline;
 pub(crate) use inline::InlineContent;
@@ -3362,6 +3348,7 @@ impl Interactivity {
         window: &mut Window,
         cx: &mut App,
     ) {
+        use crate::{PaintQuad, TextAlign};
         if let Some(global_id) = global_id
             && (style.debug || style.debug_below || cx.has_global::<crate::DebugBelow>())
             && hitbox.is_hovered(window)
@@ -5234,8 +5221,8 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, AppContextWindow, Context, InputEvent, Keystroke, MouseMoveEvent,
-        TestAppContext, canvas, util::FluentBuilder as _,
+        AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, MouseMoveEvent,
+        StyledText, TestAppContext, canvas, context::AppContextWindow, hsla, util::FluentBuilder,
     };
     use std::{cell::Cell, rc::Weak};
 

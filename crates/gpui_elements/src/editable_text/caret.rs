@@ -114,7 +114,7 @@ impl Caret {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{AppContextEntity, TestAppContext};
+    use gpui::{TestAppContext, context::AppContextEntity};
 
     struct CaretEventEmitter;
     impl EventEmitter<CaretNotify> for CaretEventEmitter {}

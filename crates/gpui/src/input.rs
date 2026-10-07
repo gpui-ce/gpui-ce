@@ -313,9 +313,9 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
 mod configuration_tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, AppContextWindow, FocusHandle, InteractiveElement as _, IntoElement,
-        ParentElement as _, Render, Styled as _, TestAppContext, TextInputAction,
-        TextInputStateChange, canvas, div,
+        AnyWindowHandle, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, Styled as _, TestAppContext, TextInputAction, TextInputStateChange, canvas,
+        context::AppContextWindow, div,
     };
 
     #[gpui::test]
