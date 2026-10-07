@@ -2,15 +2,14 @@ use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, Arena, ArenaBox,
     Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
     CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
-    FocusMap, ForegroundExecutor, Global, GlobalId, HapticFeedbackStyle, KeyBinding, KeyContext,
-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+    FocusMap, ForegroundExecutor, GlobalId, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
+    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
     Subscription, SvgRenderer, SystemNotification, SystemNotificationResponse, Task,
     TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
     WindowHandle, WindowId, WindowInvalidator,
-    colors::{Colors, GlobalColors},
     context::*,
     hash,
     http_client::{HttpClient, NullHttpClient},
@@ -499,7 +498,7 @@ pub struct SystemWindowTabController {
     tab_groups: FxHashMap<usize, Vec<SystemWindowTab>>,
 }
 
-impl Global for SystemWindowTabController {}
+impl crate::Global for SystemWindowTabController {}
 
 impl SystemWindowTabController {
     /// Creates an empty controller with no tab groups and tabs hidden.
@@ -2429,7 +2428,9 @@ impl App {
     }
 
     /// Returns whether a global of type `G` has been set.
-    pub fn has_global<G: Global>(&self) -> bool {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
+    #[allow(deprecated)]
+    pub fn has_global<G: crate::Global>(&self) -> bool {
         self.globals_by_type.contains_key(&TypeId::of::<G>())
     }
 
@@ -2440,7 +2441,9 @@ impl App {
     /// Panics if no global of type `G` has been set. Use [`App::try_global`] when the
     /// global may be missing.
     #[track_caller]
-    pub fn global<G: Global>(&self) -> &G {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
+    #[allow(deprecated)]
+    pub fn global<G: crate::Global>(&self) -> &G {
         self.globals_by_type
             .get(&TypeId::of::<G>())
             .map(|any_state| any_state.downcast_ref::<G>().unwrap())
@@ -2448,7 +2451,9 @@ impl App {
     }
 
     /// Returns the global of type `G`, or `None` if it has not been set.
-    pub fn try_global<G: Global>(&self) -> Option<&G> {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
+    #[allow(deprecated)]
+    pub fn try_global<G: crate::Global>(&self) -> Option<&G> {
         self.globals_by_type
             .get(&TypeId::of::<G>())
             .map(|any_state| any_state.downcast_ref::<G>().unwrap())
@@ -2465,7 +2470,9 @@ impl App {
     /// Panics if no global of type `G` has been set. Use [`App::default_global`] to
     /// create one on first use.
     #[track_caller]
-    pub fn global_mut<G: Global>(&mut self) -> &mut G {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_mut_global")]
+    #[allow(deprecated)]
+    pub fn global_mut<G: crate::Global>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.globals_by_type
@@ -2477,7 +2484,11 @@ impl App {
     /// Returns the global of type `G` for mutation, first setting `G::default()` if it is missing.
     ///
     /// Like [`App::global_mut`], this notifies global observers.
-    pub fn default_global<G: Global + Default>(&mut self) -> &mut G {
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
+    #[allow(deprecated)]
+    pub fn default_global<G: crate::Global + Default>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.globals_by_type
@@ -2504,7 +2515,11 @@ impl App {
     /// app.update(|cx| cx.set_global(Theme { name: "dark" }));
     /// app.read(|cx| assert_eq!(cx.global::<Theme>().name, "dark"));
     /// ```
-    pub fn set_global<G: Global>(&mut self, global: G) {
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by replaced by App::drain_globals + App::insert_global"
+    )]
+    #[allow(deprecated)]
+    pub fn set_global<G: crate::Global>(&mut self, global: G) {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.globals_by_type.insert(global_type, Box::new(global));
@@ -2513,6 +2528,9 @@ impl App {
     /// Clear all stored globals. Does not notify global observers.
     #[cfg(any(test, feature = "test-support"))]
     pub fn clear_globals(&mut self) {
+        if !cfg!(test) {
+            log::warn!("Executing clear_globals outside of tests");
+        }
         self.globals_by_type.drain();
     }
 
@@ -2523,7 +2541,9 @@ impl App {
     /// # Panics
     ///
     /// Panics if no global of type `G` has been set.
-    pub fn remove_global<G: Global>(&mut self) -> G {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::drain_globals")]
+    #[allow(deprecated)]
+    pub fn remove_global<G: crate::Global>(&mut self) -> G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         *self
@@ -2559,7 +2579,9 @@ impl App {
     /// app.update(|cx| cx.global_mut::<Count>().0 += 1);
     /// assert_eq!(calls.get(), 1);
     /// ```
-    pub fn observe_global<G: Global>(
+    #[deprecated(note = "migrating to entity-based globals")]
+    #[allow(deprecated)]
+    pub fn observe_global<G: crate::Global>(
         &mut self,
         mut f: impl FnMut(&mut Self) + 'static,
     ) -> Subscription {
@@ -2576,7 +2598,9 @@ impl App {
 
     /// Move the global of the given type to the stack.
     #[track_caller]
-    pub(crate) fn lease_global<G: Global>(&mut self) -> GlobalLease<G> {
+    #[deprecated(note = "migrating to entity-based globals")]
+    #[allow(deprecated)]
+    pub(crate) fn lease_global<G: crate::Global>(&mut self) -> GlobalLease<G> {
         GlobalLease::new(
             self.globals_by_type
                 .remove(&TypeId::of::<G>())
@@ -2586,7 +2610,9 @@ impl App {
     }
 
     /// Restore the global of the given type after it is moved to the stack.
-    pub(crate) fn end_global_lease<G: Global>(&mut self, lease: GlobalLease<G>) {
+    #[deprecated(note = "migrating to entity-based globals")]
+    #[allow(deprecated)]
+    pub(crate) fn end_global_lease<G: crate::Global>(&mut self, lease: GlobalLease<G>) {
         let global_type = TypeId::of::<G>();
 
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -3330,8 +3356,11 @@ impl App {
     }
 
     /// Sets the default [`Colors`] global, which `cx.default_colors()` returns.
+    #[deprecated(note = "migrating to entity-based globals")]
+    #[allow(deprecated)]
     pub fn init_colors(&mut self) {
-        self.set_global(GlobalColors(Arc::new(Colors::default())));
+        let colors = crate::colors::GlobalColors(Arc::new(crate::colors::Colors::default()));
+        self.set_global(colors);
     }
 }
 
@@ -3508,9 +3537,10 @@ impl AppContextWindow for App {
     }
 }
 impl AppContextGlobal for App {
+    #[allow(deprecated)]
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
-        G: Global,
+        G: crate::Global,
     {
         let mut g = self.global::<G>();
         callback(g, self)
@@ -3647,12 +3677,15 @@ impl std::fmt::Debug for Effect {
 }
 
 /// Wraps a global variable value during `update_global` while the value has been moved to the stack.
-pub(crate) struct GlobalLease<G: Global> {
+#[deprecated(note = "replaced by global entities")]
+#[allow(deprecated)]
+pub(crate) struct GlobalLease<G: crate::Global> {
     global: Box<dyn Any>,
     global_type: PhantomData<G>,
 }
 
-impl<G: Global> GlobalLease<G> {
+#[allow(deprecated)]
+impl<G: crate::Global> GlobalLease<G> {
     fn new(global: Box<dyn Any>) -> Self {
         GlobalLease {
             global,
@@ -3661,7 +3694,8 @@ impl<G: Global> GlobalLease<G> {
     }
 }
 
-impl<G: Global> Deref for GlobalLease<G> {
+#[allow(deprecated)]
+impl<G: crate::Global> Deref for GlobalLease<G> {
     type Target = G;
 
     fn deref(&self) -> &Self::Target {
@@ -3669,7 +3703,8 @@ impl<G: Global> Deref for GlobalLease<G> {
     }
 }
 
-impl<G: Global> DerefMut for GlobalLease<G> {
+#[allow(deprecated)]
+impl<G: crate::Global> DerefMut for GlobalLease<G> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.global.downcast_mut().unwrap()
     }

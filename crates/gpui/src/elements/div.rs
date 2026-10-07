@@ -17,14 +17,14 @@
 use crate::{
     Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, CursorStyle,
     DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, FocusHandle,
-    Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, ImageCacheProvider,
-    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
-    KeyboardClickEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent,
-    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
-    OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, PointerChangeCause, Render,
-    ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, StyleTransitionContext,
-    StyleTransitionState, StyleTransitions, Styled, Task, TooltipId, Visibility, Window,
-    WindowControlArea, context::AppContextEntity, point, px, size,
+    GlobalElementId, Hitbox, HitboxBehavior, HitboxId, ImageCacheProvider, InspectorElementId,
+    IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
+    LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
+    PinchEvent, Pixels, Point, PointerChangeCause, Render, ScrollWheelEvent, SharedString, Size,
+    Style, StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled,
+    Task, TooltipId, Visibility, Window, WindowControlArea, context::AppContextEntity, point, px,
+    size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -4822,7 +4822,7 @@ fn handle_tooltip_check_visible_and_update(
 #[derive(Default)]
 pub(crate) struct GroupHitboxes(HashMap<SharedString, SmallVec<[HitboxId; 1]>>);
 
-impl Global for GroupHitboxes {}
+impl crate::Global for GroupHitboxes {}
 
 impl GroupHitboxes {
     pub fn get(name: &SharedString, cx: &mut App) -> Option<HitboxId> {

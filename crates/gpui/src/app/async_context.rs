@@ -1,8 +1,7 @@
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AsEntityId, BackgroundExecutor, BorrowAppContext,
-    Context, Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton,
-    PromptLevel, Render, Reservation, Result, Subscription, Task, VisualContext, WeakEntity,
-    Window, WindowHandle, context::*,
+    AnyView, AnyWindowHandle, App, AppCell, AsEntityId, BackgroundExecutor, Context, Entity,
+    EventEmitter, Focusable, ForegroundExecutor, PromptButton, PromptLevel, Render, Reservation,
+    Result, Subscription, Task, VisualContext, WeakEntity, Window, WindowHandle, context::*,
 };
 use anyhow::{Context as _, bail};
 use derive_more::{Deref, DerefMut};
@@ -180,7 +179,9 @@ impl AsyncApp {
     }
 
     /// Returns whether a global of type `G` has been set.
-    pub fn has_global<G: Global>(&self) -> bool {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
+    #[allow(deprecated)]
+    pub fn has_global<G: crate::Global>(&self) -> bool {
         let app = self.app();
         let app = app.borrow_mut();
         app.has_global::<G>()
@@ -193,7 +194,9 @@ impl AsyncApp {
     /// # Panics
     ///
     /// Panics if no global of type `G` has been set, or if the app has been released.
-    pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
+    #[allow(deprecated)]
+    pub fn read_global<G: crate::Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app();
         let app = app.borrow_mut();
         read(app.global(), &app)
@@ -201,7 +204,12 @@ impl AsyncApp {
 
     /// Like [`AsyncApp::read_global`], but returns `None` instead of panicking when no
     /// global of type `G` is set, or when the app is quitting.
-    pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
+    #[allow(deprecated)]
+    pub fn try_read_global<G: crate::Global, R>(
+        &self,
+        read: impl FnOnce(&G, &App) -> R,
+    ) -> Option<R> {
         let app = self.app();
         let app = app.borrow_mut();
         if app.quitting {
@@ -212,7 +220,11 @@ impl AsyncApp {
 
     /// Like [`AsyncApp::read_global`], but first sets a `G::default()` if no global of
     /// type `G` has been set.
-    pub fn read_default_global<G: Global + Default, R>(
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
+    #[allow(deprecated)]
+    pub fn read_default_global<G: crate::Global + Default, R>(
         &self,
         read: impl FnOnce(&G, &App) -> R,
     ) -> R {
@@ -233,7 +245,13 @@ impl AsyncApp {
     /// # Panics
     ///
     /// Panics if no global of type `G` has been set, or if the app has been released.
-    pub fn update_global<G: Global, R>(&self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
+    #[allow(deprecated)]
+    pub fn update_global<G: crate::Global, R>(
+        &self,
+        update: impl FnOnce(&mut G, &mut App) -> R,
+    ) -> R {
+        use crate::BorrowAppContext;
         let app = self.app();
         let mut app = app.borrow_mut();
         app.update(|cx| cx.update_global(update))
@@ -379,7 +397,9 @@ impl AsyncWindowContext {
     /// # Panics
     ///
     /// Panics if no global of type `G` has been set.
-    pub fn read_global<G: Global, R>(
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
+    #[allow(deprecated)]
+    pub fn read_global<G: crate::Global, R>(
         &mut self,
         read: impl FnOnce(&G, &Window, &App) -> R,
     ) -> Result<R> {
@@ -399,13 +419,16 @@ impl AsyncWindowContext {
     /// # Panics
     ///
     /// Panics if no global of type `G` has been set.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
+    #[allow(deprecated)]
     pub fn update_global<G, R>(
         &mut self,
         update: impl FnOnce(&mut G, &mut Window, &mut App) -> R,
     ) -> Result<R>
     where
-        G: Global,
+        G: crate::Global,
     {
+        use crate::BorrowAppContext;
         self.app.update_window(self.window, |_, window, cx| {
             cx.update_global(|global, cx| update(global, window, cx))
         })
