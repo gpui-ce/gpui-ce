@@ -40,7 +40,10 @@ pub struct WindowsPlatform {
     icon: HICON,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
+    #[cfg(not(feature = "wgpu"))]
     text_system: Arc<DirectWriteTextSystem>,
+    #[cfg(feature = "wgpu")]
+    text_system: Arc<dyn gpui::PlatformTextSystem>,
     drop_target_helper: Option<IDropTargetHelper>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
@@ -331,12 +334,15 @@ impl WindowsPlatform {
     fn begin_vsync_thread(&self) {
         // Without DirectX devices (the WGPU renderer), the thread still paces
         // frames but has no device to watch.
+        #[cfg(not(feature = "wgpu"))]
         let mut directx_devices = self.inner.state.directx_devices.borrow().clone();
+        #[cfg(not(feature = "wgpu"))]
+        let text_system = Arc::downgrade(&self.text_system);
+        #[cfg(not(feature = "wgpu"))]
+        let invalidate_devices = self.invalidate_devices.clone();
         let platform_window: SafeHwnd = self.handle.into();
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
-        let text_system = Arc::downgrade(&self.text_system);
-        let invalidate_devices = self.invalidate_devices.clone();
 
         std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
@@ -344,6 +350,7 @@ impl WindowsPlatform {
                 let vsync_provider = VSyncProvider::new();
                 loop {
                     vsync_provider.wait_for_vsync();
+                    #[cfg(not(feature = "wgpu"))]
                     if let Some(directx_device) = directx_devices.as_mut()
                         && (check_device_lost(&directx_device.device)
                             || invalidate_devices.fetch_and(false, Ordering::Acquire))
