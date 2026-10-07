@@ -1,6 +1,6 @@
 use crate::{
     AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, Window,
+    IntoElement, LayoutId, Pixels, Window, context::*,
 };
 
 /// Builds a `Deferred` element, which delays the layout and paint of its child.
@@ -135,16 +135,17 @@ pub(crate) struct DeferredPriorityStackCache(Vec<usize>);
 impl crate::Global for DeferredPriorityStackCache {}
 impl DeferredPriorityStackCache {
     pub(crate) fn push(priority: usize, cx: &mut App) {
-        cx.default_global::<Self>().0.push(priority);
+        let entity = cx.get_global_or_insert_default::<Self>();
+        entity.as_mut(cx).0.push(priority);
     }
 
     pub(crate) fn pop(cx: &mut App) {
-        cx.default_global::<Self>().0.pop();
+        let entity = cx.get_global_or_insert_default::<Self>();
+        entity.as_mut(cx).0.pop();
     }
 
     fn current_depth(cx: &App) -> Option<usize> {
-        let cache = cx.try_global::<Self>()?;
-        cache.0.last().copied()
+        cx.try_read_global::<Self>()?.0.last().copied()
     }
 }
 
