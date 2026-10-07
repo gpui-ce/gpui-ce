@@ -3,7 +3,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, PaintQuad,
     Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
-    TextRun, Window, black, phi, point, px, rems, size,
+    TextRun, Window, black, context::*, phi, point, px, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -17,9 +17,6 @@ use std::{iter, mem, ops::Range};
 /// GPUI.
 #[cfg(debug_assertions)]
 pub struct DebugBelow;
-
-#[cfg(debug_assertions)]
-impl crate::Global for DebugBelow {}
 
 /// How to fit the image into the bounds of the element.
 pub enum ObjectFit {
@@ -987,11 +984,12 @@ impl Style {
     ) {
         #[cfg(debug_assertions)]
         if self.debug_below {
-            cx.set_global(DebugBelow)
+            let entity = cx.new(|_| DebugBelow);
+            cx.insert_global_by_type(entity);
         }
 
         #[cfg(debug_assertions)]
-        if self.debug || cx.has_global::<DebugBelow>() {
+        if self.debug || cx.has_globals_of(std::any::TypeId::of::<DebugBelow>()) {
             window.paint_quad(
                 PaintQuad::new(bounds)
                     .border_widths(px(1.))
@@ -1087,7 +1085,8 @@ impl Style {
 
         #[cfg(debug_assertions)]
         if self.debug_below {
-            cx.remove_global::<DebugBelow>();
+            cx.drain_globals(std::any::TypeId::of::<DebugBelow>())
+                .last();
         }
     }
 

@@ -24,7 +24,7 @@ use crate::{
     OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, PointerChangeCause, Render,
     ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, StyleTransitionContext,
     StyleTransitionState, StyleTransitions, Styled, Task, TooltipId, Visibility, Window,
-    WindowControlArea, context::AppContextEntity, point, px, size,
+    WindowControlArea, context::*, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -3350,7 +3350,9 @@ impl Interactivity {
     ) {
         use crate::{PaintQuad, TextAlign};
         if let Some(global_id) = global_id
-            && (style.debug || style.debug_below || cx.has_global::<crate::DebugBelow>())
+            && (style.debug
+                || style.debug_below
+                || cx.has_globals_of(TypeId::of::<crate::DebugBelow>()))
             && hitbox.is_hovered(window)
         {
             const FONT_SIZE: crate::Pixels = crate::Pixels(10.);
@@ -4826,23 +4828,23 @@ impl Global for GroupHitboxes {}
 
 impl GroupHitboxes {
     pub fn get(name: &SharedString, cx: &mut App) -> Option<HitboxId> {
-        cx.default_global::<Self>()
-            .0
-            .get(name)
-            .and_then(|bounds_stack| bounds_stack.last())
-            .cloned()
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let group = entity.read(cx);
+        let hitboxes = group.0.get(name);
+        let last_hitbox = hitboxes.and_then(|bounds_stack| bounds_stack.last());
+        last_hitbox.cloned()
     }
 
     pub fn push(name: SharedString, hitbox_id: HitboxId, cx: &mut App) {
-        cx.default_global::<Self>()
-            .0
-            .entry(name)
-            .or_default()
-            .push(hitbox_id);
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let mut group = entity.as_mut(cx);
+        group.0.entry(name).or_default().push(hitbox_id);
     }
 
     pub fn pop(name: &SharedString, cx: &mut App) {
-        cx.default_global::<Self>().0.get_mut(name).unwrap().pop();
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let mut group = entity.as_mut(cx);
+        group.0.get_mut(name).unwrap().pop();
     }
 }
 
