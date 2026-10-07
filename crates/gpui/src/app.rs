@@ -2090,12 +2090,14 @@ impl App {
     }
 
     /// Check whether a global of the given type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
     pub fn has_global<G: Global>(&self) -> bool {
         self.globals_by_type.contains_key(&TypeId::of::<G>())
     }
 
     /// Access the global of the given type. Panics if a global for that type has not been assigned.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn global<G: Global>(&self) -> &G {
         self.globals_by_type
             .get(&TypeId::of::<G>())
@@ -2104,6 +2106,7 @@ impl App {
     }
 
     /// Access the global of the given type if a value has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn try_global<G: Global>(&self) -> Option<&G> {
         self.globals_by_type
             .get(&TypeId::of::<G>())
@@ -2112,6 +2115,7 @@ impl App {
 
     /// Access the global of the given type mutably. Panics if a global for that type has not been assigned.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_mut_global")]
     pub fn global_mut<G: Global>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2123,6 +2127,9 @@ impl App {
 
     /// Access the global of the given type mutably. A default value is assigned if a global of this type has not
     /// yet been assigned.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
     pub fn default_global<G: Global + Default>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2134,6 +2141,9 @@ impl App {
     }
 
     /// Sets the value of the global of the given type.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by replaced by App::drain_globals + App::insert_global"
+    )]
     pub fn set_global<G: Global>(&mut self, global: G) {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2143,10 +2153,14 @@ impl App {
     /// Clear all stored globals. Does not notify global observers.
     #[cfg(any(test, feature = "test-support"))]
     pub fn clear_globals(&mut self) {
+        if !cfg!(test) {
+            log::warn!("Executing clear_globals outside of tests");
+        }
         self.globals_by_type.drain();
     }
 
     /// Remove the global of the given type from the app context. Does not notify global observers.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::drain_globals")]
     pub fn remove_global<G: Global>(&mut self) -> G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2159,6 +2173,7 @@ impl App {
     }
 
     /// Register a callback to be invoked when a global of the given type is updated.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn observe_global<G: Global>(
         &mut self,
         mut f: impl FnMut(&mut Self) + 'static,
@@ -2176,6 +2191,7 @@ impl App {
 
     /// Move the global of the given type to the stack.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals")]
     pub(crate) fn lease_global<G: Global>(&mut self) -> GlobalLease<G> {
         GlobalLease::new(
             self.globals_by_type
@@ -2186,6 +2202,7 @@ impl App {
     }
 
     /// Restore the global of the given type after it is moved to the stack.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub(crate) fn end_global_lease<G: Global>(&mut self, lease: GlobalLease<G>) {
         let global_type = TypeId::of::<G>();
 
@@ -2829,6 +2846,7 @@ impl App {
     /// Initializes gpui's default colors for the application.
     ///
     /// These colors can be accessed through `cx.default_colors()`.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn init_colors(&mut self) {
         self.set_global(GlobalColors(Arc::new(Colors::default())));
     }

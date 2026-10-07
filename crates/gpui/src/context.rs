@@ -107,19 +107,23 @@ pub trait AppContextTask {
 /// Exposes apis for interfacing with globals (entities which are owned by the [`App`]).
 pub trait AppContextGlobal {
     /// Read a global from this app context
+    #[deprecated(note = "migrating to entity-based globals")]
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global;
 
     /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
     /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`](Self::remove_global_entity).
+    #[deprecated(note = "migrating to entity-based globals")]
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
 
     /// Removes the entity from global storage. If no other entities are holding reference to it,
     /// it will be dropped in the very near future.
+    #[deprecated(note = "migrating to entity-based globals")]
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>);
 
     /// Returns an iterator of all globally-stored entities which match the provided type.
+    #[deprecated(note = "migrating to entity-based globals")]
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
 
     /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.

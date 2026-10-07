@@ -191,6 +191,11 @@ Changelog established.
 - Added `UpgradeApp` and `BorrowApp[Mut]` traits to support blanket implementation of `AppContext` traits. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 - Added `AsEntityId` trait which contains `fn entity_id(..) -> EntityId` for `EntityId`, `[Weak]Entity<T>`, `Any[Weak]Entity`, & `Any[Weak]View`. Added trait to `gpui::prelude::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 - Updated `AppContextEntity::notify` to take anything which impls `AsEntityId` (not just `EntityId` itself). [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Global entities api moved into `AppContextGlboal`: [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - implementable fns: `insert_global_by_id()`, `extract_globals()`, `has_globals_of()`, `drain_globals()`, `iter_globals()`
+  - provided fns: `remove_global_by_id()`, `get_global_by_id()`, `get_global_or_insert_default()`, `insert_global_by_type()`, `remove_global_by_type()`, `emplace_global_by_type()`, `extract_globals_of_type()`, `iter_globals_of_type()`, `get_global_by_type()`
+  - `App` has additional global entity fns: `try_read_global()`, `try_mut_global()` [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - Added enum `EntityBuilder<T>` and updated `AppContextGlobal::insert_global_by_id()` to take `Into<EntityBuilder<T>>` instead of `Entity<T>`, which allows callers to pass lazy entity constructor fns (thereby passing raw values). [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Removals
 
@@ -227,6 +232,13 @@ Changelog established.
   - `InteractiveElement::active()` -> `gpui::InteractiveElement::active_style()`
   - `InteractiveElement::group_active()` -> `gpui::InteractiveElement::group_active_style()`
 - `InteractiveElement::drag_over()` -> `InteractiveElement::on_drag_over()`. [#227](https://github.com/gpui-ce/gpui-ce/pull/227), [deprecation](https://github.com/gpui-ce/gpui-ce/commit/c818c3a1c0af68d1d45aa42654b5752903c7f51e)
+- Deprecating old globals API. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - traits `BorrowAppContext`, `Global`, `ReadGlobal`, `UpdateGlobal`
+  - structs `Colors`, `GlobalColors`
+  - methods in `AppContextGlobal`: `read_global`, `insert_global_entity`, `remove_global_entity`, `global_entities`
+  - methods in `App`: `has_global`, `global`, `try_global`, `global_mut`, `default_global`, `set_global`, `clear_globals`, `remove_global`, `observe_global`, `init_colors`
+  - methods in `Context`: `observe_global_in`
+  - methods in `AsyncApp`: `has_global`, `read_global`, `try_read_global`, `read_default_global`, `update_global`
 
 ### Contributors
 

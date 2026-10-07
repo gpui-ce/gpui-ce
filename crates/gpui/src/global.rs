@@ -23,6 +23,7 @@ use std::{
 /// [`Global`] and holds the global state. Then create a newtype struct that wraps
 /// the global type and create custom accessor methods to expose the desired subset
 /// of operations.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait Global: 'static {
     // This trait is intentionally left empty, by virtue of being a marker trait.
     //
@@ -31,6 +32,7 @@ pub trait Global: 'static {
 }
 
 /// A trait for reading a global value from the context.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait ReadGlobal {
     /// Returns the global instance of the implementing type.
     ///
@@ -45,6 +47,7 @@ impl<T: Global> ReadGlobal for T {
 }
 
 /// A trait for updating a global value in the context.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait UpdateGlobal {
     /// Updates the global instance of the implementing type using the provided closure.
     ///

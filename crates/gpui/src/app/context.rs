@@ -699,6 +699,7 @@ impl<'a, T: 'static> Context<'a, T> {
     }
 
     /// Register a callback to be invoked when the given global state changes.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn observe_global_in<G: Global>(
         &mut self,
         window: &Window,

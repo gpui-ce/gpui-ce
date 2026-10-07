@@ -120,6 +120,7 @@ impl AsyncApp {
     }
 
     /// Determine whether global state of the specified type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app();
         let app = app.borrow_mut();
@@ -129,6 +130,7 @@ impl AsyncApp {
     /// Reads the global state of the specified type, passing it to the given callback.
     ///
     /// Panics if no global state of the specified type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app();
         let app = app.borrow_mut();
@@ -138,6 +140,7 @@ impl AsyncApp {
     /// Reads the global state of the specified type, passing it to the given callback.
     ///
     /// Similar to [`AsyncApp::read_global`], but returns an error instead of panicking
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let app = self.app();
         let app = app.borrow_mut();
@@ -149,6 +152,9 @@ impl AsyncApp {
 
     /// Reads the global state of the specified type, passing it to the given callback.
     /// A default value is assigned if a global of this type has not yet been assigned.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
     pub fn read_default_global<G: Global + Default, R>(
         &self,
         read: impl FnOnce(&G, &App) -> R,
@@ -163,6 +169,7 @@ impl AsyncApp {
 
     /// A convenience method for [`App::update_global`](BorrowAppContext::update_global)
     /// for updating the global state of the specified type.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
     pub fn update_global<G: Global, R>(&self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
@@ -225,6 +232,7 @@ impl AsyncWindowContext {
     }
 
     /// A convenience method for [`App::global`].
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn read_global<G: Global, R>(
         &mut self,
         read: impl FnOnce(&G, &Window, &App) -> R,
@@ -235,6 +243,7 @@ impl AsyncWindowContext {
 
     /// A convenience method for [`App::update_global`](BorrowAppContext::update_global).
     /// for updating the global state of the specified type.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
     pub fn update_global<G, R>(
         &mut self,
         update: impl FnOnce(&mut G, &mut Window, &mut App) -> R,

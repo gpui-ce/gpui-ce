@@ -238,14 +238,20 @@ pub trait EventEmitter<E: Any>: 'static {}
 
 /// A helper trait for auto-implementing certain methods on contexts that
 /// can be used interchangeably.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait BorrowAppContext {
     /// Set a global value on the context.
+    #[deprecated(note = "migrating to entity-based globals")]
     fn set_global<T: Global>(&mut self, global: T);
+
     /// Updates the global state of the given type.
+    #[deprecated(note = "migrating to entity-based globals")]
     fn update_global<G, R>(&mut self, f: impl FnOnce(&mut G, &mut Self) -> R) -> R
     where
         G: Global;
+
     /// Updates the global state of the given type, creating a default if it didn't exist before.
+    #[deprecated(note = "migrating to entity-based globals")]
     fn update_default_global<G, R>(&mut self, f: impl FnOnce(&mut G, &mut Self) -> R) -> R
     where
         G: Global + Default;

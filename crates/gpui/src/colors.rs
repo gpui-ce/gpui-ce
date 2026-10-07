@@ -7,6 +7,9 @@ use std::sync::Arc;
 ///
 /// These are used for styling base components, examples and more.
 #[derive(Clone, Debug)]
+#[deprecated(
+    note = "migrating to entity-based globals. replaced by App::insert_color / App::get_color"
+)]
 pub struct Colors {
     /// Text color
     pub text: Rgba,
@@ -77,6 +80,9 @@ impl Colors {
 
 /// Get [Colors] from the global state
 #[derive(Clone, Debug)]
+#[deprecated(
+    note = "migrating to entity-based globals. replaced by App::insert_color / App::get_color"
+)]
 pub struct GlobalColors(pub Arc<Colors>);
 
 impl Deref for GlobalColors {
