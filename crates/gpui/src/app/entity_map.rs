@@ -1,7 +1,4 @@
-use crate::{
-    App, AppContextBorrowEntity, AppContextEntity, AppContextWindow, GpuiBorrow, VisualContext,
-    Window, seal::Sealed,
-};
+use crate::{App, GpuiBorrow, VisualContext, Window, context::*, seal::Sealed};
 use anyhow::{Context as _, Result};
 use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};

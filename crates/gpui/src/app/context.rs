@@ -1,7 +1,7 @@
 use crate::{
-    AppContext, AppContextEntity, AsyncApp, DispatchPhase, EntityId, EventEmitter, FocusHandle,
-    FocusOutEvent, Focusable, Global, KeystrokeObserver, Priority, SubscriberSet, Subscription,
-    Task, WeakEntity, WeakFocusHandle, Window,
+    App, AppContext, AsyncApp, AsyncWindowContext, DispatchPhase, Entity, EntityId, EventEmitter,
+    FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeEvent, KeystrokeObserver, Priority,
+    SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, context::*,
 };
 use futures::FutureExt;
 use gpui_util::Deferred;
@@ -12,8 +12,6 @@ use std::{
     ops,
     sync::Arc,
 };
-
-use super::{App, AsyncWindowContext, Entity, KeystrokeEvent};
 
 /// The app context, with specialized behavior for the given entity.
 pub struct Context<'a, T> {
@@ -771,10 +769,10 @@ impl<T> Context<'_, T> {
 }
 
 impl<T: 'static> AppContext for Context<'_, T> {}
-impl<T> crate::context::ImpliedAppEntity for Context<'_, T> {}
-impl<T> crate::context::ImpliedAppWindow for Context<'_, T> {}
-impl<T> crate::context::ImpliedAppTask for Context<'_, T> {}
-impl<T> crate::context::ImpliedAppGlobals for Context<'_, T> {}
+impl<T> ImpliedAppEntity for Context<'_, T> {}
+impl<T> ImpliedAppWindow for Context<'_, T> {}
+impl<T> ImpliedAppTask for Context<'_, T> {}
+impl<T> ImpliedAppGlobals for Context<'_, T> {}
 
 impl<T> Borrow<App> for Context<'_, T> {
     fn borrow(&self) -> &App {

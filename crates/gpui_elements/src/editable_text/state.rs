@@ -1437,8 +1437,8 @@ mod tests {
     use super::*;
     use crate::editable_text::StringStorage;
     use gpui::{
-        AppContextEntity, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
-        TextSystem, WindowHandle, WindowTextSystem, div, font, px,
+        Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun, TextSystem,
+        WindowHandle, WindowTextSystem, context::AppContextEntity, div, font, px,
     };
     use gpui_parley::{ParleyTextSystem, SystemFonts};
     use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};

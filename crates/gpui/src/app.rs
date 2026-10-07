@@ -1,10 +1,9 @@
 use crate::{
-    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext,
-    AppContextBorrowEntity, AppContextEntity, AppContextGlobal, AppContextTask, AppContextWindow,
-    Arena, ArenaBox, Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem,
-    ClipboardReadError, CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload,
-    FocusHandle, FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext,
-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, Arena, ArenaBox,
+    Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
+    CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
+    FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
+    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
@@ -12,6 +11,7 @@ use crate::{
     TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
     WindowHandle, WindowId, WindowInvalidator,
     colors::{Colors, GlobalColors},
+    context::*,
     hash,
     http_client::{HttpClient, NullHttpClient},
     init_app_menus,
@@ -80,9 +80,8 @@ use crate::MacActivationPolicy;
 /// [Context::on_app_quit] before fully quitting.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Temporary(?) wrapper around [`RefCell<App>`] to help us debug any double borrows.
+/// Wrapper around [`RefCell<App>`] to help us debug any double borrows.
 /// Strongly consider removing after stabilization.
-#[doc(hidden)]
 pub struct AppCell {
     app: RefCell<App>,
 }
@@ -120,12 +119,12 @@ impl AppCell {
 }
 
 impl AppContext for Rc<AppCell> {}
-impl crate::context::ImpliedAppEntity for Rc<AppCell> {}
-impl crate::context::ImpliedAppWindow for Rc<AppCell> {}
-impl crate::context::ImpliedAppTask for Rc<AppCell> {}
-impl crate::context::ImpliedAppGlobals for Rc<AppCell> {}
+impl ImpliedAppEntity for Rc<AppCell> {}
+impl ImpliedAppWindow for Rc<AppCell> {}
+impl ImpliedAppTask for Rc<AppCell> {}
+impl ImpliedAppGlobals for Rc<AppCell> {}
 
-#[doc(hidden)]
+/// Internally wrapped reference to [`App`] for usage with [`Rc<AppCell>`].
 #[derive(Deref, DerefMut)]
 #[deref(forward)]
 #[deref_mut(forward)]
@@ -3249,8 +3248,8 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 mod test {
     use super::{Application, CursorHideMode};
     use crate::{
-        AppContext, AppContextEntity, BackgroundExecutor, Context, Empty, ForegroundExecutor,
-        IntoElement, Render, TestAppContext, TestDispatcher, TestPlatform, Window,
+        BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
+        TestAppContext, TestDispatcher, TestPlatform, Window, context::*,
     };
     use std::{
         cell::{Cell, RefCell},

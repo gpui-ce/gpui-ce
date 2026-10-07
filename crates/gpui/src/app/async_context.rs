@@ -1,13 +1,16 @@
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, AppContextEntity, AppContextTask,
-    AppContextWindow, BackgroundExecutor, BorrowAppContext, Context, Entity, EntityId,
-    EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton, PromptLevel, Render,
-    Reservation, Result, Subscription, Task, VisualContext, WeakEntity, Window, WindowHandle,
+    AnyView, AnyWindowHandle, App, AppCell, BackgroundExecutor, BorrowAppContext, Context, Entity,
+    EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton, PromptLevel,
+    Render, Reservation, Result, Subscription, Task, VisualContext, WeakEntity, Window,
+    WindowHandle, context::*,
 };
 use anyhow::{Context as _, bail};
 use derive_more::{Deref, DerefMut};
 use futures::{channel::oneshot, future::FutureExt};
-use std::{future::Future, rc::Weak};
+use std::{
+    future::Future,
+    rc::{Rc, Weak},
+};
 
 /// An async-friendly version of [App] with a static lifetime so it can be held across `await` points in async code.
 /// You're provided with an instance when calling [App::spawn], and you can also create one with [App::to_async].
@@ -23,7 +26,7 @@ pub struct AsyncApp {
 }
 
 impl AsyncApp {
-    pub(crate) fn app(&self) -> std::rc::Rc<AppCell> {
+    pub(crate) fn app(&self) -> Rc<AppCell> {
         self.app
             .upgrade()
             .expect("app was released before async operation completed")
@@ -31,9 +34,9 @@ impl AsyncApp {
 }
 
 impl AppContext for AsyncApp {}
-impl crate::context::ImpliedAppEntity for AsyncApp {}
-impl crate::context::ImpliedAppWindow for AsyncApp {}
-impl crate::context::ImpliedAppGlobals for AsyncApp {}
+impl ImpliedAppEntity for AsyncApp {}
+impl ImpliedAppWindow for AsyncApp {}
+impl ImpliedAppGlobals for AsyncApp {}
 impl AppContextTask for AsyncApp {
     #[track_caller]
     fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>

@@ -105,6 +105,7 @@ pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use color::*;
+pub use context::AppContext;
 pub use ctor::ctor;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;
@@ -183,123 +184,6 @@ pub use window::*;
 #[cfg(not(target_family = "wasm"))]
 pub use pollster::block_on;
 
-/// The context trait, allows the different contexts in GPUI to be used
-/// interchangeably for certain operations.
-pub trait AppContext:
-    AppContextEntity + AppContextTask + AppContextWindow + AppContextGlobal
-{
-}
-
-/// API trait used to unify multiple GPUI contexts under a single api.
-/// Exposes ways to borrow entities inline.
-pub trait AppContextBorrowEntity {
-    /// Update a entity in the app context.
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static;
-}
-/// API trait used to unify multiple GPUI contexts under a single api.
-/// Exposes various apis for interacting with [`Entity`] in the [`App`] that aren't exposed mutable borrow (see [`AppContextBorrowEntity`]).
-pub trait AppContextEntity {
-    /// Create a new entity in the app context.
-    #[expect(
-        clippy::wrong_self_convention,
-        reason = "`App::new` is an ubiquitous function for creating entities"
-    )]
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T>;
-
-    /// Reserve a slot for a entity to be inserted later.
-    /// The returned [Reservation] allows you to obtain the [EntityId] for the future entity.
-    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T>;
-
-    /// Insert a new entity in the app context based on a [Reservation] previously obtained from [`reserve_entity`].
-    ///
-    /// [`reserve_entity`]: Self::reserve_entity
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T>;
-
-    /// Update a entity in the app context.
-    fn update_entity<T, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R
-    where
-        T: 'static;
-
-    /// Read a entity from the app context.
-    fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static;
-
-    /// Tell GPUI that an entity has changed and observers of it should be notified.
-    fn notify(&mut self, entity_id: EntityId);
-
-    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
-    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static;
-}
-/// API trait used to unify multiple GPUI contexts under a single api.
-/// Exposes apis for interfacing with [`Window`] data.
-pub trait AppContextWindow {
-    /// Update a window for the given handle.
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T;
-
-    /// Run `f` against the entity's *current* window — the most recently
-    /// rendered window that referenced the entity. Returns `None` if the
-    /// entity has no current window or that window is unavailable. See
-    /// [`App::with_window`] for the underlying lookup.
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R>;
-
-    /// Read a window off of the application context.
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static;
-}
-/// API trait used to unify multiple GPUI contexts under a single api.
-/// Exposes apis for spawning tasks.
-pub trait AppContextTask {
-    /// Spawn a future on a background thread
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static;
-}
-/// API trait used to unify multiple GPUI contexts under a single api.
-/// Exposes apis for interfacing with globals (entities which are owned by the [`App`]).
-pub trait AppContextGlobal {
-    /// Read a global from this app context
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global;
-
-    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
-    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
-
-    /// Removes the entity from global storage. If no other entities are holding reference to it,
-    /// it will be dropped in the very near future.
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>);
-
-    /// Returns an iterator of all globally-stored entities which match the provided type.
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
-}
-
 /// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].
 /// Allows you to obtain the [EntityId] for a entity before it is created.
 pub struct Reservation<T>(pub(crate) Slot<T>);
@@ -313,7 +197,7 @@ impl<T: 'static> Reservation<T> {
 
 /// This trait is used for the different visual contexts in GPUI that
 /// require a window to be present.
-pub trait VisualContext: AppContextWindow {
+pub trait VisualContext: context::AppContextWindow {
     /// The result type for window operations.
     type Result<T>;
 

@@ -1,10 +1,10 @@
 use crate::{
-    ActiveTooltip, AnyView, App, AppContextEntity, Bounds, DispatchPhase, Element, ElementId,
-    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParagraphDirection, Pixels,
-    Point, ShapedText, ShapedTextLayout, SharedString, Size, TextAlign, TextLayoutOptions,
-    TextOverflow, TextRangeExt, TextRun, TextStyle, TextTransform, TooltipId, UnicodeBidi,
-    WhiteSpace, Window, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
+    ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
+    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, LineLayout,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParagraphDirection, Pixels, Point, ShapedText,
+    ShapedTextLayout, SharedString, Size, TextAlign, TextLayoutOptions, TextOverflow, TextRangeExt,
+    TextRun, TextStyle, TextTransform, TooltipId, UnicodeBidi, WhiteSpace, Window,
+    context::AppContextEntity, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
