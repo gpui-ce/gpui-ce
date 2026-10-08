@@ -230,6 +230,7 @@ Changelog established.
   - Added feature flags `gpui_apple/runtime_shaders`, `gpui_macos/runtime_shaders`, `gpui_platform/runtime_shaders`
   - Linux/FreeBSD screen capture was incorporated at some point.
 - Added `UpgradeApp` and `BorrowApp[Mut]` traits to support blanket implementation of `AppContext` traits. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Added `AsEntityId` trait which contains `fn entity_id(..) -> EntityId` for `EntityId`, `[Weak]Entity<T>`, `Any[Weak]Entity`, & `Any[Weak]View`. Added trait to `gpui::prelude::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Removals
 
