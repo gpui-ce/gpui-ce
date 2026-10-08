@@ -1,7 +1,7 @@
 use crate::{
-    App, AppContext, AsyncApp, AsyncWindowContext, DispatchPhase, Entity, EntityId, EventEmitter,
-    FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeEvent, KeystrokeObserver, Priority,
-    SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, context::*,
+    App, AppContext, AsEntityId, AsyncApp, AsyncWindowContext, DispatchPhase, Entity, EntityId,
+    EventEmitter, FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeEvent, KeystrokeObserver,
+    Priority, SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, context::*,
 };
 use futures::FutureExt;
 use gpui_util::Deferred;
