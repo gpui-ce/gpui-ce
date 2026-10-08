@@ -1027,7 +1027,7 @@ pub enum HitboxBehavior {
     /// All hitboxes behind this hitbox will be ignored and so will have `hitbox.is_hovered() ==
     /// false` and `hitbox.should_handle_scroll() == false`. Typically for elements this causes
     /// skipping of all mouse events, hover styles, and tooltips. This flag is set by
-    /// [`InteractiveElement::occlude`].
+    /// [`InteractiveElement::occlude`](crate::InteractiveElement::occlude).
     ///
     /// For mouse handlers that check those hitboxes, this behaves the same as registering a
     /// bubble-phase handler for every mouse event type:
@@ -1051,7 +1051,7 @@ pub enum HitboxBehavior {
     /// `hitbox.should_handle_scroll() == true`. Typically for elements this causes all mouse
     /// interaction except scroll events to be ignored - see the documentation of
     /// [`Hitbox::is_hovered`] for details. This flag is set by
-    /// [`InteractiveElement::block_mouse_except_scroll`].
+    /// [`InteractiveElement::block_mouse_except_scroll`](crate::InteractiveElement::block_mouse_except_scroll).
     ///
     /// For mouse handlers that check those hitboxes, this behaves the same as registering a
     /// bubble-phase handler for every mouse event type **except** `ScrollWheelEvent`:
@@ -3214,7 +3214,7 @@ impl Window {
     }
 
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
-    /// the contents of the new [`Scene`], use [`Self::present`].
+    /// the contents of the new [`Scene`], use `present`.
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         // Drain every draw in profiler builds so a previous frame's
@@ -4126,9 +4126,9 @@ impl Window {
         result
     }
 
-    /// When you call this method during [`Element::prepaint`], containing elements will attempt to
+    /// When you call this method during [`crate::Element::prepaint`], containing elements will attempt to
     /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
-    /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
+    /// [`crate::Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
     /// that supports this method being called on the elements it contains. This method should only be
     /// called during the prepaint phase of element drawing.
     pub fn request_autoscroll(&mut self, bounds: Bounds<Pixels>) {
@@ -5250,7 +5250,7 @@ impl Window {
 
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
-    /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.
+    /// calls to the [`crate::Element::request_layout`] trait method and enables any element to participate in layout.
     ///
     /// This method should only be called as part of the request_layout or prepaint phase of element drawing.
     #[must_use]
@@ -7797,7 +7797,7 @@ impl HasDisplayHandle for Window {
     }
 }
 
-/// An identifier for an [`Element`].
+/// An identifier for an [`crate::Element`].
 ///
 /// Can be constructed with a string, a number, or both, as well
 /// as other internal representations.
