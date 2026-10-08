@@ -1,10 +1,11 @@
 //! Module containing various [`AppContext`] subdomain traits for common accessors of [`App`].
 use crate::{
-    AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityId, EventEmitter, Global,
-    GpuiBorrow, Reservation, Result, Window, WindowHandle,
+    AnyEntity, AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityId, EventEmitter,
+    Global, GpuiBorrow, Reservation, Result, Window, WindowHandle,
     app_borrow::{BorrowApp, BorrowAppMut, UpgradeApp},
 };
 use scheduler::Task;
+use std::any::TypeId;
 use std::ops::{Deref, DerefMut};
 
 /// API trait used to unify multiple GPUI contexts under a single api.
@@ -111,7 +112,7 @@ pub trait AppContextGlobal {
         G: Global;
 
     /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
-    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`](Self::remove_global_entity).
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
 
     /// Removes the entity from global storage. If no other entities are holding reference to it,
@@ -120,6 +121,118 @@ pub trait AppContextGlobal {
 
     /// Returns an iterator of all globally-stored entities which match the provided type.
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_by_id`](Self::remove_global_by_id).
+    fn insert_global_by_id<T: 'static>(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: Entity<T>,
+    );
+
+    /// Removes the entity from global storage. It will be dropped after there are no other entities holding a reference to it..
+    fn remove_global_by_id(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: impl AsEntityId,
+    ) -> Option<Vec<AnyEntity>> {
+        let entity_id = entity.entity_id();
+        let matches_id = |any: AnyEntity, _cx: &App| any.entity_id() == entity_id;
+        self.extract_globals(id, matches_id)
+    }
+
+    /// Returns true if there are any global entities stored with the provided group id.
+    fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool;
+
+    /// Drains all globals stored with the provided group id, returning the draining iterator.
+    ///
+    /// If the iterator is dropped before being fully consumed, it drops the remaining removed elements.
+    #[must_use]
+    fn drain_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = AnyEntity> + '_;
+
+    /// Drains global entities in the provided group id, if `should_extract` returns true.
+    fn extract_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        should_extract: impl Fn(AnyEntity, &App) -> bool,
+    ) -> Option<Vec<AnyEntity>>;
+
+    /// Returns an iterator of all globally-stored entities which match the provided group id.
+    fn iter_globals<T: 'static>(
+        &self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = Entity<T>> + '_;
+
+    /// Finds the first global stored with the provided group id.
+    /// Specifically useful for singleton-globals; if you have multiple globals in this group, you probably want [`iter_globals`](Self::iter_globals).
+    fn get_global_by_id<T: 'static>(
+        &self,
+        id: impl collections::any::AnyHash,
+    ) -> Option<Entity<T>> {
+        self.iter_globals(id).next()
+    }
+
+    /// Finds the first global stored by the type id of `T`.
+    /// If it doesn't exist, the default value of the global is constructed and its entity is returned.
+    fn get_global_or_insert_default<T: 'static + Default>(&mut self) -> Entity<T>
+    where
+        Self: AppContextEntity,
+    {
+        let id = TypeId::of::<T>();
+        if let Some(entity) = self.get_global_by_id::<T>(id) {
+            return entity;
+        }
+        let entity = self.new(|_| T::default());
+        self.insert_global_by_id(id, entity.clone());
+        entity
+    }
+
+    /// Inserts a global stored by the type id of `T`.
+    fn insert_global_by_type<T: 'static>(&mut self, entity: Entity<T>) {
+        self.insert_global_by_id(TypeId::of::<T>(), entity);
+    }
+
+    /// Removes a specific global entity from the bin keyed by the type id of `T`.
+    fn remove_global_by_type<T: 'static>(&mut self, entity: &Entity<T>) -> Option<Vec<AnyEntity>> {
+        self.remove_global_by_id(TypeId::of::<T>(), entity.entity_id())
+    }
+
+    /// Removes all globals of the provided type, and inserts the singular provided in their place.
+    /// Returns any removed globals.
+    fn emplace_global_by_type<T: 'static>(&mut self, entity: Entity<T>) -> Option<Vec<Entity<T>>> {
+        let removed = self.extract_globals_of_type::<T>(|_, _| true);
+        self.insert_global_by_type(entity);
+        removed
+    }
+
+    /// Drains global entities in the provided group id, if `should_extract` returns true.
+    fn extract_globals_of_type<T: 'static>(
+        &mut self,
+        should_extract: impl Fn(&Entity<T>, &App) -> bool,
+    ) -> Option<Vec<Entity<T>>> {
+        let anys = self.extract_globals(TypeId::of::<T>(), |any, cx: &App| {
+            let Some(entity) = any.clone().downcast::<T>().ok() else {
+                return false;
+            };
+            should_extract(&entity, cx)
+        })?;
+        let entities = anys.into_iter().filter_map(|any| any.downcast::<T>().ok());
+        Some(entities.collect())
+    }
+
+    /// Returns an iterator of all globally-stored entities which are stored by the type id of `T`.
+    fn iter_globals_of_type<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> + '_ {
+        self.iter_globals(TypeId::of::<T>())
+    }
+
+    /// Finds the first global stored by the type id of `T`.
+    /// Specifically useful for singleton-globals; if you have multiple globals in this group, you probably want [`iter_globals_of_type`](Self::iter_globals_of_type).
+    fn get_global_by_type<T: 'static>(&self) -> Option<Entity<T>> {
+        self.get_global_by_id(TypeId::of::<T>())
+    }
 }
 
 /// Marker trait which auto implements [`AppContextEntity`] if the marked struct also implements [`UpgradeApp`].
@@ -273,10 +386,60 @@ where
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let app = self.upgrade();
-        let borrow = app.borrow();
-        let iter = borrow.global_entities();
-        // Cloning the iterator here so that lock can be released when function is going out of scope
-        iter.collect::<Vec<_>>().into_iter()
+        into_owned_iter(self.upgrade().borrow().global_entities())
     }
+
+    fn insert_global_by_id<T: 'static>(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: Entity<T>,
+    ) {
+        let mut app = self.upgrade_mut();
+        app.borrow_mut().insert_global_by_id(id, entity);
+    }
+
+    fn remove_global_by_id(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: impl AsEntityId,
+    ) -> Option<Vec<AnyEntity>> {
+        let mut app = self.upgrade_mut();
+        app.borrow_mut().remove_global_by_id(id, entity)
+    }
+
+    fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool {
+        let mut app = self.upgrade();
+        app.borrow().has_globals_of(id)
+    }
+
+    fn drain_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = AnyEntity> + '_ {
+        let mut app = self.upgrade_mut();
+        into_owned_iter(app.borrow_mut().drain_globals(id))
+    }
+
+    fn extract_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        should_extract: impl Fn(AnyEntity, &App) -> bool,
+    ) -> Option<Vec<AnyEntity>> {
+        let mut app = self.upgrade_mut();
+        app.borrow_mut().extract_globals(id, should_extract)
+    }
+
+    fn iter_globals<T: 'static>(
+        &self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = Entity<T>> + '_ {
+        let mut app = self.upgrade();
+        into_owned_iter(app.borrow().iter_globals(id))
+    }
+}
+
+fn into_owned_iter<'a, T>(
+    iter: impl Iterator<Item = T> + 'a,
+) -> <Vec<T> as IntoIterator>::IntoIter {
+    iter.collect::<Vec<_>>().into_iter()
 }

@@ -185,7 +185,7 @@ pub use pollster::block_on;
 use std::any::Any;
 use taffy::TaffyLayoutEngine;
 
-/// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].
+/// Returned by [reserve_entity](context::AppContextEntity::reserve_entity) to later be passed to [insert_entity](context::AppContextEntity::insert_entity).
 /// Allows you to obtain the [EntityId] for a entity before it is created.
 pub struct Reservation<T>(pub(crate) Slot<T>);
 
