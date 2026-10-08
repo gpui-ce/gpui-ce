@@ -1,8 +1,8 @@
 use crate::{
-    AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
-    Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
-    Pixels, PrepaintStateIndex, Render, RenderOnce, ResolvedDirection, Style, StyleRefinement,
-    TextStyle, UnicodeBidi, WeakEntity,
+    AnyElement, AnyEntity, AnyWeakEntity, App, AsEntityId, Bounds, ContentMask, Context, Element,
+    ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
+    PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, ResolvedDirection, Style,
+    StyleRefinement, TextStyle, UnicodeBidi, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -28,6 +28,12 @@ impl<V: Render> From<Entity<V>> for AnyView {
             entity: value.into_any(),
             render: any_view::render::<V>,
         }
+    }
+}
+
+impl AsEntityId for AnyView {
+    fn entity_id(&self) -> EntityId {
+        self.entity.entity_id()
     }
 }
 
@@ -64,11 +70,6 @@ impl AnyView {
     /// Gets the [TypeId] of the underlying view.
     pub fn entity_type(&self) -> TypeId {
         self.entity.entity_type
-    }
-
-    /// The [`EntityId`] of this view.
-    pub fn entity_id(&self) -> EntityId {
-        self.entity.entity_id()
     }
 }
 
@@ -113,6 +114,12 @@ impl IntoElement for AnyView {
 pub struct AnyWeakView {
     entity: AnyWeakEntity,
     render: fn(&AnyView, &mut Window, &mut App) -> AnyElement,
+}
+
+impl AsEntityId for AnyWeakView {
+    fn entity_id(&self) -> EntityId {
+        self.entity.entity_id()
+    }
 }
 
 impl AnyWeakView {

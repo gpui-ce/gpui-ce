@@ -53,6 +53,19 @@ impl Display for EntityId {
     }
 }
 
+/// Exposes a consistent api for accessing an entity's id across raw valid, typed entity, anonymized any-entity.
+/// Primarily useful to allow any of the implementing types as inputs to functions that take an [`EntityId`].
+pub trait AsEntityId {
+    /// Returns the id associated with this entity.
+    fn entity_id(&self) -> EntityId;
+}
+
+impl AsEntityId for EntityId {
+    fn entity_id(&self) -> EntityId {
+        *self
+    }
+}
+
 pub(crate) struct EntityMap {
     entities: SecondaryMap<EntityId, Box<dyn Any>>,
     pub accessed_entities: RefCell<FxHashSet<EntityId>>,
@@ -251,6 +264,13 @@ pub struct AnyEntity {
     handle_id: HandleId,
 }
 
+impl AsEntityId for AnyEntity {
+    #[inline]
+    fn entity_id(&self) -> EntityId {
+        self.entity_id
+    }
+}
+
 impl AnyEntity {
     fn new(
         id: EntityId,
@@ -271,12 +291,6 @@ impl AnyEntity {
                 .handle_created(id, Some(type_name)),
             entity_map,
         }
-    }
-
-    /// Returns the id associated with this entity.
-    #[inline]
-    pub fn entity_id(&self) -> EntityId {
-        self.entity_id
     }
 
     /// Returns the [TypeId] associated with this entity.
@@ -416,6 +430,12 @@ pub struct Entity<T> {
     #[deref_mut]
     pub(crate) any_entity: AnyEntity,
     pub(crate) entity_type: PhantomData<fn(T) -> T>,
+}
+
+impl<T> AsEntityId for Entity<T> {
+    fn entity_id(&self) -> EntityId {
+        self.any_entity.entity_id()
+    }
 }
 
 impl<T> Sealed for Entity<T> {}
@@ -572,13 +592,14 @@ pub struct AnyWeakEntity {
     entity_ref_counts: Weak<RwLock<EntityRefCounts>>,
 }
 
-impl AnyWeakEntity {
-    /// Get the entity ID associated with this weak reference.
+impl AsEntityId for AnyWeakEntity {
     #[inline]
-    pub fn entity_id(&self) -> EntityId {
+    fn entity_id(&self) -> EntityId {
         self.entity_id
     }
+}
 
+impl AnyWeakEntity {
     /// Check if this weak handle can be upgraded, or if the entity has already been dropped
     pub fn is_upgradable(&self) -> bool {
         let ref_count = self
@@ -742,6 +763,12 @@ pub struct WeakEntity<T> {
     #[deref_mut]
     any_entity: AnyWeakEntity,
     entity_type: PhantomData<fn(T) -> T>,
+}
+
+impl<T> AsEntityId for WeakEntity<T> {
+    fn entity_id(&self) -> EntityId {
+        self.any_entity.entity_id()
+    }
 }
 
 impl<T> std::fmt::Debug for WeakEntity<T> {
