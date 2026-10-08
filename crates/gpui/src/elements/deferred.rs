@@ -15,7 +15,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 /// An element which delays the painting of its child until after all of
 /// its ancestors, while keeping its layout as part of the current element tree.
 ///
-/// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
+/// Per `Window::prepaint_deferred_draws`, deferred elements causing additional deferred elements
 /// should be constrained to limited circumstances and will stop processing after some depth
 /// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
 #[derive(derive_setters::Setters)]
