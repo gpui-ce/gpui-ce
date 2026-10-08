@@ -3026,17 +3026,8 @@ impl AppContextGlobal for App {
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
         self.iter_globals(TypeId::of::<T>())
     }
-}
 
-impl App {
-    fn global_entry_mut(
-        &mut self,
-        id: impl collections::any::AnyHash,
-    ) -> std::collections::hash_map::Entry<'_, GlobalId, Vec<AnyEntity>> {
-        self.globals_by_id.entry(GlobalId::new(id))
-    }
-
-    pub fn insert_global_by_id<T: 'static>(
+    fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl collections::any::AnyHash,
         entity: Entity<T>,
@@ -3046,23 +3037,28 @@ impl App {
             .push(entity.into_any());
     }
 
-    pub fn remove_global_by_id(
+    fn extract_globals(
         &mut self,
         id: impl collections::any::AnyHash,
-        entity: impl AsEntityId,
-    ) {
-        use std::collections::hash_map::Entry::*;
-        let entity_id = entity.entity_id();
-        if let Occupied(mut entry) = self.global_entry_mut(id) {
-            entry.get_mut().retain(|any| any.entity_id() != entity_id);
-        }
+        should_extract: impl Fn(AnyEntity, &App) -> bool,
+    ) -> Option<Vec<AnyEntity>> {
+        let id = GlobalId::new(id);
+        let Some(mut globals) = self.globals_by_id.remove(&id) else {
+            return None;
+        };
+
+        let out_iter = globals.extract_if(.., |entity| should_extract(entity.clone(), self));
+        let out_vec = out_iter.collect();
+
+        self.globals_by_id.insert(id, globals);
+        Some(out_vec)
     }
 
-    pub fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool {
+    fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool {
         self.globals_by_id.contains_key(&GlobalId::new(id))
     }
 
-    pub fn drain_globals(
+    fn drain_globals(
         &mut self,
         id: impl collections::any::AnyHash,
     ) -> impl Iterator<Item = AnyEntity> + '_ {
@@ -3073,7 +3069,7 @@ impl App {
         either.factor_into_iter().map(|either| either.into_inner())
     }
 
-    pub fn iter_globals<T: 'static>(
+    fn iter_globals<T: 'static>(
         &self,
         id: impl collections::any::AnyHash,
     ) -> impl Iterator<Item = crate::Entity<T>> + '_ {
@@ -3081,40 +3077,30 @@ impl App {
         let iter = entries_by_id.into_iter().flatten();
         iter.filter_map(|any| any.clone().downcast::<T>().ok())
     }
+}
 
-    pub fn get_global<T: 'static>(&self, id: impl collections::any::AnyHash) -> Option<Entity<T>> {
-        self.iter_globals(id).next()
+impl App {
+    fn global_entry_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> std::collections::hash_map::Entry<'_, GlobalId, Vec<AnyEntity>> {
+        self.globals_by_id.entry(id)
     }
 
-    pub fn get_global_or_insert_default<T: 'static + Default>(&mut self) -> Entity<T> {
-        let id = TypeId::of::<T>();
-        if let Some(entity) = self.get_global::<T>(id) {
-            return entity;
-        }
-        let entity = self.new(|_| T::default());
-        self.insert_global_by_id(id, entity.clone());
-        entity
-    }
-
+    /// Tries to find the global stored by the type id of `T`, returning an immutable borrow of the value at the entity.
     #[track_caller]
     pub fn try_read_global<T: 'static>(&self) -> Option<&T> {
         let entity = self.iter_globals(TypeId::of::<T>()).next()?;
         Some(entity.read(self))
     }
 
+    /// Tries to find the global stored by the type id of `T`, returning a mutable borrow of the value at the entity.
+    /// Automatically pre-notifies the entity that it is being mutated.
     #[track_caller]
     pub fn try_mut_global<T: 'static>(&mut self) -> Option<GpuiBorrow<'_, T>> {
         let entity = self.iter_globals::<T>(TypeId::of::<T>()).next()?;
         self.notify(entity.entity_id());
         Some(entity.as_mut(self))
-    }
-
-    pub fn insert_global_by_type<T: 'static>(&mut self, entity: Entity<T>) {
-        self.insert_global_by_id(TypeId::of::<T>(), entity);
-    }
-
-    pub fn remove_global_by_type<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.remove_global_by_id(TypeId::of::<T>(), entity.entity_id());
     }
 }
 
