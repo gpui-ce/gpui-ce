@@ -1058,7 +1058,7 @@ pub trait InteractiveElement: Sized {
 
     #[cfg(any(test, feature = "test-support"))]
     /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
+    /// in the `crate::VisualTestContext::debug_bounds` map
     /// This is a noop in release builds
     fn debug_selector(mut self, f: impl FnOnce() -> String) -> Self {
         self.interactivity().debug_selector = Some(f());
@@ -1067,7 +1067,7 @@ pub trait InteractiveElement: Sized {
 
     #[cfg(not(any(test, feature = "test-support")))]
     /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
+    /// in the `crate::VisualTestContext::debug_bounds` map
     /// This is a noop in release builds
     #[inline]
     fn debug_selector(self, _: impl FnOnce() -> String) -> Self {
@@ -2209,7 +2209,7 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// If a value of type [`T`] is dragged over the owning element,
+    /// If a value of type `T` is dragged over the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to provide style changes to apply to the owning element.
     pub fn on_drag_over(
@@ -2222,7 +2222,7 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// If a value of type [`T`] is dropped on the owning element,
+    /// If a value of type `T` is dropped on the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to process the dropped value.
     pub fn on_drop(
@@ -4971,7 +4971,7 @@ where
 }
 
 /// Represents an element that can be scrolled *to* in its parent element.
-/// Contrary to [ScrollHandle::scroll_to_active_item], an anchored element does not have to be an immediate child of the parent.
+/// Contrary to `ScrollHandle::scroll_to_active_item`, an anchored element does not have to be an immediate child of the parent.
 #[derive(Clone)]
 pub struct ScrollAnchor {
     handle: ScrollHandle,
@@ -5099,7 +5099,7 @@ impl ScrollHandle {
         self.0.borrow().child_bounds.get(ix).cloned()
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
+    /// Update the active item of `ScrollHandleState` for scrolling to in prepaint
     pub fn scroll_to_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {
@@ -5108,7 +5108,7 @@ impl ScrollHandle {
         });
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
+    /// Update the active item of `ScrollHandleState` for scrolling to in prepaint
     /// This scrolls the minimal amount to ensure that the child is the first visible element
     pub fn scroll_to_top_of_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
