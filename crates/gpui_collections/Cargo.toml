@@ -19,3 +19,4 @@ test-support = []
 indexmap = { version = "2", features = ["serde"] }
 rustc-hash = "2"
 gpui_util = { package = "gpui_ce_util", version = "0.2.6", path = "../gpui_ce_util" }
+any_key = "0.1.1"

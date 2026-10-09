@@ -1,5 +1,4 @@
 use crate::{App, BorrowAppContext};
-use gpui_shared_string::SharedString;
 use std::{
     any::TypeId,
     hash::{BuildHasher, Hasher},
@@ -79,33 +78,29 @@ impl<T: Global> UpdateGlobal for T {
     }
 }
 
-/// Unique id for each bin of global entities.
-#[derive(Clone, PartialEq, Eq)]
-pub enum GlobalId {
-    /// Global entities keyed by their type
-    Type(TypeId),
-    /// Global entities keyed by a string (e.g. asset paths)
-    String(SharedString),
+/// Unique id for each bin of global entities. Internally represented as "any value that is hashable and partial-eq",
+/// where the hash value of TypeId is custom defined by gpui.
+#[derive(Eq)]
+pub(crate) struct GlobalId(Box<dyn collections::any::AnyHash>);
+impl GlobalId {
+    pub(crate) fn new(value: impl collections::any::AnyHash) -> Self {
+        Self(Box::new(value))
+    }
 }
 impl std::hash::Hash for GlobalId {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            GlobalId::Type(type_id) => {
+        match self.0.downcast_ref::<TypeId>() {
+            Some(type_id) => {
                 let mut hasher = gpui_util::TypeIdHashBuilder.build_hasher();
                 type_id.hash(&mut hasher);
                 hasher.finish().hash(state);
             }
-            GlobalId::String(shared_string) => shared_string.hash(state),
+            None => collections::any::AnyHash::hash(&self.0, state),
         }
     }
 }
-impl From<TypeId> for GlobalId {
-    fn from(value: TypeId) -> Self {
-        Self::Type(value)
-    }
-}
-impl From<SharedString> for GlobalId {
-    fn from(value: SharedString) -> Self {
-        Self::String(value)
+impl PartialEq for GlobalId {
+    fn eq(&self, other: &Self) -> bool {
+        collections::any::AnyHash::eq(&self.0, &other.0)
     }
 }
