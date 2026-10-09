@@ -55,7 +55,7 @@ bytemuck = "1"
 collections.workspace = true
 image.workspace = true
 futures.workspace = true
-gpui.workspace = true
+gpui = { workspace = true, default-features = false }
 gpui_util.workspace = true
 gpui_parley = { workspace = true, features = ["system-fonts"] }
 gpui_wgpu = { workspace = true, optional = true }
