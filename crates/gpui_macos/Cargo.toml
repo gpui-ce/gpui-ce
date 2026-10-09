@@ -13,7 +13,6 @@ workspace = true
 path = "src/gpui_macos.rs"
 
 [features]
-default = ["gpui/default"]
 bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]
 test-support = [
   "gpui/test-support",
@@ -81,6 +80,6 @@ url.workspace = true
 # GPUI and the extracted renderer. A dependency does not inherit this crate's
 # `cfg(test)`, so dev-dependencies enable those APIs only for test builds.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"], default-features = false }
 gpui_apple = { workspace = true, features = ["test-support"] }
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }

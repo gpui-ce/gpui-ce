@@ -38,7 +38,7 @@ wayland = ["gpui_linux/wayland"]
 x11 = ["gpui_linux/x11"]
 
 [dependencies]
-gpui.workspace = true
+gpui = { workspace = true, default-features = false }
 
 [dev-dependencies]
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
