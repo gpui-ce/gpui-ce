@@ -27,3 +27,7 @@ gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-
 [[example]]
 name = "editable_text"
 path = "examples/editable_text.rs"
+
+[[example]]
+name = "button"
+path = "examples/button.rs"
