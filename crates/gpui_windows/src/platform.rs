@@ -16,6 +16,7 @@ use gpui_util::{ResultExt, get_powershell, new_std_command};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
+#[cfg(not(feature = "wgpu"))]
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::{
     UI::ViewManagement::UISettings,
@@ -340,7 +341,9 @@ impl WindowsPlatform {
         let text_system = Arc::downgrade(&self.text_system);
         #[cfg(not(feature = "wgpu"))]
         let invalidate_devices = self.invalidate_devices.clone();
+        #[cfg(not(feature = "wgpu"))]
         let platform_window: SafeHwnd = self.handle.into();
+        #[cfg(not(feature = "wgpu"))]
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
 
@@ -1459,6 +1462,7 @@ fn should_auto_hide_scrollbars() -> Result<bool> {
     Ok(ui_settings.AutoHideScrollBars()?)
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn check_device_lost(device: &ID3D11Device) -> bool {
     let device_state = unsafe { device.GetDeviceRemovedReason() };
     match device_state {
@@ -1470,6 +1474,7 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
     }
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn handle_gpu_device_lost(
     directx_devices: &mut DirectXDevices,
     platform_window: HWND,
