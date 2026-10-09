@@ -65,7 +65,7 @@ mod taffy;
 pub mod test;
 mod text_system;
 mod transition;
-mod util;
+pub mod util;
 mod view;
 mod window;
 

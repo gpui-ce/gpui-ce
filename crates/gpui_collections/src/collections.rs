@@ -13,3 +13,5 @@ pub use std::collections::*;
 pub mod vecmap;
 #[cfg(test)]
 mod vecmap_tests;
+
+pub use any_key as any;
