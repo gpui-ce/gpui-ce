@@ -43,12 +43,12 @@ pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
-#[cfg(feature = "wgpu")]
-pub(crate) use wgpu_renderer::WindowsWgpuRenderer as WindowRenderer;
-#[cfg(feature = "wgpu")]
-pub(crate) use wgpu_renderer::Context as RendererContext;
 #[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_renderer::DirectXRenderer as WindowRenderer;
+#[cfg(feature = "wgpu")]
+pub(crate) use wgpu_renderer::Context as RendererContext;
+#[cfg(feature = "wgpu")]
+pub(crate) use wgpu_renderer::WindowsWgpuRenderer as WindowRenderer;
 
 pub use platform::WindowsPlatform;
 

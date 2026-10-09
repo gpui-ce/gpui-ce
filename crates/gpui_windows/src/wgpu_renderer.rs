@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use gpui::{GpuSpecs, Scene, Size, WindowBackgroundAppearance};
 use gpui_wgpu::{
-    GpuContext, WgpuContextHandle, WgpuDeviceRequirements, WgpuRenderer,
-    WgpuSurfaceConfig, wgpu,
+    GpuContext, WgpuContextHandle, WgpuDeviceRequirements, WgpuRenderer, WgpuSurfaceConfig, wgpu,
 };
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
@@ -37,8 +36,7 @@ impl Context {
 
 fn raw_window_handle_from_hwnd(hwnd: HWND) -> raw_window_handle::RawWindowHandle {
     let mut handle = raw_window_handle::Win32WindowHandle::new(
-        std::num::NonZeroIsize::new(hwnd.0 as isize)
-            .expect("an HWND is never the null handle"),
+        std::num::NonZeroIsize::new(hwnd.0 as isize).expect("an HWND is never the null handle"),
     );
     // The instance handle is not needed for wgpu surface creation.
     handle.hinstance = None;
