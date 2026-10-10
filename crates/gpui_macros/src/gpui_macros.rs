@@ -3,12 +3,15 @@ mod derive_action;
 mod derive_app_context;
 mod derive_element_traits;
 mod derive_into_element;
+mod derive_reflect;
 mod derive_render;
 mod derive_visual_context;
 mod property_test;
 mod register_action;
 mod styles;
 mod test;
+mod trait_items;
+mod trait_set;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod derive_inspector_reflection;
@@ -32,24 +35,28 @@ pub fn register_action(ident: TokenStream) -> TokenStream {
 
 /// #[derive(IntoElement)] generates an `IntoElement` impl for any `RenderOnce`
 /// type, wrapping it in a `ViewElement` so it can be used as a child.
-#[proc_macro_derive(IntoElement)]
+/// Concrete `Element` types use `#[into_element(self)]` to convert to themselves.
+#[proc_macro_derive(IntoElement, attributes(into_element))]
 pub fn derive_into_element(input: TokenStream) -> TokenStream {
     derive_into_element::derive_into_element(input)
 }
 
 /// Implements `Styled` using the field marked `#[style]`.
+/// Use `#[style(delegate)]` to call that field's `Styled::style` method.
 #[proc_macro_derive(Styled, attributes(style))]
 pub fn derive_styled(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_styled(input)
 }
 
 /// Implements `ParentElement` using the field marked `#[children]`.
+/// Use `#[children(delegate)]` to forward to that field's `ParentElement` implementation.
 #[proc_macro_derive(ParentElement, attributes(children))]
 pub fn derive_parent_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_parent_element(input)
 }
 
 /// Implements `InteractiveElement` using the field marked `#[interactivity]`.
+/// Use `#[interactivity(delegate)]` to call that field's `interactivity` method.
 #[proc_macro_derive(InteractiveElement, attributes(interactivity))]
 pub fn derive_interactive_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_interactive_element(input)
@@ -59,6 +66,56 @@ pub fn derive_interactive_element(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(StatefulInteractiveElement)]
 pub fn derive_stateful_interactive_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_stateful_interactive_element(input)
+}
+
+/// Builds concrete reflection metadata and detects builtin traits on monomorphic types.
+/// Generic types list traits explicitly in `#[reflect(...)]` and forward
+/// `Element::reflection` to `<Self as Reflect>::reflection()`.
+#[proc_macro_derive(Reflect, attributes(reflect))]
+pub fn derive_reflect(input: TokenStream) -> TokenStream {
+    derive_reflect::derive_reflect(input)
+}
+
+/// Generates a trait token and callable adapters for erased elements.
+/// Borrowed methods dispatch to the concrete element. Owned builders and
+/// `#[reflect(wrapper_default)]` methods run their trait bodies on `ReflectedElement`.
+///
+/// Callable traits must be non-generic, with reflected parents except `Sized`, and no
+/// associated types or constants. Forwarded methods support borrowed receivers, lifetimes,
+/// concrete types, and `impl IntoIterator<Item = ConcreteType>`.
+/// Wrapper defaults require a body and one unconditional setting. `cfg` and nested
+/// configuration-producing `cfg_attr` are preserved. GPUI style macros are supported;
+/// other item macros must generate the annotated trait.
+///
+/// `#[reflect_trait(membership)]` permits associated items, generic methods, and ordinary
+/// supertraits. These traits can join `trait_set!` without callable access, but cannot be
+/// callable parents.
+///
+/// Qualify parents whose schemas are not in scope. Parent aliases need matching schema
+/// aliases, as described in `trait_set!`.
+///
+/// ```compile_fail
+/// use gpui_macros::reflect_trait;
+///
+/// #[reflect_trait]
+/// trait Limited {
+///     const LIMIT: usize = 12;
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
+    derive_reflect::reflect_trait(args, input)
+}
+
+/// Combines reflected traits and their callable parents into a comma-separated set.
+/// Membership-only traits grant no callable access. Repeats and trailing commas are allowed.
+///
+/// Paths need matching schemas. When renaming `Trait` to `Alias`, re-export
+/// `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`. Single-token aliases need no schema.
+/// The compiler checks schema/token bindings and inherited trait capabilities.
+#[proc_macro]
+pub fn trait_set(input: TokenStream) -> TokenStream {
+    trait_set::trait_set(input)
 }
 
 #[proc_macro_derive(Render)]
@@ -122,7 +179,7 @@ pub fn derive_visual_context(input: TokenStream) -> TokenStream {
 #[proc_macro]
 #[doc(hidden)]
 pub fn style_helpers(input: TokenStream) -> TokenStream {
-    styles::style_helpers(input)
+    expand_style_macro(input, styles::style_helpers)
 }
 
 /// Generates the style transition builder and application code.
@@ -135,49 +192,49 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
 /// Generates methods for visibility styles.
 #[proc_macro]
 pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
-    styles::visibility_style_methods(input)
+    expand_style_macro(input, styles::visibility_style_methods)
 }
 
 /// Generates methods for margin styles.
 #[proc_macro]
 pub fn margin_style_methods(input: TokenStream) -> TokenStream {
-    styles::margin_style_methods(input)
+    expand_style_macro(input, styles::margin_style_methods)
 }
 
 /// Generates methods for padding styles.
 #[proc_macro]
 pub fn padding_style_methods(input: TokenStream) -> TokenStream {
-    styles::padding_style_methods(input)
+    expand_style_macro(input, styles::padding_style_methods)
 }
 
 /// Generates methods for position styles.
 #[proc_macro]
 pub fn position_style_methods(input: TokenStream) -> TokenStream {
-    styles::position_style_methods(input)
+    expand_style_macro(input, styles::position_style_methods)
 }
 
 /// Generates methods for overflow styles.
 #[proc_macro]
 pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
-    styles::overflow_style_methods(input)
+    expand_style_macro(input, styles::overflow_style_methods)
 }
 
 /// Generates methods for cursor styles.
 #[proc_macro]
 pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
-    styles::cursor_style_methods(input)
+    expand_style_macro(input, styles::cursor_style_methods)
 }
 
 /// Generates methods for border styles.
 #[proc_macro]
 pub fn border_style_methods(input: TokenStream) -> TokenStream {
-    styles::border_style_methods(input)
+    expand_style_macro(input, styles::border_style_methods)
 }
 
 /// Generates methods for box shadow styles.
 #[proc_macro]
 pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
-    styles::box_shadow_style_methods(input)
+    expand_style_macro(input, styles::box_shadow_style_methods)
 }
 
 /// `#[gpui::test]` can be used to annotate test functions that run with GPUI support.
@@ -342,4 +399,13 @@ pub(crate) fn get_simple_attribute_field(ast: &DeriveInput, name: &'static str) 
         syn::Data::Enum(_) => None,
         syn::Data::Union(_) => None,
     }
+}
+
+fn expand_style_macro(
+    input: TokenStream,
+    expand: fn(proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream>,
+) -> TokenStream {
+    expand(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
 }

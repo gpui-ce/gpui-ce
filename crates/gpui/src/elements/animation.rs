@@ -146,7 +146,8 @@ pub trait AnimationExt {
 
 impl<E: IntoElement + 'static> AnimationExt for E {}
 
-/// A GPUI element that applies an animation to another element
+/// A GPUI element that applies an animation to another element.
+/// Reflection targets this wrapper, independently of the animated result.
 pub struct AnimationElement<E> {
     id: ElementId,
     element: Option<E>,
@@ -155,6 +156,7 @@ pub struct AnimationElement<E> {
 }
 
 /// A GPUI element driven by a stateful spring.
+/// Reflection targets this wrapper, independently of the animated result.
 pub struct SpringAnimationElement<E> {
     id: ElementId,
     element: Option<E>,

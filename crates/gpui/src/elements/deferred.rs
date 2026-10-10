@@ -18,6 +18,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 /// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
 /// should be constrained to limited circumstances and will stop processing after some depth
 /// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
+#[derive(gpui_macros::Reflect)]
 pub struct Deferred {
     child: Option<AnyElement>,
     priority: DeferredPriority,

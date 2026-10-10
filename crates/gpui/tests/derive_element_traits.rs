@@ -17,6 +17,19 @@ struct Control {
     interactivity: Interactivity,
 }
 
+#[derive(
+    gpui::Styled, gpui::ParentElement, gpui::InteractiveElement, gpui::StatefulInteractiveElement,
+)]
+struct Delegated<StyleTarget, InteractiveTarget>(
+    #[style(delegate)]
+    #[children(delegate)]
+    StyleTarget,
+    #[interactivity(delegate)] InteractiveTarget,
+)
+where
+    StyleTarget: Styled + ParentElement,
+    InteractiveTarget: gpui::InteractiveElement;
+
 fn requires_stateful<Type: StatefulInteractiveElement>(element: &mut Type) -> &mut Interactivity {
     element.interactivity()
 }
@@ -40,8 +53,20 @@ mod tests {
         let mut control = Control {
             interactivity: Interactivity::default(),
         };
+        let expected = std::ptr::from_ref(&control.interactivity);
 
-        let interactivity: &mut Interactivity = requires_stateful(&mut control);
-        assert!(std::ptr::eq(interactivity, &control.interactivity));
+        assert!(std::ptr::eq(requires_stateful(&mut control), expected));
+
+        let mut delegated = Delegated(card, control);
+        delegated.style().opacity = Some(0.75);
+        delegated.extend([Empty.into_any_element()]);
+
+        assert_eq!(delegated.0.style.opacity, Some(0.75));
+        assert_eq!(delegated.0.children.len(), 2);
+
+        let original = std::ptr::from_ref(&delegated.1.interactivity);
+        let interactivity: &mut Interactivity = requires_stateful(&mut delegated);
+
+        assert!(std::ptr::eq(interactivity, original));
     }
 }

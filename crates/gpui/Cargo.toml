@@ -188,6 +188,12 @@ ignored = [
 ]
 ignored-paths = ["src/_ownership_and_data_flow.rs"]
 
+[[bench]]
+name = "reflection"
+path = "benches/reflection.rs"
+harness = false
+required-features = ["bench-support"]
+
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
 # ============================================================================
@@ -215,6 +221,10 @@ path = "examples/learn/layout.rs"
 [[example]]
 name = "styling"
 path = "examples/learn/styling.rs"
+
+[[example]]
+name = "trait_reflection"
+path = "examples/learn/trait_reflection.rs"
 
 [[example]]
 name = "async_tasks"

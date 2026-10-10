@@ -20,6 +20,8 @@ pub fn canvas<T>(
 
 /// A canvas element, meant for accessing the low level paint API without defining a whole
 /// custom element
+#[derive(gpui_macros::Reflect)]
+#[reflect(crate::Styled)]
 pub struct Canvas<T> {
     prepaint: Option<Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>>,
     paint: Option<Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>>,
@@ -37,6 +39,10 @@ impl<T: 'static> IntoElement for Canvas<T> {
 impl<T: 'static> Element for Canvas<T> {
     type RequestLayoutState = Style;
     type PrepaintState = Option<T>;
+
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        <Self as crate::reflection::Reflect>::reflection()
+    }
 
     fn id(&self) -> Option<ElementId> {
         None

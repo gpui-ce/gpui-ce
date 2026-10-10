@@ -106,6 +106,7 @@ impl From<crate::ScreenCaptureFrame> for SurfaceSource {
 }
 
 /// A surface element.
+#[derive(gpui_macros::Reflect)]
 pub struct Surface {
     source: SurfaceSource,
     object_fit: ObjectFit,

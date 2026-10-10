@@ -10,10 +10,11 @@ use anyhow::{Result, anyhow};
 use hdrhistogram::Histogram;
 
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, BackgroundExecutor, Bounds, Context, Empty,
-    Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, Platform,
-    PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Task, TestPlatform,
-    ThreadedDispatcher, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
+    AnyView, AnyWindowHandle, App, AppCell, AppContext, AssetRegistry, BackgroundExecutor, Bounds,
+    Context, Empty, Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global,
+    Platform, PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Task,
+    TestPlatform, ThreadedDispatcher, VisualContext, Window, WindowBounds, WindowHandle,
+    WindowOptions,
     app::GpuiBorrow,
     profiler::{
         self, FrameEvent, FrameTimingCollector,
@@ -526,13 +527,13 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
              ThreadedDispatcher; construct one with gpui::bench_platform"
         );
         let foreground_executor = platform.foreground_executor();
-        let asset_source = Arc::new(());
+        let asset_registry = Arc::new(AssetRegistry::default());
         // Benchmark setup must not make accidental network requests. The
         // production `BlockedHttpClient` reports them without enabling a
         // configurable test double through `test-support`.
         let http_client: Arc<dyn crate::http_client::HttpClient> =
             Arc::new(crate::http_client::BlockedHttpClient::new());
-        let app = App::new_app(platform, asset_source, http_client);
+        let app = App::new_app(platform, asset_registry, http_client);
 
         Self {
             app,
@@ -1174,10 +1175,9 @@ impl VisualContext for BenchWindowContext<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{rc::Rc, sync::Arc};
-
     use super::*;
-    use crate::profiler::journal::install_test_foreground_journal;
+    use crate::{TestTextSystem, profiler::journal::install_test_foreground_journal};
+    use std::{rc::Rc, sync::Arc};
 
     #[test]
     fn foreground_work_reports_long_task_without_window_draw() {
@@ -1267,7 +1267,7 @@ mod tests {
 
     #[test]
     fn bench_task_reports_long_task_without_window() {
-        let platform = bench_platform(None, Arc::new(crate::NoopTextSystem::new()));
+        let platform = bench_platform(None, Arc::new(TestTextSystem::new()));
         let report = BenchReport::default();
         let name = "bench_task_reports_long_task_without_window";
 
@@ -1306,7 +1306,7 @@ mod tests {
     fn benchmark_contexts_forward_global_entity_operations() {
         struct GlobalEntity;
 
-        let platform = bench_platform(None, Arc::new(crate::NoopTextSystem::new()));
+        let platform = bench_platform(None, Arc::new(TestTextSystem::new()));
         let name = "benchmark_contexts_forward_global_entity_operations";
         let mut criterion = criterion::Criterion::default()
             .without_plots()

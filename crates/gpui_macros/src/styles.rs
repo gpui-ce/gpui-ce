@@ -37,14 +37,14 @@ impl Parse for StyleableMacroInput {
     }
 }
 
-pub fn style_helpers(input: TokenStream) -> TokenStream {
-    let _ = parse_macro_input!(input as StyleableMacroInput);
+pub fn style_helpers(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let _ = syn::parse2::<StyleableMacroInput>(input)?;
     let methods = generate_methods();
     let output = quote! {
         #(#methods)*
     };
 
-    output.into()
+    Ok(output)
 }
 
 struct StyleTransitionSpec {
@@ -450,8 +450,8 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
     specs
 }
 
-pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn visibility_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
     let output = quote! {
         /// Sets the visibility of the element to `visible`.
@@ -469,11 +469,11 @@ pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
         }
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn margin_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn margin_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let methods = generate_box_style_methods(
         margin_box_style_prefixes(),
         box_style_suffixes(),
@@ -483,11 +483,11 @@ pub fn margin_style_methods(input: TokenStream) -> TokenStream {
         #(#methods)*
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn padding_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn padding_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let methods = generate_box_style_methods(
         padding_box_style_prefixes(),
         box_style_suffixes(),
@@ -497,11 +497,11 @@ pub fn padding_style_methods(input: TokenStream) -> TokenStream {
         #(#methods)*
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn position_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn position_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
     let methods = generate_box_style_methods(
         position_box_style_prefixes(),
@@ -526,11 +526,11 @@ pub fn position_style_methods(input: TokenStream) -> TokenStream {
         #(#methods)*
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn overflow_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
     let output = quote! {
         /// Sets the behavior of content that overflows the container to be hidden.
@@ -556,11 +556,11 @@ pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
         }
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn cursor_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
     let output = quote! {
         /// Set the cursor style when hovering over this element
@@ -732,11 +732,11 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
 
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn border_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn border_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
 
     let mut methods = Vec::new();
@@ -781,11 +781,11 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
         #(#methods)*
     };
 
-    output.into()
+    Ok(output)
 }
 
-pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as StyleableMacroInput);
+pub fn box_shadow_style_methods(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let input = syn::parse2::<StyleableMacroInput>(input)?;
     let visibility = input.method_visibility;
     let ring_width_methods = border_suffixes()
         .into_iter()
@@ -951,7 +951,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         }
     };
 
-    output.into()
+    Ok(output)
 }
 
 struct BoxStylePrefix {

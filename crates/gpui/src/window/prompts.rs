@@ -91,6 +91,7 @@ pub fn fallback_prompt_renderer(
 }
 
 /// The default GPUI fallback for rendering prompts, when the platform doesn't support it.
+#[derive(gpui_macros::Reflect)]
 pub struct FallbackPromptRenderer {
     _level: PromptLevel,
     message: String,

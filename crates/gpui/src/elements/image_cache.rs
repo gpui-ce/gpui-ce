@@ -69,6 +69,7 @@ mod any_image_cache {
 }
 
 /// An image cache element.
+#[derive(gpui_macros::Reflect)]
 pub struct ImageCacheElement {
     image_cache_provider: Box<dyn ImageCacheProvider>,
     style: StyleRefinement,

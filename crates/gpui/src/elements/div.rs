@@ -878,6 +878,7 @@ impl Interactivity {
 
 /// A trait for elements that want to use the standard GPUI event handlers that don't
 /// require any state.
+#[gpui_macros::reflect_trait]
 pub trait InteractiveElement: Sized {
     /// Retrieve the interactivity state associated with this element
     fn interactivity(&mut self) -> &mut Interactivity;
@@ -1489,6 +1490,7 @@ pub trait InteractiveElement: Sized {
 
 /// A trait for elements that want to use the standard GPUI interactivity features
 /// that require state.
+#[gpui_macros::reflect_trait]
 pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the accessible role for this element.
     ///
@@ -2138,6 +2140,7 @@ pub fn div() -> Div {
 }
 
 /// A [`Div`] element, the all-in-one element for building complex UIs in GPUI
+#[derive(gpui_macros::Reflect)]
 pub struct Div {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,
@@ -4611,6 +4614,8 @@ impl GroupHitboxes {
 }
 
 /// A wrapper around an element that can store state, produced after assigning an ElementId.
+#[derive(gpui_macros::Reflect)]
+#[reflect()]
 pub struct Stateful<E> {
     pub(crate) element: E,
 }
@@ -4641,6 +4646,14 @@ where
 {
     type RequestLayoutState = E::RequestLayoutState;
     type PrepaintState = E::PrepaintState;
+
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        <Self as crate::reflection::Reflect>::reflection()
+    }
+
+    fn into_any(self) -> AnyElement {
+        self.element.into_any()
+    }
 
     fn id(&self) -> Option<ElementId> {
         self.element.id()
@@ -4715,11 +4728,18 @@ where
     }
 }
 
+/// Converts the inner builder without retaining `Stateful` as a runtime element.
+/// The assigned ID and state survive, but reflection describes `E::Element`.
+/// An erased `Div` therefore does not gain `StatefulInteractiveElement` from its ID.
 impl<E: IntoElement> IntoElement for Stateful<E> {
     type Element = E::Element;
 
     fn into_element(self) -> Self::Element {
         self.element.into_element()
+    }
+
+    fn into_any_element(self) -> AnyElement {
+        self.element.into_any_element()
     }
 }
 

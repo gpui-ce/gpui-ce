@@ -34,6 +34,7 @@ pub fn list(
 }
 
 /// A list element
+#[derive(gpui_macros::Reflect)]
 pub struct List {
     state: ListState,
     render_item: Box<RenderItemFn>,

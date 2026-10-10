@@ -13,6 +13,7 @@ use crate::{
 use gpui_util::ResultExt;
 
 /// An SVG element.
+#[derive(gpui_macros::Reflect)]
 pub struct Svg {
     interactivity: Interactivity,
     transformation: Option<Transformation>,

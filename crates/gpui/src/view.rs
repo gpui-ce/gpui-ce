@@ -16,7 +16,7 @@ use std::{any::TypeId, fmt, ops::Range};
 /// This is the type-erased counterpart to [`ViewElement`]: it holds an entity plus
 /// a function pointer to its render, and is itself a [`View`], so embedding it as an
 /// element goes through the same [`ViewElement`] machinery as any other view.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, gpui_macros::Reflect)]
 pub struct AnyView {
     entity: AnyEntity,
     render: fn(&AnyView, &mut Window, &mut App) -> AnyElement,
@@ -291,6 +291,7 @@ impl<T: Render> Entity<T> {
 
 /// The element type for [`View`] implementations. Wraps a `View` and hooks it
 /// into layout, prepaint, and paint. Constructed via [`ViewElement::new`].
+/// Reflection targets this wrapper, independently of the view and its rendered root.
 #[doc(hidden)]
 pub struct ViewElement<V: View> {
     view: Option<V>,
@@ -305,6 +306,7 @@ impl<V: View> ViewElement<V> {
     #[track_caller]
     pub fn new(view: V) -> Self {
         let entity_id = view.entity_id();
+
         ViewElement {
             entity_id,
             cached_style: None,
@@ -624,6 +626,7 @@ impl<V: View> Element for ViewElement<V> {
 }
 
 /// A view that renders nothing
+#[derive(gpui_macros::Reflect)]
 pub struct EmptyView;
 
 impl Render for EmptyView {

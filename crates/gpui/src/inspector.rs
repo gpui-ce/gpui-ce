@@ -57,6 +57,7 @@ mod conditional {
 
     /// Manages inspector state - which element is currently selected and whether the inspector is
     /// in picking mode.
+    #[derive(gpui_macros::Reflect)]
     pub struct Inspector {
         active_element: Option<InspectedElement>,
         pub(crate) pick_depth: Option<f32>,

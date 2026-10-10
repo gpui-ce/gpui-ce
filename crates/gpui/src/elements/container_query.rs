@@ -49,6 +49,7 @@ where
 }
 
 /// A container query element, created with [`container_query`].
+#[derive(gpui_macros::Reflect)]
 pub struct ContainerQuery {
     render: Option<Box<dyn FnOnce(Size<Pixels>, &mut Window, &mut App) -> AnyElement>>,
     style: StyleRefinement,

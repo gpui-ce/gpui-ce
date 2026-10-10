@@ -56,6 +56,7 @@ pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
 }
 
 /// An input field which users can type text into.
+#[derive(gpui::reflection::Reflect)]
 pub struct EditableTextElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.

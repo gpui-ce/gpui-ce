@@ -189,6 +189,7 @@ impl StyledImage for Stateful<Img> {
 }
 
 /// An image element.
+#[derive(gpui_macros::Reflect)]
 pub struct Img {
     interactivity: Interactivity,
     source: ImageSource,

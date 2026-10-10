@@ -13,6 +13,7 @@ pub struct AnchoredState {
 
 /// An anchored element that can be used to display UI that
 /// will avoid overflowing the window bounds.
+#[derive(gpui_macros::Reflect)]
 pub struct Anchored {
     children: SmallVec<[AnyElement; 2]>,
     anchor: Anchor,
