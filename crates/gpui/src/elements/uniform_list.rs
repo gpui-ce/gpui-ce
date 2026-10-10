@@ -54,7 +54,10 @@ where
     }
 }
 
-/// A list element for efficiently laying out and displaying a list of uniform-height elements.
+/// A virtualized list whose rows must all have the same height.
+///
+/// Keep row sizes unchanged in `nth` and `every` selectors to preserve correct spacing
+/// and scrolling.
 #[derive(gpui_macros::Reflect)]
 pub struct UniformList {
     item_count: usize,
@@ -670,18 +673,23 @@ impl UniformList {
             return Size::default();
         }
 
-        let item_ix = cmp::min(self.item_to_measure_index, self.item_count - 1);
-        let mut items = (self.render_items)(item_ix..item_ix + 1, window, cx);
-        let Some(mut item_to_measure) = items.pop() else {
-            return Size::default();
-        };
-        let available_space = size(
-            list_width.map_or(AvailableSpace::MaxContent, |width| {
-                AvailableSpace::Definite(width)
-            }),
-            AvailableSpace::MinContent,
-        );
-        item_to_measure.layout_as_root(available_space, window, cx)
+        window.with_layout_measurement(|window| {
+            let item_idx = cmp::min(self.item_to_measure_index, self.item_count - 1);
+            let mut items = (self.render_items)(item_idx..item_idx + 1, window, cx);
+
+            let Some(mut item_to_measure) = items.pop() else {
+                return Size::default();
+            };
+
+            let available_space = size(
+                list_width.map_or(AvailableSpace::MaxContent, |width| {
+                    AvailableSpace::Definite(width)
+                }),
+                AvailableSpace::MinContent,
+            );
+
+            item_to_measure.layout_as_root(available_space, window, cx)
+        })
     }
 
     /// Track and render scroll state of this list with reference to the given scroll handle.

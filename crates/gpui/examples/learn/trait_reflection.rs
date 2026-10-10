@@ -1,12 +1,11 @@
 //! Run with `cargo run -p gpui-ce --example trait_reflection`.
 //!
-//! Reflection follows the concrete element that survives conversion. The default
-//! `IntoElement` derive stores a `ViewElement`, independently of its rendered
-//! root. Animation wrappers also keep their own receiver. `Stateful<Div>` converts
-//! to `Div`, preserving its ID and state without granting reflected stateful methods.
-//! `CardElement` uses `#[into_element(self)]` to retain its concrete receiver. Its
-//! trait derives delegate to `Stateful<Div>`, and its nongeneric `Reflect` derive detects
-//! the builtin traits and registers `Draggable` explicitly.
+//! Reflection uses the concrete element after conversion. Default components and
+//! animation wrappers keep their own receiver. `Stateful<Div>` converts to `Div`,
+//! preserving its ID and state without reflecting stateful methods.
+//!
+//! `CardElement` keeps itself with `#[into_element(self)]`, delegates builder traits
+//! to `Stateful<Div>`, and reflects `Draggable` plus membership-only `CardRole`.
 
 use gpui::{
     A11ySubtreeBuilder, AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId,
@@ -22,11 +21,14 @@ pub(crate) trait Draggable {
     fn drag_payload(&mut self) -> &mut Option<SharedString>;
 }
 
+#[reflection::reflect_trait(membership)]
+pub(crate) trait CardRole {}
+
 #[derive(
     IntoElement, Styled, InteractiveElement, StatefulInteractiveElement, ParentElement, Reflect,
 )]
 #[into_element(self)]
-#[reflect(Draggable)]
+#[reflect(Draggable, CardRole)]
 pub(crate) struct CardElement {
     #[style(delegate)]
     #[interactivity(delegate)]
@@ -50,6 +52,8 @@ impl Draggable for CardElement {
         &mut self.drag_payload
     }
 }
+
+impl CardRole for CardElement {}
 
 impl Element for CardElement {
     type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;

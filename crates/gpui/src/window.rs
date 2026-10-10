@@ -1085,6 +1085,7 @@ pub(crate) struct TooltipRequest {
 }
 
 pub(crate) struct DeferredDraw {
+    captured_selector_scope: Option<crate::selectors::CapturedSelectorScope>,
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
@@ -1263,6 +1264,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    selector_runtime: crate::selectors::SelectorRuntime,
     pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
@@ -2019,6 +2021,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            selector_runtime: crate::selectors::SelectorRuntime::new(),
             collecting_inline: false,
             current_inline_fragments: None,
             root: None,
@@ -2099,6 +2102,10 @@ impl Window {
         value: AnyWindowFocusListener,
     ) -> (Subscription, impl FnOnce() + use<>) {
         self.focus_listeners.insert((), value)
+    }
+
+    pub(crate) fn selector_runtime(&self) -> &crate::selectors::SelectorRuntime {
+        &self.selector_runtime
     }
 }
 
@@ -3168,16 +3175,16 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        // Select the app's allocation arena before binding this window's selector runtime.
+        let arena_scope = ElementArenaScope::enter(&cx.element_arena);
+        let _selector_session = self.selector_runtime().enter_session();
+
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
         let frame_dirty = self.invalidator.take_frame_dirty();
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_draw();
-
-        // Set up the per-App arena for element allocation during this draw.
-        // This ensures that multiple test Apps have isolated arenas.
-        let arena_scope = ElementArenaScope::enter(&cx.element_arena);
 
         self.invalidate_entities();
         cx.entities.clear_accessed();
@@ -3370,6 +3377,11 @@ impl Window {
         if self.needs_present.get() {
             self.present();
         }
+    }
+
+    #[cfg(feature = "bench-support")]
+    pub(crate) fn clear_benchmark_layout(&mut self) {
+        self.layout_engine.as_mut().unwrap().clear();
     }
 
     /// Returns a snapshot of the current input-latency histograms.
@@ -3635,6 +3647,7 @@ impl Window {
                     rem_size,
                     absolute_offset,
                     prepaint_range,
+                    captured_selector_scope,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
@@ -3649,6 +3662,7 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        deferred_draw.captured_selector_scope.clone(),
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -3659,7 +3673,14 @@ impl Window {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
+                                let _selector_scope = window
+                                    .selector_runtime()
+                                    .enter_captured_scope(captured_selector_scope.expect(
+                                        "live deferred draw requires a captured selector scope",
+                                    ));
+
                                 element.prepaint(window, cx);
+                                drop(_selector_scope);
                                 crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
@@ -3709,6 +3730,12 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                            let _selector_scope = window.selector_runtime().enter_captured_scope(
+                                deferred_draw.captured_selector_scope.clone().expect(
+                                    "live deferred draw requires a captured selector scope",
+                                ),
+                            );
+
                             element.paint(window, cx);
                         });
                     })
@@ -3777,6 +3804,7 @@ impl Window {
                 [range.start.deferred_draws_index..range.end.deferred_draws_index]
                 .iter()
                 .map(|deferred_draw| DeferredDraw {
+                    captured_selector_scope: None,
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
@@ -3981,15 +4009,23 @@ impl Window {
         result
     }
 
-    /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
-    /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
-    /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
-    /// element offset and prepaint again. See [`crate::List`] for an example. This method should only be
-    /// called during the prepaint phase of element drawing.
+    /// Runs retryable work during prepaint, as used for list autoscroll.
+    ///
+    /// On `Err`, restores recorded frame output and selector positions, while changes
+    /// to elements or captured state remain. Panics restore selector positions only.
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
+        let _selector_session = self.selector_runtime().enter_session_if_needed();
+        let selector_positions = self.selector_runtime().checkpoint_positions();
         let result = f(self);
+
+        if result.is_ok() {
+            selector_positions.commit();
+        } else {
+            drop(selector_positions);
+        }
+
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
             self.next_frame
@@ -4006,6 +4042,7 @@ impl Window {
                 .truncate(index.accessed_element_states_index);
             self.text_system.truncate_layouts(index.line_layout_index);
         }
+
         result
     }
 
@@ -4338,6 +4375,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
+            captured_selector_scope: Some(self.selector_runtime().capture_scope()),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
@@ -5238,6 +5276,34 @@ impl Window {
                     .into(),
                 )
             })
+    }
+
+    /// Runs temporary layout without applying positional selectors.
+    /// Other selectors still apply, and measured elements must be discarded.
+    pub fn with_layout_measurement<ResultType>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> ResultType,
+    ) -> ResultType {
+        let _selector_scope = self.selector_runtime().enter_measurement();
+
+        operation(self)
+    }
+
+    /// Builds, measures, and discards a temporary element, returning its size.
+    pub fn measure_element<ElementType>(
+        &mut self,
+        available_space: Size<AvailableSpace>,
+        cx: &mut App,
+        build: impl FnOnce(&mut Self, &mut App) -> ElementType,
+    ) -> Size<Pixels>
+    where
+        ElementType: IntoElement,
+    {
+        self.with_layout_measurement(|window| {
+            let mut element = build(window, cx).into_any_element();
+
+            element.layout_as_root(available_space, window, cx)
+        })
     }
 
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which

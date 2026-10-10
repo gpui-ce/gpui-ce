@@ -194,6 +194,12 @@ path = "benches/reflection.rs"
 harness = false
 required-features = ["bench-support"]
 
+[[bench]]
+name = "selectors"
+path = "benches/selectors.rs"
+harness = false
+required-features = ["bench-support"]
+
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
 # ============================================================================
@@ -225,6 +231,10 @@ path = "examples/learn/styling.rs"
 [[example]]
 name = "trait_reflection"
 path = "examples/learn/trait_reflection.rs"
+
+[[example]]
+name = "element_selectors"
+path = "examples/learn/element_selectors.rs"
 
 [[example]]
 name = "async_tasks"

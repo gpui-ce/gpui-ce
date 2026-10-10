@@ -394,7 +394,8 @@ impl<V: View> Element for ViewElement<V> {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let entity_id = self.entity_id;
         let request_layout = |window: &mut Window| {
-            let caching_disabled = window.is_inspector_picking(cx);
+            let caching_disabled = window.is_inspector_picking(cx)
+                || window.selector_runtime().can_affect_view_contents();
 
             if let (Some(entity_id), Some(style)) = (
                 entity_id,
@@ -441,8 +442,18 @@ impl<V: View> Element for ViewElement<V> {
                 return (layout_id, ViewElementRequestLayoutState::default());
             }
 
+            // Finish this frame through the uncached prepaint and paint paths.
+            let cached_style = self.cached_style.take();
             let mut element = render_view(self.view.take().unwrap(), window, cx);
-            let layout_id = element.request_layout(window, cx);
+            let child_layout_id = element.request_layout(window, cx);
+            let layout_id = if let Some(style) = cached_style {
+                let mut root_style = Style::default();
+                root_style.refine(&style);
+
+                window.request_layout(root_style, [child_layout_id], cx)
+            } else {
+                child_layout_id
+            };
 
             (
                 layout_id,

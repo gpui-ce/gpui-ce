@@ -34,7 +34,7 @@
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
     FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
-    util::FluentBuilder, window::with_element_arena,
+    selectors::SelectorPhase, util::FluentBuilder, window::with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
 use std::{
@@ -281,6 +281,10 @@ impl GlobalElementId {
 }
 
 trait ElementObject {
+    fn is_before_layout(&self) -> bool;
+
+    fn element_id(&self) -> Option<ElementId>;
+
     fn inner_element(&self) -> &dyn Any;
 
     fn inner_element_mut(&mut self) -> &mut dyn Any;
@@ -702,6 +706,14 @@ where
     E: Element,
     E::RequestLayoutState: 'static,
 {
+    fn is_before_layout(&self) -> bool {
+        matches!(self.phase, ElementDrawPhase::Start)
+    }
+
+    fn element_id(&self) -> Option<ElementId> {
+        self.element.id()
+    }
+
     fn inner_element(&self) -> &dyn Any {
         &self.element
     }
@@ -743,8 +755,9 @@ where
 /// A dynamically typed element that can be used to store any element type.
 #[derive(gpui_macros::Reflect)]
 pub struct AnyElement {
-    element: ArenaBox<dyn ElementObject>,
+    element: Option<ArenaBox<dyn ElementObject>>,
     reflection: &'static crate::reflection::ElementReflection,
+    metadata: Option<Box<crate::selectors::ElementMetadata>>,
 }
 
 impl AnyElement {
@@ -754,12 +767,35 @@ impl AnyElement {
         E::RequestLayoutState: Any,
     {
         let reflection = Element::reflection(&element);
-        let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
-            .map(|element| element as &mut dyn ElementObject);
+        let (element, generated_by) = with_element_arena(|arena| {
+            let generated_by = arena
+                .selector_runtime
+                .borrow()
+                .clone()
+                .map(|runtime| runtime.generation_ancestry())
+                .unwrap_or_default();
+
+            let element = arena.alloc(|| Drawable::new(element));
+
+            (element, generated_by)
+        });
+
+        let element = element.map(|element| element as &mut dyn ElementObject);
+
+        let metadata = if generated_by.is_empty() {
+            None
+        } else {
+            let mut metadata = crate::selectors::ElementMetadata::new();
+            metadata.node_state =
+                Some(crate::selectors::SelectorNodeState::generated(generated_by));
+
+            Some(Box::new(metadata))
+        };
 
         let element = AnyElement {
-            element,
+            element: Some(element),
             reflection,
+            metadata,
         };
         reflection.validate_receiver(element.reflected_type_id());
 
@@ -768,19 +804,130 @@ impl AnyElement {
 
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.element.inner_element_mut().downcast_mut::<T>()
+        self.element_object_mut()
+            .inner_element_mut()
+            .downcast_mut::<T>()
     }
 
     pub(crate) fn inner_element(&self) -> &dyn Any {
-        self.element.inner_element()
+        self.element_object().inner_element()
     }
 
     pub(crate) fn inner_element_mut(&mut self) -> &mut dyn Any {
-        self.element.inner_element_mut()
+        self.element_object_mut().inner_element_mut()
     }
 
     pub(crate) fn reflected_type_id(&self) -> std::any::TypeId {
-        self.element.reflected_type_id()
+        self.element_object().reflected_type_id()
+    }
+
+    pub(crate) fn element_id(&self) -> Option<ElementId> {
+        self.element_object().element_id()
+    }
+
+    pub(crate) fn classes(&self) -> &[crate::SharedString] {
+        self.metadata
+            .as_ref()
+            .map(|metadata| metadata.classes.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn classes_mut(&mut self) -> &mut smallvec::SmallVec<[crate::SharedString; 2]> {
+        &mut self.metadata_mut().classes
+    }
+
+    pub(crate) fn add_selector(&mut self, selector: crate::selectors::PendingSelector) {
+        self.metadata_mut().selectors.push(selector);
+    }
+
+    pub(crate) fn selector_node_state_mut(&mut self) -> &mut crate::selectors::SelectorNodeState {
+        self.metadata_mut()
+            .node_state
+            .get_or_insert_with(Default::default)
+    }
+
+    pub(crate) fn selector_generation_ancestry(
+        &self,
+    ) -> smallvec::SmallVec<[crate::selectors::SelectorRuleId; 2]> {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.node_state.as_ref())
+            .map(|state| state.generated_by.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_before_layout(&self) -> bool {
+        self.element_object().is_before_layout()
+    }
+
+    fn metadata_mut(&mut self) -> &mut crate::selectors::ElementMetadata {
+        self.metadata
+            .get_or_insert_with(|| Box::new(crate::selectors::ElementMetadata::new()))
+    }
+
+    fn element_object(&self) -> &dyn ElementObject {
+        self.element
+            .as_deref()
+            .expect("element is unavailable while a selector is transforming it")
+    }
+
+    fn element_object_mut(&mut self) -> &mut dyn ElementObject {
+        self.element
+            .as_deref_mut()
+            .expect("element is unavailable while a selector is transforming it")
+    }
+
+    pub(crate) fn take(&mut self) -> AnyElement {
+        AnyElement {
+            element: self.element.take(),
+            reflection: self.reflection,
+            metadata: self.metadata.take(),
+        }
+    }
+
+    pub(crate) fn replace(&mut self, element: AnyElement) {
+        *self = element;
+    }
+
+    pub(crate) fn attached_selectors(&self) -> Vec<crate::selectors::PendingSelector> {
+        self.metadata
+            .as_ref()
+            .map(|metadata| metadata.selectors.clone())
+            .unwrap_or_default()
+    }
+
+    // Keep shared rule handles on both preserved inputs and their replacement roots.
+    pub(crate) fn inherit_attached_selectors(
+        &mut self,
+        mut selectors: Vec<crate::selectors::PendingSelector>,
+    ) {
+        if let Some(metadata) = self.metadata.as_mut() {
+            for selector in &metadata.selectors {
+                if !selectors
+                    .iter()
+                    .any(|attached| attached.identity() == selector.identity())
+                {
+                    selectors.push(selector.clone());
+                }
+            }
+        }
+
+        if selectors.is_empty() {
+            return;
+        }
+
+        self.metadata_mut().selectors = selectors;
+    }
+
+    fn with_selector_scope<ResultType>(
+        &mut self,
+        window: &mut Window,
+        phase: SelectorPhase,
+        operation: impl FnOnce(&mut AnyElement, &mut Window) -> ResultType,
+    ) -> ResultType {
+        let _scope = window.selector_runtime().enter_element(self, phase);
+
+        operation(self, window)
     }
 
     /// Returns the metadata supplied by the concrete element at erasure.
@@ -806,7 +953,9 @@ impl AnyElement {
     /// Request the layout ID of the element stored in this `AnyElement`.
     /// Used for laying out child elements in a parent element.
     pub fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
-        self.element.request_layout(window, cx)
+        self.with_selector_scope(window, SelectorPhase::RequestLayout, |element, window| {
+            element.element_object_mut().request_layout(window, cx)
+        })
     }
 
     /// Prepares the element to be painted by storing its bounds, giving it a chance to draw hitboxes and
@@ -814,7 +963,9 @@ impl AnyElement {
     pub fn prepaint(&mut self, window: &mut Window, cx: &mut App) -> Option<FocusHandle> {
         let focus_assigned = window.next_frame.focus.is_some();
 
-        self.element.prepaint(window, cx);
+        self.with_selector_scope(window, SelectorPhase::Prepaint, |element, window| {
+            element.element_object_mut().prepaint(window, cx);
+        });
 
         if !focus_assigned && let Some(focus_id) = window.next_frame.focus {
             return FocusHandle::for_id(focus_id, &cx.focus_handles);
@@ -825,7 +976,9 @@ impl AnyElement {
 
     /// Paints the element stored in this `AnyElement`.
     pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
-        self.element.paint(window, cx);
+        self.with_selector_scope(window, SelectorPhase::Paint, |element, window| {
+            element.element_object_mut().paint(window, cx);
+        });
     }
 
     /// Performs layout for this element within the given available space and returns its size.
@@ -835,7 +988,11 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        self.element.layout_as_root(available_space, window, cx)
+        self.with_selector_scope(window, SelectorPhase::RequestLayout, |element, window| {
+            element
+                .element_object_mut()
+                .layout_as_root(available_space, window, cx)
+        })
     }
 
     /// Prepaints this element at the given absolute origin.
@@ -858,7 +1015,9 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<FocusHandle> {
+        let _selector_session = window.selector_runtime().enter_session_if_needed();
         self.layout_as_root(available_space, window, cx);
+
         window.with_absolute_element_offset(origin, |window| self.prepaint(window, cx))
     }
 }
@@ -876,7 +1035,7 @@ impl Element for AnyElement {
     }
 
     fn id(&self) -> Option<ElementId> {
-        None
+        self.element_id()
     }
 
     fn source_location(&self) -> Option<&'static panic::Location<'static>> {

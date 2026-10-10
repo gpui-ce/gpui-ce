@@ -660,6 +660,34 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         self.bench_batched_task_internal("bench_task", |_| (), |_, cx| benchmark(cx));
     }
 
+    /// Measures synchronous work with fresh input constructed outside timing.
+    /// Input and output destruction are also excluded from each iteration.
+    pub fn bench_batched<Input, Output>(
+        &mut self,
+        mut setup: impl FnMut(&mut Self) -> Input,
+        mut benchmark: impl FnMut(&mut Input, &mut Self) -> Output,
+    ) {
+        let bencher = self.take_bencher("bench_batched");
+        let mut setup_context = self.clone();
+        let collector = TraceScope::start(self.foreground_journal_collector());
+
+        bencher.iter_batched_ref(
+            || {
+                setup_context.settle();
+
+                setup(&mut setup_context)
+            },
+            |input| benchmark(input, self),
+            criterion::BatchSize::PerIteration,
+        );
+
+        let events = collector.finish();
+        self.report.record_frame_timings(events.frame_events.iter());
+        self.report
+            .record_foreground_events(events.foreground_events());
+        self.replace_bencher(bencher);
+    }
+
     /// Measures a GPUI task with per-iteration setup outside the timed interval.
     ///
     /// `setup` runs before timing starts. The returned input is passed by mutable

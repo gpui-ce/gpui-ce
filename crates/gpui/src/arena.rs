@@ -1,6 +1,7 @@
+use crate::selectors::SelectorRuntimeHandle;
 use std::{
     alloc::{self, handle_alloc_error},
-    cell::Cell,
+    cell::{Cell, RefCell},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
@@ -85,6 +86,7 @@ pub struct Arena {
     current_chunk_index: usize,
     chunk_size: NonZeroUsize,
     scope_depth: usize,
+    pub(crate) selector_runtime: Rc<RefCell<Option<SelectorRuntimeHandle>>>,
 }
 
 impl Drop for Arena {
@@ -103,6 +105,7 @@ impl Arena {
             current_chunk_index: 0,
             chunk_size,
             scope_depth: 0,
+            selector_runtime: Rc::new(RefCell::new(None)),
         }
     }
 

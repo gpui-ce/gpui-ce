@@ -182,9 +182,9 @@ impl StyledImage for Img {
     }
 }
 
-impl StyledImage for Stateful<Img> {
+impl<ElementType: StyledImage> StyledImage for Stateful<ElementType> {
     fn image_style(&mut self) -> &mut ImageStyle {
-        &mut self.element.style
+        self.element.image_style()
     }
 }
 
@@ -801,7 +801,9 @@ impl From<image::ImageError> for ImageCacheError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParentElement as _, TestAppContext, canvas, div, point, px, size};
+    use crate::{
+        ParentElement as _, SelectableElement, TestAppContext, canvas, div, point, px, size,
+    };
     use image::{Frame, ImageBuffer, Rgba};
 
     const TEST_IMG_ID: &str = "test-img";
@@ -848,25 +850,32 @@ mod tests {
         let image = test_image_with_size(200, 100);
         window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
             img(ImageSource::Render(image.clone()))
+                .class("image")
+                .id("image")
                 .size_full()
                 .object_fit(ObjectFit::Fill)
+                .grayscale(true)
                 .into_any_element()
         });
         let full_tile_bounds = window.update(|window, _| {
-            window
+            let sprite = window
                 .rendered_frame
                 .scene
                 .polychrome_sprites
                 .last()
-                .expect("fill image should paint a sprite")
-                .tile
-                .bounds
+                .expect("fill image should paint a sprite");
+            assert_eq!(sprite.grayscale, crate::ShaderBool::Enabled);
+
+            sprite.tile.bounds
         });
 
         window.draw(point(px(10.), px(20.)), size(px(100.), px(100.)), |_, _| {
             img(ImageSource::Render(image))
+                .id("image")
+                .class("image")
                 .size_full()
                 .object_fit(ObjectFit::Cover)
+                .grayscale(true)
                 .into_any_element()
         });
 
@@ -877,6 +886,8 @@ mod tests {
                 .polychrome_sprites
                 .last()
                 .expect("cover image should paint a sprite");
+            assert_eq!(sprite.grayscale, crate::ShaderBool::Enabled);
+
             (sprite.bounds, sprite.tile.bounds, window.scale_factor())
         });
         assert_eq!(
