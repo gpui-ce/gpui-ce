@@ -7259,7 +7259,24 @@ impl Window {
         // Fall back to built-in action handling.
         match request.action {
             accesskit::Action::Click => {
-                if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
+                // Elements with click listeners handle Click themselves, so this
+                // only synthesizes mouse input for nodes that listen to the mouse
+                // directly. Aim at the visible part of the node: its full bounds
+                // can lie under other content once a container scrolls it out of
+                // view.
+                if let Some(bounds) = self
+                    .a11y
+                    .node_visible_bounds
+                    .get(&request.target_node)
+                    .copied()
+                {
+                    if bounds.is_empty() {
+                        log::debug!(
+                            "Not clicking a11y node {:?}: it is scrolled or clipped out of view",
+                            request.target_node
+                        );
+                        return;
+                    }
                     let center = bounds.center();
                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
                         button: MouseButton::Left,
@@ -7276,6 +7293,11 @@ impl Window {
                     });
                     self.dispatch_event(mouse_down, cx);
                     self.dispatch_event(mouse_up, cx);
+                }
+            }
+            accesskit::Action::ScrollIntoView => {
+                if self.a11y.scroll_into_view(request.target_node) {
+                    self.refresh();
                 }
             }
             accesskit::Action::Focus => {
