@@ -25,15 +25,16 @@ use crate::{
 use std::{cell::Cell, rc::Weak};
 
 use crate::{
-    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Bounds, ClickEvent,
-    CursorStyle, DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload,
-    FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId,
-    IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
-    LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
-    PinchEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
-    StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled, Task,
-    TooltipId, Visibility, Window, WindowControlArea, point, px, size,
+    AccessibilityClickEvent, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext,
+    Bounds, ClickEvent, CursorStyle, DispatchPhase, Display, Element, ElementId, Entity, EntityId,
+    ExternalDragPayload, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
+    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
+    KeyboardClickEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
+    OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, Render, ScrollWheelEvent,
+    SharedString, Size, Style, StyleRefinement, StyleTransitionContext, StyleTransitionState,
+    StyleTransitions, Styled, Task, TooltipId, Visibility, Window, WindowControlArea, point, px,
+    size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -2923,6 +2924,35 @@ impl Interactivity {
         )
     }
 
+    fn paint_a11y_action_listeners(
+        &mut self,
+        global_id: &GlobalElementId,
+        bounds: Bounds<Pixels>,
+        click_listeners: Vec<ClickListener>,
+        window: &mut Window,
+    ) {
+        let node_id = global_id.accesskit_node_id();
+        let has_own_click_listener = self
+            .a11y_action_listeners
+            .iter()
+            .any(|(action, _)| *action == accesskit::Action::Click);
+        for (action, listener) in self.a11y_action_listeners.drain(..) {
+            window.on_a11y_action(node_id, action, listener);
+        }
+
+        // Call the click listeners directly rather than letting the window
+        // synthesize a mouse click at the element's position, which may be
+        // scrolled out of view or covered by other content.
+        if !click_listeners.is_empty() && !has_own_click_listener {
+            window.on_a11y_action(node_id, accesskit::Action::Click, move |_, window, cx| {
+                let event = ClickEvent::Accessibility(AccessibilityClickEvent { bounds });
+                for listener in &click_listeners {
+                    listener(&event, window, cx);
+                }
+            });
+        }
+    }
+
     fn should_insert_hitbox(&self, style: &Style, window: &Window, cx: &App) -> bool {
         self.hitbox_behavior != HitboxBehavior::Normal
             || self.window_control.is_some()
@@ -3084,6 +3114,13 @@ impl Interactivity {
                                         if let Some(focus_handle) = &self.tracked_focus_handle {
                                             window.next_frame.tab_stops.insert(focus_handle);
                                         }
+                                        // Kept for accessibility clicks, since painting the mouse
+                                        // listeners takes the click listeners.
+                                        let click_listeners = if window.a11y.is_active() {
+                                            self.click_listeners.clone()
+                                        } else {
+                                            Vec::new()
+                                        };
                                         if let Some(hitbox) = hitbox {
                                             #[cfg(debug_assertions)]
                                             self.paint_debug_info(
@@ -3124,16 +3161,12 @@ impl Interactivity {
 
                                         if window.a11y.is_active() {
                                             if let Some(global_id) = global_id {
-                                                if !self.a11y_action_listeners.is_empty() {
-                                                    let node_id = global_id.accesskit_node_id();
-                                                    for (action, listener) in
-                                                        self.a11y_action_listeners.drain(..)
-                                                    {
-                                                        window.on_a11y_action(
-                                                            node_id, action, listener,
-                                                        );
-                                                    }
-                                                }
+                                                self.paint_a11y_action_listeners(
+                                                    global_id,
+                                                    bounds,
+                                                    click_listeners,
+                                                    window,
+                                                );
                                             }
                                         }
 
@@ -5264,6 +5297,139 @@ mod tests {
         assert_eq!(render_count.get(), initial_render_count + 2);
         assert_eq!(anonymous_paint_count.get(), 1);
         assert_eq!(stateful_width.get(), px(10.));
+    }
+
+    /// How the scrolled-out element in [`ScrolledOutElementTestView`] listens
+    /// for clicks.
+    #[derive(Clone, Copy)]
+    enum ScrolledOutListener {
+        Click,
+        MouseDown,
+        ClickAndOwnA11yClick,
+    }
+
+    /// A button scrolled below a 100px scroll container, whose layout bounds
+    /// (105..125) overlap a footer button drawn right below it (100..120).
+    struct ScrolledOutElementTestView {
+        listener: ScrolledOutListener,
+        events: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for ScrolledOutElementTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let button = |name: &'static str| {
+                div()
+                    .id(name)
+                    .role(accesskit::Role::Button)
+                    .h(px(20.))
+                    .w_full()
+                    .flex_none()
+            };
+            let push = |event: &'static str| {
+                let events = self.events.clone();
+                move || events.borrow_mut().push(event)
+            };
+            let scrolled_out = match self.listener {
+                ScrolledOutListener::Click => {
+                    let accessibility = push("scrolled-out: accessibility click");
+                    let other = push("scrolled-out: other click");
+                    button("scrolled-out").on_click(move |event, _, _| {
+                        if event.is_accessibility() {
+                            accessibility()
+                        } else {
+                            other()
+                        }
+                    })
+                }
+                ScrolledOutListener::MouseDown => {
+                    let mouse_down = push("scrolled-out: mouse down");
+                    button("scrolled-out")
+                        .on_mouse_down(MouseButton::Left, move |_, _, _| mouse_down())
+                }
+                ScrolledOutListener::ClickAndOwnA11yClick => {
+                    let click = push("scrolled-out: click");
+                    let own = push("scrolled-out: own a11y click");
+                    button("scrolled-out")
+                        .on_click(move |_, _, _| click())
+                        .on_a11y_action(accesskit::Action::Click, move |_, _, _| own())
+                }
+            };
+            let footer = push("footer");
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(
+                    div()
+                        .id("scroll")
+                        .flex()
+                        .flex_col()
+                        .h(px(100.))
+                        .flex_none()
+                        .overflow_y_scroll()
+                        .child(div().h(px(105.)).flex_none())
+                        .child(scrolled_out),
+                )
+                .child(button("footer").on_click(move |_, _, _| footer()))
+        }
+    }
+
+    fn a11y_click_scrolled_out_element(listener: ScrolledOutListener) -> Vec<&'static str> {
+        let cx = &mut TestAppContext::single();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.add_window({
+            let events = events.clone();
+            move |_, _| ScrolledOutElementTestView { listener, events }
+        });
+        let window = AnyWindowHandle::from(window);
+        cx.update_window(window, |_, window, cx| {
+            window.set_a11y_forced(true);
+            window.draw(cx).clear(cx);
+            let target_node = window
+                .a11y
+                .node_bounds
+                .iter()
+                .find(|(_, bounds)| bounds.origin.y == px(105.))
+                .map(|(id, _)| *id)
+                .expect("scrolled-out node");
+            window.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::Click,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node,
+                    data: None,
+                },
+                cx,
+            );
+        })
+        .unwrap();
+        events.take()
+    }
+
+    #[test]
+    fn a11y_click_calls_the_click_listeners_of_a_scrolled_out_element() {
+        assert_eq!(
+            a11y_click_scrolled_out_element(ScrolledOutListener::Click),
+            ["scrolled-out: accessibility click"]
+        );
+    }
+
+    #[test]
+    fn a11y_click_on_scrolled_out_mouse_listener_does_not_click_what_is_drawn_there() {
+        // Without click listeners, the click falls back to synthesized mouse
+        // input, which must not land on the footer drawn over the node's centre.
+        assert_eq!(
+            a11y_click_scrolled_out_element(ScrolledOutListener::MouseDown),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn a11y_click_prefers_an_element_s_own_click_action() {
+        assert_eq!(
+            a11y_click_scrolled_out_element(ScrolledOutListener::ClickAndOwnA11yClick),
+            ["scrolled-out: own a11y click"]
+        );
     }
 
     struct HoverListenerLayoutTestView {
