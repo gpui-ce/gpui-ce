@@ -35,10 +35,11 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSBackingStoreType, NSBeep, NSButton as Objc2NSButton,
-    NSEventModifierFlags, NSEventType, NSRequestUserAttentionType, NSScreen, NSView as Objc2NSView,
-    NSViewLayerContentsRedrawPolicy, NSVisualEffectMaterial, NSVisualEffectState,
-    NSWindow as Objc2NSWindow, NSWindowButton as Objc2NSWindowButton, NSWindowCollectionBehavior,
-    NSWindowOcclusionState, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSCursorFrameResizeDirections, NSCursorFrameResizePosition, NSEventModifierFlags, NSEventType,
+    NSRequestUserAttentionType, NSScreen, NSView as Objc2NSView, NSViewLayerContentsRedrawPolicy,
+    NSVisualEffectMaterial, NSVisualEffectState, NSWindow as Objc2NSWindow,
+    NSWindowButton as Objc2NSWindowButton, NSWindowCollectionBehavior, NSWindowOcclusionState,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSInteger, NSNotFound, NSOperatingSystemVersion, NSPoint as Objc2NSPoint, NSRange,
@@ -2608,13 +2609,14 @@ unsafe extern "C" fn reset_cursor_rects(this: &Objc2Object, _: Sel) {
             CursorStyle::ResizeUp => msg_send![class!(NSCursor), resizeUpCursor],
             CursorStyle::ResizeDown => msg_send![class!(NSCursor), resizeDownCursor],
 
-            // Undocumented, private class methods:
-            // https://stackoverflow.com/questions/27242353/cocoa-predefined-resize-mouse-cursor
-            CursorStyle::ResizeUpLeftDownRight => {
-                msg_send![class!(NSCursor), _windowResizeNorthWestSouthEastCursor]
-            }
-            CursorStyle::ResizeUpRightDownLeft => {
-                msg_send![class!(NSCursor), _windowResizeNorthEastSouthWestCursor]
+            CursorStyle::ResizeUpLeft
+            | CursorStyle::ResizeUpRight
+            | CursorStyle::ResizeDownLeft
+            | CursorStyle::ResizeDownRight
+            | CursorStyle::ResizeUpLeftDownRight
+            | CursorStyle::ResizeUpRightDownLeft => {
+                let (position, directions) = directional_resize_spec(cursor_style).unwrap();
+                directional_resize_cursor(position, directions)
             }
 
             CursorStyle::IBeamCursorForVerticalLayout => {
@@ -2630,6 +2632,71 @@ unsafe extern "C" fn reset_cursor_rects(this: &Objc2Object, _: Sel) {
 
         let bounds: Objc2NSRect = msg_send![this as *const Objc2Object as ObjcId, bounds];
         let _: () = msg_send![this, addCursorRect: bounds, cursor: cursor];
+    }
+}
+
+fn directional_resize_spec(
+    style: CursorStyle,
+) -> Option<(NSCursorFrameResizePosition, NSCursorFrameResizeDirections)> {
+    Some(match style {
+        CursorStyle::ResizeUpLeft => (
+            NSCursorFrameResizePosition::TopLeft,
+            NSCursorFrameResizeDirections::Outward,
+        ),
+        CursorStyle::ResizeUpRight => (
+            NSCursorFrameResizePosition::TopRight,
+            NSCursorFrameResizeDirections::Outward,
+        ),
+        CursorStyle::ResizeDownLeft => (
+            NSCursorFrameResizePosition::BottomLeft,
+            NSCursorFrameResizeDirections::Outward,
+        ),
+        CursorStyle::ResizeDownRight => (
+            NSCursorFrameResizePosition::BottomRight,
+            NSCursorFrameResizeDirections::Outward,
+        ),
+        CursorStyle::ResizeUpLeftDownRight => (
+            NSCursorFrameResizePosition::TopLeft,
+            NSCursorFrameResizeDirections::All,
+        ),
+        CursorStyle::ResizeUpRightDownLeft => (
+            NSCursorFrameResizePosition::TopRight,
+            NSCursorFrameResizeDirections::All,
+        ),
+        _ => return None,
+    })
+}
+
+/// Uses AppKit's directional frame cursors when available, with a legacy fallback.
+unsafe fn directional_resize_cursor(
+    position: NSCursorFrameResizePosition,
+    directions: NSCursorFrameResizeDirections,
+) -> ObjcId {
+    let cursor_class = class!(NSCursor);
+    let modern_selector = sel!(frameResizeCursorFromPosition:inDirections:);
+    let supports_modern_api: Bool = msg_send![cursor_class, respondsToSelector: modern_selector];
+    if supports_modern_api.as_bool() {
+        msg_send![
+            cursor_class,
+            frameResizeCursorFromPosition: position,
+            inDirections: directions
+        ]
+    } else {
+        // Legacy cursors pair opposite corners.
+        let nw_se = matches!(
+            position,
+            NSCursorFrameResizePosition::TopLeft | NSCursorFrameResizePosition::BottomRight
+        );
+        unsafe { legacy_diagonal_resize_cursor(nw_se) }
+    }
+}
+
+/// Uses AppKit's private diagonal selectors as a fallback.
+unsafe fn legacy_diagonal_resize_cursor(nw_se: bool) -> ObjcId {
+    if nw_se {
+        msg_send![class!(NSCursor), _windowResizeNorthWestSouthEastCursor]
+    } else {
+        msg_send![class!(NSCursor), _windowResizeNorthEastSouthWestCursor]
     }
 }
 
@@ -3955,5 +4022,51 @@ mod tests {
     #[test]
     fn display_id_for_screen_returns_none_for_null_screen() {
         assert_eq!(display_id_for_screen(NIL), None);
+    }
+
+    #[test]
+    fn directional_resize_specs_preserve_each_corner() {
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeUpLeft),
+            Some((
+                NSCursorFrameResizePosition::TopLeft,
+                NSCursorFrameResizeDirections::Outward
+            ))
+        );
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeUpRight),
+            Some((
+                NSCursorFrameResizePosition::TopRight,
+                NSCursorFrameResizeDirections::Outward
+            ))
+        );
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeDownLeft),
+            Some((
+                NSCursorFrameResizePosition::BottomLeft,
+                NSCursorFrameResizeDirections::Outward
+            ))
+        );
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeDownRight),
+            Some((
+                NSCursorFrameResizePosition::BottomRight,
+                NSCursorFrameResizeDirections::Outward
+            ))
+        );
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeUpLeftDownRight),
+            Some((
+                NSCursorFrameResizePosition::TopLeft,
+                NSCursorFrameResizeDirections::All
+            ))
+        );
+        assert_eq!(
+            directional_resize_spec(CursorStyle::ResizeUpRightDownLeft),
+            Some((
+                NSCursorFrameResizePosition::TopRight,
+                NSCursorFrameResizeDirections::All
+            ))
+        );
     }
 }

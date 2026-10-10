@@ -35,7 +35,6 @@ use futures::FutureExt;
 use futures::channel::oneshot;
 use gpui_util::post_inc;
 use gpui_util::{ResultExt, measure};
-use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use palette::Hsla;
 use parking_lot::RwLock;
@@ -747,10 +746,42 @@ type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
 pub(crate) type AnyMouseListener =
     Box<dyn FnMut(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static>;
 
+#[derive(Clone, Copy)]
+pub(crate) struct PointerChange {
+    pub(crate) position: Option<Point<Pixels>>,
+    pub(crate) cause: PointerChangeCause,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerChangeCause {
+    Input,
+    Layout,
+}
+
+type PointerObserver = Rc<dyn Fn(PointerChange, &mut Window, &mut App)>;
+
 #[derive(Clone)]
-pub(crate) struct CursorStyleRequest {
-    pub(crate) hitbox_id: Option<HitboxId>,
-    pub(crate) style: CursorStyle,
+enum CursorStyleRequest {
+    Window(CursorStyleSource),
+    Hitbox {
+        id: HitboxId,
+        style: CursorStyleSource,
+    },
+}
+
+#[derive(Clone)]
+enum CursorStyleSource {
+    Fixed(CursorStyle),
+    Position(Rc<dyn Fn(Point<Pixels>) -> Option<CursorStyle>>),
+}
+
+impl CursorStyleSource {
+    fn resolve(&self, position: Point<Pixels>) -> Option<CursorStyle> {
+        match self {
+            Self::Fixed(style) => Some(*style),
+            Self::Position(resolve) => resolve(position),
+        }
+    }
 }
 
 /// Contains information about an occlusion test through hitboxes at a mouse position.
@@ -1104,6 +1135,7 @@ pub(crate) struct Frame {
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
     accessed_element_states: Vec<(GlobalElementId, TypeId)>,
     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
+    pointer_observers: Rc<Vec<PointerObserver>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
     pub(crate) hitboxes: Vec<Hitbox>,
@@ -1111,7 +1143,7 @@ pub(crate) struct Frame {
     pub(crate) deferred_draws: Vec<DeferredDraw>,
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
     pub(crate) tooltip_requests: Vec<Option<TooltipRequest>>,
-    pub(crate) cursor_styles: Vec<CursorStyleRequest>,
+    cursor_styles: Vec<CursorStyleRequest>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -1135,6 +1167,7 @@ pub(crate) struct PrepaintStateIndex {
 pub(crate) struct PaintIndex {
     scene_index: usize,
     mouse_listeners_index: usize,
+    pointer_observers_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
     accessed_element_states_index: usize,
@@ -1150,6 +1183,7 @@ impl Frame {
             element_states: FxHashMap::default(),
             accessed_element_states: Vec::new(),
             mouse_listeners: Vec::new(),
+            pointer_observers: Rc::default(),
             dispatch_tree,
             scene: Scene::default(),
             hitboxes: Vec::new(),
@@ -1175,6 +1209,7 @@ impl Frame {
         self.element_states.clear();
         self.accessed_element_states.clear();
         self.mouse_listeners.clear();
+        Rc::make_mut(&mut self.pointer_observers).clear();
         self.dispatch_tree.clear();
         self.scene.clear();
         self.input_handlers.clear();
@@ -1199,18 +1234,30 @@ impl Frame {
     }
 
     pub(crate) fn cursor_style(&self, window: &Window) -> Option<CursorStyle> {
+        // Resolve window-wide requests first, regardless of paint order.
         self.cursor_styles
             .iter()
             .rev()
-            .fold_while(None, |style, request| match request.hitbox_id {
-                None => Done(Some(request.style)),
-                Some(hitbox_id) => Continue(style.or_else(|| {
-                    hitbox_id
-                        .is_hovered_ignoring_last_input(window)
-                        .then_some(request.style)
-                })),
+            .find_map(|request| match request {
+                CursorStyleRequest::Window(style) => style.resolve(window.mouse_position()),
+                CursorStyleRequest::Hitbox { .. } => None,
             })
-            .into_inner()
+            .or_else(|| {
+                if !window.pointer_inside_window {
+                    return None;
+                }
+                self.cursor_styles
+                    .iter()
+                    .rev()
+                    .find_map(|request| match request {
+                        CursorStyleRequest::Hitbox { id, style }
+                            if id.is_hovered_ignoring_last_input(window) =>
+                        {
+                            style.resolve(window.mouse_position())
+                        }
+                        _ => None,
+                    })
+            })
     }
 
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
@@ -1296,6 +1343,7 @@ pub struct Window {
     focus_lost_path: SmallVec<[FocusId; 8]>,
     default_prevented: bool,
     mouse_position: Point<Pixels>,
+    pointer_inside_window: bool,
     mouse_hit_test: HitTest,
     modifiers: Modifiers,
     capslock: Capslock,
@@ -1915,6 +1963,7 @@ impl Window {
                 handle
                     .update(&mut cx, |_, window, _| {
                         window.hovered.set(active);
+                        window.pointer_inside_window = active;
                         window.refresh();
                     })
                     .log_err();
@@ -2046,6 +2095,7 @@ impl Window {
             focus_lost_path: SmallVec::new(),
             default_prevented: true,
             mouse_position,
+            pointer_inside_window: true,
             mouse_hit_test: HitTest::default(),
             modifiers,
             capslock,
@@ -3298,6 +3348,7 @@ impl Window {
         self.reset_cursor_style(cx);
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
+        self.notify_pointer_observers(PointerChangeCause::Layout, cx);
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
@@ -3796,6 +3847,7 @@ impl Window {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
+            pointer_observers_index: self.next_frame.pointer_observers.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
@@ -3805,6 +3857,12 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        Rc::make_mut(&mut self.next_frame.pointer_observers).extend(
+            self.rendered_frame.pointer_observers
+                [range.start.pointer_observers_index..range.end.pointer_observers_index]
+                .iter()
+                .cloned(),
+        );
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
@@ -3864,10 +3922,28 @@ impl Window {
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {
         self.invalidator.debug_assert_paint();
-        self.next_frame.cursor_styles.push(CursorStyleRequest {
-            hitbox_id: Some(hitbox.id),
-            style,
-        });
+        self.next_frame
+            .cursor_styles
+            .push(CursorStyleRequest::Hitbox {
+                id: hitbox.id,
+                style: CursorStyleSource::Fixed(style),
+            });
+    }
+
+    /// Resolves this hitbox's cursor from window coordinates on pointer input.
+    /// Return `None` to use the next cursor request. Cached paints retain the resolver.
+    pub fn set_cursor_style_with(
+        &mut self,
+        hitbox: &Hitbox,
+        resolve: impl Fn(Point<Pixels>) -> Option<CursorStyle> + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame
+            .cursor_styles
+            .push(CursorStyleRequest::Hitbox {
+                id: hitbox.id,
+                style: CursorStyleSource::Position(Rc::new(resolve)),
+            });
     }
 
     /// Updates the cursor style for the entire window at the platform level. A cursor
@@ -3876,10 +3952,23 @@ impl Window {
     /// phase of element drawing.
     pub fn set_window_cursor_style(&mut self, style: CursorStyle) {
         self.invalidator.debug_assert_paint();
-        self.next_frame.cursor_styles.push(CursorStyleRequest {
-            hitbox_id: None,
-            style,
-        })
+        self.next_frame
+            .cursor_styles
+            .push(CursorStyleRequest::Window(CursorStyleSource::Fixed(style)));
+    }
+
+    /// Resolves a window-wide cursor from pointer position.
+    /// Return `None` to defer to hitbox cursor requests.
+    pub fn set_window_cursor_style_with(
+        &mut self,
+        resolve: impl Fn(Point<Pixels>) -> Option<CursorStyle> + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame
+            .cursor_styles
+            .push(CursorStyleRequest::Window(CursorStyleSource::Position(
+                Rc::new(resolve),
+            )));
     }
 
     /// Sets a tooltip to be rendered for the upcoming frame. This method should only be called
@@ -5690,6 +5779,32 @@ impl Window {
         )));
     }
 
+    // Observe completed hit tests independently of event propagation.
+    pub(crate) fn on_pointer_change(
+        &mut self,
+        observer: impl Fn(PointerChange, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+        Rc::make_mut(&mut self.next_frame.pointer_observers).push(Rc::new(observer));
+    }
+
+    fn notify_pointer_observers(&mut self, cause: PointerChangeCause, cx: &mut App) {
+        let change = PointerChange {
+            position: self.pointer_inside_window.then_some(self.mouse_position),
+            cause,
+        };
+        // Snapshot observers before callbacks can redraw the frame.
+        let observers = self.rendered_frame.pointer_observers.clone();
+        let propagate_event = cx.propagate_event;
+        let default_prevented = self.default_prevented;
+        for observer in observers.iter() {
+            observer(change, self, cx);
+            // Observers must not change the event's dispatch state.
+            cx.propagate_event = propagate_event;
+            self.default_prevented = default_prevented;
+        }
+    }
+
     /// Register a key event listener on this node for the next frame. The type of event
     /// is determined by the first parameter of the given listener. When the next frame is rendered
     /// the listener will be cleared.
@@ -6179,11 +6294,21 @@ impl Window {
     }
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
+        if event.is::<crate::MouseExitEvent>() {
+            self.pointer_inside_window = false;
+        } else if event.is::<MouseMoveEvent>()
+            || event.is::<crate::MouseDownEvent>()
+            || event.is::<MouseUpEvent>()
+        {
+            self.pointer_inside_window =
+                Bounds::new(Point::default(), self.viewport_size).contains(&self.mouse_position);
+        }
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
-            self.reset_cursor_style(cx);
         }
+        // Resolve on every pointer event, including movement within one hitbox.
+        self.reset_cursor_style(cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx) {
@@ -6233,6 +6358,12 @@ impl Window {
         // Auto-release pointer capture on mouse up
         if event.is::<MouseUpEvent>() && self.captured_hitbox.is_some() {
             self.captured_hitbox = None;
+        }
+        if event.is::<MouseMoveEvent>()
+            || event.is::<crate::MouseExitEvent>()
+            || event.is::<MouseUpEvent>()
+        {
+            self.notify_pointer_observers(PointerChangeCause::Input, cx);
         }
     }
 
@@ -8039,6 +8170,9 @@ pub fn outline(
         border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
     }
 }
+
+#[cfg(test)]
+mod pointer_tests;
 
 #[cfg(test)]
 mod tests {

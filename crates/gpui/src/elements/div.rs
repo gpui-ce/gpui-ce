@@ -31,9 +31,9 @@ use crate::{
     IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
     LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
     MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
-    PinchEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
-    StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled, Task,
-    TooltipId, Visibility, Window, WindowControlArea, point, px, size,
+    PinchEvent, Pixels, Point, PointerChangeCause, Render, ScrollWheelEvent, SharedString, Size,
+    Style, StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled,
+    Task, TooltipId, Visibility, Window, WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -789,7 +789,39 @@ impl Interactivity {
     where
         Self: Sized,
     {
-        self.hover_listeners.push(Rc::new(listener));
+        self.on_hover_region(
+            |_, _| Some(()),
+            move |value, window, cx| listener(&value.is_some(), window, cx),
+        );
+    }
+
+    /// Resolves this element's cursor from pointer position and bounds.
+    /// Return `None` to defer to another cursor request.
+    pub fn cursor_with(
+        &mut self,
+        resolver: impl Fn(Point<Pixels>, Bounds<Pixels>) -> Option<CursorStyle> + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.cursor_style_resolver = Some(Rc::new(resolver));
+    }
+
+    /// Calls `listener` when the projected pointer value changes.
+    /// The projection receives window coordinates and element bounds; return `None` outside active regions.
+    /// Layout changes and occlusion are observed independently of event propagation.
+    /// Keep listener order stable across renders.
+    pub fn on_hover_region<R: PartialEq + 'static>(
+        &mut self,
+        project: impl Fn(Point<Pixels>, Bounds<Pixels>) -> Option<R> + 'static,
+        listener: impl Fn(&Option<R>, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.hover_region_listeners
+            .push(Box::new(TypedHoverRegionListener {
+                project: Rc::new(project),
+                callback: Rc::new(listener),
+            }));
     }
 
     /// Use the given callback to construct a new tooltip view when the mouse hovers over this element.
@@ -1485,6 +1517,19 @@ pub trait InteractiveElement: Sized {
         self.interactivity().focus_visible_style = Some(Box::new(f(StyleRefinement::default())));
         self
     }
+
+    /// Resolves this element's cursor from pointer position and bounds.
+    /// Return `None` to defer to another cursor request.
+    fn cursor_with(
+        mut self,
+        resolver: impl Fn(Point<Pixels>, Bounds<Pixels>) -> Option<CursorStyle> + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().cursor_with(resolver);
+        self
+    }
 }
 
 /// A trait for elements that want to use the standard GPUI interactivity features
@@ -1904,6 +1949,19 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Calls the listener when a typed pointer projection changes.
+    fn on_hover_region<R: PartialEq + 'static>(
+        mut self,
+        project: impl Fn(Point<Pixels>, Bounds<Pixels>) -> Option<R> + 'static,
+        listener: impl Fn(&Option<R>, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_hover_region(project, listener);
+        self
+    }
+
     /// Use the given callback to construct a new tooltip view when the mouse hovers over this element.
     /// The fluent API equivalent to [`Interactivity::tooltip`].
     fn tooltip(mut self, build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static) -> Self
@@ -1983,7 +2041,50 @@ pub(crate) type PinchListener =
     Box<dyn Fn(&PinchEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
-pub(crate) type HoverListener = Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
+type PointerProjector<R> = Rc<dyn Fn(Point<Pixels>, Bounds<Pixels>) -> Option<R>>;
+pub(crate) type CursorStyleResolver = PointerProjector<CursorStyle>;
+type HoverRegionCallback<R> = Rc<dyn Fn(&Option<R>, &mut Window, &mut App)>;
+type HoverRegionObserver = Rc<dyn Fn(Option<Point<Pixels>>, Bounds<Pixels>, &mut Window, &mut App)>;
+
+/// Erases only the stored region type.
+#[derive(Default)]
+pub(crate) struct HoverRegionState(Option<Rc<dyn Any>>);
+
+pub(crate) trait HoverRegionListener {
+    fn bind(&self, state: &mut HoverRegionState) -> HoverRegionObserver;
+}
+
+struct TypedHoverRegionListener<R> {
+    project: PointerProjector<R>,
+    callback: HoverRegionCallback<R>,
+}
+
+impl<R: PartialEq + 'static> HoverRegionListener for TypedHoverRegionListener<R> {
+    fn bind(&self, state: &mut HoverRegionState) -> HoverRegionObserver {
+        // Reset state if this registration changes type.
+        let value = state
+            .0
+            .as_ref()
+            .and_then(|state| state.clone().downcast::<RefCell<Rc<Option<R>>>>().ok())
+            .unwrap_or_else(|| Rc::new(RefCell::new(Rc::new(None))));
+        state.0 = Some(value.clone());
+        let project = self.project.clone();
+        let callback = self.callback.clone();
+        Rc::new(move |position, bounds, window, cx| {
+            let next = position.and_then(|position| project(position, bounds));
+            let mut previous = value.borrow_mut();
+            if **previous == next {
+                return;
+            }
+            let next = Rc::new(next);
+            *previous = next.clone();
+            // Release the borrow before callbacks can redraw or dispatch input.
+            // Keep this snapshot alive across reentrant updates.
+            drop(previous);
+            callback(&next, window, cx);
+        })
+    }
+}
 
 pub(crate) type DragListener =
     Box<dyn Fn(Point<Pixels>, Option<CursorStyle>, &mut Window, &mut App) -> AnyDrag + 'static>;
@@ -2654,7 +2755,9 @@ pub struct Interactivity {
     pub(crate) click_listeners: Vec<ClickListener>,
     pub(crate) aux_click_listeners: Vec<ClickListener>,
     pub(crate) drag_listener: Option<DragListener>,
-    pub(crate) hover_listeners: Vec<HoverListener>,
+    pub(crate) hover_region_listeners: Vec<Box<dyn HoverRegionListener>>,
+    /// Resolves a cursor from the current pointer position and this element's bounds.
+    pub(crate) cursor_style_resolver: Option<CursorStyleResolver>,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
@@ -2927,12 +3030,13 @@ impl Interactivity {
         self.hitbox_behavior != HitboxBehavior::Normal
             || self.window_control.is_some()
             || style.mouse_cursor.is_some()
+            || self.cursor_style_resolver.is_some()
             || self.group.is_some()
             || self.scroll_offset.is_some()
             || self.tracked_focus_handle.is_some()
             || self.hover_style.is_some()
             || self.group_hover_style.is_some()
-            || !self.hover_listeners.is_empty()
+            || !self.hover_region_listeners.is_empty()
             || !self.mouse_up_listeners.is_empty()
             || !self.mouse_pressure_listeners.is_empty()
             || !self.mouse_down_listeners.is_empty()
@@ -3047,6 +3151,12 @@ impl Interactivity {
                     cx,
                 );
 
+                if let Some(state) = element_state.as_mut() {
+                    state
+                        .hover_region_states
+                        .truncate(self.hover_region_listeners.len());
+                }
+
                 #[cfg(any(feature = "test-support", test))]
                 if let Some(debug_selector) = &self.debug_selector {
                     window
@@ -3097,6 +3207,16 @@ impl Interactivity {
                                             } else {
                                                 if let Some(mouse_cursor) = style.mouse_cursor {
                                                     window.set_cursor_style(mouse_cursor, hitbox);
+                                                }
+                                                if let Some(resolve_cursor) =
+                                                    self.cursor_style_resolver.clone()
+                                                {
+                                                    window.set_cursor_style_with(
+                                                        hitbox,
+                                                        move |position| {
+                                                            resolve_cursor(position, bounds)
+                                                        },
+                                                    );
                                                 }
                                             }
 
@@ -3665,58 +3785,33 @@ impl Interactivity {
                 });
             }
 
-            if !self.hover_listeners.is_empty() {
-                let was_hovered = element_state
-                    .hover_listener_state
-                    .get_or_insert_with(Default::default)
-                    .clone();
-                let has_mouse_down = element_state
-                    .pending_mouse_down
-                    .get_or_insert_with(Default::default)
-                    .clone();
-                let hover_listeners = self.hover_listeners.clone();
-                let hover_listener_state = was_hovered.clone();
-                let update_hover = move |is_hovered: bool, window: &mut Window, cx: &mut App| {
-                    let mut was_hovered = hover_listener_state.borrow_mut();
-                    if is_hovered != *was_hovered {
-                        *was_hovered = is_hovered;
-                        drop(was_hovered);
-                        for listener in &hover_listeners {
-                            listener(&is_hovered, window, cx);
+            if !self.hover_region_listeners.is_empty() {
+                let states = &mut element_state.hover_region_states;
+                states.resize_with(self.hover_region_listeners.len(), HoverRegionState::default);
+                for (listener, state) in self.hover_region_listeners.iter().zip(states) {
+                    let observe = listener.bind(state);
+                    let region_hitbox = hitbox.clone();
+                    let pending_mouse_down = element_state
+                        .pending_mouse_down
+                        .get_or_insert_with(Default::default)
+                        .clone();
+                    window.on_pointer_change(move |change, window, cx| {
+                        let layout_changed = change.cause == PointerChangeCause::Layout;
+                        if layout_changed && pending_mouse_down.borrow().is_some() {
+                            return;
                         }
-                    }
-                };
-
-                if has_mouse_down.borrow().is_none() {
-                    let is_hovered = !cx.has_active_drag() && hitbox.is_hovered(window);
-                    if is_hovered != *was_hovered.borrow() {
-                        let update_hover = update_hover.clone();
-                        window.defer(cx, move |window, cx| {
-                            update_hover(is_hovered, window, cx);
-                        });
-                    }
+                        let position = if cx.has_active_drag()
+                            || !layout_changed && pending_mouse_down.borrow().is_some()
+                        {
+                            None
+                        } else if change.position.is_some() && !region_hitbox.is_hovered(window) {
+                            None
+                        } else {
+                            change.position
+                        };
+                        observe(position, region_hitbox.bounds, window, cx);
+                    });
                 }
-
-                window.on_mouse_event({
-                    let update_hover = update_hover.clone();
-                    let hitbox = hitbox.clone();
-                    move |_: &MouseMoveEvent, phase, window, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            let is_hovered = has_mouse_down.borrow().is_none()
-                                && !cx.has_active_drag()
-                                && hitbox.is_hovered(window);
-                            update_hover(is_hovered, window, cx);
-                        }
-                    }
-                });
-
-                // The pointer can leave the window without a final MouseMove, so also
-                // clear hover on MouseExited.
-                window.on_mouse_event(move |_: &MouseExitEvent, phase, window, cx| {
-                    if phase == DispatchPhase::Bubble {
-                        update_hover(false, window, cx);
-                    }
-                });
             }
 
             if let Some(tooltip_builder) = self.tooltip_builder.take() {
@@ -4208,7 +4303,7 @@ pub struct InteractiveElementState {
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) clicked_state: Option<Rc<RefCell<ElementClickedState>>>,
     pub(crate) hover_state: Option<Rc<RefCell<ElementHoverState>>>,
-    pub(crate) hover_listener_state: Option<Rc<RefCell<bool>>>,
+    pub(crate) hover_region_states: Vec<HoverRegionState>,
     pub(crate) pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
     /// Set to the window's [`focus_generation`](crate::Window::focus_generation)
     /// when an Enter/Space keydown is received while this element is focused,
@@ -5381,6 +5476,267 @@ mod tests {
         })
         .unwrap();
         assert_eq!(*hover_transitions.borrow(), [true]);
+    }
+
+    struct HoverRegionView {
+        events: Rc<RefCell<Vec<Option<&'static str>>>>,
+        projections: Rc<Cell<usize>>,
+    }
+
+    impl Render for HoverRegionView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let events = self.events.clone();
+            let projections = self.projections.clone();
+            div().size_full().child(
+                div()
+                    .id("hover-region-target")
+                    .ml(px(20.))
+                    .mt(px(20.))
+                    .size(px(40.))
+                    .on_hover_region(
+                        move |position, bounds| {
+                            projections.set(projections.get() + 1);
+                            let x = position.x - bounds.left();
+                            (x < px(15.))
+                                .then_some("left")
+                                .or_else(|| (x >= px(25.)).then_some("right"))
+                        },
+                        move |region, _, _| events.borrow_mut().push(*region),
+                    ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn hover_region_transitions_once_and_stays_none_after_exit(cx: &mut TestAppContext) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let projections = Rc::new(Cell::new(0));
+        let window = cx.add_window({
+            let events = events.clone();
+            let projections = projections.clone();
+            move |_, _| HoverRegionView {
+                events,
+                projections,
+            }
+        });
+        let any_window = AnyWindowHandle::from(window);
+
+        let mut expected = Vec::new();
+        for (x, transition) in [
+            (25., Some(Some("left"))),
+            (30., None),
+            (40., Some(None)), // The projector can decline while the element stays hovered.
+            (42., None),
+            (50., Some(Some("right"))),
+            (50., None),
+        ] {
+            cx.update_window(any_window, |_, window, cx| {
+                window.simulate_mouse_move(point(px(x), px(25.)), cx);
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+            if let Some(transition) = transition {
+                expected.push(transition);
+            }
+            assert_eq!(*events.borrow(), expected, "x={x}");
+        }
+        let count = projections.get();
+        cx.update_window(any_window, |_, window, cx| {
+            window.dispatch_event(
+                // No final move: the window still holds the last inside position.
+                MouseExitEvent::default().to_platform_input(),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+            window.dispatch_event(MouseExitEvent::default().to_platform_input(), cx);
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+
+        expected.push(None);
+        assert_eq!(*events.borrow(), expected);
+        assert_eq!(
+            projections.get(),
+            count,
+            "exit and subsequent draws must not run the projection"
+        );
+        cx.update_window(any_window, |_, window, cx| {
+            window.simulate_mouse_move(point(px(50.), px(25.)), cx);
+            window.simulate_mouse_move(point(px(60.), px(25.)), cx);
+            window.simulate_mouse_move(point(px(65.), px(25.)), cx);
+        })
+        .unwrap();
+        expected.extend([Some("right"), None]);
+        assert_eq!(
+            *events.borrow(),
+            expected,
+            "reentry and half-open element bounds"
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum HoverRegionEvent {
+        Number(Option<u8>),
+        Flag(Option<bool>),
+    }
+
+    struct MultipleHoverRegionsView {
+        events: Rc<RefCell<Vec<HoverRegionEvent>>>,
+    }
+
+    impl Render for MultipleHoverRegionsView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let events = self.events.clone();
+            let events_second = events.clone();
+            div()
+                .id("multiple-hover-regions")
+                .size(px(40.))
+                .on_hover_region(
+                    |position, _| (position.x < px(20.)).then_some(1u8),
+                    move |value, _, _| events.borrow_mut().push(HoverRegionEvent::Number(*value)),
+                )
+                .on_hover_region(
+                    |position, _| (position.x >= px(20.)).then_some(true),
+                    move |value, _, _| {
+                        // Keep this listener independently typed from the first one.
+                        events_second
+                            .borrow_mut()
+                            .push(HoverRegionEvent::Flag(*value));
+                    },
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn hover_regions_keep_independent_state_when_rebuilt(cx: &mut TestAppContext) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let view = cx.add_window({
+            let events = events.clone();
+            move |_, _| MultipleHoverRegionsView { events }
+        });
+        let any_window = AnyWindowHandle::from(view);
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.simulate_mouse_move(point(px(5.), px(5.)), cx);
+            window.simulate_mouse_move(point(px(25.), px(5.)), cx);
+        })
+        .unwrap();
+        use HoverRegionEvent::{Flag, Number};
+        assert_eq!(
+            *events.borrow(),
+            [Number(Some(1)), Number(None), Flag(Some(true))]
+        );
+        for _ in 0..3 {
+            view.update(cx, |_, _, cx| cx.notify()).unwrap();
+            cx.update_window(any_window, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+            assert_eq!(
+                *events.borrow(),
+                [Number(Some(1)), Number(None), Flag(Some(true))]
+            );
+        }
+        cx.update_window(any_window, |_, window, cx| {
+            window.simulate_mouse_move(point(px(5.), px(5.)), cx);
+            window.simulate_mouse_move(point(px(50.), px(5.)), cx);
+        })
+        .unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [
+                Number(Some(1)),
+                Number(None),
+                Flag(Some(true)),
+                Number(Some(1)),
+                Flag(None),
+                Number(None)
+            ]
+        );
+    }
+
+    struct ChangingHoverRegionView {
+        enabled: bool,
+        alternate_type: bool,
+        events: Rc<RefCell<Vec<HoverRegionEvent>>>,
+    }
+
+    impl Render for ChangingHoverRegionView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let events = self.events.clone();
+            let target = div().id("changing-regions").size(px(40.));
+            if !self.enabled {
+                target
+            } else if self.alternate_type {
+                target.on_hover_region(
+                    |_, _| Some(true),
+                    move |value, _, _| events.borrow_mut().push(HoverRegionEvent::Flag(*value)),
+                )
+            } else {
+                target.on_hover_region(
+                    |_, _| Some(1u8),
+                    move |value, _, _| events.borrow_mut().push(HoverRegionEvent::Number(*value)),
+                )
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn hover_region_registration_replaces_types_and_discards_removed_state(
+        cx: &mut TestAppContext,
+    ) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.add_window({
+            let events = events.clone();
+            move |_, _| ChangingHoverRegionView {
+                enabled: true,
+                alternate_type: false,
+                events,
+            }
+        });
+        let any_window = AnyWindowHandle::from(window);
+        cx.update_window(any_window, |_, window, cx| {
+            window.simulate_mouse_move(point(px(5.), px(5.)), cx);
+        })
+        .unwrap();
+        assert_eq!(*events.borrow(), [HoverRegionEvent::Number(Some(1))]);
+        window
+            .update(cx, |view, _, cx| {
+                view.alternate_type = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(any_window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [
+                HoverRegionEvent::Number(Some(1)),
+                HoverRegionEvent::Flag(Some(true))
+            ]
+        );
+        window
+            .update(cx, |view, _, cx| {
+                view.enabled = false;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(any_window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.enabled = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(any_window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [
+                HoverRegionEvent::Number(Some(1)),
+                HoverRegionEvent::Flag(Some(true)),
+                HoverRegionEvent::Flag(Some(true))
+            ]
+        );
     }
 
     struct TestTooltipView;

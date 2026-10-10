@@ -730,6 +730,30 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
+        /// Sets the upper-left resize cursor.
+        #visibility fn cursor_nw_resize(mut self) -> Self {
+            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUpLeft);
+            self
+        }
+
+        /// Sets the upper-right resize cursor.
+        #visibility fn cursor_ne_resize(mut self) -> Self {
+            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUpRight);
+            self
+        }
+
+        /// Sets the lower-left resize cursor.
+        #visibility fn cursor_sw_resize(mut self) -> Self {
+            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeDownLeft);
+            self
+        }
+
+        /// Sets the lower-right resize cursor.
+        #visibility fn cursor_se_resize(mut self) -> Self {
+            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeDownRight);
+            self
+        }
+
     };
 
     output.into()

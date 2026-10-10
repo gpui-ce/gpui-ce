@@ -522,31 +522,11 @@ impl Platform for WebPlatform {
     }
 
     fn set_cursor_style(&self, style: CursorStyle) {
-        let css_cursor = match style {
-            CursorStyle::Arrow => "default",
-            CursorStyle::IBeam => "text",
-            CursorStyle::Crosshair => "crosshair",
-            CursorStyle::ClosedHand => "grabbing",
-            CursorStyle::OpenHand => "grab",
-            CursorStyle::PointingHand => "pointer",
-            CursorStyle::ResizeLeft | CursorStyle::ResizeRight | CursorStyle::ResizeLeftRight => {
-                "ew-resize"
-            }
-            CursorStyle::ResizeUp | CursorStyle::ResizeDown | CursorStyle::ResizeUpDown => {
-                "ns-resize"
-            }
-            CursorStyle::ResizeUpLeftDownRight => "nesw-resize",
-            CursorStyle::ResizeUpRightDownLeft => "nwse-resize",
-            CursorStyle::ResizeColumn => "col-resize",
-            CursorStyle::ResizeRow => "row-resize",
-            CursorStyle::IBeamCursorForVerticalLayout => "vertical-text",
-            CursorStyle::OperationNotAllowed => "not-allowed",
-            CursorStyle::DragLink => "alias",
-            CursorStyle::DragCopy => "copy",
-            CursorStyle::ContextualMenu => "context-menu",
-        };
+        let css_cursor = cursor_style_to_css(style);
 
-        self.last_cursor_css.set(css_cursor);
+        if self.last_cursor_css.replace(css_cursor) == css_cursor {
+            return;
+        }
         if self.cursor_visible.get() {
             set_body_cursor(&self.browser_window, css_cursor);
         }
@@ -668,6 +648,37 @@ impl Platform for WebPlatform {
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
         self.callbacks.borrow_mut().keyboard_layout_change = Some(callback);
+    }
+}
+
+/// Convert a GPUI cursor style to the corresponding browser CSS cursor value.
+fn cursor_style_to_css(style: CursorStyle) -> &'static str {
+    match style {
+        CursorStyle::Arrow => "default",
+        CursorStyle::IBeam => "text",
+        CursorStyle::Crosshair => "crosshair",
+        CursorStyle::ClosedHand => "grabbing",
+        CursorStyle::OpenHand => "grab",
+        CursorStyle::PointingHand => "pointer",
+        CursorStyle::ResizeLeft => "w-resize",
+        CursorStyle::ResizeRight => "e-resize",
+        CursorStyle::ResizeLeftRight => "ew-resize",
+        CursorStyle::ResizeUp => "n-resize",
+        CursorStyle::ResizeDown => "s-resize",
+        CursorStyle::ResizeUpDown => "ns-resize",
+        CursorStyle::ResizeUpLeft => "nw-resize",
+        CursorStyle::ResizeUpRight => "ne-resize",
+        CursorStyle::ResizeDownLeft => "sw-resize",
+        CursorStyle::ResizeDownRight => "se-resize",
+        CursorStyle::ResizeUpLeftDownRight => "nwse-resize",
+        CursorStyle::ResizeUpRightDownLeft => "nesw-resize",
+        CursorStyle::ResizeColumn => "col-resize",
+        CursorStyle::ResizeRow => "row-resize",
+        CursorStyle::IBeamCursorForVerticalLayout => "vertical-text",
+        CursorStyle::OperationNotAllowed => "not-allowed",
+        CursorStyle::DragLink => "alias",
+        CursorStyle::DragCopy => "copy",
+        CursorStyle::ContextualMenu => "context-menu",
     }
 }
 
