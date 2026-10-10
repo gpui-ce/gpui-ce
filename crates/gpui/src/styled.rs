@@ -966,7 +966,7 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the opacity of this element and its children.
+    /// Sets the opacity of this element and its children, composited together as one group.
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);
         self

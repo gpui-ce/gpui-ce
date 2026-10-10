@@ -2,7 +2,7 @@ use super::{AtlasTextureId, BatchIterator, FilterBoundary, Scene};
 use smallvec::SmallVec;
 use std::ops::Range;
 
-/// Nested content-filter groups with dedicated isolation targets; deeper ones render inline.
+/// Inline capacity of renderer isolation stacks. Deeper groups allocate additional targets.
 pub const MAX_FILTER_GROUP_DEPTH: usize = 2;
 
 /// Index of an offscreen texture reserved for an isolated content-filter group.
@@ -19,7 +19,7 @@ impl FilterTargetIndex {
 /// Where the contents of a filter group are rendered.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FilterRenderTarget {
-    /// Render directly into the current target once isolation targets are exhausted.
+    /// Render an unmatched group directly into the current target.
     Inline,
     /// Render into a dedicated offscreen target and composite it into the parent.
     Isolated(FilterTargetIndex),
@@ -45,6 +45,7 @@ pub struct ScenePlanRequirements {
     pub isolated_target_count: usize,
     pub uses_path_target: bool,
     pub uses_offscreen_target: bool,
+    pub uses_blur_target: bool,
 }
 
 /// A compiled scene command stream, built by [`Scene::finish`] and shared by every renderer.
@@ -86,9 +87,7 @@ impl ScenePlan {
                 PrimitiveBatch::FilterBoundary(boundary_index) => {
                     let boundary = &scene.filter_boundaries[boundary_index];
                     if boundary.is_start {
-                        let target = if matched_starts[boundary_index]
-                            && isolated_depth < MAX_FILTER_GROUP_DEPTH
-                        {
+                        let target = if matched_starts[boundary_index] {
                             FilterRenderTarget::Isolated(FilterTargetIndex(isolated_depth))
                         } else {
                             FilterRenderTarget::Inline
@@ -96,6 +95,7 @@ impl ScenePlan {
                         if target.is_isolated() {
                             isolated_depth += 1;
                             requirements.uses_offscreen_target = true;
+                            requirements.uses_blur_target |= boundary.max_blur_radius() > 0.0;
                             requirements.isolated_target_count =
                                 requirements.isolated_target_count.max(isolated_depth);
                         }
@@ -124,6 +124,12 @@ impl ScenePlan {
                     }
                 }
                 batch => {
+                    if let PrimitiveBatch::BackdropFilters(range) = &batch {
+                        requirements.uses_blur_target |= scene.backdrop_filters[range.clone()]
+                            .iter()
+                            .any(|filter| filter.max_blur_radius() > 0.0);
+                    }
+
                     requirements.include_batch(&batch);
                     commands.push(RenderCommand::Batch(batch));
                 }

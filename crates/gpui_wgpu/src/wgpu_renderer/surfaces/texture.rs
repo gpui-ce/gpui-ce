@@ -34,11 +34,10 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
-    opacities: &[f32],
     pass: &mut wgpu::RenderPass<'_>,
 ) -> frame::DrawResult {
-    let mut textures = smallvec::SmallVec::<[(&PaintSurface, &wgpu::Texture, f32); 4]>::new();
-    for (index, surface) in surfaces.iter().enumerate() {
+    let mut textures = smallvec::SmallVec::<[(&PaintSurface, &wgpu::Texture); 4]>::new();
+    for surface in surfaces {
         let gpui::SurfaceSource::Texture { texture, .. } = &surface.source else {
             log::error!("surface source cannot be imported by the WGPU texture renderer");
             return Err(frame::DrawError::ExternalSurface);
@@ -47,17 +46,13 @@ pub(super) fn draw_surfaces(
             log::error!("surface source is not a WGPU texture");
             return Err(frame::DrawError::ExternalSurface);
         };
-        textures.push((
-            surface,
-            texture,
-            opacities.get(index).copied().unwrap_or(1.0),
-        ));
+        textures.push((surface, texture));
     }
 
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
 
-    for (surface, texture, opacity) in textures {
+    for (surface, texture) in textures {
         if !cache.textures.contains_key(texture) {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             cache.textures.insert(
@@ -69,7 +64,7 @@ pub(super) fn draw_surfaces(
             log::error!("surface texture cache insertion failed");
             return Err(frame::DrawError::ExternalSurface);
         };
-        renderer.draw_surface_binding(surface, SurfaceColorFormat::Rgba, opacity, cached, pass)?;
+        renderer.draw_surface_binding(surface, SurfaceColorFormat::Rgba, cached, pass)?;
     }
     Ok(())
 }

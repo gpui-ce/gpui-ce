@@ -71,7 +71,6 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
 pub(super) fn draw_surfaces(
     renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
-    opacities: &[f32],
     pass: &mut wgpu::RenderPass<'_>,
 ) -> frame::DrawResult {
     use core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
@@ -79,8 +78,7 @@ pub(super) fn draw_surfaces(
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
 
-    for (index, surface) in surfaces.iter().enumerate() {
-        let opacity = opacities.get(index).copied().unwrap_or(1.0);
+    for surface in surfaces {
         match &surface.source {
             gpui::SurfaceSource::Surface(image_buffer) => {
                 if image_buffer.get_pixel_format() != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -95,7 +93,6 @@ pub(super) fn draw_surfaces(
                 renderer.draw_surface_binding(
                     surface,
                     SurfaceColorFormat::Yuv,
-                    opacity,
                     &mut imported.binding,
                     pass,
                 )?;
@@ -111,13 +108,7 @@ pub(super) fn draw_surfaces(
                     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                     SurfaceBinding::new(renderer, view.clone(), view)
                 });
-                renderer.draw_surface_binding(
-                    surface,
-                    SurfaceColorFormat::Rgba,
-                    opacity,
-                    binding,
-                    pass,
-                )?;
+                renderer.draw_surface_binding(surface, SurfaceColorFormat::Rgba, binding, pass)?;
             }
             _ => {
                 log::error!("surface source cannot be imported by the macOS renderer");

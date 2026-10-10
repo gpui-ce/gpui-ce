@@ -124,7 +124,6 @@ impl WgpuRenderer {
         &self,
         surface: &PaintSurface,
         color_format: SurfaceColorFormat,
-        opacity: f32,
         binding: &mut SurfaceBinding,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
@@ -133,7 +132,7 @@ impl WgpuRenderer {
             bounds: surface.bounds.into(),
             content_mask: surface.content_mask.into(),
             color_format,
-            opacity,
+            opacity: 1.0,
             padding0: 0,
             padding1: 0,
             padding2: 0,
@@ -157,9 +156,8 @@ impl WgpuRenderer {
     pub(super) fn draw_surfaces(
         &self,
         surfaces: &[PaintSurface],
-        opacities: &[f32],
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
-        platform::draw_surfaces(self, surfaces, opacities, pass)
+        platform::draw_surfaces(self, surfaces, pass)
     }
 }

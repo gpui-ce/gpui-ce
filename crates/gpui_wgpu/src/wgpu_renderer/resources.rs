@@ -5,6 +5,7 @@ use std::{
 };
 
 use collections::FxHashMap;
+use gpui::ScenePlanRequirements;
 
 use crate::WgpuContext;
 use gpui_render::blur::downsampled_dimension;
@@ -60,6 +61,8 @@ pub(super) struct WgpuResources {
     pub(super) path_msaa_view: Option<wgpu::TextureView>,
     pub(super) scene_color_texture: Option<wgpu::Texture>,
     pub(super) scene_color_view: Option<wgpu::TextureView>,
+    pub(super) backdrop_snapshot_texture: Option<wgpu::Texture>,
+    pub(super) backdrop_snapshot_view: Option<wgpu::TextureView>,
     pub(super) blur_ping_texture: Option<wgpu::Texture>,
     pub(super) blur_ping_view: Option<wgpu::TextureView>,
     pub(super) blur_pong_texture: Option<wgpu::Texture>,
@@ -193,6 +196,8 @@ impl WgpuResources {
             path_msaa_view: None,
             scene_color_texture: None,
             scene_color_view: None,
+            backdrop_snapshot_texture: None,
+            backdrop_snapshot_view: None,
             blur_ping_texture: None,
             blur_ping_view: None,
             blur_pong_texture: None,
@@ -212,6 +217,8 @@ impl WgpuResources {
         self.path_msaa_view = None;
         self.scene_color_texture = None;
         self.scene_color_view = None;
+        self.backdrop_snapshot_texture = None;
+        self.backdrop_snapshot_view = None;
         self.blur_ping_texture = None;
         self.blur_ping_view = None;
         self.blur_pong_texture = None;
@@ -272,7 +279,7 @@ impl WgpuRenderer {
         }
     }
 
-    pub(super) fn ensure_filter_textures(&mut self, isolated_target_count: usize) {
+    pub(super) fn ensure_filter_textures(&mut self, requirements: &ScenePlanRequirements) {
         let format = self.target.format();
         let width = self.target.width();
         let height = self.target.height();
@@ -284,6 +291,9 @@ impl WgpuRenderer {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
             resources.scene_color_texture = Some(texture);
             resources.scene_color_view = Some(view);
+        }
+
+        if requirements.uses_blur_target && resources.blur_ping_texture.is_none() {
             let (texture, view) =
                 sampled_render_texture(&resources.device, format, blur_width, blur_height);
             resources.blur_ping_texture = Some(texture);
@@ -294,7 +304,16 @@ impl WgpuRenderer {
             resources.blur_pong_view = Some(view);
         }
 
-        while resources.filter_group_views.len() < isolated_target_count {
+        if requirements.backdrop_filter_count > 0
+            && requirements.isolated_target_count > 0
+            && resources.backdrop_snapshot_texture.is_none()
+        {
+            let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+            resources.backdrop_snapshot_texture = Some(texture);
+            resources.backdrop_snapshot_view = Some(view);
+        }
+
+        while resources.filter_group_views.len() < requirements.isolated_target_count {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
             resources.filter_group_textures.push(texture);
             resources.filter_group_views.push(view);

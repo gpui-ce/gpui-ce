@@ -69,7 +69,7 @@ js-sys.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 criterion.workspace = true
 env_logger.workspace = true
-gpui_platform = { workspace = true, features = ["wayland", "x11"] }
+gpui_platform = { workspace = true, features = ["wayland", "x11", "test-support"] }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

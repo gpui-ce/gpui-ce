@@ -5,9 +5,10 @@ use super::{
     path_types,
 };
 use gpui::{
-    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PolychromeSprite, PrimitiveBatch,
-    Quad, RenderCommand, Scene, Shadow, SubpixelSprite, Underline,
+    FilterRenderTarget, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, RenderCommand,
+    Scene, ScenePlanRequirements, Shadow, SubpixelSprite, Underline,
 };
+use gpui_render::TargetStack;
 use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
 use gpui_render::shaders::{
     common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool},
@@ -91,15 +92,15 @@ impl PreparedTargets {
             return None;
         }
 
-        if requirements.uses_path_target {
+        if requirements.planned.uses_path_target {
             renderer.ensure_path_textures();
         }
-        if requirements.uses_offscreen_target {
-            renderer.ensure_filter_textures(requirements.isolated_target_count);
+        if requirements.planned.uses_offscreen_target {
+            renderer.ensure_filter_textures(&requirements.planned);
         }
         write_shader_globals(renderer);
 
-        if requirements.uses_offscreen_target {
+        if requirements.planned.uses_offscreen_target {
             let resources = renderer.resources();
             let offscreen = resources
                 .scene_color_view
@@ -236,9 +237,7 @@ pub(super) struct FrameRequirements {
     /// Instance batches this frame; one downlevel range-uniform slot per batch.
     instance_batches: u64,
     pub(super) uniforms: FrameUniformRequirements,
-    isolated_target_count: usize,
-    uses_path_target: bool,
-    uses_offscreen_target: bool,
+    planned: ScenePlanRequirements,
 }
 
 impl FrameRequirements {
@@ -303,12 +302,15 @@ impl FrameRequirements {
             uniforms: FrameUniformRequirements {
                 filter_count: FILTER_UNIFORMS_PER_COMPOSITE
                     * (planned.backdrop_filter_count + planned.isolated_filter_count) as u64
-                    + u64::from(planned.uses_offscreen_target),
+                    + u64::from(planned.uses_offscreen_target)
+                    + if planned.isolated_target_count > 0 {
+                        (planned.backdrop_filter_count * (planned.isolated_target_count + 1)) as u64
+                    } else {
+                        0
+                    },
                 surface_count: planned.surface_count as u64,
             },
-            isolated_target_count: planned.isolated_target_count,
-            uses_path_target: planned.uses_path_target,
-            uses_offscreen_target: planned.uses_offscreen_target,
+            planned: *planned,
         }
     }
 }
@@ -317,7 +319,7 @@ struct FrameEncoder<'a> {
     renderer: &'a WgpuRenderer,
     scene: &'a Scene,
     encoder: wgpu::CommandEncoder,
-    targets: TargetStack,
+    targets: TargetStack<wgpu::TextureView>,
     offscreen: Option<wgpu::TextureView>,
     presentation: wgpu::TextureView,
     instances: InstanceUpload,
@@ -421,10 +423,26 @@ impl<'a> FrameEncoder<'a> {
                 RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     drop(pass);
                     for filter in &self.scene.backdrop_filters[range.clone()] {
-                        self.renderer.draw_backdrop_filter(
+                        let snapshot = self.targets.inherits_backdrop().then(|| {
+                            self.renderer.snapshot_backdrop(
+                                &mut self.encoder,
+                                self.targets.backdrop_layers(),
+                            )
+                        });
+                        let source = snapshot.as_ref().unwrap_or_else(|| self.targets.current());
+                        self.renderer.blur_and_composite(
                             &mut self.encoder,
-                            filter,
+                            source,
                             self.targets.current(),
+                            FilterCompositeParameters {
+                                bounds: filter.bounds,
+                                content_mask: filter.content_mask.bounds,
+                                corner_radii: filter.corner_radii,
+                                corner_smoothing: filter.corner_smoothing,
+                                blur_radius: filter.max_blur_radius(),
+                                opacity: filter.opacity,
+                                clip: FilterCompositeClip::RoundedBounds,
+                            },
                         );
                     }
                     pass = begin_scene_render_pass(
@@ -446,13 +464,18 @@ impl<'a> FrameEncoder<'a> {
                     &mut pass,
                 )?,
                 RenderCommand::BeginFilter {
+                    boundary_index,
                     target: FilterRenderTarget::Isolated(index),
-                    ..
                 } => {
                     drop(pass);
                     let target =
                         self.renderer.resources().filter_group_views[index.as_usize()].clone();
-                    self.targets.enter(target);
+                    self.targets.enter(
+                        target,
+                        self.scene.filter_boundaries[*boundary_index]
+                            .filters
+                            .is_empty(),
+                    );
                     pass = begin_scene_render_pass(
                         self.renderer,
                         &mut self.encoder,
@@ -523,45 +546,6 @@ fn begin_scene_render_pass<'a>(
     pass
 }
 
-struct TargetStack {
-    current: wgpu::TextureView,
-    parents: smallvec::SmallVec<[wgpu::TextureView; MAX_FILTER_GROUP_DEPTH]>,
-}
-
-impl TargetStack {
-    fn new(root: wgpu::TextureView) -> Self {
-        Self {
-            current: root,
-            parents: smallvec::SmallVec::new(),
-        }
-    }
-
-    fn current(&self) -> &wgpu::TextureView {
-        &self.current
-    }
-
-    fn enter(&mut self, next: wgpu::TextureView) {
-        self.parents
-            .push(std::mem::replace(&mut self.current, next));
-    }
-
-    fn exit(&mut self) -> (wgpu::TextureView, &wgpu::TextureView) {
-        let parent = self
-            .parents
-            .pop()
-            .expect("render plan ended an isolated filter without beginning one");
-        let filtered = std::mem::replace(&mut self.current, parent);
-        (filtered, &self.current)
-    }
-
-    fn assert_balanced(&self) {
-        assert!(
-            self.parents.is_empty(),
-            "render plan left an isolated filter group open"
-        );
-    }
-}
-
 #[derive(Debug)]
 pub(super) enum DrawError {
     CapacityPlanningInvariant,
@@ -612,11 +596,9 @@ fn encode_inline_batch(
             instances,
             pass,
         ),
-        PrimitiveBatch::Surfaces(range) => renderer.draw_surfaces(
-            &scene.surfaces[range.clone()],
-            &scene.surface_opacities()[range.clone()],
-            pass,
-        ),
+        PrimitiveBatch::Surfaces(range) => {
+            renderer.draw_surfaces(&scene.surfaces[range.clone()], pass)
+        }
         PrimitiveBatch::Paths { .. }
         | PrimitiveBatch::BackdropFilters(_)
         | PrimitiveBatch::FilterBoundary(_) => {

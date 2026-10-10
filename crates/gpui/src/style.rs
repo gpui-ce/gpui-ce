@@ -392,7 +392,7 @@ pub struct Style {
     /// The mouse cursor style shown when the mouse pointer is over an element.
     pub mouse_cursor: Option<CursorStyle>,
 
-    /// The opacity of this element
+    /// Opacity applied to this element and its children after compositing them as a group.
     pub opacity: Option<f32>,
 
     /// The grid columns of this element
@@ -981,17 +981,19 @@ impl Style {
         cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
-        if let Some(fragments) = window.current_inline_fragments.clone() {
-            for fragment in fragments.iter() {
-                self.paint_box(*fragment, window, cx, |_, _| {});
+        window.with_element_opacity(self.opacity, |window| {
+            if let Some(fragments) = window.current_inline_fragments.clone() {
+                for fragment in fragments.iter() {
+                    self.paint_box(*fragment, window, cx, |_, _| {});
+                }
+
+                continuation(window, cx);
+
+                return;
             }
 
-            continuation(window, cx);
-
-            return;
-        }
-
-        self.paint_box(bounds, window, cx, continuation);
+            self.paint_box(bounds, window, cx, continuation);
+        });
     }
 
     fn paint_box(
