@@ -16,12 +16,18 @@ use upload::UploadedTexture;
 
 pub(in crate::wgpu_renderer) struct SurfaceCache {
     textures: FxHashMap<CaptureFrameKey, CachedTexture>,
+    /// Bindings for application-rendered WGPU textures (the `custom-gpu`
+    /// compositing path; these live on the renderer's own device).
+    #[cfg(feature = "custom-gpu")]
+    custom_textures: FxHashMap<wgpu::Texture, SurfaceBinding>,
 }
 
 impl SurfaceCache {
     pub(in crate::wgpu_renderer) fn new(_device: &wgpu::Device) -> Result<Self> {
         Ok(Self {
             textures: FxHashMap::default(),
+            #[cfg(feature = "custom-gpu")]
+            custom_textures: FxHashMap::default(),
         })
     }
 }
@@ -31,12 +37,27 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
         .iter()
         .filter_map(|surface| capture_frame(surface).map(CaptureFrameKey::from_frame))
         .collect::<smallvec::SmallVec<[CaptureFrameKey; 4]>>();
+    #[cfg(feature = "custom-gpu")]
+    let active_custom_textures = surfaces
+        .iter()
+        .filter_map(|surface| match &surface.source {
+            gpui::SurfaceSource::Texture { texture, .. } => texture.downcast_ref::<wgpu::Texture>(),
+            _ => None,
+        })
+        .collect::<smallvec::SmallVec<[&wgpu::Texture; 4]>>();
     renderer
         .resources()
         .surface_cache
         .borrow_mut()
         .textures
         .retain(|key, _| active_keys.contains(key));
+    #[cfg(feature = "custom-gpu")]
+    renderer
+        .resources()
+        .surface_cache
+        .borrow_mut()
+        .custom_textures
+        .retain(|texture, _| active_custom_textures.contains(&texture));
 }
 
 pub(super) fn draw_surfaces(
@@ -48,6 +69,28 @@ pub(super) fn draw_surfaces(
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
     for (index, surface) in surfaces.iter().enumerate() {
+        #[cfg(feature = "custom-gpu")]
+        if let gpui::SurfaceSource::Texture { texture, .. } = &surface.source {
+            let Some(texture) = texture.downcast_ref::<wgpu::Texture>() else {
+                log::error!("surface source is not a WGPU texture");
+                return Err(frame::DrawError::ExternalSurface);
+            };
+            let binding = cache
+                .custom_textures
+                .entry(texture.clone())
+                .or_insert_with(|| {
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    SurfaceBinding::new(renderer, view.clone(), view)
+                });
+            renderer.draw_surface_binding(
+                surface,
+                SurfaceColorFormat::Rgba,
+                opacities.get(index).copied().unwrap_or(1.0),
+                binding,
+                pass,
+            )?;
+            continue;
+        }
         let Some(frame) = capture_frame(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");
             return Err(frame::DrawError::ExternalSurface);
@@ -295,5 +338,112 @@ mod tests {
         cache.retain(|key, _| *key == second);
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&second), Some(&2));
+    }
+}
+
+#[cfg(all(test, feature = "test-support", feature = "custom-gpu"))]
+mod custom_gpu_tests {
+    use std::sync::Arc;
+
+    use gpui::{Bounds, Point, ScaledPixels, Scene, Size, SurfaceSource};
+
+    use super::*;
+    use crate::{WgpuContext, WgpuRenderer};
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+
+    fn renderer() -> anyhow::Result<WgpuRenderer> {
+        let context = WgpuContext::new_headless(None)?;
+        WgpuRenderer::new_headless(
+            &context,
+            gpui::size(gpui::DevicePixels(4), gpui::DevicePixels(2)),
+        )
+    }
+
+    fn solid_texture(renderer: &WgpuRenderer, color: [u8; 4]) -> Arc<wgpu::Texture> {
+        let (device, queue) = renderer.gpu_context();
+        let size = wgpu::Extent3d {
+            width: 2,
+            height: 2,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("application-texture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            &color.repeat(4),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: Some(2),
+            },
+            size,
+        );
+        Arc::new(texture)
+    }
+
+    fn bounds(width: f32, height: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(width),
+                height: ScaledPixels(height),
+            },
+        }
+    }
+
+    /// Application-rendered WGPU textures composite into the frame over the
+    /// backdrop: the custom-gpu compositing path end to end, headless.
+    #[test]
+    fn custom_gpu_textures_composite_into_the_frame() -> anyhow::Result<()> {
+        let mut renderer = renderer()?;
+        let texture = solid_texture(&renderer, RED);
+
+        let full = bounds(4.0, 2.0);
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Quad {
+            bounds: full.clone(),
+            content_mask: gpui::ContentMask {
+                bounds: full.clone(),
+                ..Default::default()
+            },
+            background: gpui::solid_background(gpui::white()),
+            ..Default::default()
+        });
+        scene.insert_primitive(gpui::PaintSurface {
+            order: 1,
+            bounds: bounds(2.0, 2.0),
+            content_mask: gpui::ContentMask {
+                bounds: full.clone(),
+                ..Default::default()
+            },
+            source: SurfaceSource::Texture {
+                texture,
+                size: gpui::size(gpui::DevicePixels(2), gpui::DevicePixels(2)),
+            },
+        });
+        scene.finish();
+
+        // Renders through the full frame path (including draw_surfaces) and
+        // reads the frame back without presenting.
+        let image = renderer.render_to_image(&scene)?;
+
+        assert_eq!(image.dimensions(), (4, 2));
+        // Inside the surface: the application texture's red, opaque.
+        assert_eq!(image.get_pixel(1, 1).0, RED);
+        // Outside it: the white backdrop.
+        assert_eq!(image.get_pixel(3, 1).0, [255, 255, 255, 255]);
+        Ok(())
     }
 }

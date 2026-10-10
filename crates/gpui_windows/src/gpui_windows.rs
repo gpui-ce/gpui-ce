@@ -3,9 +3,16 @@
 mod clipboard;
 mod destination_list;
 mod direct_manipulation;
+// Kept compiled under the `wgpu` feature too: `direct_write` shares its
+// shader/emoji-rasterization internals, and `directx_devices` backs it. When
+// the `wgpu` feature selects the WGPU renderer, `DirectXRenderer`,
+// `DirectWriteTextSystem` and `DirectXDevices` are simply never instantiated.
+#[cfg_attr(feature = "wgpu", allow(dead_code))]
 mod direct_write;
 mod directx_atlas;
+#[cfg_attr(feature = "wgpu", allow(dead_code))]
 mod directx_devices;
+#[cfg_attr(feature = "wgpu", allow(dead_code, unfulfilled_lint_expectations))]
 mod directx_renderer;
 mod dispatcher;
 mod display;
@@ -16,11 +23,14 @@ mod system_notifications;
 mod system_settings;
 mod util;
 mod vsync;
+#[cfg(feature = "wgpu")]
+mod wgpu_renderer;
 mod window;
 mod wrapper;
 
 pub(crate) use clipboard::*;
 pub(crate) use destination_list::*;
+#[cfg(not(feature = "wgpu"))]
 pub(crate) use direct_write::*;
 pub(crate) use directx_atlas::*;
 pub(crate) use directx_devices::*;
@@ -36,6 +46,13 @@ pub(crate) use util::*;
 pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
+
+#[cfg(not(feature = "wgpu"))]
+pub(crate) use directx_renderer::DirectXRenderer as WindowRenderer;
+#[cfg(feature = "wgpu")]
+pub(crate) use wgpu_renderer::Context as RendererContext;
+#[cfg(feature = "wgpu")]
+pub(crate) use wgpu_renderer::WindowsWgpuRenderer as WindowRenderer;
 
 pub use platform::WindowsPlatform;
 

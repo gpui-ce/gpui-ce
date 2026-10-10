@@ -14,8 +14,17 @@ path = "src/gpui_windows.rs"
 
 [features]
 default = ["gpui/default"]
-test-support = ["gpui/test-support"]
+test-support = ["gpui/test-support", "gpui_wgpu?/test-support"]
 screen-capture = ["gpui/screen-capture"]
+# Draw windows with the WGPU renderer instead of DirectX, so applications can
+# share its device and composite their own WGPU textures (with gpui's
+# `custom-gpu` feature).
+wgpu = [
+  "dep:gpui_wgpu",
+  "gpui/custom-gpu",
+  "gpui_wgpu/custom-gpu",
+  "gpui_wgpu/wgpu-surfaces",
+]
 
 [dependencies]
 gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
@@ -23,6 +32,7 @@ gpui_render.workspace = true
 wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+gpui_wgpu = { workspace = true, optional = true }
 accesskit.workspace = true
 accesskit_windows.workspace = true
 anyhow.workspace = true

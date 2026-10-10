@@ -3,18 +3,20 @@
 //! The control owns its buffers, pipeline, and offscreen target. GPUI owns the
 //! device and queue, so those resources are recreated after device loss.
 //!
-//! Run with `--features custom-gpu` on supported targets. macOS windows also
-//! need the WGPU renderer:
+//! Run with `--features custom-gpu` on supported targets. macOS and Windows
+//! windows also need the WGPU renderer:
 //!
 //! ```sh
-//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/macos-wgpu
+//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/macos-wgpu   # macOS
+//! cargo run -p gpui_ce_wgpu --example custom_gpu --features custom-gpu,gpui_platform/windows-wgpu # Windows
 //! ```
 
 #[cfg(any(
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 ))]
 mod custom_gpu {
     use std::borrow::Cow;
@@ -320,7 +322,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             self.render_gpu(window);
             let mut root = div().size_full();
             if let Some(target) = self.target.as_ref() {
-                root = root.child(target.surface());
+                root = root.child(target.surface().size_full());
             }
             root
         }
@@ -352,7 +354,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 ))]
 fn main() {
     custom_gpu::run();
@@ -362,8 +365,9 @@ fn main() {
     target_family = "wasm",
     target_os = "linux",
     target_os = "freebsd",
-    target_os = "macos"
+    target_os = "macos",
+    target_os = "windows"
 )))]
 fn main() {
-    eprintln!("custom_gpu is supported on Linux, FreeBSD, macOS, and WASM targets only");
+    eprintln!("custom_gpu is supported on Linux, FreeBSD, macOS, Windows, and WASM targets only");
 }

@@ -61,7 +61,7 @@ pub struct WindowsWindowState {
     pub hovered: Cell<bool>,
     pub direct_manipulation: DirectManipulationHandler,
 
-    pub renderer: RefCell<DirectXRenderer>,
+    pub renderer: RefCell<WindowRenderer>,
     /// Set when the next `draw_window` call must be treated as a forced
     /// render. Used after a GPU device-lost recovery, where the next frame
     /// must both re-enable drawing (via `mark_drawable`) and bypass the GPUI
@@ -110,7 +110,8 @@ pub(crate) struct WindowsWindowInner {
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
-        directx_devices: &DirectXDevices,
+        #[cfg(not(feature = "wgpu"))] directx_devices: &DirectXDevices,
+        #[cfg(feature = "wgpu")] renderer_context: &RendererContext,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
         cursor_visible: Arc<AtomicBool>,
@@ -137,8 +138,13 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
+        #[cfg(not(feature = "wgpu"))]
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
+        #[cfg(feature = "wgpu")]
+        let _ = disable_direct_composition;
+        #[cfg(feature = "wgpu")]
+        let renderer = WindowRenderer::new(hwnd, renderer_context)?;
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
@@ -251,7 +257,10 @@ impl WindowsWindowInner {
     fn new(context: &mut WindowCreateContext, hwnd: HWND, cs: &CREATESTRUCTW) -> Result<Rc<Self>> {
         let state = WindowsWindowState::new(
             hwnd,
+            #[cfg(not(feature = "wgpu"))]
             &context.directx_devices,
+            #[cfg(feature = "wgpu")]
+            &context.renderer_context,
             cs,
             context.current_cursor,
             context.cursor_visible.clone(),
@@ -406,7 +415,10 @@ struct WindowCreateContext {
     platform_window_handle: HWND,
     appearance: WindowAppearance,
     disable_direct_composition: bool,
+    #[cfg(not(feature = "wgpu"))]
     directx_devices: DirectXDevices,
+    #[cfg(feature = "wgpu")]
+    renderer_context: RendererContext,
     invalidate_devices: Arc<AtomicBool>,
     draw_coordinator: Rc<DrawCoordinator>,
     parent_hwnd: Option<HWND>,
@@ -434,7 +446,10 @@ impl WindowsWindow {
             main_receiver,
             platform_window_handle,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
+            #[cfg(feature = "wgpu")]
+            renderer_context,
             invalidate_devices,
             draw_coordinator,
         } = creation_info;
@@ -519,7 +534,10 @@ impl WindowsWindow {
             platform_window_handle,
             appearance,
             disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices,
+            #[cfg(feature = "wgpu")]
+            renderer_context,
             invalidate_devices,
             draw_coordinator,
             parent_hwnd,
@@ -1100,6 +1118,14 @@ impl PlatformWindow for WindowsWindow {
             .borrow_mut()
             .draw(scene, self.state.background_appearance.get())
             .log_err();
+        // The WGPU renderer flags skipped frames (device lost, recovery
+        // deferred, surface lost) so the next vsync forces a render — an
+        // unchanged scene is not re-drawn on its own, which would leave the
+        // window blank.
+        #[cfg(feature = "wgpu")]
+        if self.state.renderer.borrow().needs_redraw() {
+            self.state.force_render_pending.set(true);
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1120,6 +1146,32 @@ impl PlatformWindow for WindowsWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.state.renderer.borrow().gpu_specs().log_err()
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        let renderer = self.state.renderer.borrow();
+        // Between recovery attempts the renderer's resources are torn down,
+        // so there is no device to hand out until a draw recovers it.
+        if renderer.device_lost() {
+            return None;
+        }
+        let (device, queue) = renderer.gpu_context();
+        Some(Box::new((device, queue)))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_device_lost(&self) -> Option<bool> {
+        Some(self.state.renderer.borrow().device_lost())
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.state
+            .renderer
+            .borrow()
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
     }
 
     fn update_ime_position(&self, bounds: Bounds<Pixels>) {
