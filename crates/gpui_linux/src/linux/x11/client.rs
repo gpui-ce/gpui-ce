@@ -194,6 +194,7 @@ pub struct X11ClientState {
     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
     pub(crate) mouse_focused_window: Option<xproto::Window>,
     pub(crate) keyboard_focused_window: Option<xproto::Window>,
+    activation_history: crate::linux::platform::ActivationHistory<xproto::Window>,
     pub(crate) xkb: xkbc::State,
     keyboard_layout: LinuxKeyboardLayout,
     pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
@@ -239,6 +240,7 @@ impl X11ClientStatePtr {
         };
         let mut state = client.0.borrow_mut();
 
+        state.activation_history.closed(&x_window);
         if let Some(window_ref) = state.windows.remove(&x_window)
             && let Some(RefreshState::PeriodicRefresh {
                 event_loop_token, ..
@@ -541,6 +543,7 @@ impl X11Client {
             windows: HashMap::default(),
             mouse_focused_window: None,
             keyboard_focused_window: None,
+            activation_history: Default::default(),
             xkb: xkb_state,
             keyboard_layout,
             ximc,
@@ -976,13 +979,14 @@ impl X11Client {
             }
             Event::FocusIn(event) => {
                 let window = self.get_window(event.event)?;
-                window.set_active(true);
                 let mut state = self.0.borrow_mut();
                 state.keyboard_focused_window = Some(event.event);
+                state.activation_history.focused(&event.event);
                 if let Some(handler) = state.xim_handler.as_mut() {
                     handler.window = event.event;
                 }
                 drop(state);
+                window.set_active(true);
                 self.enable_ime();
             }
             Event::FocusOut(event) => {
@@ -1627,6 +1631,10 @@ impl LinuxClient for X11Client {
             .resource_database
             .get_string("Xft.rgba", "Xft.Rgba")
             .is_some_and(|v| v.eq_ignore_ascii_case("bgr"));
+        let activation_target = matches!(
+            &params.kind,
+            gpui::WindowKind::Normal | gpui::WindowKind::Floating | gpui::WindowKind::Dialog
+        );
         let window = X11Window::new(
             handle,
             X11ClientStatePtr(Rc::downgrade(&self.0)),
@@ -1666,6 +1674,9 @@ impl LinuxClient for X11Client {
             is_mapped: false,
         };
 
+        if activation_target {
+            state.activation_history.opened(x_window);
+        }
         state.windows.insert(x_window, window_ref);
         Ok(Box::new(window))
     }
@@ -1818,6 +1829,20 @@ impl LinuxClient for X11Client {
                 .get(&focused_window)
                 .map(|window| window.handle())
         })
+    }
+
+    fn activate(&self) {
+        let window = {
+            let state = self.0.borrow();
+            state
+                .activation_history
+                .target()
+                .and_then(|id| state.windows.get(id))
+                .map(|window| window.window.clone())
+        };
+        if let Some(window) = window {
+            window.activate(None);
+        }
     }
 
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {

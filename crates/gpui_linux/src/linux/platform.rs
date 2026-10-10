@@ -74,6 +74,7 @@ pub(crate) trait LinuxClient {
     fn read_from_primary(&self) -> Option<ClipboardItem>;
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
     fn active_window(&self) -> Option<AnyWindowHandle>;
+    fn activate(&self) {}
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>>;
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
     fn run(&self);
@@ -83,6 +84,38 @@ pub(crate) trait LinuxClient {
         &self,
     ) -> impl Future<Output = Option<ashpd::WindowIdentifier>> + Send + 'static {
         std::future::ready::<Option<ashpd::WindowIdentifier>>(None)
+    }
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+pub(crate) struct ActivationHistory<T>(Vec<T>);
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+impl<T> Default for ActivationHistory<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+impl<T: PartialEq + Clone> ActivationHistory<T> {
+    pub(crate) fn opened(&mut self, window: T) {
+        self.closed(&window);
+        self.0.push(window);
+    }
+
+    pub(crate) fn focused(&mut self, window: &T) {
+        if self.0.contains(window) {
+            self.opened(window.clone());
+        }
+    }
+
+    pub(crate) fn closed(&mut self, window: &T) {
+        self.0.retain(|candidate| candidate != window);
+    }
+
+    pub(crate) fn target(&self) -> Option<&T> {
+        self.0.last()
     }
 }
 
@@ -336,7 +369,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
     }
 
     fn activate(&self, _ignoring_other_apps: bool) {
-        log::info!("activate is not implemented on Linux, ignoring the call")
+        self.inner.activate();
     }
 
     fn hide(&self) {
@@ -1266,6 +1299,30 @@ pub(super) fn compositor_gpu_hint_from_dev_t(dev: u64) -> Option<gpui_wgpu::Comp
 mod tests {
     use super::*;
     use gpui::{Point, px};
+
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    #[test]
+    fn activation_history_restores_the_most_recent_surviving_window() {
+        let mut history = ActivationHistory::default();
+        history.opened(1);
+        history.opened(2);
+        history.focused(&1);
+        history.focused(&99);
+        assert_eq!(
+            history.target(),
+            Some(&1),
+            "unregistered popup must not replace target"
+        );
+        history.closed(&1);
+        assert_eq!(history.target(), Some(&2));
+        history.opened(2);
+        history.closed(&2);
+        assert_eq!(
+            history.target(),
+            None,
+            "registration must not duplicate windows"
+        );
+    }
 
     #[cfg(any(feature = "wayland", feature = "x11"))]
     #[test]

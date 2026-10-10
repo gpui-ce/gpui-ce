@@ -936,6 +936,37 @@ impl WaylandWindow {
 }
 
 impl WaylandWindowStatePtr {
+    pub(crate) fn activate(&self, token: Option<&str>) -> bool {
+        let state = self.state.borrow();
+        if let Some(token) = token {
+            let Some(activation) = &state.globals.activation else {
+                return false;
+            };
+            if token.is_empty() {
+                return false;
+            }
+            activation.activate(token.to_owned(), &state.surface);
+            return true;
+        }
+
+        // Try to request an activation token. Even though the activation is likely going to be rejected,
+        // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
+        if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
+        {
+            state.client.set_pending_activation(state.surface.id());
+            let token = activation.get_activation_token(&state.globals.qh, ());
+            // The serial isn't exactly important here, since the activation is probably going to be rejected anyway.
+            let serial = state.client.get_serial(SerialKind::MousePress);
+            token.set_app_id(app_id);
+            token.set_serial(serial.as_raw(), &state.globals.seat);
+            token.set_surface(&state.surface);
+            token.commit();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn handle(&self) -> AnyWindowHandle {
         self.state.borrow().handle
     }
@@ -1916,34 +1947,7 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn activate(&self, token: Option<&str>) -> bool {
-        let state = self.borrow();
-        if let Some(token) = token {
-            let Some(activation) = &state.globals.activation else {
-                return false;
-            };
-            if token.is_empty() {
-                return false;
-            }
-            activation.activate(token.to_owned(), &state.surface);
-            return true;
-        }
-
-        // Try to request an activation token. Even though the activation is likely going to be rejected,
-        // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
-        if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
-        {
-            state.client.set_pending_activation(state.surface.id());
-            let token = activation.get_activation_token(&state.globals.qh, ());
-            // The serial isn't exactly important here, since the activation is probably going to be rejected anyway.
-            let serial = state.client.get_serial(SerialKind::MousePress);
-            token.set_app_id(app_id);
-            token.set_serial(serial.as_raw(), &state.globals.seat);
-            token.set_surface(&state.surface);
-            token.commit();
-            true
-        } else {
-            false
-        }
+        self.0.activate(token)
     }
 
     fn request_attention(&self) {}
