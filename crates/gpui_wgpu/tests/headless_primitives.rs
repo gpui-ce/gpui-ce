@@ -7,7 +7,8 @@ use gpui::{
     AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
     DevicePixels, Edges, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point, PolychromeSprite,
     Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene, ShaderBool,
-    Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient, solid_background,
+    Shadow, Size, Underline, angular_gradient, checkerboard, diamond_gradient, linear_color_stop,
+    linear_gradient, radial_gradient, solid_background,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
 use smallvec::smallvec;
@@ -89,6 +90,58 @@ fn tile(renderer: &WgpuHeadlessRenderer, key: AtlasKey, bytes: Vec<u8>) -> Atlas
         })
         .expect("atlas insert must succeed")
         .expect("atlas insert must produce a tile")
+}
+
+#[test]
+fn two_stop_gradient_geometries_render() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let from = linear_color_stop(gpui::black(), 0.0);
+    let to = linear_color_stop(gpui::white(), 1.0);
+    for (index, gradient) in [
+        linear_gradient(90.0, from, to),
+        radial_gradient(from, to),
+        angular_gradient(0.0, from, to),
+        diamond_gradient(0.0, from, to),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        scene.insert_primitive(Quad {
+            bounds: bounds(10.0 + index as f32 * 75.0, 10.0, 70.0, 70.0),
+            content_mask: full_mask(),
+            background: gradient.color_space(ColorSpace::Srgb),
+            ..Default::default()
+        });
+    }
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    // sRGB-interpolated colors are decoded before headless readback.
+    for (name, x, y, expected) in [
+        ("linear start", 10, 45, 0),
+        ("linear end", 79, 45, 250),
+        ("radial center", 120, 45, 0),
+        ("radial midpoint", 137, 45, 55),
+        ("radial diagonal", 128, 53, 25),
+        ("angular start", 195, 11, 0),
+        ("angular seam end", 194, 11, 253),
+        ("angular right", 228, 45, 13),
+        ("angular bottom", 195, 78, 54),
+        ("angular left", 161, 45, 133),
+        ("diamond center", 270, 45, 1),
+        ("diamond diagonal midpoint", 278, 53, 51),
+        ("diamond diagonal end", 287, 62, 255),
+    ] {
+        let pixel = image.get_pixel(x, y).0;
+        assert!(
+            pixel[..3]
+                .iter()
+                .all(|&channel| (channel as i32 - expected).abs() <= 8),
+            "{name} at ({x},{y}): got {pixel:?}, expected gray {expected}"
+        );
+    }
 }
 
 #[test]
