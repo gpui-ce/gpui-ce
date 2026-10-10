@@ -25,7 +25,7 @@ extend-ignore-re = [
   # OpenType width axis references and the Noto Sans variable font filename.
   "`wdth`",
   "'wdth'",
-  'NotoSans\[wdth,wght\]\.subset\.ttf',
+  'NotoSans\[wdth[,-]wght\]\.subset\.ttf',
 ]
 check-filename = true
 

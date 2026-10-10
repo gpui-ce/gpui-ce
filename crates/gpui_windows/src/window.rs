@@ -1150,7 +1150,13 @@ impl PlatformWindow for WindowsWindow {
 
     #[cfg(feature = "wgpu")]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
-        let (device, queue) = self.state.renderer.borrow().gpu_context();
+        let renderer = self.state.renderer.borrow();
+        // Between recovery attempts the renderer's resources are torn down,
+        // so there is no device to hand out until a draw recovers it.
+        if renderer.device_lost() {
+            return None;
+        }
+        let (device, queue) = renderer.gpu_context();
         Some(Box::new((device, queue)))
     }
 

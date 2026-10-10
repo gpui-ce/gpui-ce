@@ -41,9 +41,7 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
     let active_custom_textures = surfaces
         .iter()
         .filter_map(|surface| match &surface.source {
-            gpui::SurfaceSource::Texture { texture, .. } => {
-                texture.downcast_ref::<wgpu::Texture>()
-            }
+            gpui::SurfaceSource::Texture { texture, .. } => texture.downcast_ref::<wgpu::Texture>(),
             _ => None,
         })
         .collect::<smallvec::SmallVec<[&wgpu::Texture; 4]>>();
@@ -77,10 +75,13 @@ pub(super) fn draw_surfaces(
                 log::error!("surface source is not a WGPU texture");
                 return Err(frame::DrawError::ExternalSurface);
             };
-            let binding = cache.custom_textures.entry(texture.clone()).or_insert_with(|| {
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                SurfaceBinding::new(renderer, view.clone(), view)
-            });
+            let binding = cache
+                .custom_textures
+                .entry(texture.clone())
+                .or_insert_with(|| {
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    SurfaceBinding::new(renderer, view.clone(), view)
+                });
             renderer.draw_surface_binding(
                 surface,
                 SurfaceColorFormat::Rgba,
@@ -344,7 +345,7 @@ mod tests {
 mod custom_gpu_tests {
     use std::sync::Arc;
 
-    use gpui::{Bounds, Point, Scene, ScaledPixels, Size, SurfaceSource};
+    use gpui::{Bounds, Point, ScaledPixels, Scene, Size, SurfaceSource};
 
     use super::*;
     use crate::{WgpuContext, WgpuRenderer};
@@ -413,14 +414,20 @@ mod custom_gpu_tests {
         let mut scene = Scene::default();
         scene.insert_primitive(gpui::Quad {
             bounds: full.clone(),
-            content_mask: gpui::ContentMask { bounds: full.clone(), ..Default::default() },
+            content_mask: gpui::ContentMask {
+                bounds: full.clone(),
+                ..Default::default()
+            },
             background: gpui::solid_background(gpui::white()),
             ..Default::default()
         });
         scene.insert_primitive(gpui::PaintSurface {
             order: 1,
             bounds: bounds(2.0, 2.0),
-            content_mask: gpui::ContentMask { bounds: full.clone(), ..Default::default() },
+            content_mask: gpui::ContentMask {
+                bounds: full.clone(),
+                ..Default::default()
+            },
             source: SurfaceSource::Texture {
                 texture,
                 size: gpui::size(gpui::DevicePixels(2), gpui::DevicePixels(2)),
