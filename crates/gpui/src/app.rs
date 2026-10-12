@@ -3528,10 +3528,16 @@ impl AppContextGlobal for App {
         self.iter_globals(TypeId::of::<T>())
     }
 
-    fn insert_global_by_id<T: 'static>(&mut self, id: impl AnyHash, entity: Entity<T>) {
+    fn insert_global_by_id<T: 'static>(
+        &mut self,
+        id: impl AnyHash,
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T> {
+        let entity = entity.into().build(self);
         self.global_entry_mut(GenericId::new(id))
             .or_default()
-            .push(entity.into_any());
+            .push(entity.clone().into_any());
+        entity
     }
 
     fn extract_globals(
