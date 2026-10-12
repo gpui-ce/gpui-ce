@@ -1,7 +1,7 @@
 //! Module containing various [`AppContext`] subdomain traits for common accessors of [`App`].
 use crate::{
-    AnyEntity, AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityId, EventEmitter,
-    Global, GpuiBorrow, Reservation, Result, Window, WindowHandle,
+    AnyEntity, AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityBuilder, EntityId,
+    EventEmitter, Global, GpuiBorrow, Reservation, Result, Window, WindowHandle,
     app_borrow::{BorrowApp, BorrowAppMut, UpgradeApp},
 };
 use scheduler::Task;
@@ -127,8 +127,8 @@ pub trait AppContextGlobal {
     fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl collections::any::AnyHash,
-        entity: Entity<T>,
-    );
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T>;
 
     /// Removes the entity from global storage. It will be dropped after there are no other entities holding a reference to it..
     fn remove_global_by_id(
@@ -191,8 +191,11 @@ pub trait AppContextGlobal {
     }
 
     /// Inserts a global stored by the type id of `T`.
-    fn insert_global_by_type<T: 'static>(&mut self, entity: Entity<T>) {
-        self.insert_global_by_id(TypeId::of::<T>(), entity);
+    fn insert_global_by_type<T: 'static>(
+        &mut self,
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T> {
+        self.insert_global_by_id(TypeId::of::<T>(), entity)
     }
 
     /// Removes a specific global entity from the bin keyed by the type id of `T`.
@@ -392,10 +395,10 @@ where
     fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl collections::any::AnyHash,
-        entity: Entity<T>,
-    ) {
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T> {
         let mut app = self.upgrade_mut();
-        app.borrow_mut().insert_global_by_id(id, entity);
+        app.borrow_mut().insert_global_by_id(id, entity)
     }
 
     fn remove_global_by_id(
