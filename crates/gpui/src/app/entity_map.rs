@@ -255,6 +255,38 @@ impl<T> Drop for Lease<T> {
 #[derive(Deref, DerefMut)]
 pub(crate) struct Slot<T>(Entity<T>);
 
+/// Anonymizing enum which accepts a prebuilt/existing [`Entity`] or the context-parameterized constructor for one.
+pub enum EntityBuilder<T> {
+    /// An entity that has already been created.
+    Existing(Entity<T>),
+    /// The context-constructor to make an entity when the builder is collapsed.
+    Constructor(Box<dyn FnOnce(&mut Context<'_, T>) -> T>),
+}
+impl<T> From<Entity<T>> for EntityBuilder<T> {
+    fn from(value: Entity<T>) -> Self {
+        Self::Existing(value)
+    }
+}
+impl<T: Default + 'static> Default for EntityBuilder<T> {
+    fn default() -> Self {
+        Self::new(|_| T::default())
+    }
+}
+impl<T: 'static> EntityBuilder<T> {
+    /// Boxes the provided constructor for execution sometime later.
+    pub fn new(builder: impl FnOnce(&mut Context<'_, T>) -> T + 'static) -> Self {
+        Self::Constructor(Box::new(builder))
+    }
+
+    /// Collapses the builder into the existing entity or creating a new one.
+    pub fn build(self, cx: &mut App) -> Entity<T> {
+        match self {
+            Self::Existing(entity) => entity,
+            Self::Constructor(builder) => cx.new(builder),
+        }
+    }
+}
+
 /// A dynamically typed reference to a entity, which can be downcast into a `Entity<T>`.
 pub struct AnyEntity {
     pub(crate) entity_id: EntityId,

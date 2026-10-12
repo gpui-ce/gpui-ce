@@ -3030,11 +3030,13 @@ impl AppContextGlobal for App {
     fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl collections::any::AnyHash,
-        entity: Entity<T>,
-    ) {
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T> {
+        let entity = entity.into().build(self);
         self.global_entry_mut(GlobalId::new(id))
             .or_default()
-            .push(entity.into_any());
+            .push(entity.clone().into_any());
+        entity
     }
 
     fn extract_globals(
