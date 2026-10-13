@@ -1358,7 +1358,7 @@ mod raster_contract_tests {
 
     #[test]
     fn prepared_style_and_format_drive_atlas_keys_without_caching_pixels() {
-        let backend = Arc::new(SequencedRasterizer::default());
+        let backend = Arc::new(ScriptedRasterizer::default());
         let text_system = TextSystem::new(backend.clone());
         let style_a = text_system.prepare_raster_style(
             FontId(7),
@@ -1417,9 +1417,24 @@ mod raster_contract_tests {
 
     #[test]
     fn atlas_entries_own_their_raster_metadata_and_retry_failures() {
-        let backend = Arc::new(SequencedRasterizer {
-            attempts: AtomicUsize::new(0),
-            fail_until_valid: true,
+        let mut malformed = raster(
+            Point::default(),
+            size(DevicePixels(1), DevicePixels(1)),
+            RasterizedGlyphFormat::AlphaMask,
+        );
+        malformed.pixels.clear();
+
+        let backend = Arc::new(ScriptedRasterizer {
+            outcomes: vec![
+                Err("transient native failure"),
+                Ok(malformed),
+                Ok(raster(
+                    Point::default(),
+                    size(DevicePixels(1), DevicePixels(1)),
+                    RasterizedGlyphFormat::AlphaMask,
+                )),
+            ],
+            ..Default::default()
         });
         let text_system = TextSystem::new(backend.clone());
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
@@ -1460,7 +1475,26 @@ mod raster_contract_tests {
 
     #[test]
     fn separate_atlases_keep_the_metadata_for_their_own_pixels() {
-        let backend = Arc::new(ChangingRasterizer::default());
+        let backend = Arc::new(ScriptedRasterizer {
+            outcomes: vec![
+                Ok(raster(
+                    point(DevicePixels(-2), DevicePixels(-7)),
+                    size(DevicePixels(2), DevicePixels(3)),
+                    RasterizedGlyphFormat::AlphaMask,
+                )),
+                Ok(raster(
+                    point(DevicePixels(1), DevicePixels(-9)),
+                    size(DevicePixels(4), DevicePixels(5)),
+                    RasterizedGlyphFormat::BgraColor,
+                )),
+                Ok(raster(
+                    point(DevicePixels(3), DevicePixels(-8)),
+                    size(DevicePixels(3), DevicePixels(4)),
+                    RasterizedGlyphFormat::BgraColor,
+                )),
+            ],
+            ..Default::default()
+        });
         let text_system = TextSystem::new(backend.clone());
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Color));
         let first_atlas = TestAtlas::new();
@@ -1545,12 +1579,32 @@ mod raster_contract_tests {
         assert_eq!(builds, 2);
     }
 
-    #[derive(Default)]
-    struct ChangingRasterizer {
-        attempts: AtomicUsize,
+    fn raster(
+        origin: Point<DevicePixels>,
+        size: Size<DevicePixels>,
+        format: RasterizedGlyphFormat,
+    ) -> RasterizedGlyph {
+        let bytes_per_pixel = if format == RasterizedGlyphFormat::AlphaMask {
+            1
+        } else {
+            4
+        };
+
+        RasterizedGlyph {
+            bounds: Bounds { origin, size },
+            size,
+            format,
+            pixels: vec![0x7f; size.width.0 as usize * size.height.0 as usize * bytes_per_pixel],
+        }
     }
 
-    impl PlatformTextSystem for ChangingRasterizer {
+    #[derive(Default)]
+    struct ScriptedRasterizer {
+        attempts: AtomicUsize,
+        outcomes: Vec<Result<RasterizedGlyph, &'static str>>,
+    }
+
+    impl PlatformTextSystem for ScriptedRasterizer {
         fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
             Ok(())
         }
@@ -1581,117 +1635,16 @@ mod raster_contract_tests {
 
         fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
-            let (origin, size, format) = match attempt {
-                0 => (
-                    point(DevicePixels(-2), DevicePixels(-7)),
-                    size(DevicePixels(2), DevicePixels(3)),
+            let outcome = self.outcomes.get(attempt).or_else(|| self.outcomes.last());
+
+            match outcome {
+                Some(Ok(raster)) => Ok(raster.clone()),
+                Some(Err(message)) => Err(anyhow!("{message}")),
+                None => Ok(raster(
+                    Point::default(),
+                    size(DevicePixels(1), DevicePixels(1)),
                     RasterizedGlyphFormat::AlphaMask,
-                ),
-                1 => (
-                    point(DevicePixels(1), DevicePixels(-9)),
-                    size(DevicePixels(4), DevicePixels(5)),
-                    RasterizedGlyphFormat::BgraColor,
-                ),
-                _ => (
-                    point(DevicePixels(3), DevicePixels(-8)),
-                    size(DevicePixels(3), DevicePixels(4)),
-                    RasterizedGlyphFormat::BgraColor,
-                ),
-            };
-            let bytes_per_pixel = if format == RasterizedGlyphFormat::AlphaMask {
-                1
-            } else {
-                4
-            };
-
-            Ok(RasterizedGlyph {
-                bounds: Bounds { origin, size },
-                size,
-                format,
-                pixels: vec![
-                    0x7f;
-                    size.width.0 as usize * size.height.0 as usize * bytes_per_pixel
-                ],
-            })
-        }
-
-        fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-            PlatformTextSystem::layout_text(&TestTextSystem, request)
-        }
-
-        fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-            PlatformTextSystem::layout_inline(&TestTextSystem, request)
-        }
-    }
-
-    #[derive(Default)]
-    struct SequencedRasterizer {
-        attempts: AtomicUsize,
-        fail_until_valid: bool,
-    }
-
-    impl PlatformTextSystem for SequencedRasterizer {
-        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-            Ok(())
-        }
-
-        fn all_font_names(&self) -> Vec<String> {
-            Vec::new()
-        }
-
-        fn font_id(&self, descriptor: &Font) -> Result<FontId> {
-            PlatformTextSystem::font_id(&TestTextSystem, descriptor)
-        }
-
-        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-            PlatformTextSystem::font_metrics(&TestTextSystem, font_id)
-        }
-
-        fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-            PlatformTextSystem::typographic_bounds(&TestTextSystem, font_id, glyph_id)
-        }
-
-        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-            PlatformTextSystem::advance(&TestTextSystem, font_id, glyph_id)
-        }
-
-        fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
-            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, character)
-        }
-
-        fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
-            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
-            if !self.fail_until_valid {
-                return Ok(RasterizedGlyph {
-                    bounds: Bounds {
-                        origin: Point::default(),
-                        size: size(DevicePixels(1), DevicePixels(1)),
-                    },
-                    size: size(DevicePixels(1), DevicePixels(1)),
-                    format: RasterizedGlyphFormat::AlphaMask,
-                    pixels: vec![0x7f],
-                });
-            }
-            match attempt {
-                0 => Err(anyhow!("transient native failure")),
-                1 => Ok(RasterizedGlyph {
-                    bounds: Bounds {
-                        origin: Point::default(),
-                        size: size(DevicePixels(1), DevicePixels(1)),
-                    },
-                    size: size(DevicePixels(1), DevicePixels(1)),
-                    format: RasterizedGlyphFormat::AlphaMask,
-                    pixels: Vec::new(),
-                }),
-                _ => Ok(RasterizedGlyph {
-                    bounds: Bounds {
-                        origin: Point::default(),
-                        size: size(DevicePixels(1), DevicePixels(1)),
-                    },
-                    size: size(DevicePixels(1), DevicePixels(1)),
-                    format: RasterizedGlyphFormat::AlphaMask,
-                    pixels: vec![0x7f],
-                }),
+                )),
             }
         }
 
