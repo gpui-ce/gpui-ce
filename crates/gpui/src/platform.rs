@@ -1041,7 +1041,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         target_family = "wasm",
         target_os = "linux",
         target_os = "freebsd",
-        target_os = "macos"
+        target_os = "macos",
+        target_os = "windows"
     ))]
     fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
         None

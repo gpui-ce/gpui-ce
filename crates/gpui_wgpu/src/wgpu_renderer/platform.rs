@@ -103,6 +103,41 @@ impl WgpuRenderer {
         )
     }
 
+    /// Creates a renderer presenting to a native window identified only by its
+    /// raw window handle, for platforms whose window types do not implement
+    /// `HasWindowHandle` (the Win32 `HWND` path). Windows shares one device
+    /// through `gpu_context` like [`Self::new`]; DXGI requires the instance to
+    /// carry a (stateless) Windows display handle, so this path synthesizes
+    /// one instead of taking it from the window.
+    #[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
+    pub fn new_for_raw_window_handle(
+        gpu_context: GpuContext,
+        raw_window_handle: raw_window_handle::RawWindowHandle,
+        config: WgpuSurfaceConfig,
+        extra_requirements: Option<WgpuDeviceRequirements>,
+    ) -> anyhow::Result<Self> {
+        Self::new_for_target(
+            gpu_context,
+            &|| Some(Box::new(WindowsDisplayHandleSource) as _),
+            NativeSurfaceTarget::Window(raw_window_handle),
+            config,
+            None,
+            extra_requirements,
+        )
+    }
+
+    /// Recovers a renderer made by [`Self::new_for_raw_window_handle`].
+    #[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
+    pub fn recover_raw_window_handle(
+        &mut self,
+        raw_window_handle: raw_window_handle::RawWindowHandle,
+    ) -> anyhow::Result<()> {
+        self.recover_target(
+            &|| Some(Box::new(WindowsDisplayHandleSource) as _),
+            NativeSurfaceTarget::Window(raw_window_handle),
+        )
+    }
+
     #[cfg(target_family = "wasm")]
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn new_from_surface(
@@ -420,6 +455,26 @@ fn initialize_context_and_surface(
         )?;
         Ok((context, surface))
     })
+}
+
+/// A display handle for Windows, where DXGI requires the wgpu instance to
+/// carry one even though `WindowsDisplayHandle` itself carries no state.
+#[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
+#[derive(Debug)]
+struct WindowsDisplayHandleSource;
+
+#[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
+impl raw_window_handle::HasDisplayHandle for WindowsDisplayHandleSource {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        let raw = raw_window_handle::RawDisplayHandle::Windows(
+            raw_window_handle::WindowsDisplayHandle::new(),
+        );
+        // SAFETY: the Windows display handle carries no state and is always
+        // valid.
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]

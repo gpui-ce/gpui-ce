@@ -16,6 +16,7 @@ use gpui_util::{ResultExt, get_powershell, new_std_command};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
+#[cfg(not(feature = "wgpu"))]
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::{
     UI::ViewManagement::UISettings,
@@ -40,7 +41,10 @@ pub struct WindowsPlatform {
     icon: HICON,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
+    #[cfg(not(feature = "wgpu"))]
     text_system: Arc<DirectWriteTextSystem>,
+    #[cfg(feature = "wgpu")]
+    text_system: Arc<dyn gpui::PlatformTextSystem>,
     drop_target_helper: Option<IDropTargetHelper>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
@@ -74,6 +78,10 @@ pub(crate) struct WindowsPlatformState {
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     directx_devices: RefCell<Option<DirectXDevices>>,
+    /// The WGPU renderer context shared by every window when the `wgpu`
+    /// feature draws windows with the WGPU renderer.
+    #[cfg(feature = "wgpu")]
+    pub(crate) renderer_context: RendererContext,
 }
 
 #[derive(Default)]
@@ -101,6 +109,8 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
             directx_devices: RefCell::new(directx_devices),
+            #[cfg(feature = "wgpu")]
+            renderer_context: RendererContext::default(),
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -111,20 +121,34 @@ impl WindowsPlatform {
         unsafe {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
+        // The WGPU renderer owns its device and notices losing it, so with the
+        // `wgpu` feature no DirectX devices are created and the text system
+        // uses the DX11-free swash rasterizer.
+        #[cfg(feature = "wgpu")]
+        let (directx_devices, text_system) = {
+            let text_system = Arc::new(
+                gpui_parley::ParleyTextSystem::new_with_rasterizer(
+                    gpui_parley::SystemFonts::Load,
+                    "Segoe UI",
+                    gpui_parley::SwashGlyphRasterizer::default(),
+                )
+                .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]),
+            ) as Arc<dyn PlatformTextSystem>;
+            (None, text_system)
+        };
+        #[cfg(not(feature = "wgpu"))]
         let (directx_devices, text_system) = if !headless {
             let devices = DirectXDevices::new().context("Creating DirectX devices")?;
             let text_system = Arc::new(
                 DirectWriteTextSystem::new(&devices)
                     .context("Error creating DirectWriteTextSystem")?,
             );
-
             (Some(devices), text_system)
         } else {
             let text_system = Arc::new(
                 DirectWriteTextSystem::new_headless()
                     .context("Error creating headless DirectWriteTextSystem")?,
             );
-
             (None, text_system)
         };
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
@@ -238,7 +262,10 @@ impl WindowsPlatform {
             main_receiver: self.inner.main_receiver.clone(),
             platform_window_handle: self.handle,
             disable_direct_composition: self.disable_direct_composition,
+            #[cfg(not(feature = "wgpu"))]
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
+            #[cfg(feature = "wgpu")]
+            renderer_context: self.inner.state.renderer_context.clone(),
             invalidate_devices: self.invalidate_devices.clone(),
             draw_coordinator: self.inner.state.draw_coordinator.clone(),
         }
@@ -306,15 +333,19 @@ impl WindowsPlatform {
     }
 
     fn begin_vsync_thread(&self) {
-        let Some(directx_devices) = self.inner.state.directx_devices.borrow().clone() else {
-            return;
-        };
-        let mut directx_device = directx_devices;
+        // Without DirectX devices (the WGPU renderer), the thread still paces
+        // frames but has no device to watch.
+        #[cfg(not(feature = "wgpu"))]
+        let mut directx_devices = self.inner.state.directx_devices.borrow().clone();
+        #[cfg(not(feature = "wgpu"))]
+        let text_system = Arc::downgrade(&self.text_system);
+        #[cfg(not(feature = "wgpu"))]
+        let invalidate_devices = self.invalidate_devices.clone();
+        #[cfg(not(feature = "wgpu"))]
         let platform_window: SafeHwnd = self.handle.into();
+        #[cfg(not(feature = "wgpu"))]
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
-        let text_system = Arc::downgrade(&self.text_system);
-        let invalidate_devices = self.invalidate_devices.clone();
 
         std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
@@ -322,11 +353,13 @@ impl WindowsPlatform {
                 let vsync_provider = VSyncProvider::new();
                 loop {
                     vsync_provider.wait_for_vsync();
-                    if check_device_lost(&directx_device.device)
-                        || invalidate_devices.fetch_and(false, Ordering::Acquire)
+                    #[cfg(not(feature = "wgpu"))]
+                    if let Some(directx_device) = directx_devices.as_mut()
+                        && (check_device_lost(&directx_device.device)
+                            || invalidate_devices.fetch_and(false, Ordering::Acquire))
                     {
                         if let Err(err) = handle_gpu_device_lost(
-                            &mut directx_device,
+                            directx_device,
                             platform_window.as_raw(),
                             validation_number,
                             &all_windows,
@@ -578,6 +611,15 @@ impl Platform for WindowsPlatform {
         self.raw_window_handles.write().push(handle.into());
 
         Ok(Box::new(window))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
+        if let Ok(reqs) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+            self.inner.state.renderer_context.set_requirements(*reqs);
+        } else {
+            log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
+        }
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -1198,7 +1240,10 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) disable_direct_composition: bool,
+    #[cfg(not(feature = "wgpu"))]
     pub(crate) directx_devices: DirectXDevices,
+    #[cfg(feature = "wgpu")]
+    pub(crate) renderer_context: crate::wgpu_renderer::Context,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
     pub(crate) invalidate_devices: Arc<AtomicBool>,
@@ -1417,6 +1462,7 @@ fn should_auto_hide_scrollbars() -> Result<bool> {
     Ok(ui_settings.AutoHideScrollBars()?)
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn check_device_lost(device: &ID3D11Device) -> bool {
     let device_state = unsafe { device.GetDeviceRemovedReason() };
     match device_state {
@@ -1428,6 +1474,7 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
     }
 }
 
+#[cfg(not(feature = "wgpu"))]
 fn handle_gpu_device_lost(
     directx_devices: &mut DirectXDevices,
     platform_window: HWND,
