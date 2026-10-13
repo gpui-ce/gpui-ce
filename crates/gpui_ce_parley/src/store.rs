@@ -522,8 +522,8 @@ fn verified_design_variations(
     shaping_variations: &[FontVariation],
 ) -> Result<Vec<FontVariation>> {
     let axes = font.axes();
-    let axis_records = axes.iter().collect::<Vec<_>>();
-    let mut variations = axis_records
+
+    let mut variations = axes
         .iter()
         .map(|axis| FontVariation {
             tag: axis.tag(),
@@ -531,20 +531,18 @@ fn verified_design_variations(
         })
         .collect::<Vec<_>>();
 
-    let mut apply = |tag: Tag, value: f32| {
-        let Some(axis) = axis_records.iter().find(|axis| axis.tag() == tag) else {
-            return;
+    let settings = synthesis.variation_settings().iter().copied().chain(
+        shaping_variations
+            .iter()
+            .map(|variation| (variation.tag, variation.value)),
+    );
+
+    for (tag, value) in settings {
+        let Some(axis) = axes.get_by_tag(tag) else {
+            continue;
         };
 
         variations[axis.index()].value = value.clamp(axis.min_value(), axis.max_value());
-    };
-
-    for &(tag, value) in synthesis.variation_settings() {
-        apply(tag, value);
-    }
-
-    for variation in shaping_variations {
-        apply(variation.tag, variation.value);
     }
 
     let location = axes.location(
@@ -552,6 +550,7 @@ fn verified_design_variations(
             .iter()
             .map(|variation| (variation.tag, variation.value)),
     );
+
     ensure!(
         location.coords() == normalized_coords,
         "native font coordinates differ from the shaped instance: design {variations:?}, native {:?}, shaped {normalized_coords:?}",
