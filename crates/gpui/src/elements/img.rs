@@ -493,7 +493,7 @@ impl Element for Img {
                         .get_bounds(bounds, data.size(layout_state.frame_index));
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                     window
-                        .paint_image_with_corner_smoothing(
+                        .paint_image(
                             bounds,
                             new_bounds,
                             corner_radii,

@@ -1127,6 +1127,7 @@ fn generate_corner_smoothing_methods(visibility: Visibility) -> Vec<TokenStream2
                 #[doc = #doc_string]
                 #visibility fn #method_name(mut self) -> Self {
                     self.style().corner_smoothing = Some(#amount_tokens);
+
                     self
                 }
             }

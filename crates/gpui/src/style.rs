@@ -1020,20 +1020,16 @@ impl Style {
 
         let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
 
-        window.paint_drop_shadows_with_corner_smoothing(
-            bounds,
-            corner_radii,
-            corner_smoothing,
-            &self.box_shadow,
-        );
+        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
+
         if let Some(ring) = self.ring.outer_quad(bounds, corner_radii, current_color) {
-            window.paint_quad_with_corner_smoothing(ring, corner_smoothing);
+            window.paint_quad(ring.corner_smoothing(corner_smoothing));
         }
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
         if !self.backdrop_filter.is_empty() {
-            window.paint_backdrop_filter_with_corner_smoothing(
+            window.paint_backdrop_filter(
                 bounds,
                 corner_radii,
                 corner_smoothing,
@@ -1048,7 +1044,7 @@ impl Style {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
-                window.paint_quad_with_corner_smoothing(
+                window.paint_quad(
                     quad(
                         bounds,
                         corner_radii,
@@ -1056,32 +1052,27 @@ impl Style {
                         Edges::default(),
                         background_color.opacity(0.),
                         self.border_style,
-                    ),
-                    corner_smoothing,
+                    )
+                    .corner_smoothing(corner_smoothing),
                 );
             }
 
             if let Some(ring) = self.inset_ring.inset_shadow(current_color) {
-                window.paint_inset_shadows_with_corner_smoothing(
+                window.paint_inset_shadows(
                     bounds,
                     corner_radii,
                     corner_smoothing,
                     std::slice::from_ref(&ring),
                 );
             }
-            window.paint_inset_shadows_with_corner_smoothing(
-                bounds,
-                corner_radii,
-                corner_smoothing,
-                &self.box_shadow,
-            );
+            window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
             continuation(window, cx);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let border_color = self.border_color.unwrap_or_default();
-                window.paint_quad_with_corner_smoothing(
+                window.paint_quad(
                     quad(
                         bounds,
                         corner_radii,
@@ -1090,9 +1081,9 @@ impl Style {
                         border_color,
                         self.border_style,
                     )
+                    .corner_smoothing(corner_smoothing)
                     .border_dashed_length(self.border_dashed_length)
                     .border_dashed_gap(self.border_dashed_gap),
-                    corner_smoothing,
                 );
             }
         };
@@ -1100,7 +1091,7 @@ impl Style {
         if self.filter.is_empty() {
             paint_box(window, cx);
         } else {
-            window.with_filter_layer_with_corner_smoothing(
+            window.with_filter_layer(
                 bounds,
                 corner_radii,
                 corner_smoothing,
