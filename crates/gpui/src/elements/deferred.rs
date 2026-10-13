@@ -18,9 +18,17 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 /// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
 /// should be constrained to limited circumstances and will stop processing after some depth
 /// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
+#[derive(derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct Deferred {
     child: Option<AnyElement>,
+    /// Sets a priority for the element. A higher priority means painting the element
+    /// on top of deferred draws with a lower priority, closer to the viewer.
+    #[setters(generate, into)]
     priority: DeferredPriority,
+    /// When a content mask is provided, the deferred element will be clipped to that region during
+    /// both prepaint and paint.
+    #[setters(generate, strip_option)]
     content_mask: Option<ContentMask<Pixels>>,
 }
 
@@ -84,25 +92,11 @@ impl IntoElement for Deferred {
 }
 
 impl Deferred {
-    /// Sets a priority for the element. A higher priority conceptually means painting the element
-    /// on top of deferred draws with a lower priority (i.e. closer to the viewer).
-    pub fn priority(mut self, priority: impl Into<DeferredPriority>) -> Self {
-        self.priority = priority.into();
-        self
-    }
-
     /// Configures the priority of the deferred element to be 1 greater than the previous
     /// deferred element (when this element is caused by another deferred element, even if indirectly).
     /// Defaults to 1 when this is a deferred element caused by non-deferred elements.
     pub fn priority_auto(mut self) -> Self {
         self.priority = DeferredPriority::Auto;
-        self
-    }
-
-    /// When a content mask is provided, the deferred element will be clipped to that region during
-    /// both prepaint and paint.
-    pub fn content_mask(mut self, mask: ContentMask<Pixels>) -> Self {
-        self.content_mask = Some(mask);
         self
     }
 }

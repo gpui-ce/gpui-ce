@@ -13,6 +13,7 @@ workspace = true
 ignored = ["gpui"]
 
 [dependencies]
+derive_setters.workspace = true
 gpui.workspace = true
 unicode-segmentation.workspace = true
 palette.workspace = true

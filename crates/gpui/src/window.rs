@@ -7974,19 +7974,24 @@ impl From<[u8; 20]> for ElementId {
 
 /// A rectangle to be rendered in the window at the given position and size.
 /// Passed as an argument [`Window::paint_quad`].
-#[derive(Clone)]
+#[derive(Clone, derive_setters::Setters)]
+#[setters(into, generate = false)]
 pub struct PaintQuad {
     /// The bounds of the quad within the window.
     pub bounds: Bounds<Pixels>,
     /// The radii of the quad's corners.
+    #[setters(generate)]
     pub corner_radii: Corners<Pixels>,
     /// Corner smoothing, from circular corners at `0.0` to maximum smoothing at `1.0`.
     pub corner_smoothing: f32,
     /// The background color of the quad.
+    #[setters(generate)]
     pub background: Background,
     /// The widths of the quad's borders.
+    #[setters(generate)]
     pub border_widths: Edges<Pixels>,
     /// The background painted into the quad's borders.
+    #[setters(generate)]
     pub border_color: Background,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
@@ -7997,42 +8002,10 @@ pub struct PaintQuad {
 }
 
 impl PaintQuad {
-    /// Sets the corner radii of the quad.
-    pub fn corner_radii(self, corner_radii: impl Into<Corners<Pixels>>) -> Self {
-        PaintQuad {
-            corner_radii: corner_radii.into(),
-            ..self
-        }
-    }
-
     /// Sets the corner smoothing, clamped to the range `0.0..=1.0`.
     pub fn corner_smoothing(self, amount: f32) -> Self {
         PaintQuad {
             corner_smoothing: amount.clamp(0.0, 1.0),
-            ..self
-        }
-    }
-
-    /// Sets the border widths of the quad.
-    pub fn border_widths(self, border_widths: impl Into<Edges<Pixels>>) -> Self {
-        PaintQuad {
-            border_widths: border_widths.into(),
-            ..self
-        }
-    }
-
-    /// Sets the background painted into the quad's borders.
-    pub fn border_color(self, border_color: impl Into<Background>) -> Self {
-        PaintQuad {
-            border_color: border_color.into(),
-            ..self
-        }
-    }
-
-    /// Sets the background color of the quad.
-    pub fn background(self, background: impl Into<Background>) -> Self {
-        PaintQuad {
-            background: background.into(),
             ..self
         }
     }

@@ -56,18 +56,39 @@ pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
 }
 
 /// An input field which users can type text into.
+#[derive(derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct EditableTextElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
+    /// Configures whether the field supports multiple lines of text.
+    /// Disabling this prevents actions like `enter` and navigating up and down.
+    ///
+    /// Inputs containing newlines, such as pasted text, are not automatically sanitized.
+    /// This is a limitation of the current state of implementation and requires further iteration.
+    #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
+    /// Assigns the text that should be displayed when storage of the element is empty.
+    #[setters(generate, strip_option, into)]
     placeholder: Option<SharedString>,
+    /// Configures whether the element is enabled and can accept input.
+    #[setters(generate)]
     accepts_input: bool,
     colors: EditableTextColors,
+    /// Sets the blinking interval of the caret.
+    #[setters(generate, strip_option)]
     caret_blink_interval: Option<Duration>,
+    /// Sets the width of the caret / text-cursor.
+    #[setters(generate, rename = "caret_w", into)]
     caret_width: Pixels,
+    /// Sets the height of the caret / text-cursor.
+    ///
+    /// Relative lengths are resolved against the current line height. The default is
+    /// `relative(1.)`, which makes the caret as tall as the line.
+    #[setters(generate, rename = "caret_h", into)]
     caret_height: DefiniteLength,
 }
 
@@ -110,34 +131,6 @@ impl EditableTextElement {
         self
     }
 
-    /// Configures whether the field supports multiple lines of text.
-    /// Disabling this prevents actions like `enter` and navigating up and down.
-    ///
-    /// It doesnt not automatically sanitize inputs from containing newlines (e.g. on paste).
-    /// This is a limitation of the current state of implementation and requires further iteration.
-    pub fn multiline(mut self, enabled: bool) -> Self {
-        self.supports_multiline = enabled;
-        self
-    }
-
-    /// Assigns the text that should be displayed when storage of the element is empty.
-    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
-        self.placeholder = Some(text.into());
-        self
-    }
-
-    /// Configures whether the element can accept input (effectively means "is the element currently enabled").
-    pub fn accepts_input(mut self, enabled: bool) -> Self {
-        self.accepts_input = enabled;
-        self
-    }
-
-    /// Sets the blinking interval of the caret.
-    pub fn caret_blink_interval(mut self, duration: Duration) -> Self {
-        self.caret_blink_interval = Some(duration);
-        self
-    }
-
     /// Sets the blinking interval of the caret to 500ms
     pub fn caret_blink_interval_500ms(self) -> Self {
         self.caret_blink_interval(BLINK_INTERVAL_500MS)
@@ -148,21 +141,6 @@ impl EditableTextElement {
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn placeholder_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         self.colors.placeholder = color.into_color();
-        self
-    }
-
-    /// Sets the width of the caret / text-cursor.
-    pub fn caret_w(mut self, width: impl Into<Pixels>) -> Self {
-        self.caret_width = width.into();
-        self
-    }
-
-    /// Sets the height of the caret / text-cursor.
-    ///
-    /// Relative lengths are resolved against the current line height. The default is
-    /// `relative(1.)`, which makes the caret as tall as the line.
-    pub fn caret_h(mut self, height: impl Into<DefiniteLength>) -> Self {
-        self.caret_height = height.into();
         self
     }
 

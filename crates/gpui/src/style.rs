@@ -500,17 +500,21 @@ pub enum UnicodeBidi {
 }
 
 /// The possible values of the box-shadow property
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct BoxShadow {
     /// The shadow color or gradient.
     pub color: Background,
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
     /// How much should the shadow be blurred?
+    #[setters(generate)]
     pub blur_radius: Pixels,
     /// How much should the shadow spread?
+    #[setters(generate)]
     pub spread_radius: Pixels,
     /// Whether this is an inset shadow (drawn inside the element's bounds).
+    #[setters(generate, bool)]
     pub inset: bool,
 }
 
@@ -526,24 +530,6 @@ impl BoxShadow {
             spread_radius: px(0.),
             inset: false,
         }
-    }
-
-    /// Sets the shadow blur radius.
-    pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
-        self.blur_radius = blur_radius;
-        self
-    }
-
-    /// Sets the shadow spread radius.
-    pub fn spread_radius(mut self, spread_radius: Pixels) -> Self {
-        self.spread_radius = spread_radius;
-        self
-    }
-
-    /// Marks the shadow as inset (drawn inside the element's bounds).
-    pub fn inset(mut self) -> Self {
-        self.inset = true;
-        self
     }
 }
 
