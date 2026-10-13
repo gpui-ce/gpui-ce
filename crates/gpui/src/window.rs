@@ -4479,32 +4479,7 @@ impl Window {
         corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
-        self.invalidator.debug_assert_paint();
-
-        let scale_factor = self.scale_factor();
-        let content_mask = self.snapped_content_mask();
-        let opacity = self.element_opacity();
-        let element_bounds = self.cover_bounds(bounds);
-        let element_corner_radii = corner_radii.scale(scale_factor);
-        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
-        for shadow in shadows {
-            if shadow.inset {
-                continue;
-            }
-            let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
-            self.next_frame.scene.insert_primitive(Shadow {
-                order: 0,
-                blur_radius: shadow.blur_radius.scale(scale_factor),
-                bounds: self.cover_bounds(shadow_bounds),
-                content_mask,
-                corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity),
-                element_bounds,
-                element_corner_radii,
-                inset: false.into(),
-                corner_smoothing,
-            });
-        }
+        self.paint_shadows(bounds, corner_radii, corner_smoothing, shadows, false);
     }
 
     /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
@@ -4518,6 +4493,17 @@ impl Window {
         corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
+        self.paint_shadows(bounds, corner_radii, corner_smoothing, shadows, true);
+    }
+
+    fn paint_shadows(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+        inset: bool,
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4526,30 +4512,33 @@ impl Window {
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
         let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
-        for shadow in shadows {
-            if !shadow.inset {
-                continue;
-            }
-            let hole = (bounds + shadow.offset).dilate(-shadow.spread_radius);
-            // Clamp at zero so a large spread can't produce negative radii, which would
-            // break the SDF in the shader.
-            let zero = Pixels::ZERO;
-            let hole_corner_radii = Corners {
-                top_left: (corner_radii.top_left - shadow.spread_radius).max(zero),
-                top_right: (corner_radii.top_right - shadow.spread_radius).max(zero),
-                bottom_right: (corner_radii.bottom_right - shadow.spread_radius).max(zero),
-                bottom_left: (corner_radii.bottom_left - shadow.spread_radius).max(zero),
+
+        for shadow in shadows.iter().filter(|shadow| shadow.inset == inset) {
+            let spread = if inset {
+                -shadow.spread_radius
+            } else {
+                shadow.spread_radius
             };
+
+            let shadow_bounds = (bounds + shadow.offset).dilate(spread);
+
+            let shadow_radii = if inset {
+                // Large inset spreads must not produce negative radii in the shader.
+                corner_radii.map(|radius| (*radius - shadow.spread_radius).max(Pixels::ZERO))
+            } else {
+                corner_radii
+            };
+
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
-                bounds: self.cover_bounds(hole),
+                bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
-                corner_radii: hole_corner_radii.scale(scale_factor),
+                corner_radii: shadow_radii.scale(scale_factor),
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
-                inset: true.into(),
+                inset: inset.into(),
                 corner_smoothing,
             });
         }
