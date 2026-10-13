@@ -10,8 +10,8 @@
 use gpui::colors::Colors;
 use gpui::{
     App, Bounds, ColorExt, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
-    WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
+    MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
+    WindowOptions, canvas, div, point, prelude::*, px, rgb, size,
 };
 use palette::IntoColor;
 
@@ -33,31 +33,31 @@ fn basic_shapes_canvas(colors: &Colors) -> impl IntoElement {
         move |_bounds, _window, _cx| {},
         move |bounds, _prepaint_state, window, _cx| {
             // Draw a filled rectangle
-            window.paint_quad(fill(
-                Bounds {
+            window.paint_quad(
+                PaintQuad::new(Bounds {
                     origin: point(bounds.origin.x + px(10.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
-                },
-                error,
-            ));
+                })
+                .background(error),
+            );
 
             // Draw another rectangle
-            window.paint_quad(fill(
-                Bounds {
+            window.paint_quad(
+                PaintQuad::new(Bounds {
                     origin: point(bounds.origin.x + px(80.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
-                },
-                success,
-            ));
+                })
+                .background(success),
+            );
 
             // Draw a third rectangle
-            window.paint_quad(fill(
-                Bounds {
+            window.paint_quad(
+                PaintQuad::new(Bounds {
                     origin: point(bounds.origin.x + px(150.), bounds.origin.y + px(10.)),
                     size: size(px(60.), px(40.)),
-                },
-                accent,
-            ));
+                })
+                .background(accent),
+            );
         },
     )
     .size_full()

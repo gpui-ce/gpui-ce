@@ -106,7 +106,7 @@ It's mostly API compatible with upstream, but that is changing!
   canvas(
       |_bounds, _window, _cx| {},
       |bounds, _state, window, _cx| {
-          window.paint_quad(fill(bounds, rgb(0x5078f0)));
+          window.paint_quad(PaintQuad::new(bounds).background(rgb(0x5078f0)));
       },
   )
   .size(px(80.0))

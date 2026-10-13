@@ -15,6 +15,9 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+#[cfg(debug_assertions)]
+use crate::{PaintQuad, TextAlign};
+
 #[cfg(test)]
 use crate::{
     AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, StyledText, TestAppContext,
@@ -3292,8 +3295,6 @@ impl Interactivity {
         window: &mut Window,
         cx: &mut App,
     ) {
-        use crate::{BorderStyle, TextAlign};
-
         if let Some(global_id) = global_id
             && (style.debug || style.debug_below || cx.has_global::<crate::DebugBelow>())
             && hitbox.is_hovered(window)
@@ -3371,18 +3372,18 @@ impl Interactivity {
                                 }
                             }
                         });
-                        window.paint_quad(crate::outline(
-                            crate::Bounds {
+                        window.paint_quad(
+                            PaintQuad::new(crate::Bounds {
                                 origin: hitbox.origin
                                     + crate::point(crate::px(0.), FONT_SIZE - px(2.)),
                                 size: crate::Size {
                                     width: text_bounds.size.width,
                                     height: crate::px(1.),
                                 },
-                            },
-                            crate::red(),
-                            BorderStyle::default(),
-                        ))
+                            })
+                            .border_widths(px(1.))
+                            .border_color(crate::red()),
+                        )
                     }
                 }
             };

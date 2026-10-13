@@ -4684,7 +4684,7 @@ impl Window {
 
     /// Paint one or more quads into the scene for the next frame at the current stacking context.
     /// Quads are colored rectangular regions with an optional background, border, and corner radius.
-    /// see [`fill`], [`outline`], and [`quad`] to construct this type.
+    /// Use [`PaintQuad::new`] and its builder methods to construct the quad.
     /// `quad.corner_smoothing` ranges from circular corners at `0.0` to maximum smoothing at `1.0`.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -7470,7 +7470,7 @@ impl Window {
                     .iter()
                     .find(|hitbox| hitbox.id == hitbox_id)
             {
-                self.paint_quad(crate::fill(hitbox.bounds, crate::rgba(0x61afef4d)));
+                self.paint_quad(PaintQuad::new(hitbox.bounds).background(crate::rgba(0x61afef4d)));
             }
         }
     }
@@ -7994,6 +7994,7 @@ pub struct PaintQuad {
     #[setters(generate)]
     pub border_color: Background,
     /// The style of the quad's borders.
+    #[setters(generate)]
     pub border_style: BorderStyle,
     /// The length of each border dash, as a multiple of the border width.
     pub border_dashed_length: f32,
@@ -8002,6 +8003,21 @@ pub struct PaintQuad {
 }
 
 impl PaintQuad {
+    /// Creates a transparent quad with no border or rounded corners.
+    pub fn new(bounds: impl Into<Bounds<Pixels>>) -> Self {
+        Self {
+            bounds: bounds.into(),
+            corner_radii: (0.).into(),
+            corner_smoothing: 0.0,
+            background: transparent_black().into(),
+            border_widths: (0.).into(),
+            border_color: transparent_black().into(),
+            border_style: BorderStyle::default(),
+            border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+            border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+        }
+    }
+
     /// Sets the corner smoothing, clamped to the range `0.0..=1.0`.
     pub fn corner_smoothing(self, amount: f32) -> Self {
         PaintQuad {
@@ -8024,62 +8040,6 @@ impl PaintQuad {
             border_dashed_gap: gap_per_border_width.max(0.0),
             ..self
         }
-    }
-}
-
-/// Creates a quad with the given parameters.
-pub fn quad(
-    bounds: Bounds<Pixels>,
-    corner_radii: impl Into<Corners<Pixels>>,
-    background: impl Into<Background>,
-    border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl Into<Background>,
-    border_style: BorderStyle,
-) -> PaintQuad {
-    PaintQuad {
-        bounds,
-        corner_radii: corner_radii.into(),
-        corner_smoothing: 0.0,
-        background: background.into(),
-        border_widths: border_widths.into(),
-        border_color: border_color.into(),
-        border_style,
-        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
-        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
-    }
-}
-
-/// Creates a filled quad with the given bounds and background color.
-pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>) -> PaintQuad {
-    PaintQuad {
-        bounds: bounds.into(),
-        corner_radii: (0.).into(),
-        corner_smoothing: 0.0,
-        background: background.into(),
-        border_widths: (0.).into(),
-        border_color: transparent_black().into(),
-        border_style: BorderStyle::default(),
-        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
-        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
-    }
-}
-
-/// Creates a rectangle outline with the given bounds, border color, and a 1px border width
-pub fn outline(
-    bounds: impl Into<Bounds<Pixels>>,
-    border_color: impl Into<Background>,
-    border_style: BorderStyle,
-) -> PaintQuad {
-    PaintQuad {
-        bounds: bounds.into(),
-        corner_radii: (0.).into(),
-        corner_smoothing: 0.0,
-        background: transparent_black().into(),
-        border_widths: (1.).into(),
-        border_color: border_color.into(),
-        border_style,
-        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
-        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
     }
 }
 

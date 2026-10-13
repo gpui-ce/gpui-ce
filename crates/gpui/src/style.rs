@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, Pixels,
-    Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
-    Window, black, phi, point, px, quad, rems, size, transparent_black,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, PaintQuad,
+    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
+    TextRun, Window, black, phi, point, px, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -205,18 +205,14 @@ impl RingStyle {
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
         current_color: Hsla,
-    ) -> Option<crate::PaintQuad> {
+    ) -> Option<PaintQuad> {
         (self.width > Pixels::ZERO).then(|| {
             // Quad borders are painted inward, so expanding the quad by the ring width leaves
             // its transparent interior aligned with the element's original bounds.
-            quad(
-                bounds.dilate(self.width),
-                corner_radii.map(|radius| *radius + self.width),
-                transparent_black(),
-                Edges::all(self.width),
-                self.color.resolve(current_color),
-                BorderStyle::Solid,
-            )
+            PaintQuad::new(bounds.dilate(self.width))
+                .corner_radii(corner_radii.map(|radius| *radius + self.width))
+                .border_widths(Edges::all(self.width))
+                .border_color(self.color.resolve(current_color))
         })
     }
 
@@ -994,7 +990,11 @@ impl Style {
 
         #[cfg(debug_assertions)]
         if self.debug || cx.has_global::<DebugBelow>() {
-            window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
+            window.paint_quad(
+                PaintQuad::new(bounds)
+                    .border_widths(px(1.))
+                    .border_color(crate::red()),
+            );
         }
 
         let rem_size = window.rem_size();
@@ -1031,15 +1031,12 @@ impl Style {
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
                 window.paint_quad(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        background_color,
-                        Edges::default(),
-                        background_color.opacity(0.),
-                        self.border_style,
-                    )
-                    .corner_smoothing(corner_smoothing),
+                    PaintQuad::new(bounds)
+                        .corner_radii(corner_radii)
+                        .background(background_color)
+                        .border_color(background_color.opacity(0.))
+                        .border_style(self.border_style)
+                        .corner_smoothing(corner_smoothing),
                 );
             }
 
@@ -1059,17 +1056,15 @@ impl Style {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let border_color = self.border_color.unwrap_or_default();
                 window.paint_quad(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        border_color.opacity(0.),
-                        border_widths,
-                        border_color,
-                        self.border_style,
-                    )
-                    .corner_smoothing(corner_smoothing)
-                    .border_dashed_length(self.border_dashed_length)
-                    .border_dashed_gap(self.border_dashed_gap),
+                    PaintQuad::new(bounds)
+                        .corner_radii(corner_radii)
+                        .background(border_color.opacity(0.))
+                        .border_widths(border_widths)
+                        .border_color(border_color)
+                        .border_style(self.border_style)
+                        .corner_smoothing(corner_smoothing)
+                        .border_dashed_length(self.border_dashed_length)
+                        .border_dashed_gap(self.border_dashed_gap),
                 );
             }
         };

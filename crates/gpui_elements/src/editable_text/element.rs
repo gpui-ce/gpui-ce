@@ -9,8 +9,8 @@ use gpui::{
     HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParagraphDirection, Pixels, Point,
     ShapedText, SharedString, Size, StatefulInteractiveElement, Style, StyleRefinement, Styled,
-    TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity, Window, accesskit, fill,
-    point, px, relative, size,
+    TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity, Window, accesskit, point,
+    px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -819,13 +819,11 @@ impl PrepaintElements {
                 .selection_bounds(start..end, line_height)
                 .into_iter()
                 .map(move |bounds| {
-                    fill(
-                        Bounds::from_corners(
-                            document_origin + bounds.origin + point(Pixels::ZERO, offset_y),
-                            document_origin + bounds.bottom_right(),
-                        ),
-                        color,
-                    )
+                    PaintQuad::new(Bounds::from_corners(
+                        document_origin + bounds.origin + point(Pixels::ZERO, offset_y),
+                        document_origin + bounds.bottom_right(),
+                    ))
+                    .background(color)
                 })
         };
 
@@ -850,13 +848,13 @@ impl PrepaintElements {
                     .unwrap_or_default();
             let caret_height = caret_height.to_pixels(line_height.into(), window.rem_size());
             let vertical_offset = (line_height - caret_height) / 2.;
-            elements.caret = Some(fill(
-                Bounds::new(
+            elements.caret = Some(
+                PaintQuad::new(Bounds::new(
                     caret_point + point(Pixels::ZERO, vertical_offset),
                     size(caret_width, caret_height),
-                ),
-                colors.caret,
-            ));
+                ))
+                .background(colors.caret),
+            );
         }
 
         elements

@@ -13,7 +13,7 @@ use std::time::Duration;
 use gpui::{
     App, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
     InteractiveElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Subscription, Task,
-    TextRun, UTF16Selection, Window, fill, hsla, point, prelude::*, px, relative, size,
+    TextRun, UTF16Selection, Window, hsla, point, prelude::*, px, relative, size,
     utf8_to_utf16_offset, utf16_to_utf8_offset,
 };
 use unicode_segmentation::*;
@@ -418,24 +418,24 @@ impl Element for EditorText {
             let (cursor_line, offset_in_line) = cursor_line_and_offset(&content, cursor_offset);
             let cursor_line = cursor_line.min(lines.len().saturating_sub(1));
             let cursor_x = lines[cursor_line].x_for_index(offset_in_line);
-            Some(fill(
-                Bounds::new(
+            Some(
+                PaintQuad::new(Bounds::new(
                     point(
                         bounds.left() + cursor_x,
                         bounds.top() + line_height * cursor_line as f32,
                     ),
                     size(px(1.5), line_height),
-                ),
-                text_color,
-            ))
+                ))
+                .background(text_color),
+            )
         } else if is_focused && cursor_visible && is_placeholder {
-            Some(fill(
-                Bounds::new(
+            Some(
+                PaintQuad::new(Bounds::new(
                     point(bounds.left(), bounds.top()),
                     size(px(1.5), line_height),
-                ),
-                text_color,
-            ))
+                ))
+                .background(text_color),
+            )
         } else {
             None
         };
