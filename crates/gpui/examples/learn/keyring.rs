@@ -153,7 +153,7 @@ fn button(
         .text_color(colors.selected_text)
         .bg(colors.selected)
         .cursor_pointer()
-        .hover(move |style| style.bg(bg_hover))
+        .hover_style(move |style| style.bg(bg_hover))
         .child(label)
 }
 

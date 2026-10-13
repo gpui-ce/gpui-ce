@@ -19,7 +19,7 @@ fn button(text: &str, on_click: impl Fn(&mut Window, &mut App) + 'static) -> imp
         .flex_none()
         .px_2()
         .bg(rgb(0xf7f7f7))
-        .active(|this| this.opacity(0.85))
+        .active_style(|this| this.opacity(0.85))
         .border_1()
         .border_color(rgb(0xe0e0e0))
         .rounded_sm()

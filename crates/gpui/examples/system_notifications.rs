@@ -92,8 +92,8 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .py_2()
         .rounded_md()
         .bg(rgb(0x3f3f46))
-        .hover(|style| style.bg(rgb(0x52525b)))
-        .active(|style| style.bg(rgb(0x71717a)))
+        .hover_style(|style| style.bg(rgb(0x52525b)))
+        .active_style(|style| style.bg(rgb(0x71717a)))
         .cursor_pointer()
         .child(label)
 }

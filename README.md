@@ -27,7 +27,7 @@ It's mostly API compatible with upstream, but that is changing!
       .bg(rgba(0xffffff30))
       .backdrop_blur(px(12.0))
       .transitions(|transitions| transitions.bg(millis(200)))
-      .hover(|style| style.bg(rgba(0xffffff60)))
+      .hover_style(|style| style.bg(rgba(0xffffff60)))
       .child("Hello, GPUI")
   ```
 

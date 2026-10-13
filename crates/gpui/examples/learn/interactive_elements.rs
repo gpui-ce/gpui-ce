@@ -76,8 +76,8 @@ impl Render for ClickDemo {
                     .text_color(colors.selected_text)
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|style| style.bg(colors.selected))
-                    .active(|style| style.bg(colors.selected))
+                    .hover_style(|style| style.bg(colors.selected))
+                    .active_style(|style| style.bg(colors.selected))
                     .child("Click Me!")
                     // on_click receives a ClickEvent with click_count() method
                     .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
@@ -437,7 +437,7 @@ impl Render for DragDropDemo {
                             .text_color(color)
                             .text_xs()
                             .cursor_grab()
-                            .hover(move |style| {
+                            .hover_style(move |style| {
                                 let c: Hsla = color.into_color();
                                 style.bg(c.opacity(0.1))
                             })
