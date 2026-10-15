@@ -3,37 +3,54 @@ use palette::rgb::Rgba;
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// The default set of colors for gpui.
+/// A pair of light and dark base palettes for application components to share.
+/// GPUI's built-in elements do not read this value automatically.
 ///
-/// These are used for styling base components, examples and more.
+/// Choose a palette for a window with [`Colors::for_appearance`]. For one app-wide palette,
+/// call [`App::init_colors`] and read it with [`DefaultColors::default_colors`].
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{colors::Colors, rgb};
+///
+/// let light = Colors::light();
+/// assert_eq!(light.background, rgb(0xffffff));
+///
+/// let dark = Colors::dark();
+/// assert_eq!(dark.text, rgb(0xffffff));
+/// ```
 #[derive(Clone, Debug)]
 pub struct Colors {
-    /// Text color
+    /// The default color for text.
     pub text: Rgba,
-    /// Selected text color
+    /// The color for text on a [`Colors::selected`] background.
     pub selected_text: Rgba,
-    /// Background color
+    /// The color of the window background.
     pub background: Rgba,
-    /// Disabled color
+    /// The color for disabled controls and their text.
     pub disabled: Rgba,
-    /// Selected color
+    /// The color for selected items and highlighted controls.
     pub selected: Rgba,
-    /// Border color
+    /// The color for borders around controls.
     pub border: Rgba,
-    /// Separator color
+    /// The color for dividers between items.
     pub separator: Rgba,
-    /// Container color
+    /// The color for raised surfaces, such as cards and panels, drawn over [`Colors::background`].
     pub container: Rgba,
 }
 
 impl Default for Colors {
+    /// Returns [`Colors::light`].
     fn default() -> Self {
         Self::light()
     }
 }
 
 impl Colors {
-    /// Returns the default colors for the given window appearance.
+    /// Returns [`Colors::light`] or [`Colors::dark`] for the window's [`WindowAppearance`].
+    ///
+    /// The returned palette is a snapshot. Ask again after the window appearance changes.
     pub fn for_appearance(window: &Window) -> Self {
         match window.appearance() {
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
@@ -41,7 +58,7 @@ impl Colors {
         }
     }
 
-    /// Returns the default dark colors.
+    /// Returns the colors for dark appearances.
     pub fn dark() -> Self {
         Self {
             text: rgb(0xffffff),
@@ -55,7 +72,9 @@ impl Colors {
         }
     }
 
-    /// Returns the default light colors.
+    /// Returns the colors for light appearances.
+    ///
+    /// This is the set that [`Colors::default`] returns.
     pub fn light() -> Self {
         Self {
             text: rgb(0x252525),
@@ -69,13 +88,20 @@ impl Colors {
         }
     }
 
-    /// Get [Colors] from the global state
+    /// Returns the app-wide colors that [`App::init_colors`] set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`App::init_colors`] has not been called.
     pub fn get_global(cx: &App) -> &Arc<Colors> {
         &cx.global::<GlobalColors>().0
     }
 }
 
-/// Get [Colors] from the global state
+/// The app-wide [`Colors`], stored as a global on the [`App`].
+///
+/// [`App::init_colors`] sets it. Read the colors through [`DefaultColors::default_colors`]
+/// or [`Colors::get_global`] rather than this type. It dereferences to the shared [`Colors`].
 #[derive(Clone, Debug)]
 pub struct GlobalColors(pub Arc<Colors>);
 
@@ -89,9 +115,15 @@ impl Deref for GlobalColors {
 
 impl Global for GlobalColors {}
 
-/// Implement this trait to allow global [Colors] access via `cx.default_colors()`.
+/// Gives access to the app-wide [`Colors`] through `cx.default_colors()`.
+///
+/// [`App`] implements this trait. The colors exist only after [`App::init_colors`] runs.
+///
+/// # Panics
+///
+/// Calling [`DefaultColors::default_colors`] panics if [`App::init_colors`] has not been called.
 pub trait DefaultColors {
-    /// Returns the default [`Colors`]
+    /// Returns the app-wide [`Colors`] that [`App::init_colors`] set.
     fn default_colors(&self) -> &Arc<Colors>;
 }
 
@@ -101,9 +133,11 @@ impl DefaultColors for App {
     }
 }
 
-/// The appearance of the base GPUI colors, used to style GPUI elements
+/// Whether GPUI's base colors use the light or the dark set.
 ///
-/// Varies based on the system's current [`WindowAppearance`].
+/// This is a two-value form of [`WindowAppearance`], which also has vibrant variants. The
+/// conversion from [`WindowAppearance`] maps each vibrant variant to its base set. Use
+/// [`Colors::light`] for `Light` and [`Colors::dark`] for `Dark`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultAppearance {
     /// Use the set of colors for light appearances.
