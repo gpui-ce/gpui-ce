@@ -2,19 +2,31 @@ use crate::SharedString;
 use anyhow::{Context as _, Result};
 use std::fmt;
 
-/// A datastructure for resolving whether an action should be dispatched
-/// at this point in the element tree. Contains a set of identifiers
-/// and/or key value pairs representing the current context for the
-/// keymap.
+/// The names and values that describe one element, for matching key bindings.
+///
+/// An element sets its context with [`InteractiveElement::key_context`](crate::InteractiveElement::key_context),
+/// and GPUI collects the contexts along the focus path into a stack. A binding's
+/// [predicate](KeyBindingContextPredicate) is then matched against that stack. A context holds
+/// identifiers, such as `Editor`, and key-value pairs, such as `mode=full`.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{KeyContext, SharedString};
+/// let context = KeyContext::parse("Editor mode=full").unwrap();
+/// assert!(context.contains("Editor"));
+/// assert_eq!(context.get("mode"), Some(&SharedString::from("full")));
+/// assert_eq!(context.get("Editor"), None);
+/// ```
 #[derive(Clone, Default, Eq, PartialEq, Hash)]
 pub struct KeyContext(Vec<ContextEntry>);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-/// An entry in a KeyContext
+/// One identifier or key-value pair in a [`KeyContext`].
 pub struct ContextEntry {
-    /// The key (or name if no value)
+    /// The identifier, or the key of a key-value pair.
     pub key: SharedString,
-    /// The value
+    /// The value of a key-value pair, or `None` for a plain identifier.
     pub value: Option<SharedString>,
 }
 
@@ -27,7 +39,10 @@ impl<'a> TryFrom<&'a str> for KeyContext {
 }
 
 impl KeyContext {
-    /// Initialize a new [`KeyContext`] that contains an `os` key set to either `macos`, `linux`, `windows` or `unknown`.
+    /// Creates an empty context that already has an `os` entry for the current platform.
+    ///
+    /// The value is `macos`, `linux`, `windows` or `unknown`, so a binding can use
+    /// `os == macos` to apply on one platform only.
     pub fn new_with_defaults() -> Self {
         let mut context = Self::default();
         #[cfg(target_os = "macos")]
@@ -46,22 +61,37 @@ impl KeyContext {
         context
     }
 
-    /// Returns the primary context entry (usually the name of the component)
+    /// Returns the first identifier without a value, which names the element in
+    /// the usual context convention. Returns `None` if there is no identifier.
     pub fn primary(&self) -> Option<&ContextEntry> {
         self.0.iter().find(|p| p.value.is_none())
     }
 
-    /// Returns everything except the primary context entry.
+    /// Returns every entry except the one [`primary`](Self::primary) returns.
     pub fn secondary(&self) -> impl Iterator<Item = &ContextEntry> {
         let primary = self.primary();
         self.0.iter().filter(move |&p| Some(p) != primary)
     }
 
-    /// Parse a key context from a string.
-    /// The key context format is very simple:
-    /// - either a single identifier, such as `StatusBar`
-    /// - or a key value pair, such as `mode = visible`
-    /// - separated by whitespace, such as `StatusBar mode = visible`
+    /// Parses a context such as `Editor` or `Editor mode=full`.
+    ///
+    /// The text is a list of entries separated by whitespace. Each entry is either an identifier,
+    /// such as `Editor`, or a key-value pair written `key=value` or `key = value`. Identifier
+    /// characters are letters, digits, `_` and `-`. An entry whose key is already present is
+    /// ignored, so the first one wins. Returns an error for text that isn't a list of such
+    /// entries, such as `.` or `=insert`.
+    ///
+    /// This takes entries only. Operators such as `&&` and `>` aren't part of this format. Use
+    /// [`KeyBindingContextPredicate::parse`] to write a predicate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{KeyContext, SharedString};
+    /// let context = KeyContext::parse("Panel Editor mode = insert").unwrap();
+    /// assert!(context.contains("Panel"));
+    /// assert_eq!(context.primary().unwrap().key, SharedString::from("Panel"));
+    /// ```
     pub fn parse(source: &str) -> Result<Self> {
         let mut context = Self::default();
         let source = skip_whitespace(source);
@@ -78,6 +108,11 @@ impl KeyContext {
             .chars()
             .take_while(|c| is_identifier_char(*c))
             .collect::<String>();
+        // Without this, an unexpected character makes no progress and recurses forever.
+        anyhow::ensure!(
+            !key.is_empty(),
+            "expected a context identifier at {source:?}"
+        );
         source = skip_whitespace(&source[key.len()..]);
         if let Some(suffix) = source.strip_prefix('=') {
             source = skip_whitespace(suffix);
@@ -94,17 +129,17 @@ impl KeyContext {
         Self::parse_expr(source, context)
     }
 
-    /// Check if this context is empty.
+    /// Returns whether this context has no entries.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Clear this context.
+    /// Removes every entry.
     pub fn clear(&mut self) {
         self.0.clear();
     }
 
-    /// Extend this context with another context.
+    /// Adds each entry of `other` whose key this context doesn't already have.
     pub fn extend(&mut self, other: &Self) {
         for entry in &other.0 {
             if !self.contains(&entry.key) {
@@ -113,7 +148,7 @@ impl KeyContext {
         }
     }
 
-    /// Add an identifier to this context, if it's not already in this context.
+    /// Adds an identifier, unless this context already has an entry with that key.
     pub fn add<I: Into<SharedString>>(&mut self, identifier: I) {
         let key = identifier.into();
 
@@ -122,7 +157,7 @@ impl KeyContext {
         }
     }
 
-    /// Set a key value pair in this context, if it's not already set.
+    /// Adds a key-value pair, unless this context already has an entry with that key.
     pub fn set<S1: Into<SharedString>, S2: Into<SharedString>>(&mut self, key: S1, value: S2) {
         let key = key.into();
         if !self.contains(&key) {
@@ -133,12 +168,13 @@ impl KeyContext {
         }
     }
 
-    /// Check if this context contains a given identifier or key.
+    /// Returns whether this context has an entry with `key`, whether or not that entry has a value.
     pub fn contains(&self, key: &str) -> bool {
         self.0.iter().any(|entry| entry.key.as_ref() == key)
     }
 
-    /// Get the associated value for a given identifier or key.
+    /// Returns the value of the first entry with `key`. Returns `None` if there is no such entry,
+    /// or if the entry is a plain identifier.
     pub fn get(&self, key: &str) -> Option<&SharedString> {
         self.0
             .iter()
@@ -165,31 +201,53 @@ impl fmt::Debug for KeyContext {
     }
 }
 
-/// A datastructure for resolving whether an action should be dispatched
-/// Representing a small language for describing which contexts correspond
-/// to which actions.
+/// A condition on the key context stack that decides whether a binding applies.
+///
+/// A predicate is written in a small language, such as `Editor && mode == insert`, and is
+/// evaluated against the [`KeyContext`]s on the focus path. Build one with
+/// [`KeyBindingContextPredicate::parse`].
+///
+/// `Display` writes the predicate in the same syntax. It adds parentheses around `||` inside `&&`
+/// and around negated groups. Descendant expressions are written without parentheses around their
+/// operands, so add parentheses yourself when combining `>` with `&&` or `||` in text that must
+/// round-trip through [`parse`](Self::parse).
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{KeyBindingContextPredicate, KeyContext};
+/// let predicate = KeyBindingContextPredicate::parse("Editor && mode == insert").unwrap();
+/// assert_eq!(predicate.to_string(), "Editor && mode == insert");
+///
+/// let stack = [
+///     KeyContext::parse("Workspace").unwrap(),
+///     KeyContext::parse("Editor mode=insert").unwrap(),
+/// ];
+/// assert_eq!(predicate.depth_of(&stack), Some(2));
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum KeyBindingContextPredicate {
-    /// A predicate that will match a given identifier.
+    /// Matches a context that has an entry named by the identifier, with or without a value.
     Identifier(SharedString),
-    /// A predicate that will match a given key-value pair.
+    /// Matches a context whose entry for the key has the given value. Written `key == value`.
     Equal(SharedString, SharedString),
-    /// A predicate that will match a given key-value pair not being present.
+    /// Matches unless the context's entry for the key has the given value. Written `key != value`.
+    /// Also matches when the context has no entry for the key.
     NotEqual(SharedString, SharedString),
-    /// A predicate that will match a given predicate appearing below another predicate.
-    /// in the element tree
+    /// Matches when the first predicate matches an ancestor context and the second matches the
+    /// contexts beneath it. Written `parent > child`.
     Descendant(
         Box<KeyBindingContextPredicate>,
         Box<KeyBindingContextPredicate>,
     ),
-    /// Predicate that will invert another predicate.
+    /// Matches when the inner predicate doesn't match. Written `!inner`.
     Not(Box<KeyBindingContextPredicate>),
-    /// A predicate that will match if both of its children match.
+    /// Matches when both predicates match. Written `left && right`.
     And(
         Box<KeyBindingContextPredicate>,
         Box<KeyBindingContextPredicate>,
     ),
-    /// A predicate that will match if either of its children match.
+    /// Matches when either predicate matches. Written `left || right`.
     Or(
         Box<KeyBindingContextPredicate>,
         Box<KeyBindingContextPredicate>,
@@ -218,34 +276,42 @@ impl fmt::Display for KeyBindingContextPredicate {
 }
 
 impl KeyBindingContextPredicate {
-    /// Parse a string in the same format as the keymap's context field.
+    /// Parses a predicate such as `Editor && !ReadOnly` or `Panel > Editor`.
     ///
-    /// A basic equivalence check against a set of identifiers can performed by
-    /// simply writing a string:
+    /// The grammar, from the tightest-binding rule to the loosest, is:
     ///
-    /// `StatusBar` -> A predicate that will match a context with the identifier `StatusBar`
+    /// - **Atoms.** An identifier, such as `Editor`, matches a context with that name. An identifier
+    ///   is letters, digits, `_` and `-`. The characters `>`, `<`, `~`, `"` and `?` can also
+    ///   appear after the first character, so write `Panel > Editor` with spaces. The text
+    ///   `Panel>Editor` is one identifier.
+    /// - **Parentheses.** `( ... )` groups a predicate.
+    /// - **Negation.** `!` applies to the atom or parenthesized group after it, so `!a && b` is
+    ///   `(!a) && b`. Use `!(a && b)` to negate a group.
+    /// - **Equality.** `key == value` and `key != value` compare the value of an entry. Both sides
+    ///   must be plain identifiers, so `mode == "full"` is an error.
+    /// - **`&&`** binds tighter than **`||`**. So `a || b && c` is `a || (b && c)`.
+    /// - **Descendant.** `parent > child` binds loosest, so `a && b > c` is `(a && b) > c`. It is
+    ///   left-associative: `A > B > C` is `(A > B) > C`.
     ///
-    /// You can also specify a key-value pair:
+    /// The keymap guide has the same rules as a table.
     ///
-    /// `mode == visible` -> A predicate that will match a context with the key `mode`
-    ///                      with the value `visible`
+    /// # Errors
     ///
-    /// And a logical operations combining these two checks:
+    /// Returns an error for an unbalanced parenthesis, a missing operand, an operator the grammar
+    /// doesn't have, a `==` or `!=` whose operands aren't identifiers, or any leftover text.
     ///
-    /// `StatusBar && mode == visible` -> A predicate that will match a context with the
-    ///                                   identifier `StatusBar` and the key `mode`
-    ///                                   with the value `visible`
+    /// # Examples
     ///
+    /// ```
+    /// # use gpui::KeyBindingContextPredicate;
+    /// let predicate = KeyBindingContextPredicate::parse("Pane > (Editor || Terminal) && !ReadOnly")
+    ///     .unwrap();
+    /// assert_eq!(predicate.to_string(), "Pane > (Editor || Terminal) && !ReadOnly");
+    /// assert!(KeyBindingContextPredicate::parse("mode == \"full\"").is_err());
+    /// ```
     ///
-    /// There is also a special child `>` operator that will match a predicate that is
-    /// below another predicate:
-    ///
-    /// `StatusBar > mode == visible` -> A predicate that will match a context identifier `StatusBar`
-    ///                                  and a child context that has the key `mode` with the
-    ///                                  value `visible`
-    ///
-    /// This syntax supports `!=`, `||` and `&&` as logical operators.
-    /// You can also preface an operation or check with a `!` to negate it.
+    /// See [contexts](crate::_documentation::concepts::contexts) and
+    /// [keyboard input](crate::_documentation::guides::keyboard) for when contexts apply.
     pub fn parse(source: &str) -> Result<Self> {
         let source = skip_whitespace(source);
         let (predicate, rest) = Self::parse_expr(source, 0)?;
@@ -256,7 +322,26 @@ impl KeyBindingContextPredicate {
         }
     }
 
-    /// Find the deepest depth at which the predicate matches.
+    /// Returns the deepest depth at which the predicate matches `contexts`, or `None` if it
+    /// matches none.
+    ///
+    /// A depth `d` means the predicate matches the first `d` contexts, with the `d`th as the
+    /// deepest one that identifiers and `==` look at. The keymap uses this depth to rank bindings:
+    /// a deeper match wins. A predicate that matches only at a shallower depth is returned at that
+    /// depth.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{KeyBindingContextPredicate, KeyContext};
+    /// let predicate = KeyBindingContextPredicate::parse("Workspace").unwrap();
+    /// let stack = [
+    ///     KeyContext::parse("Workspace").unwrap(),
+    ///     KeyContext::parse("Editor").unwrap(),
+    /// ];
+    /// assert_eq!(predicate.depth_of(&stack), Some(1));
+    /// assert_eq!(predicate.depth_of(&stack[1..]), None);
+    /// ```
     pub fn depth_of(&self, contexts: &[KeyContext]) -> Option<usize> {
         for depth in (0..=contexts.len()).rev() {
             let context_slice = &contexts[0..depth];
@@ -267,13 +352,18 @@ impl KeyBindingContextPredicate {
         None
     }
 
-    /// Eval a predicate against a set of contexts, arranged from lowest to highest.
+    /// Returns whether the predicate matches the whole of `contexts`, which is ordered from the
+    /// root to the focused element.
     #[allow(unused)]
     pub fn eval(&self, contexts: &[KeyContext]) -> bool {
         self.eval_inner(contexts, contexts)
     }
 
-    /// Eval a predicate against a set of contexts, arranged from lowest to highest.
+    /// Returns whether the predicate matches the prefix `contexts`, ordered from the root to the
+    /// focused element. `all_contexts` is the full stack, which `!` checks against.
+    ///
+    /// Callers that want the whole stack use [`eval`](Self::eval). [`depth_of`](Self::depth_of)
+    /// calls this with each prefix.
     pub fn eval_inner(&self, contexts: &[KeyContext], all_contexts: &[KeyContext]) -> bool {
         let Some(context) = contexts.last() else {
             return false;
@@ -323,8 +413,21 @@ impl KeyBindingContextPredicate {
         }
     }
 
-    /// Returns whether or not this predicate matches all possible contexts matched by
-    /// the other predicate.
+    /// Returns whether every context that `other` matches is also matched by `self`.
+    ///
+    /// The check is conservative. `true` is certain, but `false` means only that this check
+    /// couldn't show it. The keymap uses it to check whether a disabling binding's context covers
+    /// the context of the binding it disables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::KeyBindingContextPredicate;
+    /// let editor = KeyBindingContextPredicate::parse("Editor").unwrap();
+    /// let editor_and_vim = KeyBindingContextPredicate::parse("Editor && vim_mode").unwrap();
+    /// assert!(editor.is_superset(&editor_and_vim));
+    /// assert!(!editor_and_vim.is_superset(&editor));
+    /// ```
     pub fn is_superset(&self, other: &Self) -> bool {
         if self == other {
             return true;
@@ -548,6 +651,20 @@ mod tests {
             expected
         );
         assert_eq!(KeyContext::parse(" baz foo = bar").unwrap(), expected);
+    }
+
+    #[test]
+    fn test_parse_malformed_context() {
+        for source in [
+            ".",
+            "Editor && enabled",
+            "=insert",
+            "mode==insert",
+            "mode=\"insert\"",
+        ] {
+            assert!(KeyContext::parse(source).is_err(), "accepted {source:?}");
+        }
+        assert!(KeyContext::parse(" \n ").unwrap().is_empty());
     }
 
     #[test]
