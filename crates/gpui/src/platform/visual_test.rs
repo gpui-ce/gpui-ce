@@ -1,9 +1,7 @@
-//! Visual test platform that combines real rendering (macOs-only for now) with controllable TestDispatcher.
+//! A visual-test platform that keeps real macOS rendering while making scheduling deterministic.
 //!
-//! This platform is used for visual tests that need:
-//! - Real rendering (e.g. Metal/compositor) for accurate screenshots
-//! - Deterministic task scheduling via TestDispatcher
-//! - Controllable time via `advance_clock`
+//! Use it when a screenshot must cover the renderer and compositor, but the test also needs to
+//! advance virtual time and run tasks on demand through [`TestDispatcher`].
 
 use crate::ScreenCaptureSource;
 use crate::{
@@ -22,12 +20,21 @@ use std::{
     sync::Arc,
 };
 
-/// A platform that combines real Mac rendering with controllable TestDispatcher.
+/// A macOS platform that delegates windows and drawing to a real platform while
+/// [`TestDispatcher`] controls task scheduling and virtual time.
 ///
-/// This allows visual tests to:
-/// - Render real UI via Metal for accurate screenshots
-/// - Control task scheduling deterministically via TestDispatcher
-/// - Advance simulated time for testing time-based behaviors (tooltips, animations, etc.)
+/// Windows, text, and rendering come from the wrapped platform, so screenshots exercise the
+/// application's graphics path. Tasks use the test dispatcher. Call [`Self::dispatcher`] to
+/// advance virtual time or run ready work; tooltips and animations then progress without a real
+/// sleep.
+///
+/// Services that would otherwise depend on the host are deliberately stubbed:
+/// - The clipboard is kept in memory, and nothing reaches the system clipboard.
+/// - [`Platform::run`] panics; use the test harness instead of starting an event loop.
+/// - File dialogs resolve immediately with no selection.
+/// - Menus are not stored, and quit, restart and activation do nothing.
+///
+/// This type exists only on macOS, in test builds and with the `test-support` feature.
 pub struct VisualTestPlatform {
     dispatcher: TestDispatcher,
     background_executor: BackgroundExecutor,
@@ -38,9 +45,10 @@ pub struct VisualTestPlatform {
 }
 
 impl VisualTestPlatform {
-    /// Creates a new VisualTestPlatform with the given random seed.
+    /// Creates a visual test platform that renders through `platform`.
     ///
-    /// The seed is used for deterministic random number generation in the TestDispatcher.
+    /// `seed` initializes the [`TestDispatcher`]'s random number generator. Reusing the seed
+    /// makes scheduling decisions reproducible, which makes a visual failure easier to replay.
     pub fn new(platform: Rc<dyn Platform>, seed: u64) -> Self {
         let dispatcher = TestDispatcher::new(seed);
         let arc_dispatcher = Arc::new(dispatcher.clone());
@@ -58,7 +66,10 @@ impl VisualTestPlatform {
         }
     }
 
-    /// Returns a reference to the TestDispatcher for controlling task scheduling and time.
+    /// Returns the [`TestDispatcher`] that runs this platform's tasks.
+    ///
+    /// Call `advance_clock` to move virtual time forward, or `run_until_parked` to run work that
+    /// is ready without advancing time.
     pub fn dispatcher(&self) -> &TestDispatcher {
         &self.dispatcher
     }
