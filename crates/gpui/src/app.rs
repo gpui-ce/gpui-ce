@@ -163,7 +163,7 @@ impl ApplicationHandle {
     /// double borrow.
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> R {
         let cx = &mut *self.app.borrow_mut();
-        f(cx)
+        cx.update(f)
     }
 
     /// An [`AsyncApp`] for use across await points. It holds the app weakly; keeping the
@@ -3280,6 +3280,22 @@ mod test {
         cx.to_async().refresh();
 
         assert_eq!(render_count.get(), render_count_before_refresh + 1);
+    }
+
+    #[test]
+    fn embedded_update_flushes_effects() {
+        let cx = TestAppContext::single();
+        let handle = super::ApplicationHandle { app: cx.app };
+        let completed = Rc::new(Cell::new(false));
+
+        handle.update(|cx| {
+            cx.defer({
+                let completed = completed.clone();
+                move |_| completed.set(true)
+            });
+        });
+
+        assert!(completed.get());
     }
 
     #[test]
