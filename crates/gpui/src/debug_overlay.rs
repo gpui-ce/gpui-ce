@@ -1,6 +1,9 @@
-//! A developer overlay that paints frame-time statistics directly into the
-//! scene, bypassing layout, text, and view invalidation entirely (to avoid
-//! infinitely triggering new frames).
+//! A frame-time overlay that reports recent draw durations in a small panel at
+//! the top-right of the window.
+//!
+//! The panel is painted directly into the scene, so it bypasses layout, text
+//! shaping, and view invalidation. Drawing it does not request another frame.
+//! The overlay is available only with the `profiler` feature.
 
 use crate::{
     BorderStyle, Bounds, ContentMask, Corners, Edges, Hsla, Pixels, Quad, ScaledPixels, Scene,
@@ -8,17 +11,51 @@ use crate::{
 };
 use std::{collections::VecDeque, time::Duration};
 
+/// Selects the frame-time readout shown in a window.
+///
+/// The overlay is painted only with the `profiler` feature. Set the mode with
+/// `Window::set_debug_frame_overlay_mode`, or step through the modes with
+/// `Window::cycle_debug_frame_overlay_mode`. Both window methods, like the rest of
+/// the overlay API, exist only with the `profiler` feature. The
+/// [performance guide](crate::_documentation::guides::performance) shows how to use
+/// the readouts.
 #[allow(missing_docs)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum DebugFrameOverlayMode {
+    /// No overlay. This is the default.
     #[default]
     Hidden,
+    /// Shows the draw time of the most recent frame, in milliseconds.
     Minimal,
+    /// Shows five rows: `CUR`, `1%`, `10%`, `MAX` and `FRAMES`.
+    ///
+    /// - `CUR` is the draw time of the most recent frame.
+    /// - `1%` is the 99th percentile of recent draw times. Roughly 1% of the
+    ///   retained frames took longer, so this row exposes the slow tail that
+    ///   produces visible hitches.
+    /// - `10%` is the 90th percentile. Roughly 10% of the retained frames took
+    ///   longer than this value.
+    /// - `MAX` is the slowest draw among the retained samples.
+    /// - `FRAMES` is the number of frames drawn since the window opened. It
+    ///   keeps counting across resets and mode changes, and shows `LOTS` past 99,999.
+    ///
+    /// The percentile rows and `MAX` use the last 1000 samples. They show `--`
+    /// until at least one frame has been drawn. `Window::reset_debug_frame_overlay_stats`
+    /// clears those samples without resetting `FRAMES`.
     Full,
 }
 
 impl DebugFrameOverlayMode {
-    /// Returns the next mode in the Hidden → FrameTime → Detailed cycle.
+    /// Returns the mode after this one: `Hidden`, then `Minimal`, then `Full`, then `Hidden` again.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::DebugFrameOverlayMode;
+    ///
+    /// assert_eq!(DebugFrameOverlayMode::Hidden.next(), DebugFrameOverlayMode::Minimal);
+    /// assert_eq!(DebugFrameOverlayMode::Full.next(), DebugFrameOverlayMode::Hidden);
+    /// ```
     pub fn next(self) -> Self {
         match self {
             Self::Hidden => Self::Minimal,
@@ -226,6 +263,10 @@ fn solid_quad(
         border_color: transparent_black().into(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        border_dashed_length: 0.,
+        border_dashed_gap: 0.,
+        corner_smoothing: 0.,
+        padding: 0,
     }
 }
 

@@ -9,6 +9,8 @@
 //! thoroughly as one long stall. [`HangDetector`] drains the journal and
 //! reports each completed activity interval containing hangs as a
 //! [`HangIncident`].
+//!
+//! This module exists only with the `profiler` feature.
 
 use std::time::Duration;
 
@@ -25,7 +27,8 @@ use super::journal::{
 ///
 /// Detection is post-hoc: a hang is reported once an explicit presentation
 /// or foreground-idle boundary completes its interval. Work that never
-/// yields back to the foreground is not observed until it does.
+/// yields back to the foreground is not observed until it does. Available
+/// with the `profiler` feature.
 pub struct HangDetector {
     collector: ForegroundJournalCollector,
     sealer: IntervalSealer,
@@ -34,7 +37,7 @@ pub struct HangDetector {
     first_present_at: Option<Instant>,
 }
 
-/// One sealed interval that contained at least one hang.
+/// One sealed interval that contained at least one hang. Available with the `profiler` feature.
 #[derive(Debug, Clone)]
 pub struct HangIncident {
     /// The interval the hangs occurred in, including all non-hang foreground
@@ -53,7 +56,7 @@ pub struct HangIncident {
 ///
 /// Recorded explicitly so consumers can separate the two classes without
 /// re-deriving them from `stall_ms`, which stops working whenever the
-/// detector's thresholds change.
+/// detector's thresholds change. Available with the `profiler` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HangTrigger {
@@ -86,6 +89,10 @@ impl HangDetector {
 
     /// Drains newly recorded events and returns the incidents sealed since
     /// the previous poll.
+    ///
+    /// Call this regularly. An interval is reported only after its boundary, a
+    /// presentation or foreground idle, has been observed, so a poll can return
+    /// nothing while work is still running.
     pub fn poll(&mut self) -> Vec<HangIncident> {
         let drained = self.collector.collect_unseen();
         if self.first_present_at.is_none() {
@@ -109,6 +116,7 @@ impl HangDetector {
 /// A [`HangIncident`] in a telemetry-friendly form: timestamps and durations
 /// in fractional milliseconds since app startup (microsecond precision),
 /// locations as plain data, contributor count capped by the converter.
+/// Available with the `profiler` feature.
 #[derive(Debug, Clone, Serialize)]
 pub struct SerializedHangIncident {
     /// `"startup"` when the active window began before the first observed
@@ -165,7 +173,8 @@ pub struct SerializedHangIncident {
 /// Foreground work nests: an input dispatch can synchronously draw a window,
 /// a draw can poll a task. `depth` expresses that containment — a depth-1
 /// event's time is already inside some depth-0 event's duration, so summing
-/// sibling durations across depths double-counts.
+/// sibling durations across depths double-counts. Available with the `profiler`
+/// feature.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SerializedHangContributor {

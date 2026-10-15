@@ -11,6 +11,9 @@
 //! feed entries to [`IntervalSealer`], a pure state machine that groups all work
 //! preceding each boundary into a [`FrameSnapshot`]. The sealer does not infer
 //! boundaries from elapsed time or from incidental event kinds such as draws.
+//!
+//! This module exists only with the `profiler` feature. Get the stream with
+//! [`App::foreground_journal`](crate::App::foreground_journal).
 
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, VecDeque};
@@ -26,17 +29,20 @@ use scheduler::Instant;
 use super::{ActionTiming, FrameTiming, PresentTiming, TaskTiming};
 use crate::WindowId;
 
-/// Task polls shorter than this are folded into a [`PollSummary`] instead of
-/// being recorded individually. This keeps the stream bounded by the number
-/// of *slow* polls while preserving their exact count and total duration.
+/// The shortest task poll that is recorded as its own event.
+///
+/// Shorter polls are folded into a [`PollSummary`] instead. This keeps the stream
+/// bounded by the number of slow polls, while the summary keeps their exact count
+/// and total duration. Available with the `profiler` feature.
 pub const TASK_POLL_FLOOR: Duration = Duration::from_micros(100);
 
-/// A dirty frame that has not been presented by this deadline stops blocking
-/// foreground-idle boundaries, so a window that never presents (hidden or
-/// occluded windows receive no frame callbacks) cannot suppress boundaries
-/// indefinitely. Expiry only unblocks: the open interval still seals at a
-/// real presentation or idle boundary, keeping a starving hang and the frame
-/// it starved in one interval.
+/// How long a dirty frame can hold up foreground-idle boundaries without being presented.
+///
+/// A window that never presents, such as a hidden or occluded window that gets no frame
+/// callbacks, would otherwise block idle boundaries forever. After this deadline the frame
+/// no longer blocks them. The open interval still seals only at a presentation or idle
+/// boundary, so a hang and the frame it starved stay in one interval. Available with the
+/// `profiler` feature.
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(1);
 
 // Backstop against pathological event storms within a single interval. At the
@@ -55,12 +61,12 @@ const MAX_JOURNAL_ENTRIES: usize = (4 * 1024 * 1024) / core::mem::size_of::<Jour
 // in order on the next publication.
 const MAX_PENDING_JOURNAL_ENTRIES: usize = 64;
 
-/// One entry in the foreground stream.
+/// One piece of completed foreground work.
 ///
 /// Events are recorded in completion order (ordered by their end time). An
 /// event that was in progress across a frame boundary (e.g. the task poll
 /// enclosing a draw) is recorded when it *ends*, with timestamps that may
-/// precede events recorded before it.
+/// precede events recorded before it. Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub enum ForegroundEvent {
     /// A foreground task poll at least [`TASK_POLL_FLOOR`] long.
@@ -112,7 +118,7 @@ impl ForegroundEvent {
     }
 }
 
-/// Timing of one platform input dispatch on a window.
+/// Timing of one platform input dispatch on a window. Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub struct InputTiming {
     /// The platform input variant dispatched (see
@@ -126,7 +132,9 @@ pub struct InputTiming {
     pub caused_invalidation: bool,
 }
 
-/// Exact count and total duration of task polls below [`TASK_POLL_FLOOR`].
+/// The exact count and total duration of task polls below [`TASK_POLL_FLOOR`].
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct PollSummary {
     /// Number of polls below the floor.
@@ -142,7 +150,9 @@ impl PollSummary {
     }
 }
 
-/// A flushed [`PollSummary`] and the tightest span containing its folded polls.
+/// A flushed [`PollSummary`] and the span that contains its folded polls.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub struct SmallPollFlush {
     /// The folded polls.
@@ -154,6 +164,8 @@ pub struct SmallPollFlush {
 }
 
 /// A newly drawn frame and the platform submission that completed its interval.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub struct PresentedFrame {
     /// The draw whose rendered scene was submitted.
@@ -171,7 +183,9 @@ impl PresentedFrame {
     }
 }
 
-/// The semantic event that completed a foreground activity interval.
+/// The event that ends a foreground activity interval: a presentation or the foreground going idle.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub enum IntervalBoundary {
     /// A newly drawn frame was submitted to the platform.
@@ -202,7 +216,9 @@ impl IntervalBoundary {
     }
 }
 
-/// A control-plane change to one window's pending-frame state.
+/// A change to one window's pending-frame state.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub enum FrameStateChange {
     /// The window has a frame waiting to be presented.
@@ -223,6 +239,8 @@ pub enum FrameStateChange {
 }
 
 /// One item retained in the foreground journal.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Copy, Clone)]
 pub enum ForegroundJournalEntry {
     /// A completed piece of foreground work.
@@ -239,8 +257,10 @@ pub enum ForegroundJournalEntry {
     },
 }
 
-/// An immutable view of one sealed foreground interval, produced by
+/// One sealed foreground interval: the work done between two boundaries, produced by
 /// [`IntervalSealer`].
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Clone)]
 pub struct FrameSnapshot {
     /// When the interval started (the previous seal, or the end of the idle
@@ -880,12 +900,13 @@ impl JournalPublisher {
     }
 }
 
-/// A cloneable handle to one foreground journal stream.
+/// A cloneable handle to the foreground journal stream of this thread.
 ///
-/// Each collector has an independent cursor. Collectors briefly pin one slot
-/// at a time and never block recording; entries they could not observe are
-/// reported as discontinuities. Apps on the same foreground thread share the
-/// stream.
+/// Get one from [`App::foreground_journal`](crate::App::foreground_journal), then
+/// create a [`ForegroundJournalCollector`] from it to read the stream. Each collector
+/// has an independent cursor. Collectors briefly pin one slot at a time and never block
+/// recording. Entries they could not observe are reported as discontinuities. Apps on
+/// the same foreground thread share the stream. Available with the `profiler` feature.
 #[derive(Clone)]
 pub struct ForegroundJournal {
     ring: Arc<JournalRing>,
@@ -912,7 +933,9 @@ impl ForegroundJournal {
     }
 }
 
-/// Entries returned by one [`ForegroundJournalCollector::collect_unseen`] call.
+/// The entries returned by one [`ForegroundJournalCollector::collect_unseen`] call.
+///
+/// Available with the `profiler` feature.
 #[derive(Debug, Default)]
 pub struct DrainedEntries {
     /// Journal entries recorded since the previous drain, in recording order,
@@ -927,7 +950,8 @@ pub struct DrainedEntries {
 
 /// Reads the foreground stream, tracking a cursor so each call to
 /// [`Self::collect_unseen`] returns only entries recorded since the previous
-/// call. Independent collectors do not affect each other.
+/// call. Independent collectors do not affect each other. Available with the
+/// `profiler` feature.
 pub struct ForegroundJournalCollector {
     cursor: u64,
     ring: Arc<JournalRing>,
@@ -967,13 +991,12 @@ impl ForegroundJournalCollector {
     }
 }
 
-/// A pure state machine that groups foreground journal entries into
-/// [`FrameSnapshot`]s.
+/// A state machine that groups foreground journal entries into [`FrameSnapshot`]s.
 ///
 /// Feed it drained entries in recording order. Work is carried across calls
 /// until an explicit [`IntervalBoundary`] arrives. Idle time before an
 /// interval's first event is excluded without relying on an elapsed-time
-/// heuristic.
+/// heuristic. Available with the `profiler` feature.
 #[derive(Debug)]
 pub struct IntervalSealer {
     interval_start: Instant,
