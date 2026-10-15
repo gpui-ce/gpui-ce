@@ -120,7 +120,7 @@ let shadow = BoxShadow {
     spread_radius: px(0.),
     inset: false,
 };
-window.paint_drop_shadows(bounds, Corners::all(px(8.)), &[shadow]);
+window.paint_drop_shadows(bounds, Corners::all(px(8.)), 0.0, &[shadow]);
 window.paint_quad(fill(bounds, rgb(0xffffff)).corner_radii(px(8.)));
 # }
 ```
@@ -141,7 +141,7 @@ so the image is loaded once and shared:
 # use std::path::PathBuf;
 fn paint_thumbnail(path: PathBuf, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
     if let Some(Ok(image)) = window.use_asset::<ImgResourceLoader>(&Resource::from(path), cx) {
-        let _ = window.paint_image(bounds, bounds, Corners::all(px(6.)), image, 0, false);
+        let _ = window.paint_image(bounds, bounds, Corners::all(px(6.)), 0.0, image, 0, false);
     }
 }
 ```
