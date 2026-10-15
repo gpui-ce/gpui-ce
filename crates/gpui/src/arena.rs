@@ -78,6 +78,11 @@ impl Chunk {
     }
 }
 
+/// A bump allocator that stores values in chunks and drops them together.
+///
+/// Values stay valid until [`Arena::clear`] runs or the arena is dropped. Refer to a value with an
+/// [`ArenaBox`]; dereferencing that handle after a clear panics instead of reading freed memory.
+/// The arena holds an [`Rc`](std::rc::Rc), so it is neither `Send` nor `Sync`.
 pub struct Arena {
     chunks: Vec<Chunk>,
     elements: Vec<ArenaElement>,
@@ -94,6 +99,11 @@ impl Drop for Arena {
 }
 
 impl Arena {
+    /// Creates an arena whose chunks each hold `chunk_size` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is zero.
     pub fn new(chunk_size: usize) -> Self {
         let chunk_size = NonZeroUsize::try_from(chunk_size).unwrap();
         Self {
@@ -106,6 +116,7 @@ impl Arena {
         }
     }
 
+    /// Returns the number of bytes reserved across all chunks, whether they are in use or not.
     pub fn capacity(&self) -> usize {
         self.chunks.len() * self.chunk_size.get()
     }
@@ -157,6 +168,14 @@ impl Arena {
         self.current_chunk_index = 0;
     }
 
+    /// Stores the value returned by `f` in the arena and returns a handle that dereferences to it.
+    ///
+    /// The value is dropped when the arena is cleared. If the current chunk has no room, a new
+    /// chunk is added; an allocation must fit within one chunk.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value doesn't fit in one chunk.
     #[inline(always)]
     pub fn alloc<T>(&mut self, f: impl FnOnce() -> T) -> ArenaBox<T> {
         #[inline(always)]
@@ -210,12 +229,17 @@ impl Arena {
     }
 }
 
+/// A handle to a value owned by an [`Arena`].
+///
+/// Dereferencing the box panics if the arena has been cleared or dropped since the box was created.
 pub struct ArenaBox<T: ?Sized> {
     ptr: *mut T,
     valid: Rc<Cell<bool>>,
 }
 
 impl<T: ?Sized> ArenaBox<T> {
+    /// Returns a handle to a part of this value, such as one of its fields. The part remains valid
+    /// for exactly as long as the original arena allocation does.
     #[inline(always)]
     pub fn map<U: ?Sized>(mut self, f: impl FnOnce(&mut T) -> &mut U) -> ArenaBox<U> {
         ArenaBox {
