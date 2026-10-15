@@ -26,40 +26,75 @@ impl<T> TransitionCache<T> {
     }
 }
 
-/// An animated transition between values of type `T`.
+/// A value that moves toward a goal over time and changes course when that goal changes.
 ///
-/// `Transition` manages the interpolation of a value from a start state to a goal
-/// state using the supplied motion. It supports customizable easing functions and
-/// can operate in continuous or non-continuous mode.
+/// A `Transition` pairs an entity that holds a [`TransitionState`] with a [`Motion`]. Read the
+/// value for the current frame with [`evaluate`](Self::evaluate) during render. Change the goal
+/// with [`update`](Self::update) from an event handler, then call `cx.notify()` so the view
+/// redraws. `T` must implement [`Lerp`], [`Clone`] and [`PartialEq`].
 ///
-/// # Type Parameters
+/// Clones share the goal and motion state, but each has its own per-frame cache. Read the value
+/// through the clone that is rendering it.
 ///
-/// * `T` - The type of value being transitioned. Must implement [`Lerp`], [`Clone`],
-///   and [`PartialEq`].
+/// Create one during render with [`Window::use_keyed_transition`]. Its key keeps the state across
+/// frames. [`Window::use_transition`] keys state by call site instead, so that state lasts only
+/// while the element renders at that call site in consecutive frames.
 ///
-/// # Continuous vs Non-Continuous Mode
+/// # Continuous and non-continuous mode
 ///
-/// By default, transitions operate in continuous mode. When the goal is updated:
-/// - **Continuous mode** (`continuous = true`): The transition smoothly continues
-///   from the current interpolated value to the new goal.
-/// - **Non-continuous mode** (`continuous = false`): The transition restarts from
-///   the initial value to the new goal.
+/// Transitions are continuous by default. When the goal changes:
 ///
-/// # Example
+/// - **Continuous** (the default): the value continues from where it is now toward the new goal.
+/// - **Non-continuous** ([`continuous(false)`](Self::continuous)): the value restarts from the
+///   initial value and moves toward the new goal.
 ///
-/// ```ignore
-/// let transition = window.use_transition(cx, Duration::from_millis(300), |_, _| 0.0_f32)
-///     .with_easing(ease_in_out);
+/// # Examples
 ///
-/// // Get the current interpolated value
-/// let value = transition.evaluate(window, cx);
+/// The goal can change from an event handler, and the value follows it. This example uses an
+/// easing of `|_| 0.5`, so the value sits halfway between its start and its goal, and the
+/// assertions are exact.
 ///
-/// // Update the goal
-/// transition.update(cx, |val, cx| {
-///     *val = 1.0;
-///     cx.notify();
+/// ```
+/// use gpui::{
+///     AppContext, Context, IntoElement, Render, TestApp, Transition, TransitionState, Window,
+///     div, prelude::*, secs,
+/// };
+///
+/// struct Fade {
+///     transition: Transition<f32>,
+/// }
+///
+/// impl Render for Fade {
+///     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+///         let opacity = *self.transition.evaluate(window, cx);
+///         div().opacity(opacity)
+///     }
+/// }
+///
+/// let mut app = TestApp::new();
+/// let mut window = app.open_window(|_, cx| {
+///     let state = cx.new(|_| TransitionState::new(0.0_f32, secs(10)));
+///     Fade {
+///         transition: Transition::new(state, secs(10)).with_easing(|_| 0.5),
+///     }
+/// });
+///
+/// window.update(|view, _, cx| {
+///     view.transition.update(cx, |goal, cx| {
+///         *goal = 1.0;
+///         cx.notify();
+///     });
+/// });
+/// window.draw();
+///
+/// window.update(|view, _, cx| {
+///     assert_eq!(*view.transition.read_cache(), Some(0.5));
+///     assert_eq!(*view.transition.read_goal(cx), 1.0);
 /// });
 /// ```
+///
+/// See the [animation guide](crate::_documentation::guides::animation#transition-a-value-that-changes)
+/// for the keyed hook.
 #[derive(Clone)]
 pub struct Transition<T: Lerp + Clone + PartialEq + 'static> {
     motion: Motion,
@@ -76,7 +111,9 @@ pub struct Transition<T: Lerp + Clone + PartialEq + 'static> {
 }
 
 impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
-    /// Create a new transition with the given motion using the specified state.
+    /// Creates a transition that stores its state in `state` and animates with `motion`.
+    ///
+    /// Inside render, prefer [`Window::use_keyed_transition`], which creates the state for you.
     pub fn new(state: Entity<TransitionState<T>>, motion: impl Into<Motion>) -> Self {
         Self {
             motion: motion.into(),
@@ -86,20 +123,20 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         }
     }
 
-    /// Sets the forward pass's easing function for this transition.
+    /// Sets the easing of the forward pass. See [`Motion::with_easing`].
     ///
-    /// The easing function maps normalized local pass time to presentation
-    /// progress, which may be non-monotonic or overshoot zero through one.
+    /// The easing maps normalized pass time to presentation progress. It may be non-monotonic, and
+    /// it may overshoot zero through one.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.motion = self.motion.with_easing(easing);
         self.clear_cache();
         self
     }
 
-    /// Sets whether the transition should be continuous.
+    /// Sets whether a new goal continues from the current value.
     ///
-    /// On goal updates, transitions continue from the current value by default.
-    /// If `continuous` is set to false, the transition will restart from its initial value.
+    /// Continuous is the default. Pass `false` to restart from the initial value on every goal
+    /// change instead.
     pub fn continuous(mut self, continuous: bool) -> Self {
         self.continuous = continuous;
         self
@@ -124,15 +161,13 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.cache.borrow_mut().clear();
     }
 
-    /// Evaluates and returns the current interpolated value of the transition.
+    /// Returns the value for the current frame, and requests another frame while it moves.
     ///
-    /// This method calculates the value based on the elapsed time since the last
-    /// goal update, applies the easing function, and caches the result. If the
-    /// transition is still in progress, it automatically requests an animation
-    /// frame to continue the animation.
-    ///
-    /// The returned value is cached for the duration of the current frame to avoid
-    /// redundant calculations when called multiple times.
+    /// The value depends on the time since the last goal change, and on the easing. The first call
+    /// samples the clock and caches the result. Later calls return the cached value until the goal
+    /// changes or the cache is cleared, so a `Transition` kept across frames returns the same value.
+    /// [`Window::use_keyed_transition`] returns a new `Transition` on every render, which avoids
+    /// this. Call this during render or paint.
     pub fn evaluate(&self, window: &mut Window, cx: &mut App) -> Ref<'_, T> {
         let sample = self.sample(cx);
         if sample.is_active {
@@ -142,19 +177,27 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         Ref::map(sample, |sample| sample.value.as_ref().unwrap())
     }
 
-    /// Reads the end goal of the transitions.
+    /// Returns the goal: the value most recently set by [`update`](Self::update).
+    ///
+    /// This isn't the value on screen while the transition moves. Use [`evaluate`](Self::evaluate)
+    /// for that.
     pub fn read_goal<'b>(&'b self, cx: &'b mut App) -> &'b T {
         self.state.read(cx).value()
     }
 
-    /// Reads the current value of the cached transition, if it exists.
+    /// Returns the value cached by the last [`evaluate`](Self::evaluate), or `None` if the cache
+    /// was cleared.
+    ///
+    /// The cache is cleared when the goal changes, and by [`jump_to`](Self::jump_to),
+    /// [`scale_by`](Self::scale_by), [`reset`](Self::reset) and [`with_easing`](Self::with_easing).
     pub fn read_cache(&self) -> Ref<'_, Option<T>> {
         Ref::map(self.cache.borrow(), |cache| &cache.value)
     }
 
-    /// Returns eased presentation progress, which may overshoot zero through one.
-    /// This does not indicate whole-run completion: restarting iterations begin
-    /// again and alternating iterations run in reverse.
+    /// Returns the eased progress for the current frame, without requesting another frame.
+    ///
+    /// Progress may overshoot zero through one. It doesn't mean the run has finished: restarting
+    /// iterations begin again, and alternating iterations run in reverse.
     pub fn evaluate_delta(&self, cx: &App) -> f32 {
         if self.cache.borrow().value.is_some() {
             return self.cache.borrow().progress.get();
@@ -163,18 +206,16 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.state.read(cx).progress_at(Instant::now()).get()
     }
 
-    /// Updates the goal value for the transition.
+    /// Changes the goal, and starts a run toward the new goal if it changed.
     ///
-    /// The provided closure receives a mutable reference to the current goal value
-    /// and can modify it. If the goal changes (and continuous mode is enabled),
-    /// a new animation will begin from the current interpolated value toward the
-    /// new goal.
+    /// `update` passes the current goal to the closure, which can change it. If the new goal
+    /// differs from the old one, the value moves toward it. In continuous mode the run starts from
+    /// the current value. Otherwise it starts from the initial value. The goal isn't read during
+    /// render, so change it from an event handler.
     ///
-    /// Returns `true` if the goal was actually updated (i.e., the new value differs
-    /// from the previous goal), `false` otherwise.
+    /// Returns `true` if the goal changed, and `false` if it stayed the same.
     ///
-    /// Note: This method does not automatically notify GPUI of changes. You should
-    /// call `cx.notify()` within the closure if you want to trigger a re-render.
+    /// This doesn't notify GPUI. Call `cx.notify()` inside the closure to redraw the view.
     pub fn update<R>(
         &self,
         cx: &mut App,
@@ -199,22 +240,19 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         was_updated
     }
 
-    /// Instantly set the transition to the given target value without animation.
+    /// Sets the value and the goal to `target`, with no animation.
     ///
-    /// Sets both the start and end goals to `target` so that subsequent evaluations
-    /// return `target` immediately. This is useful for transitions that require a
-    /// different start value on each update.
+    /// Later calls to [`evaluate`](Self::evaluate) return `target` until the goal changes again.
+    /// Use this when the next animation should start from a different value.
     pub fn jump_to(&self, target: T, cx: &mut App) {
         self.state.update(cx, |state, _cx| state.jump_to(target));
         self.clear_cache();
     }
 
-    /// Scale the transition's start and end goals by the given ratio.
+    /// Multiplies the start value and the goal by `ratio`.
     ///
-    /// This preserves the relative progress of an in-flight animation when the
-    /// coordinate space changes (e.g. on window resize).  Both the start and
-    /// end goal are multiplied by `ratio` so the interpolated value remains
-    /// proportionally correct.
+    /// An in-flight transition keeps its progress when the coordinate space changes, such as a
+    /// window resize. Pass the ratio of the new scale to the old one.
     pub fn scale_by(&self, ratio: f32, cx: &mut App)
     where
         T: std::ops::Mul<f32, Output = T>,
@@ -223,25 +261,27 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.clear_cache();
     }
 
-    /// Returns the entity ID associated with this transition's state.
+    /// Returns the ID of the entity that holds this transition's state.
     ///
-    /// This can be useful for tracking or comparing transitions.
+    /// Use it to tell two transitions apart.
     pub fn entity_id(&self) -> EntityId {
         self.state.entity_id()
     }
 
-    /// Resets the transition to its initial state.
+    /// Returns the transition to its initial value, with no animation.
     ///
-    /// This clears all progress and sets both the start and end goals back to
-    /// the initial value that was provided when the transition was created.
-    /// The cache is also cleared.
+    /// This clears any progress and sets the goal back to the value the transition was created
+    /// with. The cache is cleared too.
     pub fn reset(&self, cx: &mut App) {
         self.state.update(cx, |state, _cx| state.reset());
         self.clear_cache();
     }
 }
 
-/// The animated value stored by the legacy transition hooks.
+/// The state behind a [`Transition`]: an [`Animated`] that reads the clock from [`Instant`].
+///
+/// Create one with `cx.new(|_| TransitionState::new(initial, motion))` and pass it to
+/// [`Transition::new`]. [`Window::use_keyed_transition`] does that for you.
 pub type TransitionState<T> = Animated<T, Instant>;
 
 #[cfg(all(test, feature = "test-support"))]
@@ -265,6 +305,40 @@ mod tests {
         let motion = motion.into();
         let state = cx.new(|_| TransitionState::new(initial, motion.clone()));
         Transition::new(state, motion)
+    }
+
+    #[gpui::test]
+    fn unkeyed_transitions_have_distinct_state_that_persists(cx: &mut TestAppContext) {
+        struct Hooks {
+            seen: Rc<RefCell<Vec<[EntityId; 2]>>>,
+        }
+
+        impl Render for Hooks {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let first = window.use_transition(cx, Duration::from_secs(1), |_, _| 2.0_f32);
+                let second = window.use_transition(cx, Duration::from_secs(1), |_, _| 7.0_f32);
+                assert_eq!(*first.read_goal(cx), 2.0);
+                assert_eq!(*second.read_goal(cx), 7.0);
+                self.seen
+                    .borrow_mut()
+                    .push([first.entity_id(), second.entity_id()]);
+                crate::Empty
+            }
+        }
+
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.), px(100.)), {
+            let seen = seen.clone();
+            move |_, _| Hooks { seen }
+        });
+        cx.run_until_parked();
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.run_until_parked();
+
+        let seen = seen.borrow();
+        assert!(seen.len() >= 2);
+        assert_ne!(seen[0][0], seen[0][1]);
+        assert!(seen.iter().all(|ids| *ids == seen[0]));
     }
 
     struct TransitionTestView {

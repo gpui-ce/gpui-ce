@@ -14,17 +14,48 @@ use crate::{
 
 const MIN_THREADS: usize = 2;
 
-/// A multithreaded [`PlatformDispatcher`] for tests and benchmarks.
+/// A [`PlatformDispatcher`] that runs background work on real threads, for tests and benchmarks.
 ///
-/// Background tasks run in parallel on a pool of worker threads and timers fire
-/// in real time on a dedicated timer thread, mirroring the production
-/// dispatchers (see `LinuxDispatcher`). Main-thread tasks are queued until the
-/// creating thread drains them via [`Self::run_until_idle`], since there is no
-/// platform run loop pumping them.
+/// Background tasks run in parallel on a pool of worker threads, and timers fire in real time
+/// on a timer thread. Main-thread tasks wait in a queue until the creating thread runs them
+/// with [`Self::run_until_idle`], because no platform run loop does that here.
 ///
-/// Unlike [`TestDispatcher`](crate::TestDispatcher), which runs everything on a
-/// single thread with a virtual clock, work dispatched through this dispatcher
-/// executes with production concurrency.
+/// Use this when a test needs production concurrency. For deterministic scheduling on one
+/// thread with a virtual clock, use [`TestDispatcher`](crate::TestDispatcher) instead.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::{
+///     Arc,
+///     atomic::{AtomicUsize, Ordering},
+/// };
+///
+/// use gpui::{BackgroundExecutor, ForegroundExecutor, ThreadedDispatcher};
+///
+/// let dispatcher = Arc::new(ThreadedDispatcher::new());
+/// let background = BackgroundExecutor::new(dispatcher.clone());
+/// let foreground = ForegroundExecutor::new(dispatcher.clone());
+/// let total = Arc::new(AtomicUsize::new(0));
+///
+/// let background_total = total.clone();
+/// background
+///     .spawn(async move {
+///         background_total.fetch_add(1, Ordering::SeqCst);
+///     })
+///     .detach();
+///
+/// let main_total = total.clone();
+/// foreground
+///     .spawn(async move {
+///         main_total.fetch_add(10, Ordering::SeqCst);
+///     })
+///     .detach();
+///
+/// // Runs the main-thread task, and waits for the background task to finish.
+/// dispatcher.run_until_idle();
+/// assert_eq!(total.load(Ordering::SeqCst), 11);
+/// ```
 pub struct ThreadedDispatcher {
     background_sender: PriorityQueueSender<RunnableVariant>,
     main_sender: PriorityQueueSender<RunnableVariant>,
@@ -120,8 +151,9 @@ impl Default for ThreadedDispatcher {
 impl ThreadedDispatcher {
     /// Creates a dispatcher whose main thread is the calling thread.
     ///
-    /// Worker and timer threads live for the lifetime of the process; the
-    /// dispatcher is expected to be created once and reused.
+    /// It starts one worker thread per available CPU, with at least two, and one timer thread.
+    /// The worker threads stop when the dispatcher is dropped, but the timer thread runs for the
+    /// rest of the process, so create one dispatcher and reuse it.
     pub fn new() -> Self {
         let (background_sender, background_receiver) = PriorityQueueReceiver::new();
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
@@ -340,12 +372,12 @@ impl ThreadedDispatcher {
         ran_any
     }
 
-    /// Cancels all pending timers so timers armed by one workload can't fire
-    /// during a later workload sharing this process-lifetime dispatcher.
+    /// Cancels every armed timer, and returns how many were canceled.
     ///
-    /// Dropping a timer runnable drops its completion sender, waking the task
-    /// awaiting the timer. Call [`Self::run_until_idle`] after this method to
-    /// drain any work that cancellation unblocks.
+    /// Use it between workloads that share one dispatcher, so a timer from the earlier workload
+    /// can't fire during the later one. Dropping a timer drops its completion sender, which wakes
+    /// the task that was awaiting it. Call [`Self::run_until_idle`] afterwards to run the work that
+    /// the cancellation unblocks.
     pub fn cancel_pending_timers(&self) -> usize {
         let timers = {
             let mut state = self.timers.state.lock();
@@ -358,8 +390,11 @@ impl ThreadedDispatcher {
         canceled
     }
 
-    /// Describes the dispatcher's idle-tracking state, for diagnosing
-    /// workloads that fail to reach quiescence.
+    /// Returns a one-line summary of the dispatcher's idle-tracking state.
+    ///
+    /// The summary lists the number of in-flight background and timer runnables, the number of
+    /// armed timers, and whether main-thread work is queued. Use it to find out why
+    /// [`Self::run_until_idle`] doesn't return.
     pub fn debug_state(&self) -> String {
         let inflight = *self.idle.inflight.lock();
         let timers = self.timers.state.lock().heap.len();

@@ -14,19 +14,26 @@ use std::{
     time::Duration,
 };
 
-/// Type-erased closure shape expected by [`Scheduler::spawn_dedicated`]:
-/// runs on a [`LocalExecutor`], returns a boxed future whose output is itself
-/// boxed as `Box<dyn Any + Send + Sync>`.
+/// The type-erased closure that [`Scheduler::spawn_dedicated`] runs on a new
+/// session.
+///
+/// It receives the session's [`LocalExecutor`] and returns a future whose
+/// output is boxed as `Box<dyn Any + Send + Sync>`, which keeps the trait
+/// object-safe. Call [`LocalExecutor::spawn_dedicated`] or
+/// [`BackgroundExecutor::spawn_dedicated`] instead of building one by hand.
 pub type DedicatedFn = Box<
     dyn FnOnce(LocalExecutor) -> Pin<Box<dyn Future<Output = Box<dyn Any + Send + Sync>> + 'static>>
         + Send
         + 'static,
 >;
 
-/// A `!Send` executor pinned to a single session. Tasks spawned on it run in
-/// order on whichever thread drains the dispatch destination supplied at
-/// construction time — typically the main thread for the default session, or
-/// a dedicated OS thread for sessions created by `spawn_dedicated_thread`.
+/// An executor for one session, for futures that are not `Send`.
+///
+/// Tasks spawned on a `LocalExecutor` run in order on whichever thread drains
+/// the dispatch destination it was built with. That is the main thread for the
+/// default session, or a dedicated thread for a session created with
+/// [`LocalExecutor::spawn_dedicated`]. Futures spawned here are polled and
+/// dropped on the thread that spawned them.
 #[derive(Clone)]
 pub struct LocalExecutor {
     session_id: SessionId,
@@ -39,14 +46,13 @@ pub struct LocalExecutor {
 }
 
 impl LocalExecutor {
-    /// Constructs a local executor that runs spawned tasks by sending their
-    /// runnables through `dispatch`. The `scheduler` is retained for access to
-    /// clocks, timers, and other scheduler-level services.
+    /// Creates a local executor for `session_id` that sends each spawned task's
+    /// runnables to `dispatch`.
     ///
-    /// For the common case of routing runnables through
-    /// `Scheduler::schedule_local`, callers pass a closure that does exactly
-    /// that. `spawn_dedicated_thread` instead passes a closure that sends to
-    /// the dedicated thread's channel.
+    /// For the default session, `dispatch` usually calls
+    /// [`Scheduler::schedule_local`]. The dedicated-session path passes a
+    /// closure that sends to the dedicated thread's channel. `scheduler` gives
+    /// the executor access to clocks, timers and the other scheduler services.
     pub fn new(
         session_id: SessionId,
         scheduler: Arc<dyn Scheduler>,
@@ -60,14 +66,22 @@ impl LocalExecutor {
         }
     }
 
+    /// Returns the session this executor runs tasks for.
     pub fn session_id(&self) -> SessionId {
         self.session_id
     }
 
+    /// Returns the scheduler that this executor's timers and clock come from.
     pub fn scheduler(&self) -> &Arc<dyn Scheduler> {
         &self.scheduler
     }
 
+    /// Spawns a future on this session and returns a [`Task`] for its output.
+    ///
+    /// The future doesn't need to be `Send`. It is polled on the thread that
+    /// spawned it, so it runs on the session's thread when called from there.
+    /// Dropping the returned task cancels the future; call [`Task::detach`] to
+    /// let it run to completion instead.
     #[track_caller]
     pub fn spawn<F>(&self, future: F) -> Task<F::Output>
     where
@@ -88,10 +102,11 @@ impl LocalExecutor {
         Task(TaskState::Spawned(task))
     }
 
-    /// Like [`Self::spawn`], but routes the task's runnables through the
-    /// given dispatch destination instead of this executor's own. The
-    /// destination must deliver runnables to this executor's thread: the
-    /// future is polled and dropped on the spawning thread.
+    /// Like [`Self::spawn`], but sends the task's runnables to `dispatch`
+    /// instead of this executor's own destination.
+    ///
+    /// `dispatch` must deliver runnables back to this executor's thread. The
+    /// future is polled and dropped on the thread that spawned it.
     #[track_caller]
     pub fn spawn_with_dispatch<F>(
         &self,
@@ -115,6 +130,16 @@ impl LocalExecutor {
         Task(TaskState::Spawned(task))
     }
 
+    /// Blocks the current thread until `future` completes, and returns its output.
+    ///
+    /// Use this where async code can't be used, such as a test or the entry
+    /// point of a session. Not available on wasm, where the main thread can't
+    /// block.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scheduler stops before `future` completes, for example
+    /// because `future` waits on work that can never run.
     #[cfg(not(target_family = "wasm"))]
     pub fn block_on<Fut: Future>(&self, future: Fut) -> Fut::Output {
         use std::cell::Cell;
@@ -131,8 +156,12 @@ impl LocalExecutor {
         output.take().expect("block_on future did not complete")
     }
 
-    /// Block until the future completes or timeout occurs.
-    /// Returns Ok(output) if completed, Err(future) if timed out.
+    /// Blocks the current thread until `future` completes or `timeout` elapses.
+    ///
+    /// Returns `Ok` with the output if the future completed in time. On timeout
+    /// it returns `Err` with the unfinished future. Await that future later to
+    /// keep waiting, or drop it to cancel the work. The future may already have
+    /// run part of its work.
     #[cfg(not(target_family = "wasm"))]
     pub fn block_with_timeout<Fut: Future>(
         &self,
@@ -161,23 +190,29 @@ impl LocalExecutor {
         }
     }
 
+    /// Returns a [`Timer`] that completes after `duration`.
     #[track_caller]
     pub fn timer(&self, duration: Duration) -> Timer {
         self.scheduler.timer(duration)
     }
 
+    /// Returns the current time from this scheduler's clock.
+    ///
+    /// Under the test scheduler this is the simulated clock, which moves only
+    /// when the test advances it.
     pub fn now(&self) -> Instant {
         self.scheduler.clock().now()
     }
 
-    /// Spawn a closure on a fresh session pinned to its own [`LocalExecutor`].
-    /// The closure runs on a new OS thread under `PlatformScheduler`, or on
-    /// the test scheduler's loop under `TestScheduler`.
+    /// Spawns a closure on a new session that has its own [`LocalExecutor`].
     ///
-    /// The returned `Task` represents the dedicated work: dropping it cancels
-    /// the dedicated closure, `.await`ing it yields the closure's return
-    /// value, `.detach()`ing it lets the dedicated work run independently of
-    /// the caller.
+    /// The closure runs on a new OS thread under the platform scheduler, or
+    /// on the test scheduler's loop under `TestScheduler`. Its future can use
+    /// the executor it receives to spawn more work on that thread.
+    ///
+    /// The returned task is the closure's work. Dropping it cancels the work,
+    /// awaiting it yields the closure's return value, and [`Task::detach`]
+    /// lets the work run on after the caller is done with it.
     #[track_caller]
     pub fn spawn_dedicated<F, Fut>(&self, f: F) -> Task<Fut::Output>
     where
@@ -207,16 +242,27 @@ where
     })
 }
 
+/// An executor that runs `Send` futures on the background thread pool.
+///
+/// Applications get one from `background_executor` on their context. Cloning
+/// is cheap, and every clone shares the same scheduler.
 #[derive(Clone)]
 pub struct BackgroundExecutor {
     scheduler: Arc<dyn Scheduler>,
 }
 
 impl BackgroundExecutor {
+    /// Creates a background executor that spawns onto `scheduler`.
     pub fn new(scheduler: Arc<dyn Scheduler>) -> Self {
         Self { scheduler }
     }
 
+    /// Spawns a future on the background thread pool with the default priority.
+    ///
+    /// The future may run on any background thread, so it must be [`Send`]. Dropping
+    /// the returned [`Task`] cancels the future. Call [`Task::detach`] to let
+    /// it finish on its own. Use [`LocalExecutor::spawn`] for futures that
+    /// aren't `Send` or that need to stay on the main thread.
     #[track_caller]
     pub fn spawn<F>(&self, future: F) -> Task<F::Output>
     where
@@ -226,6 +272,10 @@ impl BackgroundExecutor {
         self.spawn_with_priority(Priority::default(), future)
     }
 
+    /// Spawns a future on the background thread pool at `priority`.
+    ///
+    /// Like [`Self::spawn`], but the scheduler uses `priority` to order this
+    /// future against other background work waiting to run.
     #[track_caller]
     pub fn spawn_with_priority<F>(&self, priority: Priority, future: F) -> Task<F::Output>
     where
@@ -251,7 +301,10 @@ impl BackgroundExecutor {
         Task(TaskState::Spawned(task))
     }
 
-    /// Spawns a future on a dedicated realtime thread for audio processing.
+    /// Spawns a future on the platform's realtime thread, for latency-sensitive
+    /// work such as audio processing.
+    ///
+    /// The future must be [`Send`]. Use [`Self::spawn`] for everything else.
     #[track_caller]
     pub fn spawn_realtime<F>(&self, future: F) -> Task<F::Output>
     where
@@ -282,27 +335,34 @@ impl BackgroundExecutor {
         Task(TaskState::Spawned(task))
     }
 
+    /// Returns a [`Timer`] that completes after `duration`.
     #[track_caller]
     pub fn timer(&self, duration: Duration) -> Timer {
         self.scheduler.timer(duration)
     }
 
+    /// Returns the current time from this scheduler's clock.
+    ///
+    /// Under the test scheduler this is the simulated clock, which moves only
+    /// when the test advances it.
     pub fn now(&self) -> Instant {
         self.scheduler.clock().now()
     }
 
+    /// Returns the scheduler that this executor spawns onto.
     pub fn scheduler(&self) -> &Arc<dyn Scheduler> {
         &self.scheduler
     }
 
-    /// Spawn a closure on a fresh session pinned to its own [`LocalExecutor`].
-    /// The closure runs on a new OS thread under `PlatformScheduler`, or on
-    /// the test scheduler's loop under `TestScheduler`.
+    /// Spawns a closure on a new session that has its own [`LocalExecutor`].
     ///
-    /// The returned `Task` represents the dedicated work: dropping it cancels
-    /// the dedicated closure, `.await`ing it yields the closure's return
-    /// value, `.detach()`ing it lets the dedicated work run independently of
-    /// the caller.
+    /// The closure runs on a new OS thread under the platform scheduler, or on
+    /// the test scheduler's loop under `TestScheduler`. Its future can use
+    /// the executor it receives to spawn more work on that thread.
+    ///
+    /// The returned task is the closure's work. Dropping it cancels the work,
+    /// awaiting it yields the closure's return value, and [`Task::detach`]
+    /// lets the work run on after the caller is done with it.
     #[track_caller]
     pub fn spawn_dedicated<F, Fut>(&self, f: F) -> Task<Fut::Output>
     where
@@ -317,16 +377,18 @@ impl BackgroundExecutor {
     }
 }
 
-/// A long-lived handle to one dedicated session: every future spawned on it
-/// runs on that session's single thread, never on the background pool.
+/// A handle to one long-lived session. Every future spawned on it runs on that
+/// session's single thread, never on the background pool.
 ///
-/// Use this when tasks rely on thread-local state being coherent across
-/// spawns, or when the per-thread setup cost of the work is high enough that
-/// it should be paid once. Creating the session costs a thread (on the web, a
-/// worker — expensive); each spawn afterwards is just a channel send.
+/// Use this when tasks rely on thread-local state that must stay the same
+/// across spawns, or when per-thread setup is expensive enough to pay once.
+/// Creating the handle starts a thread (on the web, a worker, which needs the
+/// `wasm-threads` feature and is costly). Each later spawn only sends a message
+/// to that thread.
 ///
-/// Dropping the handle cancels the session: queued and future spawns resolve
-/// to cancelled tasks.
+/// Dropping the handle cancels the session. Futures that haven't run yet are
+/// cancelled: awaiting one of their [`Task`]s panics, and a
+/// [`FallibleTask`] resolves to `None`.
 pub struct DedicatedExecutor {
     sender: flume::Sender<Runnable<RunnableMeta>>,
     _session: Task<()>,
@@ -334,8 +396,10 @@ pub struct DedicatedExecutor {
 
 impl DedicatedExecutor {
     /// Starts a dedicated session on `executor` and returns a handle that
-    /// spawns futures onto it. Under `TestScheduler` the session runs on the
-    /// deterministic test loop; no real thread is created.
+    /// spawns futures onto it.
+    ///
+    /// Under `TestScheduler` the session runs on the deterministic test loop,
+    /// and no real thread is created.
     #[track_caller]
     pub fn new(executor: &BackgroundExecutor) -> Self {
         let (sender, receiver) = flume::unbounded::<Runnable<RunnableMeta>>();
@@ -350,11 +414,12 @@ impl DedicatedExecutor {
         }
     }
 
-    /// Spawns a future onto the dedicated session's thread.
+    /// Spawns a future onto the dedicated session's thread and returns a
+    /// [`Task`] for its output.
     ///
-    /// The returned task has the usual semantics: dropping it cancels the
-    /// future, `.await`ing it yields the output, `.detach()`ing it lets it
-    /// run to completion on its own.
+    /// The future must be [`Send`], because it moves to the session's thread.
+    /// Dropping the task cancels the future, awaiting the task yields its
+    /// output, and [`Task::detach`] lets it run to completion on its own.
     #[track_caller]
     pub fn spawn<F>(&self, future: F) -> Task<F::Output>
     where
@@ -375,12 +440,30 @@ impl DedicatedExecutor {
     }
 }
 
-/// Task is a primitive that allows work to happen in the background.
+/// A handle to a future that runs in the background, and to its output.
 ///
-/// It implements [`Future`] so you can `.await` on it.
+/// Executors return a `Task` from their `spawn` methods. `gpui::Task` is this
+/// type. The handle controls the future's lifetime in three ways:
 ///
-/// If you drop a task it will be cancelled immediately. Calling [`Task::detach`] allows
-/// the task to continue running, but with no way to return a value.
+/// - **Dropping** the task cancels the future. It stops at its current
+///   `.await` point and is never polled again. Work it already finished stays
+///   finished. Keep the handle alive while you need the result.
+/// - **[`Task::detach`]** gives up the handle and lets the future run to
+///   completion. Its output is discarded, so use this for side effects.
+/// - **Awaiting** the task waits for the output. A `Task` implements
+///   [`Future`], and awaiting it consumes it. If the future panics, the panic
+///   resumes in the awaiting code.
+///
+/// Use [`Task::ready`] for a value you already have. Use [`Task::fallible`]
+/// when a cancelled task should resolve to `None` instead of panicking.
+///
+/// # Panics
+///
+/// Awaiting a task panics if the task closed without producing an output. This
+/// happens when the scheduler drops the runnable before it runs, as during
+/// shutdown. Use [`Task::fallible`] to get `None` in that case.
+///
+/// For the bigger picture, see `gpui::_documentation::concepts::executors`.
 #[must_use]
 pub struct Task<T>(TaskState<T>);
 
@@ -518,7 +601,19 @@ impl<T> RendezvousSender<T> {
 }
 
 impl<T> Task<T> {
-    /// Creates a new task that will resolve with the value
+    /// Returns a task that is already complete and resolves to `val`.
+    ///
+    /// Use it where a function returns a `Task` but the value is known now,
+    /// such as a cache hit. No work is scheduled. Dropping or detaching the
+    /// task has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use scheduler::Task;
+    /// let task = Task::ready(42);
+    /// assert!(task.is_ready());
+    /// ```
     pub fn ready(val: T) -> Self {
         Task(TaskState::Ready(Some(val)))
     }
@@ -537,11 +632,27 @@ impl<T> Task<T> {
         )
     }
 
-    /// Creates a Task from an async_task::Task
+    /// Wraps an `async_task::Task` that carries [`RunnableMeta`] as its metadata.
+    ///
+    /// The executors use this internally. Call it only when you build the
+    /// `async_task` runnable yourself.
     pub fn from_async_task(task: async_task::Task<T, RunnableMeta>) -> Self {
         Task(TaskState::Spawned(task))
     }
 
+    /// Returns `true` if the output is ready to take without waiting.
+    ///
+    /// A [`Task::ready`] task is always ready. A spawned task becomes ready
+    /// when its future finishes, even if the output hasn't been awaited yet.
+    /// This is a snapshot: a task on another thread may finish right after the
+    /// call returns `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use scheduler::Task;
+    /// assert!(Task::ready("done").is_ready());
+    /// ```
     pub fn is_ready(&self) -> bool {
         match &self.0 {
             TaskState::Ready(_) => true,
@@ -551,7 +662,12 @@ impl<T> Task<T> {
         }
     }
 
-    /// Detaching a task runs it to completion in the background
+    /// Lets the future run to completion in the background and discards its
+    /// output.
+    ///
+    /// Use this for work whose result you don't need, such as saving a file or
+    /// sending a message. Dropping the task would cancel it instead. Detaching
+    /// a [`Task::ready`] task does nothing.
     pub fn detach(self) {
         match self {
             Task(TaskState::Ready(_)) => {}
@@ -561,7 +677,10 @@ impl<T> Task<T> {
         }
     }
 
-    /// Converts this task into a fallible task that returns `Option<T>`.
+    /// Converts this task into a [`FallibleTask`], which resolves to `None`
+    /// instead of panicking when the task closes without an output.
+    ///
+    /// A panic inside the future still propagates to the awaiter.
     pub fn fallible(self) -> FallibleTask<T> {
         FallibleTask(match self.0 {
             TaskState::Ready(val) => FallibleTaskState::Ready(val),
@@ -576,14 +695,17 @@ impl<T> Task<T> {
 }
 
 impl Task<Box<dyn Any + Send + Sync>> {
-    /// Reinterprets the boxed output as a concrete `T` via downcast on
-    /// completion. Used by [`LocalExecutor::spawn_dedicated`] and
-    /// [`BackgroundExecutor::spawn_dedicated`] to recover the user closure's
-    /// `Fut::Output` from the dyn-safe [`Scheduler::spawn_dedicated`].
+    /// Converts a task that yields a boxed `Any` into a task that yields `T`.
     ///
-    /// Panics on poll if the inner output is not in fact a `T` -- a logic
-    /// error in whatever produced the inner task, since the downcast type is
-    /// chosen by the caller of `downcast`.
+    /// [`LocalExecutor::spawn_dedicated`] and [`BackgroundExecutor::spawn_dedicated`]
+    /// use this to recover the closure's output type from the type-erased
+    /// [`Scheduler::spawn_dedicated`].
+    ///
+    /// # Panics
+    ///
+    /// Polling the returned task panics if the boxed value is not a `T`. The
+    /// check runs on poll, not in this call. A mismatch is a bug in whatever
+    /// produced the inner task, because the caller chose `T`.
     pub fn downcast<T: Send + Sync + 'static>(self) -> Task<T> {
         Task(TaskState::Downcast {
             inner: Box::new(self),
@@ -605,7 +727,13 @@ impl<T> std::fmt::Debug for Task<T> {
     }
 }
 
-/// A task that returns `Option<T>` instead of panicking when cancelled.
+/// A [`Task`] that resolves to `Option<T>`, and to `None` instead of panicking
+/// when the task is cancelled.
+///
+/// Create one with [`Task::fallible`]. Like `Task`, dropping it cancels the
+/// future and detaching lets it finish. Await it to get `Some(output)`, or
+/// `None` if the task closed without an output. A panic in the future still
+/// propagates to the awaiter.
 #[must_use]
 pub struct FallibleTask<T>(FallibleTaskState<T>);
 
@@ -627,12 +755,14 @@ enum FallibleTaskState<T> {
 }
 
 impl<T> FallibleTask<T> {
-    /// Creates a new fallible task that will resolve with the value.
+    /// Returns a fallible task that is already complete and resolves to
+    /// `Some(val)`.
     pub fn ready(val: T) -> Self {
         FallibleTask(FallibleTaskState::Ready(Some(val)))
     }
 
-    /// Detaching a task runs it to completion in the background.
+    /// Lets the future run to completion in the background and discards its
+    /// output. See [`Task::detach`].
     pub fn detach(self) {
         match self.0 {
             FallibleTaskState::Ready(_) => {}

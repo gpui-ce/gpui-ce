@@ -1,14 +1,18 @@
-//! Touch gesture recognition vocabulary.
+//! Touch gesture recognition.
 //!
-//! GPUI recognizes gestures from raw [`TouchEvent`](crate::TouchEvent)s in a
-//! single, portable arena in gpui core: recognizers compete for in-flight
-//! touches, winners claim them, and losers are cancelled. Recognized gestures
-//! are surfaced through *existing* semantic events wherever possible, a tap
-//! becomes [`ClickEvent::Touch`](crate::ClickEvent), a pan becomes
-//! [`ScrollWheelEvent`](crate::ScrollWheelEvent)s carrying a
-//! [`TouchPhase`](crate::TouchPhase), and a pinch becomes
-//! [`PinchEvent`](crate::PinchEvent)s — so components written against
-//! `on_click` and scroll containers work untouched on mobile.
+//! GPUI recognizes gestures from raw [`TouchEvent`](crate::TouchEvent)s in one
+//! portable recognizer in gpui core. Recognized gestures are reported through
+//! the existing mouse and scroll events, so code written against `on_click` and
+//! scroll containers works on touch screens without changes:
+//!
+//! - A tap becomes a synthesized left mouse press and release, which reach
+//!   `on_click` as a [`ClickEvent::Mouse`](crate::ClickEvent).
+//! - A pan becomes [`ScrollWheelEvent`](crate::ScrollWheelEvent)s carrying a
+//!   [`TouchPhase`](crate::TouchPhase), and continues as momentum after a fling.
+//! - A long press becomes a [`LongPressEvent`], and a drag claimed by an element
+//!   becomes a [`TouchDragEvent`].
+//!
+//! Pinch recognition from touch is not implemented yet.
 
 use std::collections::VecDeque;
 use std::mem;
@@ -44,7 +48,12 @@ fn movements_oppose(left: Point<Pixels>, right: Point<Pixels>) -> bool {
     f32::from(left.x) * f32::from(right.x) + f32::from(left.y) * f32::from(right.y) < 0.
 }
 
-/// Tracks the dominant axis across the events in a scroll gesture.
+/// Keeps a scroll gesture on one axis, so a mostly vertical swipe does not
+/// drift sideways.
+///
+/// Keep one `OngoingScroll` per scroll container and pass each scroll event
+/// through [`OngoingScroll::filter`] before applying it. GPUI's `div` element
+/// keeps one for each scrollable container.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OngoingScroll {
     last_event: Option<Instant>,
@@ -52,7 +61,31 @@ pub struct OngoingScroll {
 }
 
 impl OngoingScroll {
-    /// Filters the given delta to the dominant axis of the current scroll gesture.
+    /// Zeroes the component of `delta` off the gesture's dominant axis.
+    ///
+    /// The first event of a gesture picks the axis with the larger absolute
+    /// movement. Later events keep that axis until the movement clearly favors
+    /// the other axis, by at least 1.9 times and at least 6 pixels, and then the
+    /// gesture is free on both axes again. A gesture starts again at a
+    /// [`TouchPhase::Started`] event, or after 28 milliseconds without an event,
+    /// which covers platforms that only send [`TouchPhase::Moved`]. A
+    /// [`TouchPhase::Ended`] or [`TouchPhase::Cancelled`] event clears the gesture.
+    ///
+    /// `delta` is in logical pixels and is changed in place. A zero delta on
+    /// [`TouchPhase::Started`] clears the gesture, and other zero deltas are
+    /// ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{OngoingScroll, Pixels, Point, TouchPhase, point, px};
+    ///
+    /// let mut scroll = OngoingScroll::default();
+    /// let mut delta: Point<Pixels> = point(px(10.), px(2.));
+    /// scroll.filter(&mut delta, TouchPhase::Started);
+    /// // The horizontal movement dominates, so the vertical part is dropped.
+    /// assert_eq!(delta, point(px(10.), px(0.)));
+    /// ```
     ///
     /// Gestures are delimited by their touch phase when available, with a timeout
     /// fallback for platforms that only emit [`TouchPhase::Moved`].
@@ -107,25 +140,43 @@ impl OngoingScroll {
     }
 }
 
-/// Feel constants consumed by gesture recognizers. Provided on a best-effort
-/// basis, depending on each platform's support, defaulting to GPUI's own
-/// (iOS flavored) values
+/// The timing, distance and feel constants that touch gesture recognition uses.
+///
+/// The window reads these once, when it opens, from the platform's
+/// [`PlatformGestures::tuning`]. Platforms override the defaults when their
+/// users expect different feel. The defaults follow iOS.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use gpui::{GestureTuning, px};
+///
+/// let tuning = GestureTuning {
+///     touch_slop: px(12.),
+///     long_press_duration: Duration::from_millis(600),
+///     ..GestureTuning::default()
+/// };
+/// assert_eq!(tuning.multi_tap_slop, px(16.));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GestureTuning {
-    /// Distance a touch may travel before it stops being a potential tap and
-    /// becomes a pan/drag.
+    /// How far a touch may move, in logical pixels, before it stops being a tap
+    /// and becomes a pan or drag. The default is `8` pixels.
     pub touch_slop: Pixels,
-    /// Maximum interval between taps for them to accumulate a tap count.
+    /// The longest gap between taps that still lets them count as a multi-tap.
+    /// The default is 400 milliseconds.
     pub multi_tap_interval: Duration,
-    /// Maximum distance between taps for them to accumulate a tap count.
+    /// The largest distance between two taps, in logical pixels, that still
+    /// counts them as one multi-tap. The default is `16` pixels.
     pub multi_tap_slop: Pixels,
-    /// How long a touch must remain within [`Self::touch_slop`] to be
-    /// recognized as a long press.
+    /// How long a touch must stay within [`Self::touch_slop`] before it counts as a
+    /// long press. The default is 500 milliseconds.
     pub long_press_duration: Duration,
-    /// How scroll momentum decelerates after a fling.
+    /// How scroll momentum slows down after a fling.
     pub scroll_physics: ScrollPhysics,
-    /// Minimum release velocity, in pixels per second, required to start
-    /// scroll momentum.
+    /// The slowest release speed, in pixels per second, that still starts scroll
+    /// momentum. The default is `50`.
     pub min_fling_velocity: f32,
 }
 
@@ -142,17 +193,18 @@ impl Default for GestureTuning {
     }
 }
 
-/// How free scrolling decelerates after a fling.
+/// How a fling slows down after the finger lifts.
 ///
-/// This models deceleration only. Boundary behavior — bouncing, edge glow,
-/// clamping — is the scroll container's policy: the container is the one that
-/// knows its extents.
+/// This models deceleration only. Boundary behavior, such as bouncing, edge glow
+/// and clamping, belongs to the scroll container, which knows its extents.
+/// Use [`ScrollPhysics::ios`] or [`ScrollPhysics::android`] for the platform
+/// feel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScrollPhysics {
     /// Exponential velocity decay, the `UIScrollView` model:
-    /// `velocity(t) = v₀ · decay_per_msᵐˢ`.
+    /// `velocity(t) = v₀ · decay_per_msᵗ`, where `t` is elapsed milliseconds.
     Exponential {
-        /// Per-millisecond velocity decay factor. `UIScrollView`'s normal
+        /// The velocity multiplier per millisecond. `UIScrollView`'s normal
         /// deceleration rate is `0.998`.
         decay_per_ms: f32,
     },
@@ -161,8 +213,8 @@ pub enum ScrollPhysics {
     /// the fling follows a cubic-Bezier ease-out curve. Transcribed from
     /// AOSP's `SplineOverScroller` (Apache-2.0).
     FrictionSpline {
-        /// The scroll friction coefficient;
-        /// `ViewConfiguration.getScrollFriction()` is `0.015` on Android.
+        /// The scroll friction coefficient. `ViewConfiguration.getScrollFriction()`
+        /// is `0.015` on Android.
         friction: f32,
         /// Pixels per physical inch of the display, in the coordinate space
         /// the fling runs in. Android folds display density into its
@@ -173,19 +225,21 @@ pub enum ScrollPhysics {
 }
 
 impl ScrollPhysics {
-    /// iOS scroll feel: `UIScrollView`'s normal deceleration rate.
+    /// Returns the iOS feel: exponential decay at `UIScrollView`'s normal rate of
+    /// `0.998` per millisecond. This is the default in [`GestureTuning`].
     pub fn ios() -> Self {
         Self::Exponential {
             decay_per_ms: 0.998,
         }
     }
 
-    /// Android scroll feel: `OverScroller` with stock friction, at Android's
-    /// nominal density of 160 density-independent pixels per inch — the
-    /// right pairing when fling distances are in logical pixels. Platforms
-    /// that fling in physical pixels, or know the display's true density in
-    /// their logical space, should construct
-    /// [`ScrollPhysics::FrictionSpline`] directly.
+    /// Returns the Android feel: `OverScroller` with its stock friction of `0.015`
+    /// at 160 pixels per inch, Android's nominal density.
+    ///
+    /// Use this when fling distances are in logical pixels. A platform that
+    /// flings in physical pixels, or that knows the display's real density,
+    /// should build [`ScrollPhysics::FrictionSpline`] with its own
+    /// `pixels_per_inch` instead.
     pub fn android() -> Self {
         Self::FrictionSpline {
             friction: 0.015,
@@ -344,26 +398,27 @@ mod friction_spline {
     }
 }
 
-/// The set of gesture kinds that participate in recognition.
+/// The gestures a platform recognizes on its own.
 ///
-/// Used by [`PlatformGestures::native_recognizers`] to declare which gestures
-/// the platform recognizes natively rather than leaving to gpui core's
-/// portable recognizers.
+/// Returned by [`PlatformGestures::native_recognizers`] to say which gestures
+/// the platform handles natively instead of leaving them to GPUI's portable
+/// recognizer. GPUI does not read this value yet, so every kind is still
+/// recognized by the portable recognizer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GestureKinds {
-    /// Tap (and multi-tap), surfaced as [`ClickEvent::Touch`](crate::ClickEvent).
+    /// A tap, including multi-taps. GPUI reports taps as mouse clicks.
     pub tap: bool,
-    /// Long press, surfaced as [`LongPressEvent`].
+    /// A long press, reported as a [`LongPressEvent`].
     pub long_press: bool,
-    /// Pan/scroll (including fling momentum), surfaced as
+    /// A pan, including fling momentum, reported as
     /// [`ScrollWheelEvent`](crate::ScrollWheelEvent)s.
     pub pan: bool,
-    /// Pinch to zoom, surfaced as [`PinchEvent`](crate::PinchEvent)s.
+    /// A pinch to zoom, reported as [`PinchEvent`](crate::PinchEvent)s.
     pub pinch: bool,
 }
 
 impl GestureKinds {
-    /// No gestures; gpui core's portable recognizers handle everything.
+    /// No gestures. The portable recognizer handles all of them.
     pub const NONE: Self = Self {
         tap: false,
         long_press: false,
@@ -371,7 +426,7 @@ impl GestureKinds {
         pinch: false,
     };
 
-    /// All gesture kinds.
+    /// Every gesture kind.
     pub const ALL: Self = Self {
         tap: true,
         long_press: true,
@@ -380,15 +435,20 @@ impl GestureKinds {
     };
 }
 
-/// A direct touch drag claimed by an element before touch input becomes a tap,
-/// long press, or scrolling gesture.
+/// A touch drag that a listener can claim before the touch becomes a tap, long
+/// press or scroll.
+///
+/// GPUI offers a `Started` drag to listeners on [`Window::on_mouse_event`](crate::Window::on_mouse_event) when
+/// the touch begins. If a listener calls [`Window::prevent_default`](crate::Window::prevent_default) during that
+/// phase, the touch becomes a drag, and `Moved`, `Ended` and `Cancelled` follow.
+/// If no listener claims it, the touch keeps its usual meaning as a tap or pan.
 #[derive(Clone, Debug)]
 pub struct TouchDragEvent {
-    /// The phase of the touch drag.
+    /// Whether the drag started, moved, ended or was cancelled.
     pub phase: TouchPhase,
-    /// The position where the touch started.
+    /// Where the touch began, in window coordinates, in logical pixels.
     pub start_position: Point<Pixels>,
-    /// The touch's current position.
+    /// The touch's current position, in window coordinates, in logical pixels.
     pub position: Point<Pixels>,
 }
 
@@ -401,14 +461,21 @@ impl InputEvent for TouchDragEvent {
 impl GestureEvent for TouchDragEvent {}
 impl MouseEvent for TouchDragEvent {}
 
-/// A phased long-press gesture recognized from a touch.
+/// A touch held still long enough to count as a long press.
+///
+/// A touch becomes a long press when it stays within [`GestureTuning::touch_slop`]
+/// of its start for [`GestureTuning::long_press_duration`]. GPUI sends `Started`,
+/// then `Moved` if the finger moves, then `Ended` or `Cancelled`. Call
+/// [`Window::prevent_default`](crate::Window::prevent_default) during `Started` to claim the long press. Otherwise
+/// the touch keeps its tap or pan meaning. A claiming listener can also call
+/// [`Window::capture_long_press`](crate::Window::capture_long_press) to keep the press on its entity.
 #[derive(Clone, Debug)]
 pub struct LongPressEvent {
-    /// The phase of the long press.
+    /// Whether the long press started, moved, ended or was cancelled.
     pub phase: TouchPhase,
-    /// The position where the touch started.
+    /// Where the touch began, in window coordinates, in logical pixels.
     pub start_position: Point<Pixels>,
-    /// The touch's current position.
+    /// The touch's current position, in window coordinates, in logical pixels.
     pub position: Point<Pixels>,
 }
 
@@ -431,24 +498,30 @@ impl InputEvent for LongPressEvent {
 impl GestureEvent for LongPressEvent {}
 impl MouseEvent for LongPressEvent {}
 
-/// Platform gesture recognition services.
+/// Gesture settings that a platform supplies to GPUI.
 ///
-/// If your mobile platform supports native gesture recognition, use this
-/// to share it with GPUI.
+/// A platform returns an implementation from its `Platform::gestures` method.
+/// Implement it to change the touch feel of your platform. The window reads
+/// [`PlatformGestures::tuning`] when it opens. Nothing reads
+/// [`PlatformGestures::native_recognizers`] yet.
 pub trait PlatformGestures {
-    /// Feel constants for the portable recognizers on this platform.
+    /// Returns the timing and feel constants the portable recognizer uses on this
+    /// platform. The default is [`GestureTuning::default`].
     fn tuning(&self) -> GestureTuning {
         GestureTuning::default()
     }
 
-    /// The gesture kinds this platform recognizes natively.
+    /// Returns the gestures this platform recognizes natively. The default is
+    /// [`GestureKinds::NONE`], which means the portable recognizer handles
+    /// everything.
     fn native_recognizers(&self) -> GestureKinds {
         GestureKinds::NONE
     }
 }
 
-/// A no-op [`PlatformGestures`] implementation: no native recognizers and
-/// default tuning. Suitable for desktop platforms and tests.
+/// A [`PlatformGestures`] with the default tuning and no native recognizers.
+///
+/// Use it for desktop platforms and tests, where the defaults are enough.
 pub struct NullPlatformGestures;
 
 impl PlatformGestures for NullPlatformGestures {}

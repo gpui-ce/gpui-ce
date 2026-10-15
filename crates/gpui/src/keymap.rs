@@ -10,12 +10,44 @@ use crate::{Action, AsKeystroke, Keystroke, Unbind, is_no_action, is_unbind};
 use collections::{HashSet, TypeIdHashMap};
 use smallvec::SmallVec;
 
-/// An opaque identifier of which version of the keymap is currently active.
-/// The keymap's version is changed whenever bindings are added or removed.
+/// An identifier for one state of a [`Keymap`].
+///
+/// The version changes whenever bindings are added or the keymap is cleared. Store the version
+/// with a cached result, and recompute the result when the version differs.
 #[derive(Copy, Clone, Eq, PartialEq, Default)]
 pub struct KeymapVersion(usize);
 
-/// A collection of key bindings for the user's application.
+/// The set of key bindings for the application, and the rules for choosing among them.
+///
+/// Usually you don't build a `Keymap` yourself. [`App`](crate::App) holds one, and
+/// [`App::bind_keys`](crate::App::bind_keys) adds to it. It is also the place where the
+/// precedence rules are implemented, so this is the reference for how a keystroke resolves.
+///
+/// # Examples
+///
+/// ```standalone_crate
+/// use gpui::{Action, KeyBinding, KeyContext, Keymap, Keystroke, actions};
+///
+/// actions!(keymap_docs, [Save, Format]);
+///
+/// let keymap = Keymap::new(vec![
+///     KeyBinding::new("cmd-s", Format, Some("Workspace")),
+///     KeyBinding::new("cmd-s", Save, Some("Editor")),
+/// ]);
+///
+/// // In an editor inside a workspace, the deeper `Editor` binding wins.
+/// let typed = [Keystroke::parse("cmd-s").unwrap()];
+/// let context = [
+///     KeyContext::parse("Workspace").unwrap(),
+///     KeyContext::parse("Editor").unwrap(),
+/// ];
+/// let (bindings, pending) = keymap.bindings_for_input(&typed, &context);
+/// assert_eq!(bindings[0].action().name(), "keymap_docs::Save");
+/// assert!(!pending);
+/// ```
+///
+/// See [keyboard input](crate::_documentation::concepts::input_dispatch) for the full precedence
+/// rules as they apply during dispatch.
 #[derive(Default)]
 pub struct Keymap {
     bindings: Vec<KeyBinding>,
@@ -24,7 +56,9 @@ pub struct Keymap {
     version: KeymapVersion,
 }
 
-/// Index of a binding within a keymap.
+/// The position of a binding in a [`Keymap`], counted in the order bindings were added.
+///
+/// A larger index was added later, so it takes precedence over a smaller one at the same depth.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BindingIndex(usize);
 
@@ -49,19 +83,22 @@ fn binding_is_unbound(disabled_binding: &KeyBinding, binding: &KeyBinding) -> bo
 }
 
 impl Keymap {
-    /// Create a new keymap with the given bindings.
+    /// Creates a keymap that contains `bindings`, in the order given.
     pub fn new(bindings: Vec<KeyBinding>) -> Self {
         let mut this = Self::default();
         this.add_bindings(bindings);
         this
     }
 
-    /// Get the current version of the keymap.
+    /// Returns the current version. See [`KeymapVersion`].
     pub fn version(&self) -> KeymapVersion {
         self.version
     }
 
-    /// Add more bindings to the keymap.
+    /// Adds `bindings` after the existing ones and changes the [`version`](Self::version).
+    ///
+    /// A binding added later wins over an earlier one at the same depth. Add the user's bindings
+    /// after the defaults so that they take precedence.
     pub fn add_bindings<T: IntoIterator<Item = KeyBinding>>(&mut self, bindings: T) {
         for binding in bindings {
             let action_id = binding.action().as_any().type_id();
@@ -79,7 +116,7 @@ impl Keymap {
         self.version.0 += 1;
     }
 
-    /// Reset this keymap to its initial state.
+    /// Removes every binding and changes the [`version`](Self::version).
     pub fn clear(&mut self) {
         self.bindings.clear();
         self.binding_indices_by_action_id.clear();
@@ -87,13 +124,20 @@ impl Keymap {
         self.version.0 += 1;
     }
 
-    /// Iterate over all bindings, in the order they were added.
+    /// Iterates over all bindings, in the order they were added.
+    ///
+    /// The iterator includes [`NoAction`](crate::NoAction) and [`Unbind`](crate::Unbind) entries.
     pub fn bindings(&self) -> impl DoubleEndedIterator<Item = &KeyBinding> + ExactSizeIterator {
         self.bindings.iter()
     }
 
-    /// Iterate over all bindings for the given action, in the order they were added. For display,
-    /// the last binding should take precedence.
+    /// Iterates over the bindings that run `action`, in the order they were added.
+    ///
+    /// Bindings disabled by a later [`NoAction`](crate::NoAction) or [`Unbind`](crate::Unbind) are
+    /// left out. This ignores key contexts, so a binding is included even when it can't fire in the
+    /// current focus. To find the bindings that apply now, use
+    /// [`Window::bindings_for_action`](crate::Window::bindings_for_action). For a shortcut label,
+    /// use the last binding, which was added most recently.
     pub fn bindings_for_action<'a>(
         &'a self,
         action: &'a dyn Action,
@@ -119,7 +163,13 @@ impl Keymap {
                     }
 
                     if is_no_action(&*disabled_binding.action) {
-                        if disabled_binding_matches_context(disabled_binding, binding) {
+                        // Like `bindings_for_input`, a null only hides bindings from
+                        // equal or weaker sources (a larger meta is weaker).
+                        let source = binding.meta.map_or(0, |meta| meta.0);
+                        let removal_source = disabled_binding.meta.map_or(0, |meta| meta.0);
+                        if source >= removal_source
+                            && disabled_binding_matches_context(disabled_binding, binding)
+                        {
                             return None;
                         }
                     } else if is_unbind(&*disabled_binding.action)
@@ -135,8 +185,11 @@ impl Keymap {
         })
     }
 
-    /// Returns all bindings that might match the input without checking context. The bindings
-    /// returned in precedence order (reverse of the order they were added to the keymap).
+    /// Returns every binding that matches all of `input`, ignoring key contexts.
+    ///
+    /// The bindings are in precedence order: the most recently added comes first. Bindings that
+    /// need more keystrokes than `input` are left out. `NoAction` and `Unbind` entries that match
+    /// are included, but their effect on other bindings is not applied.
     pub fn all_bindings_for_input(&self, input: &[Keystroke]) -> Vec<KeyBinding> {
         self.bindings()
             .rev()
@@ -149,21 +202,50 @@ impl Keymap {
             .collect()
     }
 
-    /// Returns a list of bindings that match the given input, and a boolean indicating whether or
-    /// not more bindings might match if the input was longer. Bindings are returned in precedence
-    /// order (higher precedence first, reverse of the order they were added to the keymap).
+    /// Returns the bindings that match `input` in `context_stack`, and whether a longer input
+    /// could still match a binding.
     ///
-    /// Precedence is defined by the depth in the tree (matches on the Editor take precedence over
-    /// matches on the Pane, then the Workspace, etc.). Bindings with no context are treated as the
-    /// same as the deepest context.
+    /// The first value holds the matching bindings, highest precedence first. The second value is
+    /// `true` when some binding needs more keystrokes than `input`, so the caller should wait for
+    /// the next keystroke.
     ///
-    /// In the case of multiple bindings at the same depth, the ones added to the keymap later take
-    /// precedence. User bindings are added after built-in bindings so that they take precedence.
+    /// Precedence works as follows:
     ///
-    /// If a binding has been disabled with `"x": null` it will not be returned. Disabled bindings
-    /// are evaluated with the same precedence rules so you can disable a rule in a given context
-    /// only. A disabled binding only suppresses bindings from sources with equal or weaker
-    /// precedence: a base keymap null hides default bindings, but user bindings still apply.
+    /// - **Depth.** A binding's depth is the deepest point in `context_stack` where its predicate
+    ///   matches. A binding in a deeper context wins over one in a shallower context. A binding
+    ///   without a context is as deep as the stack, so it is at least as deep as any
+    ///   context-specific binding. At equal depth, the order rule below decides.
+    /// - **Order.** At the same depth, the binding added later wins.
+    /// - **`NoAction`.** A winning [`NoAction`](crate::NoAction) removes the lower-precedence
+    ///   bindings for the same keystrokes, unless they come from a stronger source. See
+    ///   [`KeyBindingMetaIndex`](crate::KeyBindingMetaIndex).
+    /// - **`Unbind`.** A winning [`Unbind`](crate::Unbind) removes the lower-precedence binding for
+    ///   the same keystrokes that runs the action it names, whatever that binding's context.
+    ///
+    /// Several bindings can be returned, because a match that isn't suppressed stays in the list.
+    ///
+    /// # Examples
+    ///
+    /// ```standalone_crate
+    /// use gpui::{Action, KeyBinding, KeyContext, Keymap, Keystroke, actions};
+    ///
+    /// actions!(input_docs, [Save, Format]);
+    ///
+    /// let keymap = Keymap::new(vec![
+    ///     KeyBinding::new("cmd-s", Format, Some("Workspace")),
+    ///     KeyBinding::new("cmd-s", Save, Some("Editor")),
+    /// ]);
+    ///
+    /// // The `Editor` binding is at depth 2 and the `Workspace` binding at depth 1.
+    /// let (bindings, _) = keymap.bindings_for_input(
+    ///     &[Keystroke::parse("cmd-s").unwrap()],
+    ///     &[
+    ///         KeyContext::parse("Workspace").unwrap(),
+    ///         KeyContext::parse("Editor").unwrap(),
+    ///     ],
+    /// );
+    /// assert_eq!(bindings[0].action().name(), "input_docs::Save");
+    /// ```
     pub fn bindings_for_input(
         &self,
         input: &[impl AsKeystroke],
@@ -253,7 +335,11 @@ impl Keymap {
         }
     }
 
-    /// Find the bindings that can follow the current input sequence.
+    /// Returns the bindings that `input` could still complete with more keystrokes, highest
+    /// precedence first, for the given `context_stack`.
+    ///
+    /// Use it to list the shortcuts available after a prefix, such as after `ctrl-k`. Bindings
+    /// that match `input` exactly, and `NoAction` and `Unbind` entries, are not included.
     pub fn possible_next_bindings_for_input(
         &self,
         input: &[Keystroke],
@@ -640,6 +726,41 @@ mod tests {
         ]);
         let (result, _) = keymap.bindings_for_input(&ctrl_x(), &editor_context());
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_bindings_for_action_disable_weaker_sources_only() {
+        // A base keymap null (meta 2) listed after the binding hides only
+        // bindings from equal or weaker sources, matching `bindings_for_input`.
+        for (source, expected) in [
+            (None, 1),
+            (Some(KeyBindingMetaIndex(0)), 1),
+            (Some(KeyBindingMetaIndex(1)), 1),
+            (Some(KeyBindingMetaIndex(2)), 0),
+            (Some(KeyBindingMetaIndex(3)), 0),
+        ] {
+            let mut binding = KeyBinding::new("ctrl-x", ActionAlpha {}, Some("editor"));
+            if let Some(source) = source {
+                binding.set_meta(source);
+            }
+            let mut keymap = Keymap::default();
+            keymap.add_bindings([
+                binding,
+                KeyBinding::new("ctrl-x", NoAction {}, Some("editor"))
+                    .with_meta(KeyBindingMetaIndex(2)),
+            ]);
+
+            let (candidates, _) = keymap.bindings_for_input(
+                &[Keystroke::parse("ctrl-x").unwrap()],
+                &[KeyContext::parse("editor").unwrap()],
+            );
+            assert_eq!(candidates.len(), expected, "{source:?}");
+            assert_eq!(
+                keymap.bindings_for_action(&ActionAlpha {}).count(),
+                expected,
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
