@@ -6891,6 +6891,7 @@ impl Window {
         let handle = PromptHandle::new(sender);
         let handle = (prompt_builder)(level, message, detail, answers, handle, self, cx);
         self.prompt = Some(handle);
+        self.refresh();
         receiver
     }
 
