@@ -6934,7 +6934,7 @@ impl Window {
     pub fn bindings_for_action(&self, action: &dyn Action) -> Vec<KeyBinding> {
         self.rendered_frame
             .dispatch_tree
-            .bindings_for_action(action, &self.rendered_frame.dispatch_tree.context_stack)
+            .bindings_for_action(action, &self.context_stack())
     }
 
     /// Returns the highest precedence key binding that invokes an action on the currently focused
@@ -6942,10 +6942,7 @@ impl Window {
     pub fn highest_precedence_binding_for_action(&self, action: &dyn Action) -> Option<KeyBinding> {
         self.rendered_frame
             .dispatch_tree
-            .highest_precedence_binding_for_action(
-                action,
-                &self.rendered_frame.dispatch_tree.context_stack,
-            )
+            .highest_precedence_binding_for_action(action, &self.context_stack())
     }
 
     /// Returns the key bindings for an action in a context.
@@ -9244,6 +9241,65 @@ mod tests {
             cx.test_window(failed.window).external_drag_files(),
             [(failed_path, true)]
         );
+    }
+
+    crate::actions!(shortcut_lookup_test, [LookupShortcut]);
+
+    struct ShortcutTargets {
+        a: FocusHandle,
+        b: FocusHandle,
+    }
+
+    impl Render for ShortcutTargets {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .key_context("ShortcutRoot")
+                .child(div().key_context("ShortcutA").track_focus(&self.a))
+                .child(div().key_context("ShortcutB").track_focus(&self.b))
+        }
+    }
+
+    #[gpui::test]
+    fn shortcut_lookup_follows_focus_between_rendered_nodes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("ctrl-r", LookupShortcut, Some("ShortcutRoot")),
+                KeyBinding::new("ctrl-a", LookupShortcut, Some("ShortcutA")),
+                KeyBinding::new("ctrl-b", LookupShortcut, Some("ShortcutB")),
+            ])
+        });
+        let window = cx.add_window(|window, cx| {
+            let a = cx.focus_handle();
+            let b = cx.focus_handle();
+            window.focus(&a, cx);
+            ShortcutTargets { a, b }
+        });
+        window
+            .update(cx, |this, window, cx| {
+                let keys = |window: &Window| {
+                    window
+                        .bindings_for_action(&LookupShortcut)
+                        .iter()
+                        .map(|binding| binding.keystrokes()[0].key().to_owned())
+                        .collect::<Vec<_>>()
+                };
+                let highest = |window: &Window| {
+                    window
+                        .highest_precedence_binding_for_action(&LookupShortcut)
+                        .map(|binding| binding.keystrokes()[0].key().to_owned())
+                };
+                assert_eq!(keys(window), ["r", "a"]);
+                assert_eq!(highest(window).as_deref(), Some("a"));
+
+                window.focus(&this.b, cx);
+                assert_eq!(keys(window), ["r", "b"]);
+                assert_eq!(highest(window).as_deref(), Some("b"));
+
+                window.blur(cx);
+                assert!(keys(window).is_empty());
+                assert_eq!(highest(window), None);
+            })
+            .unwrap();
     }
 
     struct FocusForwarder {
