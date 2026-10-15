@@ -1,7 +1,7 @@
 use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
-    layout::{EditableTextLayoutResult, EditableTextLayoutState},
+    layout::{EditableTextLayoutKey, EditableTextLayoutResult, EditableTextLayoutState},
 };
 use gpui::{
     A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, DispatchPhase,
@@ -9,17 +9,19 @@ use gpui::{
     HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParagraphDirection, Pixels, Point,
     ShapedText, SharedString, Size, StatefulInteractiveElement, Style, StyleRefinement, Styled,
-    TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity, Window, accesskit, point,
-    px, relative, size,
+    TextAlign, TextLayout, TextLayoutOptions, TextStyle, UnicodeBidi, WeakEntity, Window,
+    accesskit, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
-/// Creates a text input element.
-/// See [`EditableTextElement`] for usage.
+/// Creates an editable text element that is multiline by default.
 ///
-/// By default it is multiline, and therefore this is semantically equivalent to [`text_area`].
+/// The element is the same as [`text_area`] until you call
+/// [`EditableTextElement::multiline`] with `false`. The `id` keys the element's
+/// state and caret across frames, so it must stay the same from frame to frame.
+/// See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     let mut this = EditableTextElement {
@@ -41,21 +43,34 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     this
 }
 
-/// Creates a singleline text input element.
-/// See [`EditableTextElement`] for usage.
+/// Creates a single-line text input.
+///
+/// Newlines are removed from inserted text. Enter and Tab are passed to the
+/// surrounding view, so a form can submit on Enter or move focus on Tab. Up and
+/// Down move to the start and end of the text, respectively. See
+/// [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(false)
 }
 
-/// Creates a multiline text input element.
-/// See [`EditableTextElement`] for usage.
+/// Creates a multi-line text area.
+///
+/// Enter inserts a newline, and Tab inserts a tab character. Text wraps according
+/// to the element's `whitespace_*` style. See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(true)
 }
 
 /// An input field which users can type text into.
+///
+/// Create one with [`text_input`] for a single line, with [`text_area`] for
+/// several lines, or with [`editable_text`]. Style it with the usual
+/// [`Styled`](gpui::Styled) methods. The element's text lives in an
+/// [`EditableTextState`], which the element finds through its id, or which you
+/// attach with [`EditableTextElement::state`]. See the
+/// [module documentation](crate::editable_text) for examples.
 #[derive(derive_setters::Setters)]
 #[setters(generate = false)]
 pub struct EditableTextElement {
@@ -64,27 +79,34 @@ pub struct EditableTextElement {
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
-    /// Configures whether the field supports multiple lines of text.
-    /// Disabling this prevents actions like `enter` and navigating up and down.
+    /// Sets whether the field holds several lines of text.
     ///
-    /// Inputs containing newlines, such as pasted text, are not automatically sanitized.
-    /// This is a limitation of the current state of implementation and requires further iteration.
+    /// With `false`, Enter and Tab propagate to the surrounding view, and Up and
+    /// Down move to the start and end of the text. Newlines in inserted text,
+    /// including pasted text, are removed.
     #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
-    /// Assigns the text that should be displayed when storage of the element is empty.
+    /// Sets the text shown while the field is empty.
     #[setters(generate, strip_option, into)]
     placeholder: Option<SharedString>,
-    /// Configures whether the element is enabled and can accept input.
+    /// Sets whether the field accepts edits.
+    ///
+    /// When `false`, typing, paste, cut and delete do nothing, and multi-line fields
+    /// also ignore Enter and Tab. The field can still be focused, so the user can
+    /// select and copy the text.
     #[setters(generate)]
     accepts_input: bool,
     colors: EditableTextColors,
-    /// Sets the blinking interval of the caret.
+    /// Sets the time between caret blinks, and applies it to the field's caret.
+    ///
+    /// A zero duration turns blinking off. The interval is applied on each frame
+    /// that the element lays out, so it takes effect without any extra setup.
     #[setters(generate, strip_option)]
     caret_blink_interval: Option<Duration>,
-    /// Sets the width of the caret / text-cursor.
+    /// Sets the width of the caret. The default is 2 pixels.
     #[setters(generate, rename = "caret_w", into)]
     caret_width: Pixels,
-    /// Sets the height of the caret / text-cursor.
+    /// Sets the height of the caret.
     ///
     /// Relative lengths are resolved against the current line height. The default is
     /// `relative(1.)`, which makes the caret as tall as the line.
@@ -100,7 +122,7 @@ struct EditableTextColors {
     /// Color of the selection box.
     /// Could be driven by platform-provided styling?
     selection: Hsla,
-    /// Color of the caret / text cursor
+    /// Color of the caret or text cursor.
     caret: Hsla,
     /// Color of IME marked underlines
     ime_underline: Hsla,
@@ -122,21 +144,23 @@ impl Default for EditableTextColors {
 }
 
 impl EditableTextElement {
-    /// Assigns the underlying state of this element, which should persist across multiple frames.
-    /// The user should either create the entity once or utilize `Window::use_keyed_state`
-    /// to create an entity intrinsicly linked to the element.
-    /// If no state is configured, one will be linked to this element on first render via `Window::use_keyed_state`.
+    /// Attaches the state that holds this element's text.
+    ///
+    /// The state must outlive individual frames. Either create it once and keep
+    /// it in your view, or use [`EditableTextState::use_keyed`] so that it is
+    /// tied to the element's id. If you attach no state, the element creates one
+    /// on its first render with `Window::use_keyed_state`.
     pub fn state(self, state: WeakEntity<EditableTextState>) -> Self {
         *self.state_entity.borrow_mut() = state;
         self
     }
 
-    /// Sets the blinking interval of the caret to 500ms
+    /// Sets the caret blink interval to 500 milliseconds.
     pub fn caret_blink_interval_500ms(self) -> Self {
         self.caret_blink_interval(BLINK_INTERVAL_500MS)
     }
 
-    /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
+    /// Sets the color of the placeholder text, which is shown while the text is empty.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn placeholder_color(mut self, color: impl IntoColor<Hsla>) -> Self {
@@ -144,7 +168,7 @@ impl EditableTextElement {
         self
     }
 
-    /// Sets the color of the box highlighting selected text.
+    /// Sets the color of the box behind selected text.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn selection_color(mut self, color: Hsla) -> Self {
@@ -152,7 +176,7 @@ impl EditableTextElement {
         self
     }
 
-    /// Sets the color of the caret / text-cursor.
+    /// Sets the color of the caret.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn caret_color(mut self, color: Hsla) -> Self {
@@ -160,8 +184,8 @@ impl EditableTextElement {
         self
     }
 
-    /// Sets the color of the underlines rendered underneath text being editted/marked by InputMethodEditors
-    /// (for writing Chinese, Japanese, and Korean utf-16).
+    /// Sets the color of the underline under text that an input method editor
+    /// (IME) is composing, such as Chinese, Japanese or Korean input.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn marked_color(mut self, color: Hsla) -> Self {
@@ -176,7 +200,7 @@ impl InteractiveElement for EditableTextElement {
     }
 }
 
-// forced implementation since the API for the element doesnt use Stateful<Element>
+// Forced implementation because this element's API does not use Stateful<Element>.
 impl StatefulInteractiveElement for EditableTextElement {}
 
 impl Styled for EditableTextElement {
@@ -201,6 +225,7 @@ impl EditableTextActionElement<EditableTextState> for EditableTextElement {
 struct PrelayoutState {
     state: Entity<EditableTextState>,
     prev_layout_state: EditableTextLayoutState,
+    prev_layout_key: Option<EditableTextLayoutKey>,
     storage_version: u16,
     show_placeholder: bool,
     text: Option<SharedString>,
@@ -209,6 +234,7 @@ struct PrelayoutState {
     accepts_input: bool,
 }
 
+/// Internal state passed from layout to paint. Not part of the public API.
 #[doc(hidden)]
 pub struct LayoutState {
     layout_id: LayoutId,
@@ -236,7 +262,7 @@ struct AccessibilityPrepaint {
     focus: usize,
 }
 
-/// Internal type containing prepaint information used to paint the element
+/// Internal type containing prepaint information used to paint the element.
 #[doc(hidden)]
 pub struct PrepaintState {
     bounds: Bounds<Pixels>,
@@ -328,6 +354,7 @@ impl Element for EditableTextElement {
             let prelayout = PrelayoutState {
                 state: entity.clone(),
                 prev_layout_state: state.layout_data.state,
+                prev_layout_key: state.layout_data.layout_key.clone(),
                 show_placeholder,
                 storage_version: state.version(),
                 text,
@@ -347,8 +374,8 @@ impl Element for EditableTextElement {
             self.interactivity
                 .set_scroll_offset(global_id, window, -scroll_offset);
 
-            // Clear scroll_layout here in the very likely event that we wont need to
-            // recompute layout, in which case the layout result isnt rebuilt during `perform_text_layout`.
+            // Clear scroll_layout here in the very likely event that we won't need to
+            // recompute layout, in which case the layout result isn't rebuilt during `perform_text_layout`.
             entity.update(cx, |state, _cx| {
                 state.layout_data.next_scroll_offset = None;
             });
@@ -657,6 +684,17 @@ impl PrelayoutState {
         };
 
         let text = self.text.unwrap_or_default();
+        let layout_key = EditableTextLayoutKey {
+            text_style: TextStyle {
+                color,
+                ..text_style.clone()
+            },
+            source: text.clone(),
+            font_size,
+            line_height,
+            supports_multiline: self.supports_multiline,
+            accepts_input: self.accepts_input,
+        };
 
         window.request_measured_layout(
             Default::default(),
@@ -702,6 +740,7 @@ impl PrelayoutState {
                     && truncation.width.is_none()
                     && self.storage_version == self.prev_layout_state.last_seen_storage_version
                     && self.prev_layout_state.options == options
+                    && self.prev_layout_key.as_ref() == Some(&layout_key)
                 {
                     return size;
                 }
@@ -756,11 +795,12 @@ impl PrelayoutState {
                     line_height,
                     document_offset,
                     next_scroll_offset: initial_scroll,
+                    layout_key: Some(layout_key.clone()),
                 };
 
                 // Update the state for use in prepaint, paint, and action handlers.
                 // request_measured_layout caches this scope for processing later
-                // between layout and prepaint, so we cant just copy/move these values to the outer scope.
+                // between layout and prepaint, so we cannot copy or move these values to the outer scope.
                 self.state.update(cx, move |state, cx| {
                     state.layout_data = layout_data;
                     if state.layout_data.next_scroll_offset.is_some() {

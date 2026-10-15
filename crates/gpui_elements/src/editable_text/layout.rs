@@ -1,4 +1,4 @@
-use gpui::{Bounds, Pixels, Point, ShapedText, Size};
+use gpui::{Bounds, Pixels, Point, ShapedText, SharedString, Size, TextStyle};
 use std::sync::Arc;
 
 /// Data used across successive layout requests to gauge whether layout must be recomputed.
@@ -10,6 +10,19 @@ pub(super) struct EditableTextLayoutState {
     pub last_seen_storage_version: u16,
     /// Direction and alignment inputs used for this layout.
     pub options: gpui::TextLayoutOptions,
+}
+
+/// The inputs, besides storage version and layout options, that shaped the cached document.
+/// Any change to them must reshape the text rather than reuse the cached size.
+#[derive(Clone, PartialEq)]
+pub(super) struct EditableTextLayoutKey {
+    /// The text style with the effective (placeholder or content) color applied.
+    pub text_style: TextStyle,
+    pub source: SharedString,
+    pub font_size: Pixels,
+    pub line_height: Pixels,
+    pub supports_multiline: bool,
+    pub accepts_input: bool,
 }
 
 /// Internal state/result after the element has recomputed layout.
@@ -31,4 +44,6 @@ pub(super) struct EditableTextLayoutResult {
     /// The next position the scroll view should move to.
     /// Set by the state in response to user actions.
     pub next_scroll_offset: Option<Point<Pixels>>,
+    /// The inputs that produced `document`.
+    pub layout_key: Option<EditableTextLayoutKey>,
 }
