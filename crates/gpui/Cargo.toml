@@ -13,6 +13,10 @@ keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
 rust-version = "1.95"                                                  # required for Vec::push_mut
 
+[package.metadata.docs.rs]
+# The documentation teaches testing with `TestApp`, so document it.
+features = ["test-support"]
+
 [lints]
 workspace = true
 
@@ -47,7 +51,7 @@ image-default-formats = ["image/default-formats"]
 [lib]
 name = "gpui"
 path = "src/gpui.rs"
-doctest = false
+doctest = true
 
 [dependencies]
 accesskit.workspace = true
@@ -152,6 +156,9 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
+# Examples in the documentation use `TestApp`, so GPUI's own tests always
+# build with `test-support`.
+gpui = { path = ".", package = "gpui-ce", features = ["test-support"] }
 accesskit_consumer.workspace = true
 backtrace.workspace = true
 smol.workspace = true
