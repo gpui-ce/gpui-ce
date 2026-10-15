@@ -1,0 +1,27 @@
+<!-- Added to rustdoc pages on the GPUI site. Pages mark a live example with
+     <div class="gpui-example" data-example="NAME">fallback</div>; here that
+     becomes the example running in the browser. On docs.rs the fallback stays. -->
+<style>
+  .gpui-example { margin: 1em 0; }
+  .gpui-example iframe {
+    display: block;
+    width: 100%;
+    height: 340px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--main-background-color);
+  }
+</style>
+<script>
+  addEventListener("DOMContentLoaded", () => {
+    const root = document.querySelector('meta[name="rustdoc-vars"]')?.dataset.rootPath ?? "./";
+    for (const placeholder of document.querySelectorAll(".gpui-example[data-example]")) {
+      const name = placeholder.dataset.example;
+      const frame = document.createElement("iframe");
+      frame.src = `${root}../play/?example=${encodeURIComponent(name)}`;
+      frame.title = `The ${name} example, running live`;
+      frame.loading = "lazy";
+      placeholder.replaceChildren(frame);
+    }
+  });
+</script>
