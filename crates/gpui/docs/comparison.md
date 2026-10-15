@@ -26,7 +26,7 @@ invalidates ordinary views that read the entity; a cached subtree needs its own
 entity notified, as [the frame model](crate::_documentation::concepts::the_frame#rendering-less)
 explains. The separation gives focus, keymaps, custom layout, and virtualized
 large views distinct places in the system. egui keeps drawing code beside its
-button response, a compact arrangement for a tool or debug panel. 
+button response, a compact arrangement for a tool or debug panel.
 
 ## iced
 
@@ -50,7 +50,7 @@ concepts, while the element tree, event dispatch, and painting remain Rust
 values and traits. Application code reaches entities, actions, and platform
 services through those same values. Slint puts properties and bindings in
 compiled components, making the component language the seam between UI design
-and application code. 
+and application code.
 
 ## Dioxus and Tauri
 
@@ -65,7 +65,7 @@ comparison here refers to that WebView backend.
 GPUI has no HTML or CSS runtime and does not put the interface in a WebView. It
 uses Rust elements, its own layout and paint pipeline, and platform integrations
 behind [`Platform`](crate::Platform). CSS names, flexbox, and grid transfer as
-concepts, but web components and browser APIs do not. 
+concepts, but web components and browser APIs do not.
 
 ## Xilem and Floem
 
