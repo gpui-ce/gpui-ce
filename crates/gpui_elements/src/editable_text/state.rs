@@ -1134,6 +1134,8 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
+            // Let the surrounding view treat Enter as "submit", as in an HTML form.
+            cx.propagate();
             return;
         }
         if !self.layout_data.accepts_input {
@@ -1143,6 +1145,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.supports_multiline {
+            // Leave Tab to the surrounding view, for moving focus.
+            cx.propagate();
+            return;
+        }
         if !self.layout_data.accepts_input {
             return;
         }
