@@ -4382,6 +4382,7 @@ impl Window {
     ///
     /// The state for this transition is managed internally and will be recreated
     /// on each render. For persistent state across renders, use [`use_keyed_transition`](Self::use_keyed_transition).
+    #[track_caller]
     pub fn use_transition<T: Lerp + Clone + PartialEq + 'static>(
         &mut self,
         cx: &mut App,
