@@ -938,13 +938,17 @@ impl EditableTextState {
 
         // Push the entry onto the redo stack so the undo can be undone
         let selection = entry.selected_range;
+        // Redo should restore the selection from after this edit, not the one it undoes.
+        let mut inverse = entry.as_inverted(removed_text);
+        inverse.selected_range = self.selection_movement.result;
         self.history
             .as_mut()
             .expect("history was available when the entry was taken")
-            .push(dst, entry.as_inverted(removed_text));
+            .push(dst, inverse);
         self.set_selection(selection);
 
         self.scroll_to_caret();
+        self.emit_text_changed(cx);
         cx.notify();
     }
 }
@@ -1439,7 +1443,7 @@ mod tests {
     use super::*;
     use crate::editable_text::StringStorage;
     use gpui::{
-        AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
+        App, AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
     use gpui_parley::{ParleyTextSystem, SystemFonts};
@@ -2553,6 +2557,54 @@ mod tests {
                 }
             ); // "hello world".len() == 11
         });
+    }
+
+    #[gpui::test]
+    fn redo_restores_the_selection_from_before_undo(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5);
+        update_movement_input(view, cx, |input, window, cx| {
+            without_history_grouping(input);
+            input.replace_text_in_range(None, "!", window, cx);
+            assert_eq!(input.selected_byte_range(), 6..6);
+
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.as_str(), "hello");
+            assert_eq!(input.selected_byte_range(), 5..5);
+
+            input.set_selection(0);
+            input.redo(&Redo, window, cx);
+            assert_eq!(input.as_str(), "hello!");
+            // The selection from after the edit, not from before it.
+            assert_eq!(input.selected_byte_range(), 6..6);
+        });
+    }
+
+    #[gpui::test]
+    fn undo_and_redo_publish_text_changes(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5);
+        let input = view.update(cx, |view, _, _| view.input.clone()).unwrap();
+        let changes = Rc::new(Cell::new(0));
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&input, {
+                let changes = changes.clone();
+                move |_: Entity<EditableTextState>, _: &TextChanged, _: &mut App| {
+                    changes.set(changes.get() + 1)
+                }
+            })
+        });
+        update_movement_input(view, cx, |input, window, cx| {
+            without_history_grouping(input);
+            input.replace_text_in_range(None, "!", window, cx);
+        });
+        let after_edit = changes.get();
+        update_movement_input(view, cx, |input, window, cx| {
+            input.undo(&Undo, window, cx);
+        });
+        assert_eq!(changes.get(), after_edit + 1);
+        update_movement_input(view, cx, |input, window, cx| {
+            input.redo(&Redo, window, cx);
+        });
+        assert_eq!(changes.get(), after_edit + 2);
     }
 
     #[gpui::test]
