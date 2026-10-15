@@ -563,7 +563,7 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
     let output = quote! {
-        /// Set the cursor style when hovering over this element
+        /// Sets the cursor style when hovering over this element.
         #visibility fn cursor(mut self, cursor: CursorStyle) -> Self {
             self.style().mouse_cursor = Some(cursor);
             self
@@ -834,7 +834,8 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         });
 
     let output = quote! {
-        /// Sets the box shadow of the element.
+        /// Sets the element's box shadows, replacing any set before. Shadows draw in
+        /// order, so the first is drawn below the others.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow(mut self, shadows: std::vec::Vec<gpui::BoxShadow>) -> Self {
             self.style().box_shadow = Some(shadows);
@@ -886,7 +887,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 
         #(#ring_width_methods)*
 
-        /// Sets the box shadow of the element.
+        /// Sets a very faint shadow: 1px down, no blur, 5% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_2xs(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -898,7 +899,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets a faint shadow: 1px down, 2px blur, 5% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_xs(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -910,7 +911,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets a small shadow made of two layers, each 10% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_sm(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -923,7 +924,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets a medium shadow made of two layers, each 10% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_md(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -936,7 +937,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets a large shadow made of two layers, each 10% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_lg(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -949,7 +950,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets an extra large shadow made of two layers, each 10% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_xl(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -962,7 +963,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the box shadow of the element.
+        /// Sets the largest preset shadow: 25px down, 50px blur, 25% black.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_2xl(mut self) -> Self {
             use gpui::{BoxShadow, hsla, px};
@@ -1421,19 +1422,19 @@ fn box_prefixes() -> Vec<BoxStylePrefix> {
             prefix: "gap",
             auto_allowed: false,
             fields: vec![quote! { gap.width }, quote! { gap.height }],
-            doc_string_prefix: "Sets the gap between rows and columns in flex layouts. [Docs](https://tailwindcss.com/docs/gap)",
+            doc_string_prefix: "Sets the gap between rows and columns of a flex or grid container. [Docs](https://tailwindcss.com/docs/gap)",
         },
         BoxStylePrefix {
             prefix: "gap_x",
             auto_allowed: false,
             fields: vec![quote! { gap.width }],
-            doc_string_prefix: "Sets the gap between columns in flex layouts. [Docs](https://tailwindcss.com/docs/gap#changing-row-and-column-gaps-independently)",
+            doc_string_prefix: "Sets the gap between columns of a flex or grid container. [Docs](https://tailwindcss.com/docs/gap#changing-row-and-column-gaps-independently)",
         },
         BoxStylePrefix {
             prefix: "gap_y",
             auto_allowed: false,
             fields: vec![quote! { gap.height }],
-            doc_string_prefix: "Sets the gap between rows in flex layouts. [Docs](https://tailwindcss.com/docs/gap#changing-row-and-column-gaps-independently)",
+            doc_string_prefix: "Sets the gap between rows of a flex or grid container. [Docs](https://tailwindcss.com/docs/gap#changing-row-and-column-gaps-independently)",
         },
     ]
 }
@@ -1448,147 +1449,147 @@ fn box_style_suffixes() -> Vec<BoxStyleSuffix> {
         BoxStyleSuffix {
             suffix: "0p5",
             length_tokens: quote! { rems(0.125) },
-            doc_string_suffix: "2px (0.125rem)",
+            doc_string_suffix: "0.125rem (2px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "1",
             length_tokens: quote! { rems(0.25) },
-            doc_string_suffix: "4px (0.25rem)",
+            doc_string_suffix: "0.25rem (4px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "1p5",
             length_tokens: quote! { rems(0.375) },
-            doc_string_suffix: "6px (0.375rem)",
+            doc_string_suffix: "0.375rem (6px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "2",
             length_tokens: quote! { rems(0.5) },
-            doc_string_suffix: "8px (0.5rem)",
+            doc_string_suffix: "0.5rem (8px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "2p5",
             length_tokens: quote! { rems(0.625) },
-            doc_string_suffix: "10px (0.625rem)",
+            doc_string_suffix: "0.625rem (10px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "3",
             length_tokens: quote! { rems(0.75) },
-            doc_string_suffix: "12px (0.75rem)",
+            doc_string_suffix: "0.75rem (12px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "3p5",
             length_tokens: quote! { rems(0.875) },
-            doc_string_suffix: "14px (0.875rem)",
+            doc_string_suffix: "0.875rem (14px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "4",
             length_tokens: quote! { rems(1.) },
-            doc_string_suffix: "16px (1rem)",
+            doc_string_suffix: "1rem (16px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "5",
             length_tokens: quote! { rems(1.25) },
-            doc_string_suffix: "20px (1.25rem)",
+            doc_string_suffix: "1.25rem (20px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "6",
             length_tokens: quote! { rems(1.5) },
-            doc_string_suffix: "24px (1.5rem)",
+            doc_string_suffix: "1.5rem (24px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "7",
             length_tokens: quote! { rems(1.75) },
-            doc_string_suffix: "28px (1.75rem)",
+            doc_string_suffix: "1.75rem (28px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "8",
             length_tokens: quote! { rems(2.0) },
-            doc_string_suffix: "32px (2rem)",
+            doc_string_suffix: "2rem (32px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "9",
             length_tokens: quote! { rems(2.25) },
-            doc_string_suffix: "36px (2.25rem)",
+            doc_string_suffix: "2.25rem (36px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "10",
             length_tokens: quote! { rems(2.5) },
-            doc_string_suffix: "40px (2.5rem)",
+            doc_string_suffix: "2.5rem (40px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "11",
             length_tokens: quote! { rems(2.75) },
-            doc_string_suffix: "44px (2.75rem)",
+            doc_string_suffix: "2.75rem (44px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "12",
             length_tokens: quote! { rems(3.) },
-            doc_string_suffix: "48px (3rem)",
+            doc_string_suffix: "3rem (48px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "16",
             length_tokens: quote! { rems(4.) },
-            doc_string_suffix: "64px (4rem)",
+            doc_string_suffix: "4rem (64px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "20",
             length_tokens: quote! { rems(5.) },
-            doc_string_suffix: "80px (5rem)",
+            doc_string_suffix: "5rem (80px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "24",
             length_tokens: quote! { rems(6.) },
-            doc_string_suffix: "96px (6rem)",
+            doc_string_suffix: "6rem (96px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "32",
             length_tokens: quote! { rems(8.) },
-            doc_string_suffix: "128px (8rem)",
+            doc_string_suffix: "8rem (128px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "40",
             length_tokens: quote! { rems(10.) },
-            doc_string_suffix: "160px (10rem)",
+            doc_string_suffix: "10rem (160px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "48",
             length_tokens: quote! { rems(12.) },
-            doc_string_suffix: "192px (12rem)",
+            doc_string_suffix: "12rem (192px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "56",
             length_tokens: quote! { rems(14.) },
-            doc_string_suffix: "224px (14rem)",
+            doc_string_suffix: "14rem (224px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "64",
             length_tokens: quote! { rems(16.) },
-            doc_string_suffix: "256px (16rem)",
+            doc_string_suffix: "16rem (256px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "72",
             length_tokens: quote! { rems(18.) },
-            doc_string_suffix: "288px (18rem)",
+            doc_string_suffix: "18rem (288px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "80",
             length_tokens: quote! { rems(20.) },
-            doc_string_suffix: "320px (20rem)",
+            doc_string_suffix: "20rem (320px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "96",
             length_tokens: quote! { rems(24.) },
-            doc_string_suffix: "384px (24rem)",
+            doc_string_suffix: "24rem (384px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "112",
             length_tokens: quote! { rems(28.) },
-            doc_string_suffix: "448px (28rem)",
+            doc_string_suffix: "28rem (448px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "128",
             length_tokens: quote! { rems(32.) },
-            doc_string_suffix: "512px (32rem)",
+            doc_string_suffix: "32rem (512px at the default rem size)",
         },
         BoxStyleSuffix {
             suffix: "auto",
@@ -1663,7 +1664,7 @@ fn box_style_suffixes() -> Vec<BoxStyleSuffix> {
         BoxStyleSuffix {
             suffix: "5_6",
             length_tokens: quote! { relative(5./6.) },
-            doc_string_suffix: "80% (5/6)",
+            doc_string_suffix: "83% (5/6)",
         },
         BoxStyleSuffix {
             suffix: "1_12",
@@ -1750,42 +1751,42 @@ fn corner_suffixes() -> Vec<CornerStyleSuffix> {
         CornerStyleSuffix {
             suffix: "xs",
             radius_tokens: quote! { rems(0.125) },
-            doc_string_suffix: "2px (0.125rem)",
+            doc_string_suffix: "0.125rem (2px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "sm",
             radius_tokens: quote! { rems(0.25) },
-            doc_string_suffix: "4px (0.25rem)",
+            doc_string_suffix: "0.25rem (4px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "md",
             radius_tokens: quote! { rems(0.375) },
-            doc_string_suffix: "6px (0.375rem)",
+            doc_string_suffix: "0.375rem (6px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "lg",
             radius_tokens: quote! { rems(0.5) },
-            doc_string_suffix: "8px (0.5rem)",
+            doc_string_suffix: "0.5rem (8px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "xl",
             radius_tokens: quote! { rems(0.75) },
-            doc_string_suffix: "12px (0.75rem)",
+            doc_string_suffix: "0.75rem (12px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "2xl",
             radius_tokens: quote! { rems(1.) },
-            doc_string_suffix: "16px (1rem)",
+            doc_string_suffix: "1rem (16px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "3xl",
             radius_tokens: quote! { rems(1.5) },
-            doc_string_suffix: "24px (1.5rem)",
+            doc_string_suffix: "1.5rem (24px at the default rem size)",
         },
         CornerStyleSuffix {
             suffix: "full",
             radius_tokens: quote! {  px(9999.) },
-            doc_string_suffix: "9999px",
+            doc_string_suffix: "9999px (fully rounded)",
         },
     ]
 }
