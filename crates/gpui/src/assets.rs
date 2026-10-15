@@ -14,22 +14,28 @@ use std::{
     },
 };
 
-/// One way to store a set of assets for gpui to access.
-/// Can be provided to [`AssetRegistry`] to load asset binaries on-demand.
-/// Alternatively, assets can be provided pre-loaded to the registry while still using this api (though there are newer apis to do so).
+/// A read-only source of files that the app can load by path, such as a directory or a bundle.
 ///
-/// Generally considered deprecated for new usages since [`AssetRegistry`] has more specific
-/// support for bundled, pre-loaded, and on-demand asset loading.
+/// Prefer [`AssetRegistry`] when you control the entries: it can hold preloaded bytes as well as
+/// on-demand loaders. An `AssetSource` is useful when the source already owns the path lookup.
+/// It converts into an [`AssetRegistry`] with `From`, and
+/// [`crate::Application::with_assets`] accepts that conversion. The converted registry loads
+/// each file on demand.
 pub trait AssetSource: 'static + Send + Sync {
-    /// Load the given asset from the source path.
+    /// Returns the bytes of the file at `path`, or `None` if there is no such file.
+    ///
+    /// The paths are the ones that [`AssetSource::list`] returns.
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>>;
 
-    /// List the assets at the given path.
+    /// Returns the paths of the assets under `path`. Pass `""` to list all of them.
+    ///
+    /// Each returned path is one that [`AssetSource::load`] accepts.
     fn list(&self, path: &str) -> Result<Vec<SharedString>>;
 
-    /// Iterates over all paths (via [`list`]) and loads each asset in turn (via [`load`]),
-    /// yielding an iterator over all assets that were loaded successfully.
-    /// Output can be provided directly to [`AssetRegistry::extend`].
+    /// Loads every asset now and yields each one as an [`AssetEntry::PreLoaded`].
+    ///
+    /// It lists everything with `list("")`, loads each path, and skips the paths that fail or are
+    /// missing. Pass the result to [`AssetRegistry::extend`].
     fn iter_preloaded(&self) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)> + '_> {
         let paths = self.list("").unwrap_or_default();
         let iter = paths.into_iter().filter_map(move |path| {
@@ -39,9 +45,11 @@ pub trait AssetSource: 'static + Send + Sync {
         Box::new(iter)
     }
 
-    /// Iterates over all paths (via [`list`]) and constructs an [`AssetEntry::OnDemand`],
-    /// which will call [`load`] on this `Arc<AssetSource>` when the path is requested, yielding the resulting iterator.
-    /// Output can be provided directly to [`AssetRegistry::extend`].
+    /// Yields one [`AssetEntry::OnDemand`] per path. Each entry calls [`AssetSource::load`] on this
+    /// source when the asset is requested.
+    ///
+    /// Nothing is read until an asset is requested, and each request reads the file again. A failed
+    /// load is logged and reported as `None`. Pass the result to [`AssetRegistry::extend`].
     fn iter_ondemand(self: Arc<Self>) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)>> {
         use gpui_util::ResultExt;
         let paths = self.list("").unwrap_or_default();
@@ -68,15 +76,24 @@ impl AssetSource for () {
     }
 }
 
-/// Alias for a Cow byte vec, representing an asset that has been loaded.
+/// The bytes of one asset. `Cow::Borrowed` for data compiled into the binary, and `Cow::Owned` for
+/// data read at runtime.
 pub type AssetData = Cow<'static, [u8]>;
-/// A thread-safe callback to load an asset, possibly from disk.
+/// A callback that produces an asset's bytes when the asset is requested, or `None` if it can't.
+///
+/// The cache may call it from a worker thread, so the closure and everything it captures must be
+/// `Send` and `Sync`.
 pub type FnAssetLoader = Arc<dyn Fn() -> Option<AssetData> + 'static + Send + Sync>;
-/// The entry stored in the [`AssetRegistry`].
+/// One asset in the [`AssetRegistry`]: its bytes, or a loader that produces them on request.
+///
+/// `Cow<'static, [u8]>` converts into the `PreLoaded` variant, and a closure that returns
+/// `Option<AssetData>` converts into `OnDemand`.
 pub enum AssetEntry {
-    /// The asset is pre-loaded. It may be stored staticlly/embedded, or has already been loaded from disk.
+    /// The bytes are ready now: static data compiled into the binary, or a file that was already
+    /// read. The registry returns them without copying.
     PreLoaded(AssetData),
-    /// The entry should be loaded on demand.
+    /// The bytes come from a loader that runs on every [`AssetRegistry::load`]. The registry does
+    /// not cache the result, so the loader decides whether to read the disk again.
     OnDemand(FnAssetLoader),
 }
 impl From<AssetData> for AssetEntry {
@@ -93,14 +110,19 @@ where
     }
 }
 
-/// Caused when multiple assets are registered to the [`AssetRegistry`] with the same path.
+/// Returned when a path is already registered in an [`AssetRegistry`]. It holds the duplicated path.
 #[derive(thiserror::Error, Debug)]
 #[error("An asset with the pathkey {0:?} already exists")]
 pub struct DuplicateAssetPath(SharedString);
 
-/// Collection of assets known to the [`App`](crate::App).
+/// The named assets that the app loads by path, such as images, SVGs and fonts.
 ///
-/// Users can provide assets via [`AssetSource`] or directly via `from_iter`, `insert`, `extend_from_source`, or `extend_from_embed`.
+/// Set the registry with [`crate::Application::with_assets`] and read it with
+/// [`crate::App::assets`]. Paths are exact lookup keys such as `"icons/star.svg"`; the registry
+/// does not resolve them against the filesystem.
+/// Each path has one [`AssetEntry`] and can be registered only once. Build a registry with
+/// [`AssetRegistry::insert`], [`AssetRegistry::extend`] or `collect()`, or convert an
+/// [`AssetSource`].
 #[derive(Default)]
 pub struct AssetRegistry {
     entries: BTreeMap<SharedString, AssetEntry>,
@@ -138,8 +160,34 @@ where
 }
 
 impl AssetRegistry {
-    /// Inserts a single asset into the registry. The asset can be static (embedded/bundled, `&'static [u8]`), pre-loaded ([`Vec<u8>`]), or loaded-on-demand ([`FnAssetLoader`]).
-    /// If there is already an entry at the provided key/path, an error is returned.
+    /// Adds the asset at `path`.
+    ///
+    /// The asset can be `Cow::Borrowed(&'static [u8])` for static bytes, `Cow::Owned(Vec<u8>)` for
+    /// bytes you already have, or a closure that returns them on demand (see [`FnAssetLoader`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DuplicateAssetPath`] if `path` is already registered. The existing entry is kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// # use std::borrow::Cow;
+    /// let mut assets = AssetRegistry::default();
+    /// assets
+    ///     .insert(
+    ///         "icons/star.svg",
+    ///         Cow::Borrowed(
+    ///             &b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect width=\"8\" height=\"8\"/></svg>"[..],
+    ///         ),
+    ///     )
+    ///     .unwrap();
+    ///
+    /// assert!(assets.load("icons/star.svg").is_some());
+    /// assert!(assets.load("icons/missing.svg").is_none());
+    /// assert!(assets.insert("icons/star.svg", Cow::Borrowed(&b""[..])).is_err());
+    /// ```
     pub fn insert(
         &mut self,
         path: impl Into<SharedString>,
@@ -153,9 +201,11 @@ impl AssetRegistry {
         Ok(())
     }
 
-    /// Returns the asset data for a given path/key. If the asset is static/embedded or pre-loaded,
-    /// this will return [`Cow::Borrowed(&'this [u8])`] (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
-    /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as [`Cow::Owned(Vec<u8>)`].
+    /// Returns the bytes at `path`, or `None` if the path isn't registered.
+    ///
+    /// Preloaded entries are returned as [`Cow::Borrowed`] with no copy. An on-demand entry runs its
+    /// loader on each call, so the bytes may be read from disk again. An on-demand loader that
+    /// returns `None` makes this return `None` too.
     pub fn load<'this>(&'this self, path: impl AsRef<str>) -> Option<Cow<'this, [u8]>> {
         match self.entries.get(path.as_ref())? {
             AssetEntry::PreLoaded(Cow::Borrowed(data)) => Some(Cow::Borrowed(data)),
@@ -164,10 +214,12 @@ impl AssetRegistry {
         }
     }
 
-    /// Iterates over the provided and inserts each entry using the provided path in the item tuple.
-    /// Errors from insert are logged, and all errors are returned as a vec.
-    /// Returns OK if no duplicate paths are found (can occur if the iterator provided a path
-    /// that was already in the collection by the time that entry is inserted).
+    /// Adds each `(path, entry)` pair in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DuplicateAssetPath`] of every pair whose path was already registered, in
+    /// order. The other pairs are still added, and each duplicate is logged.
     pub fn extend<IterType, KeyType, EntryType>(
         &mut self,
         into_iter: IterType,
@@ -191,10 +243,11 @@ impl AssetRegistry {
         result
     }
 
-    /// Convenience method to create an asset iterator over paths and asset-data for
-    /// [`RustEmbed`](rust_embed::RustEmbed), since the crate only provides an iterator over file names.
+    /// Yields every file in a [`RustEmbed`](rust_embed::RustEmbed) folder as a preloaded entry.
     ///
-    /// Can be provided as the input to [`extend`].
+    /// `T` is a type that derives `RustEmbed` for a folder. Each path is the file name relative to
+    /// that folder. Pass the iterator to [`AssetRegistry::extend`]. This needs the
+    /// `embedded-assets` feature of gpui, which also brings in the `rust-embed` crate.
     #[cfg(feature = "embedded-assets")]
     pub fn iter_embed<T: rust_embed::RustEmbed>()
     -> impl Iterator<Item = (Cow<'static, str>, AssetEntry)> + 'static {
@@ -205,7 +258,8 @@ impl AssetRegistry {
     }
 }
 
-/// A unique identifier for the image cache
+/// Identifies a [`RenderImage`]. [`RenderImage::new`] gives each image a new ID, so two images
+/// never share one. The wrapped `usize` is the counter value that identifies the image.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ImageId(pub usize);
 
@@ -216,9 +270,12 @@ pub struct RenderImageParams {
     pub frame_index: usize,
 }
 
-/// A cached and processed image, in BGRA format
+/// A decoded image: one or more frames of BGRA pixels, ready to draw.
+///
+/// Create one with [`RenderImage::new`]. Two images are equal when their [`ImageId`]s are equal.
+/// Still images have one frame. Animated images have one frame per step of the animation.
 pub struct RenderImage {
-    /// The ID associated with this image
+    /// The ID that identifies this image. See [`ImageId`].
     pub id: ImageId,
     /// The scale factor of this image on render.
     pub(crate) scale_factor: f32,
@@ -234,7 +291,23 @@ impl PartialEq for RenderImage {
 impl Eq for RenderImage {}
 
 impl RenderImage {
-    /// Create a new image from the given data.
+    /// Creates an image from decoded frames, with a new [`ImageId`].
+    ///
+    /// The frames are moved in, not copied. Pass a `SmallVec<[Frame; 1]>`, or anything that converts
+    /// into one, such as a `Vec<Frame>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// use image::{Frame, ImageBuffer, Rgba};
+    ///
+    /// let pixels = ImageBuffer::from_pixel(2, 3, Rgba([255u8, 0, 0, 255]));
+    /// let image = RenderImage::new(vec![Frame::new(pixels)]);
+    ///
+    /// assert_eq!(image.frame_count(), 1);
+    /// assert_eq!(image.as_bytes(0).map(|bytes| bytes.len()), Some(2 * 3 * 4));
+    /// ```
     pub fn new(data: impl Into<SmallVec<[Frame; 1]>>) -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -245,14 +318,17 @@ impl RenderImage {
         }
     }
 
-    /// Convert this image into a byte slice.
+    /// Returns the pixels of frame `frame_index` as BGRA bytes, four per pixel, with rows packed and
+    /// no padding.
+    ///
+    /// Returns `None` if there is no such frame.
     pub fn as_bytes(&self, frame_index: usize) -> Option<&[u8]> {
         self.data
             .get(frame_index)
             .map(|frame| frame.buffer().as_raw().as_slice())
     }
 
-    /// Get the size of this image, in pixels.
+    /// Returns the size of frame `frame_index` in device pixels. Returns zero for a missing frame.
     pub fn size(&self, frame_index: usize) -> Size<DevicePixels> {
         self.data
             .get(frame_index)
@@ -269,7 +345,8 @@ impl RenderImage {
             .map(|v| (v.0 as f32 / self.scale_factor).into())
     }
 
-    /// Get the delay of this frame from the previous
+    /// Returns how long to show frame `frame_index` before the next one. Returns 100 ms for a
+    /// missing frame.
     pub fn delay(&self, frame_index: usize) -> Delay {
         self.data
             .get(frame_index)
@@ -277,7 +354,7 @@ impl RenderImage {
             .unwrap_or(Delay::from_numer_denom_ms(100, 1))
     }
 
-    /// Get the number of frames for this image.
+    /// Returns the number of frames. A still image has one. A GIF or animated WebP has one per frame.
     pub fn frame_count(&self) -> usize {
         self.data.len()
     }
