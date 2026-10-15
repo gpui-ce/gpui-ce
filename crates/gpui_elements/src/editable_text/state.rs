@@ -41,7 +41,13 @@ struct SelectionDragVisualCaret {
     position: CaretPosition,
 }
 
-/// Internal state for an editable text element.
+/// The text, selection and editing state of an editable text field.
+///
+/// Create one with [`EditableTextState::use_keyed`] or [`EditableTextState::use_keyed_init`]
+/// to keep it across frames, or with [`EditableTextState::new`] when you hold it yourself.
+/// Attach it to an element with [`EditableTextElement::state`](crate::editable_text::EditableTextElement::state).
+/// Read the text with [`EditableTextState::as_str`], and subscribe to [`TextChanged`] to
+/// learn about edits. The state is an entity, so access it through `Entity::read` and `Entity::update`.
 pub struct EditableTextState {
     /// Backing text storage, usually `StringStorage`; custom storage can support long documents.
     storage: Box<dyn UnicodeTextStorage>,
@@ -79,9 +85,10 @@ pub struct EditableTextState {
 
 impl EventEmitter<CaretNotify> for EditableTextState {}
 
-/// Event emitted when an `EditableTextState` is changed.
+/// Event emitted after the text of an [`EditableTextState`] changes.
 ///
-/// This is not suitable for input sanitation (which should occur before the mutation).
+/// Subscribe with `cx.subscribe` to react to typing, paste, cut, deletion, and [`EditableTextState::emplace`].
+/// The event comes after the change, so it can't reject or sanitize input.
 pub struct TextChanged;
 impl EventEmitter<TextChanged> for EditableTextState {}
 
@@ -98,14 +105,19 @@ impl AsRef<str> for EditableTextState {
 }
 
 impl EditableTextState {
-    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
-    /// If the state does not yet exist, a new one is created using the default [`UnicodeTextStorage`] medium.
+    /// Returns the state stored under `key` in the current view, creating it on first use.
+    ///
+    /// A new state holds an empty [`StringStorage`]. The state is kept as long as an element
+    /// with the same `key` is rendered in consecutive frames. Use [`Self::use_keyed_init`]
+    /// to start with text.
     pub fn use_keyed(key: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Entity<Self> {
         Self::use_keyed_init(key, window, cx, |_, _| StringStorage::default())
     }
 
-    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
-    /// If the state does not yet exist, a new one is created calling `init` to create a [`UnicodeTextStorage`] medium.
+    /// Returns the state stored under `key`, creating it with `init` on first use.
+    ///
+    /// `init` runs only when the state is created. Later frames reuse the existing state,
+    /// and their calls to `init` are skipped, so the initial text is set only once.
     ///
     /// ```
     /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
@@ -133,12 +145,11 @@ impl EditableTextState {
         window.use_keyed_state(key, cx, |window, cx| Self::new(init(window, cx), cx))
     }
 
-    /// Creates a new EditableText state with a given storage medium.
+    /// Creates a state that stores its text in `storage`.
     ///
-    /// Does not intrinsicly handle the state being attached to an element
-    /// over multiple frames (e.g. via [`RenderOnce`]). Use [`use_keyed`] or [`use_keyed_init`] for that.
-    ///
-    /// Expected to be called via [`AppContext::new`] such as:
+    /// The state isn't tied to an element. It is not kept across frames by itself, so
+    /// use [`Self::use_keyed`] or [`Self::use_keyed_init`] inside a render function. Call
+    /// this through `cx.new`, for example:
     /// ```
     /// # use gpui::{AppContext, Window, App, Entity};
     /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
@@ -171,16 +182,20 @@ impl EditableTextState {
         }
     }
 
-    /// Returns the current contents of [`storage`] as a string slice.
+    /// Returns the current contents of the storage as a string slice.
     pub fn as_str(&self) -> &str {
         self.storage.content_utf8()
     }
 
+    /// Returns the version of the storage, which changes whenever the text does.
     pub fn version(&self) -> u16 {
         self.storage.version()
     }
 
-    /// Replaces the contents of the stored text with the provided string slice.
+    /// Replaces all of the text with `content`, and moves the caret to its end.
+    ///
+    /// This is a programmatic edit. It emits [`TextChanged`] and can be undone
+    /// like a typed edit.
     pub fn emplace(&mut self, content: &str, cx: &mut Context<Self>) {
         let len = self.storage.content_utf8().len();
         self.replace_text(0..len, content);
@@ -307,9 +322,9 @@ impl EditableTextState {
         text_to_insert: &'text str,
     ) -> Cow<'text, str> {
         // TODO: Apply text sanitization, ideally using externally-sourced implementations.
-        // example optional/opt-in sanitations include:
-        // - single-line fields should prune /n & /r
-        // - maximum utf8 length
+        // Example optional or opt-in sanitization includes:
+        // - single-line fields should prune `\n` and `\r`
+        // - maximum UTF-8 length
         // - numbers only
         // should also consider validation support, for features such as:
         // - total syntax evaluation (e.g. passwords)
@@ -425,7 +440,8 @@ impl EditableTextState {
         Some(target.min(caret.index)..target.max(caret.index))
     }
 
-    /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
+    /// Returns the caret closest to the provided pixel-point. Empty text gives the default caret,
+    /// and a layout that is out of date gives the end of the text.
     fn caret_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> CaretPosition {
         let storage_len_utf8 = self.as_str().len();
         if storage_len_utf8 == 0 {
@@ -590,10 +606,10 @@ impl EditableTextState {
         }
     }
 
-    /// Moves the caret to the provided position.
+    /// Moves the caret to `caret_pos`, a UTF-8 byte offset. Clears the selection.
     ///
-    /// Will cause the current scroll position/offset to update on the next frame,
-    /// if the line the carent is on is out of view.
+    /// A position past the end of the text moves the caret to the end. The view
+    /// scrolls on the next frame if the caret's line is out of view.
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.move_to_caret(self.caret_for_index(caret_pos), cx);
     }
@@ -613,10 +629,10 @@ impl EditableTextState {
         }
     }
 
-    /// Changes the current selection to extend to the provided position.
+    /// Extends the selection to `caret_pos`, a UTF-8 byte offset, from the anchor.
     ///
-    /// Will cause the current scroll position/offset to update on the next frame,
-    /// if the line the carent is on is out of view.
+    /// A position past the end of the text is clamped to the end. The view scrolls
+    /// on the next frame if the caret's line is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.select_to_caret(self.caret_for_index(caret_pos), cx);
     }
@@ -640,18 +656,12 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Removes a chunk of text at the cursor/selection.
-    /// No-op if the element is currently not accepting input.
+    /// Deletes the selected text, or, with no selection, the text from the caret to `boundary`.
     ///
-    /// If there is a selection of multiple characters, the slice of text represented
-    /// by range is replaced with an empty string.
-    /// If there is no selection, `direction` and `boundary` are used to determine the slice of text to remove.
-    ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the caret.
+    /// Does nothing if the field doesn't accept input. Without a selection, `direction` picks
+    /// the side of the caret to delete: [`NavigationDirection::Back`] deletes before it, and
+    /// [`NavigationDirection::Forward`] deletes after it. `boundary` sets how far the deletion
+    /// reaches. The edit emits [`TextChanged`].
     pub fn delete_linear(
         &mut self,
         direction: NavigationDirection,
@@ -695,15 +705,11 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Moves the caret somewhere relative to its current location, according to `direction` and `boundary`.
+    /// Moves the caret by `boundary` in `direction`, and clears the selection.
     ///
-    /// If there is currently a selection, the cursor will jump to the start/end of that selection based on `direction`.
-    ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the current caret
+    /// With a selection, the caret moves to the start or end of the selection, based
+    /// on `direction`. [`NavigationDirection::Back`] moves earlier in the text and
+    /// [`NavigationDirection::Forward`] moves later.
     pub fn nav_linear(
         &mut self,
         direction: NavigationDirection,
@@ -811,20 +817,16 @@ impl EditableTextState {
         self.apply_selection_movement(self.selection_movement.move_or_select_to(caret, extend), cx);
     }
 
-    /// Sets the current selection to be the entire text in the storage medium
+    /// Selects all of the text.
     pub fn select_document(&mut self, cx: &mut Context<Self>) {
         self.set_selection(self.storage_selection_at(0, SelectionGroup::Document));
         cx.notify();
     }
 
-    /// Extends the current selection to include some amount of textrelative the current
-    /// location of the caret, according to `direction` and `boundary`.
+    /// Extends the selection by `boundary` in `direction`, from the caret's current location.
     ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the current caret
+    /// [`NavigationDirection::Back`] extends the selection earlier in the text, and
+    /// [`NavigationDirection::Forward`] extends it later. The anchor stays where it was.
     pub fn select_linear(
         &mut self,
         direction: NavigationDirection,
@@ -899,7 +901,9 @@ impl EditableTextState {
 
 // History management
 impl EditableTextState {
-    /// Returns the history log of the element, which is the data that supports undo/redo operations.
+    /// Returns the undo and redo history of the field.
+    ///
+    /// Returns `None` when the state has no history. States made with [`Self::new`] always have one.
     pub fn history(&self) -> Option<&EditableTextHistory> {
         self.history.as_ref()
     }
