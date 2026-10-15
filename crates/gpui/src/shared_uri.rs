@@ -2,7 +2,11 @@ use derive_more::{Deref, DerefMut};
 
 use crate::SharedString;
 
-/// A [`SharedString`] containing a URI.
+/// A URI held in a [`SharedString`], so cloning the handle does not copy its text.
+///
+/// The text is not validated. Converting a `SharedUri` into an [`ImageSource`](crate::ImageSource)
+/// always treats it as a URL, bypassing the scheme check applied to a plain `&str`. See
+/// [`ImageSource`](crate::ImageSource) for the corresponding string conversions.
 #[derive(Deref, DerefMut, Default, PartialEq, Eq, Hash, Clone)]
 pub struct SharedUri(SharedString);
 

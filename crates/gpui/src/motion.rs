@@ -8,40 +8,86 @@ use std::{
 use crate::spring::DEFAULT_SPRING_EPSILON;
 use crate::{SpringAnimation, SpringConfig, SpringState, SpringTarget};
 
-/// Creates a duration from a number of whole seconds.
+/// Creates a [`Duration`](std::time::Duration) from whole seconds.
+///
+/// This is `Duration::from_secs` as a `const fn`, which keeps motion declarations short.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use gpui::secs;
+///
+/// assert_eq!(secs(2), Duration::from_secs(2));
+/// ```
 pub const fn secs(seconds: u64) -> Duration {
     Duration::from_secs(seconds)
 }
 
-/// Creates a duration from a number of whole milliseconds.
+/// Creates a [`Duration`](std::time::Duration) from whole milliseconds.
+///
+/// This is `Duration::from_millis` as a `const fn`. Pass the result to [`Motion::new`] or
+/// [`Animation::new`](crate::Animation::new).
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use gpui::millis;
+///
+/// assert_eq!(millis(250), Duration::from_millis(250));
+/// ```
 pub const fn millis(milliseconds: u64) -> Duration {
     Duration::from_millis(milliseconds)
 }
 
-/// Animation progress is normalized before easing and may overshoot afterward.
+/// A motion's presentation progress, normally between zero and one.
+///
+/// [`Motion::sample`] returns progress after the easing function has run.
+/// An easing curve may overshoot, so a sample can fall outside `0.0..=1.0`. Use
+/// [`Progress::clamped`] when an API needs that range. `Progress` describes where the presentation
+/// is, not whether the run has finished; use [`MotionSample::is_complete`] for that.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::Progress;
+///
+/// assert_eq!(Progress::clamped(1.5), Progress::END);
+/// assert_eq!(Progress::clamped(-0.25), Progress::START);
+/// assert_eq!(Progress::clamped(0.5).get(), 0.5);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct Progress(f32);
 
 impl Progress {
-    /// The beginning of an animation.
+    /// Zero progress: the origin of a motion.
     pub const START: Self = Self(0.0);
 
-    /// The end of an animation.
+    /// One progress: the target of a motion.
     pub const END: Self = Self(1.0);
 
-    /// Returns progress clamped to the normalized range.
+    /// Returns `value` limited to `0.0..=1.0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` is NaN.
     pub fn clamped(value: f32) -> Self {
         assert!(!value.is_nan(), "progress must not be NaN");
         Self(value.clamp(Self::START.0, Self::END.0))
     }
 
-    /// Returns the underlying progress value.
+    /// Returns the progress as a float. It can lie outside `0.0..=1.0` when it comes from an
+    /// easing curve that overshoots.
     pub const fn get(self) -> f32 {
         self.0
     }
 
-    /// Returns whether presentation is exactly at one. This does not
-    /// indicate whole-run completion; use [`MotionSample::is_complete`].
+    /// Returns whether the progress is exactly one.
+    ///
+    /// This doesn't mean the whole run has finished. Use [`MotionSample::is_complete`] for that.
     pub const fn is_at_end(self) -> bool {
         self.0 == Self::END.0
     }
@@ -56,12 +102,28 @@ impl Progress {
     }
 }
 
-/// Creates duration-based motion with easing or a sampled spring.
+/// Adds motion constructors to [`Duration`](std::time::Duration), including
+/// `duration.with_easing(...)`.
+///
+/// Import this trait to call its methods. Each method forwards to the matching [`Motion`]
+/// method on a single forward pass.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use gpui::{MotionDurationExt, ease_out_quint};
+///
+/// let motion = Duration::from_millis(300).with_easing(ease_out_quint());
+/// assert_eq!(motion.forward_pass().duration(), Duration::from_millis(300));
+/// ```
 pub trait MotionDurationExt {
-    /// Creates motion with this duration and the supplied easing function.
+    /// Creates a one-pass motion of this duration with the given easing function.
     fn with_easing(self, easing: impl Fn(f32) -> f32 + 'static) -> Motion;
 
-    /// Samples a spring over this duration, ending when the duration expires.
+    /// Creates a motion of this duration whose easing is a spring sampled over that duration.
+    /// See [`Motion::with_spring`].
     fn with_spring(self, config: SpringConfig) -> Motion;
 }
 
@@ -78,17 +140,36 @@ impl MotionDurationExt for Duration {
 /// The former name of [`MotionDurationExt`].
 pub use MotionDurationExt as DurationWithEasing;
 
-/// Maps linear progress to eased progress.
+/// An easing function that maps linear pass time to eased progress.
+///
+/// Each [`MotionPass`] and [`Motion`] owns one. Clones share the same function. The default is
+/// [`linear`](crate::linear).
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{Easing, Progress};
+///
+/// let square = Easing::new(|t| t * t);
+/// assert_eq!(square.sample(Progress::clamped(0.5)).get(), 0.25);
+/// assert_eq!(Easing::default().sample(Progress::clamped(0.5)).get(), 0.5);
+/// ```
 #[derive(Clone)]
 pub struct Easing(Rc<dyn Fn(f32) -> f32>);
 
 impl Easing {
-    /// Creates an easing function.
+    /// Creates an easing from `easing`, which maps `0.0..=1.0` to an eased value.
+    ///
+    /// The result is not clamped, so the function may overshoot. It must return finite values.
     pub fn new(easing: impl Fn(f32) -> f32 + 'static) -> Self {
         Self(Rc::new(easing))
     }
 
-    /// Evaluates normalized progress without clamping the eased result.
+    /// Returns the eased value of `progress`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the easing function returns NaN or an infinite value.
     pub fn sample(&self, progress: Progress) -> Progress {
         Progress::eased((self.0)(progress.get()))
     }
@@ -100,11 +181,22 @@ impl Default for Easing {
     }
 }
 
-/// The duration and easing curve for one directional motion pass.
+/// One directional pass of a [`Motion`]: a duration together with its easing curve.
 ///
-/// Local pass time advances from zero to one. The easing function maps that
-/// local time to presentation progress and may be non-monotonic or overshoot.
-/// On a reverse leg, [`Motion`] maps the eased result back toward the origin.
+/// A one-way motion needs one pass, which [`Motion::new`] creates for you. Use a `MotionPass` when
+/// the reverse leg of an alternating motion needs its own duration or easing, via
+/// [`Motion::with_reverse_pass`]. Local pass time advances from zero to one; the easing maps that
+/// time to presentation progress and may overshoot or be non-monotonic.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{Motion, MotionPass, millis};
+///
+/// let motion = Motion::new(millis(500)).with_reverse_pass(MotionPass::new(millis(1000)));
+/// assert_eq!(motion.forward_pass().duration(), millis(500));
+/// assert_eq!(motion.reverse_pass().unwrap().duration(), millis(1000));
+/// ```
 #[derive(Clone)]
 pub struct MotionPass {
     duration: Duration,
@@ -112,7 +204,7 @@ pub struct MotionPass {
 }
 
 impl MotionPass {
-    /// Creates a linear pass with the supplied duration.
+    /// Creates a linear pass of `duration`. A zero duration is valid.
     pub fn new(duration: Duration) -> Self {
         Self {
             duration,
@@ -120,18 +212,20 @@ impl MotionPass {
         }
     }
 
-    /// Configures this pass's easing function.
+    /// Returns this pass with `easing` as its curve.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.easing = Easing::new(easing);
         self
     }
 
-    /// Returns this pass's duration.
+    /// Returns the length of this pass.
+    ///
+    /// See [`Motion`] for how a zero-length pass resolves.
     pub fn duration(&self) -> Duration {
         self.duration
     }
 
-    /// Returns this pass's easing function.
+    /// Returns the easing curve of this pass.
     pub fn easing(&self) -> &Easing {
         &self.easing
     }
@@ -156,12 +250,16 @@ impl From<Duration> for MotionPass {
     }
 }
 
-/// The number of passes in a playback run.
+/// How many iterations a [`Motion`] plays before it completes.
+///
+/// An iteration is one run through the motion's passes: a single forward pass, or a forward
+/// and a reverse pass when the motion alternates. Set it with [`Motion::iterations`] or
+/// [`Motion::repeat_forever`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Iterations {
-    /// A nonzero number of passes, including the first.
+    /// A nonzero number of iterations, including the first.
     Finite(NonZeroU32),
-    /// Continue until the owner stops playback.
+    /// Repeat without end, as [`Motion::repeat_forever`] does.
     Forever,
 }
 
@@ -172,7 +270,10 @@ impl Default for Iterations {
     }
 }
 
-/// The configured direction of successive iterations.
+/// The configured direction of a motion's iterations.
+///
+/// The default is [`Direction::Forward`]. [`Direction::Alternate`] and
+/// [`Direction::AlternateReverse`] differ only in which way the first iteration travels.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Direction {
     /// Every iteration travels from origin to target.
@@ -180,13 +281,13 @@ pub enum Direction {
     Forward,
     /// Every iteration travels from target to origin.
     Reverse,
-    /// Begin forward, then alternate directions.
+    /// The first iteration travels forward, then the directions alternate.
     Alternate,
-    /// Begin in reverse, then alternate directions.
+    /// The first iteration travels in reverse, then the directions alternate.
     AlternateReverse,
 }
 
-/// The direction of the pass selected for a sample.
+/// The direction of the pass that a sample falls in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PassDirection {
     /// Origin to target.
@@ -196,6 +297,8 @@ pub enum PassDirection {
 }
 
 /// The iteration count and configured direction of a run.
+///
+/// Read it with [`Motion::playback`]. Replace it all at once with [`Motion::with_playback`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Playback {
     iterations: Iterations,
@@ -203,7 +306,7 @@ pub struct Playback {
 }
 
 impl Playback {
-    /// Creates a playback policy.
+    /// Creates a playback policy from `iterations` and `direction`.
     pub const fn new(iterations: Iterations, direction: Direction) -> Self {
         Self {
             iterations,
@@ -222,26 +325,28 @@ impl Playback {
     }
 }
 
-/// The total configured playback extent, including the initial delay.
+/// The total length of a motion, including its delay.
+///
+/// See [`Motion::checked_extent`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MotionExtent {
-    /// A finite duration that fits in [`Duration`].
+    /// A finite length that fits in [`Duration`](std::time::Duration).
     Finite(Duration),
-    /// Playback has no configured end.
+    /// The motion has no end.
     Infinite,
 }
 
-/// The lifecycle state of a sampled run.
+/// Where a sampled motion is in its lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MotionPhase {
-    /// The initial delay has not elapsed.
+    /// The initial delay has not yet elapsed.
     Delayed,
-    /// Playback is in progress.
+    /// The motion is playing.
     Playing,
-    /// All finite duration iterations have elapsed, or a spring has reached
-    /// its settling cutoff.
+    /// Every finite iteration has elapsed, or a spring has reached its settling cutoff.
     Completed,
-    /// Infinite playback has no changing presentation because every applicable pass is zero length.
+    /// An infinite motion whose passes all have zero length. Its presentation never changes, so
+    /// it requests no frames.
     Inactive,
 }
 
@@ -268,74 +373,52 @@ impl Direction {
     }
 }
 
-/// The result of evaluating motion at a point in time.
+/// The state of a [`Motion`] at one moment, returned by [`Motion::sample`].
+///
+/// Use `progress` to draw the frame and `is_active` to decide whether to request another one.
+/// Whether the whole run has finished is a separate question, answered by [`is_complete`](Self::is_complete).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionSample {
-    /// Eased presentation progress, which may overshoot zero through one.
+    /// Eased presentation progress. It may overshoot zero through one.
     pub progress: Progress,
 
-    /// Uneased normalized time within a duration pass. For settling springs,
-    /// this is elapsed time divided by the estimated settling duration.
+    /// Normalized time within the current pass, before easing. For a settling spring this is
+    /// the elapsed time divided by the estimated settling time.
     pub local_time: Progress,
 
-    /// Zero-based duration iteration index. Settling springs report zero.
-    /// A completed duration run reports its final iteration.
+    /// Zero-based index of the current iteration. A spring reports zero. A completed finite
+    /// run reports its last iteration.
     pub iteration: u128,
 
-    /// Resolved duration pass direction, distinct from configured [`Direction`].
-    /// Settling springs report their nominal forward target direction.
+    /// The direction of the pass this sample is in. It is the resolved direction, not the
+    /// configured [`Direction`]. A spring reports [`PassDirection::Forward`].
     pub direction: PassDirection,
 
-    /// Whole-run lifecycle state.
+    /// The lifecycle state of the run.
     pub phase: MotionPhase,
 
-    /// Whether another sample may produce a different value.
-    /// True in [`MotionPhase::Delayed`] or [`MotionPhase::Playing`], and false
-    /// in [`MotionPhase::Completed`] or [`MotionPhase::Inactive`].
+    /// Whether another sample can produce a different value. This is true in
+    /// [`MotionPhase::Delayed`] and [`MotionPhase::Playing`], and false in
+    /// [`MotionPhase::Completed`] and [`MotionPhase::Inactive`].
     pub is_active: bool,
 }
 
 impl MotionSample {
-    /// Whether the entire finite run has completed.
+    /// Returns whether the whole finite run has completed.
+    ///
+    /// A completed run may rest at either end of its presentation, so check
+    /// [`is_at_end`](Self::is_at_end) separately if you need the endpoint.
     pub const fn is_complete(self) -> bool {
         matches!(self.phase, MotionPhase::Completed)
     }
 
-    /// Whether eased presentation is exactly at one.
+    /// Returns whether the eased presentation is exactly at one.
     pub const fn is_at_end(self) -> bool {
         self.progress.is_at_end()
     }
 }
 
-/// A deterministic, time-sampled description of duration-based motion.
-///
-/// A motion has one forward [`MotionPass`], an optional reverse pass, an
-/// initial delay, and a typed [`Playback`] policy. The default is one forward
-/// iteration with no delay. Delay applies once when a run begins.
-///
-/// [`Motion::iterations`] counts total iterations, including the first.
-/// Restarting motion begins each iteration with local time at zero.
-/// [`Motion::alternate`] starts forward, then uses a backward leg on every
-/// second iteration. [`Direction::AlternateReverse`] starts backward instead.
-/// With conventional easing endpoints, forward-first alternating motion rests
-/// at its target after an odd count and at its origin after an even count.
-/// Reverse-first alternating motion has the opposite endpoints. Custom easing
-/// endpoints may settle elsewhere, including outside zero through one.
-///
-/// A backward leg uses the configured reverse pass, or reuses the forward
-/// pass's duration and easing if no reverse pass is configured. Reverse local
-/// time still advances from zero to one and is eased in that direction; the
-/// resulting presentation progress is `1 - eased`. For example, reverse
-/// ease-in starts the backward leg slowly and accelerates toward the origin.
-///
-/// Local pass time is normalized. Eased presentation may overshoot, as in
-/// upstream spring easing, while pass selection remains deterministic. Finite
-/// zero-duration motion resolves immediately once its initial delay is
-/// satisfied, with the configured direction and iteration parity determining
-/// the final presentation. A zero-length leg in otherwise nonzero alternating
-/// motion is instantaneous.
-/// Indefinite motion whose applicable passes all have zero duration becomes
-/// inactive instead of requesting animation frames forever.
+/// The timing of a duration-based [`Motion`]: its passes, delay and playback.
 #[derive(Clone)]
 pub struct DurationDescription {
     forward: MotionPass,
@@ -344,7 +427,7 @@ pub struct DurationDescription {
     playback: Playback,
 }
 
-/// Configuration for motion driven by a settling spring.
+/// The timing of a spring-driven [`Motion`]: its physical parameters and settling tolerance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpringDescription {
     /// The spring's physical parameters.
@@ -356,7 +439,70 @@ pub struct SpringDescription {
     settle_after: Duration,
 }
 
-/// A motion with methods determined by its description type.
+/// A deterministic, time-sampled motion from a start value to a target.
+///
+/// `Motion` describes how a value moves over time, and it doesn't hold the value. It is either
+/// duration-based (the default) or spring-based, depending on `Description`. Call
+/// [`Motion::sample`] with the time since the run started to get the progress and the
+/// lifecycle state at that moment.
+///
+/// A duration motion has one forward [`MotionPass`], an optional reverse pass, an initial
+/// delay, and a [`Playback`] policy. The default is one forward iteration with no delay. The
+/// delay applies once, when a run begins.
+///
+/// [`Motion::iterations`] counts total iterations, including the first. Restarting motion
+/// begins each iteration with local time at zero. [`Motion::alternate`] starts forward, then
+/// uses a backward leg on every second iteration. [`Direction::AlternateReverse`] starts
+/// backward instead. With conventional easing endpoints, forward-first alternating motion rests
+/// at its target after an odd count and at its origin after an even count. Reverse-first
+/// alternating motion has the opposite endpoints. Custom easing endpoints may settle elsewhere,
+/// including outside zero through one.
+///
+/// A backward leg uses the configured reverse pass, or reuses the forward pass's duration and
+/// easing if no reverse pass is configured. Reverse local time still advances from zero to one
+/// and is eased in that direction. The resulting presentation progress is `1 - eased`. For
+/// example, reverse ease-in starts the backward leg slowly and accelerates toward the origin.
+///
+/// Local pass time is normalized. Eased presentation may overshoot, as in upstream spring
+/// easing, while pass selection remains deterministic. Finite zero-duration motion resolves
+/// immediately once its initial delay is satisfied, with the configured direction and iteration
+/// parity determining the final presentation. A zero-length leg in otherwise nonzero alternating
+/// motion is instantaneous. Indefinite motion whose applicable passes all have zero duration
+/// becomes inactive instead of requesting animation frames forever.
+///
+/// # Examples
+///
+/// Ease a one-pass motion. At a quarter of the way through, `ease_in_out` gives `0.125`.
+///
+/// ```
+/// use gpui::{Motion, ease_in_out, millis};
+///
+/// let motion = Motion::new(millis(200)).with_easing(ease_in_out);
+/// assert_eq!(motion.sample(millis(50)).progress.get(), 0.125);
+/// assert!(motion.sample(millis(200)).is_at_end());
+/// ```
+///
+/// Restart the pass three times. Each iteration begins again from zero.
+///
+/// ```
+/// use gpui::{Motion, millis};
+///
+/// let motion = Motion::new(millis(1000)).iterations(3);
+/// let sample = motion.sample(millis(2500));
+/// assert_eq!(sample.iteration, 2);
+/// assert_eq!(sample.local_time.get(), 0.5);
+/// assert!(motion.sample(millis(3000)).is_complete());
+/// ```
+///
+/// Alternate the direction. After an even number of iterations the motion rests at its origin.
+///
+/// ```
+/// use gpui::{Motion, Progress, millis};
+///
+/// let motion = Motion::new(millis(1000)).iterations(2).alternate();
+/// assert_eq!(motion.sample(millis(1500)).progress.get(), 0.5);
+/// assert_eq!(motion.sample(millis(2000)).progress, Progress::START);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Motion<Description = DurationDescription> {
     description: Description,
@@ -377,7 +523,7 @@ impl<Description> DerefMut for Motion<Description> {
 }
 
 impl Motion<DurationDescription> {
-    /// Creates one linear motion pass with the supplied duration.
+    /// Creates a one-pass linear motion of `duration`, with no delay, run once.
     pub fn new(duration: Duration) -> Self {
         Self {
             description: DurationDescription {
@@ -389,17 +535,20 @@ impl Motion<DurationDescription> {
         }
     }
 
-    /// Configures the forward pass's easing function.
+    /// Sets the easing of the forward pass.
     ///
-    /// An alternating motion without an explicit reverse pass also uses this
-    /// easing for its backward iterations.
+    /// An alternating motion without an explicit reverse pass uses this easing for its backward
+    /// legs too.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.description.forward.easing = Easing::new(easing);
         self
     }
 
-    /// Replaces easing with a spring sampled over this motion's duration.
-    /// Use [`Motion::spring`] for a spring that settles and preserves velocity across retargets.
+    /// Replaces the easing with a spring sampled over this motion's duration.
+    ///
+    /// The spring starts at rest and reaches its target at the end of the duration. It doesn't
+    /// settle on its own and it doesn't keep velocity across retargets. For a spring that settles
+    /// and keeps its velocity, use [`Motion::spring`].
     pub fn with_spring(self, config: SpringConfig) -> Self {
         let duration = self.forward.duration.as_secs_f32();
         let initial_state = SpringState {
@@ -420,28 +569,30 @@ impl Motion<DurationDescription> {
         })
     }
 
-    /// Replaces the forward pass.
+    /// Replaces the forward pass, including its duration and easing.
     pub fn with_forward_pass(mut self, pass: MotionPass) -> Self {
         self.forward = pass;
         self
     }
 
-    /// Configures the pass used for backward legs.
+    /// Sets the pass used for backward legs.
     ///
-    /// This does not infer direction from changes to an [`Animated`](crate::Animated)
-    /// target. A newly retargeted run begins with its configured direction. Without an
-    /// explicit reverse pass, backward legs reuse the forward pass's duration
-    /// and easing.
+    /// This doesn't infer direction from changes to an [`Animated`](crate::Animated) target. A
+    /// newly retargeted run begins with its configured direction. Without an explicit reverse
+    /// pass, backward legs reuse the forward pass's duration and easing.
     ///
-    /// Reverse local time advances from zero to one and is eased normally. Its
-    /// presentation is then mapped as `1 - eased`, so reverse
-    /// ease-in begins slowly and accelerates toward the origin.
+    /// Reverse local time advances from zero to one and is eased normally. Its presentation is
+    /// then mapped as `1 - eased`, so a reverse ease-in begins slowly and accelerates toward the
+    /// origin.
     pub fn with_reverse_pass(mut self, pass: MotionPass) -> Self {
         self.reverse = Some(pass);
         self
     }
 
-    /// Delays the start of playback once per run.
+    /// Delays the start of the run by `delay`.
+    ///
+    /// The delay applies once, before the first iteration. Restarted iterations don't wait again.
+    /// During the delay, the progress is the start value of the run.
     pub fn with_delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
         self
@@ -449,10 +600,9 @@ impl Motion<DurationDescription> {
 
     /// Sets the total number of iterations, including the first.
     ///
-    /// The default is one. Restarting motion restarts local timing
-    /// on every iteration. In forward-first alternating motion, odd-numbered
-    /// iterations are forward and even-numbered iterations are backward. With conventional
-    /// easing endpoints, counts of one and three rest at the target while counts
+    /// The default is one. Each iteration restarts local timing. In forward-first alternating
+    /// motion, odd-numbered iterations are forward and even-numbered iterations are backward.
+    /// With conventional easing endpoints, counts of one and three rest at the target, and counts
     /// of two and four rest at the origin.
     ///
     /// # Panics
@@ -465,32 +615,33 @@ impl Motion<DurationDescription> {
         self
     }
 
-    /// Repeats this motion indefinitely.
+    /// Repeats this motion without end.
     ///
-    /// A motion whose applicable passes all have zero duration becomes inactive
-    /// at a deterministic resting presentation.
+    /// Each iteration restarts from the start unless the motion alternates. A motion whose
+    /// applicable passes all have zero duration becomes [`MotionPhase::Inactive`], resting at a
+    /// deterministic presentation.
     pub fn repeat_forever(mut self) -> Self {
         self.playback.iterations = Iterations::Forever;
         self
     }
 
-    /// Alternates forward and backward iterations.
+    /// Alternates the direction of successive iterations.
     ///
-    /// Odd-numbered iterations use the forward pass. Even-numbered iterations
-    /// use the configured reverse pass, falling back to the forward pass when
-    /// none is configured.
+    /// Odd-numbered iterations use the forward pass. Even-numbered iterations use the reverse
+    /// pass, or the forward pass when none is configured. This is the same as
+    /// `direction(Direction::Alternate)`.
     pub fn alternate(mut self) -> Self {
         self.playback.direction = Direction::Alternate;
         self
     }
 
-    /// Configures the direction of playback iterations.
+    /// Sets the direction of successive iterations.
     pub fn direction(mut self, direction: Direction) -> Self {
         self.playback.direction = direction;
         self
     }
 
-    /// Replaces the playback policy.
+    /// Replaces the whole playback policy: iterations and direction.
     pub fn with_playback(mut self, playback: Playback) -> Self {
         self.playback = playback;
         self
@@ -501,17 +652,17 @@ impl Motion<DurationDescription> {
         &self.forward
     }
 
-    /// Returns the pass explicitly configured for backward legs, if any.
+    /// Returns the reverse pass, or `None` when backward legs reuse the forward pass.
     pub fn reverse_pass(&self) -> Option<&MotionPass> {
         self.reverse.as_ref()
     }
 
-    /// Returns the initial delay applied once per run.
+    /// Returns the delay applied before the first iteration.
     pub fn delay(&self) -> Duration {
         self.delay
     }
 
-    /// Returns the strongly typed iteration and direction policy.
+    /// Returns the iteration count and direction of this motion.
     pub const fn playback(&self) -> Playback {
         self.description.playback
     }
@@ -536,8 +687,19 @@ impl Motion<DurationDescription> {
         }
     }
 
-    /// Returns `Some(Infinite)` for unbounded playback and `None` only when a
-    /// finite extent cannot fit in [`Duration`].
+    /// Returns the total length of the run, including the delay.
+    ///
+    /// Returns [`MotionExtent::Infinite`] for [`Motion::repeat_forever`]. Returns `None` only when
+    /// a finite total is too large for [`Duration`](std::time::Duration).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{Motion, MotionExtent, millis};
+    ///
+    /// let motion = Motion::new(millis(300)).with_delay(millis(200)).iterations(3);
+    /// assert_eq!(motion.checked_extent(), Some(MotionExtent::Finite(millis(1100))));
+    /// ```
     pub fn checked_extent(&self) -> Option<MotionExtent> {
         let Iterations::Finite(iterations) = self.playback.iterations else {
             return Some(MotionExtent::Infinite);
@@ -644,11 +806,12 @@ impl Motion<DurationDescription> {
         }
     }
 
-    /// Evaluates this motion after the supplied elapsed time.
+    /// Samples this motion at `elapsed`, measured from the start of the run.
     ///
-    /// Pass selection, iteration parity, and completion use integer nanosecond
-    /// arithmetic. Only the fraction within the selected pass is converted to
-    /// floating point for easing.
+    /// Before the delay ends, the phase is [`MotionPhase::Delayed`]. After the last iteration of
+    /// a finite run, it is [`MotionPhase::Completed`] at the final progress. Pass selection,
+    /// iteration parity and completion use integer nanosecond arithmetic. Only the fraction
+    /// within the selected pass is converted to a float for easing.
     pub fn sample(&self, elapsed: Duration) -> MotionSample {
         if elapsed < self.delay {
             return MotionSample {
@@ -720,7 +883,10 @@ impl Motion<DurationDescription> {
         }
     }
 
-    /// Evaluates this motion between two timestamps.
+    /// Samples this motion at `now`, given the time `started_at` when the run began.
+    ///
+    /// `Time` can be any type that subtracts to a [`Duration`](std::time::Duration), such as
+    /// [`std::time::Instant`] or the executor's clock.
     pub fn sample_at<Time>(&self, started_at: Time, now: Time) -> MotionSample
     where
         Time: Sub<Time, Output = Duration>,
@@ -759,7 +925,10 @@ impl From<Duration> for Motion<DurationDescription> {
 pub type MotionInfo = Motion;
 
 impl Motion<SpringDescription> {
-    /// Creates a spring motion that runs until it settles.
+    /// Creates a spring that runs until it settles.
+    ///
+    /// Give the spring a target with [`Motion::to`]. The settling tolerance defaults to `0.001`.
+    /// Change it with [`Motion::with_epsilon`].
     pub fn spring(config: SpringConfig) -> Self {
         let epsilon = DEFAULT_SPRING_EPSILON;
 
@@ -772,17 +941,21 @@ impl Motion<SpringDescription> {
         }
     }
 
-    /// Returns this spring's physical parameters.
+    /// Returns the physical parameters of this spring.
     pub fn config(&self) -> SpringConfig {
         self.config
     }
 
-    /// Returns this spring's settling tolerance.
+    /// Returns the settling tolerance of this spring.
     pub fn epsilon(&self) -> f32 {
         self.epsilon
     }
 
-    /// Sets the spring's settling tolerance.
+    /// Sets how close the spring must be to its target before it counts as settled.
+    ///
+    /// The tolerance applies to position, and to velocity scaled by the spring's natural frequency.
+    /// Changing it also recomputes the settling time, which is when [`Motion::sample`] reports
+    /// [`MotionPhase::Completed`].
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
         self.description.epsilon = epsilon;
         self.description.settle_after =
@@ -791,7 +964,23 @@ impl Motion<SpringDescription> {
         self
     }
 
-    /// Evaluates this spring after the supplied elapsed time, starting from rest at zero progress.
+    /// Samples this spring at `elapsed`, starting from rest at zero progress.
+    ///
+    /// Progress is the spring's position, which overshoots when the spring is underdamped. From
+    /// the settling time onward the sample is [`MotionPhase::Completed`] at [`Progress::END`],
+    /// and it is no longer active.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{Motion, Progress, millis, secs, spring};
+    ///
+    /// let motion = Motion::spring(spring(100., 10., 1.));
+    /// assert!(motion.sample(millis(0)).is_active);
+    /// let settled = motion.sample(secs(10));
+    /// assert!(settled.is_complete());
+    /// assert_eq!(settled.progress, Progress::END);
+    /// ```
     pub fn sample(&self, elapsed: Duration) -> MotionSample {
         if elapsed >= self.settle_after {
             return MotionSample {
@@ -820,7 +1009,9 @@ impl Motion<SpringDescription> {
         }
     }
 
-    /// Targets a value or projected path with this spring.
+    /// Targets `target` with this spring.
+    ///
+    /// The result is a [`SpringAnimation`] for [`AnimationExt::with_spring`](crate::AnimationExt::with_spring).
     pub fn to<T: SpringTarget>(self, target: T) -> SpringAnimation<T> {
         SpringAnimation {
             motion: self,
@@ -837,7 +1028,8 @@ impl From<SpringConfig> for Motion<SpringDescription> {
     }
 }
 
-/// A duration or spring motion that can be sampled through one interface.
+/// A duration or spring [`Motion`] behind one type, so that an API can accept either.
+///
 /// Each spring sample starts from rest, so retargeting an animated value resets its velocity.
 #[derive(Clone)]
 pub enum AnyMotion {
@@ -853,7 +1045,7 @@ impl AnyMotion {
         matches!(self, Self::Duration(motion) if motion.playback.direction.pass(0) == PassDirection::Reverse)
     }
 
-    /// Evaluates this motion after the supplied elapsed time.
+    /// Samples this motion at `elapsed`. See [`Motion::sample`].
     pub fn sample(&self, elapsed: Duration) -> MotionSample {
         match self {
             Self::Duration(motion) => motion.sample(elapsed),
@@ -861,7 +1053,8 @@ impl AnyMotion {
         }
     }
 
-    /// Evaluates this motion between two timestamps.
+    /// Samples this motion at `now`, given the time `started_at` when the run began. See
+    /// [`Motion::sample_at`].
     pub fn sample_at<Time>(&self, started_at: Time, now: Time) -> MotionSample
     where
         Time: Sub<Time, Output = Duration>,

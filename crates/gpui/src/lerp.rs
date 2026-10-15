@@ -1,4 +1,4 @@
-//! Lerp trait defines behaviour for interpolating between two values of the same type.
+//! Interpolation between two values of the same type.
 use crate::{
     AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
     Percentage, Pixels, Point, Radians, Relative, Rems, RingColor, Size, colors::Colors,
@@ -12,12 +12,34 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
-/// A trait for types that can be linearly interpolated.
+/// A type whose values can be interpolated between two endpoints.
+///
+/// `delta` is the fraction of the way from `self` to `to`. `0.0` gives `self`, and `1.0` gives
+/// `to`. For numbers, deltas outside that range extrapolate. [`Animated`](crate::Animated),
+/// [`Transition`](crate::Transition) and style transitions call `lerp` for every frame.
+///
+/// Types that cannot be meaningfully blended, such as a gradient [`Background`](crate::Background)
+/// or a length that mixes pixels with rems, hold `self` until `delta` reaches `1.0`, then switch to
+/// `to`. [`Hsla`](crate::Hsla) values are converted through RGB; [`Interpolate`](crate::Interpolate)
+/// instead takes the shorter path around the hue wheel.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{Lerp, px};
+///
+/// assert_eq!(0.0_f32.lerp(&10.0, 0.25), 2.5);
+/// assert_eq!(px(0.).lerp(&px(10.), 0.5), px(5.));
+///
+/// // A bool blends to a number.
+/// let halfway: f32 = false.lerp(&true, 0.5);
+/// assert_eq!(halfway, 0.5);
+/// ```
 pub trait Lerp<Output = Self>
 where
     Self: Sized,
 {
-    /// Interpolates between `self` and `to` based on `delta`.
+    /// Returns the value `delta` of the way from `self` to `to`.
     fn lerp(&self, to: &Self, delta: f32) -> Output;
 }
 

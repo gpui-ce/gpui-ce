@@ -45,11 +45,11 @@ pub(crate) struct TestPlatform {
     weak: Weak<Self>,
 }
 
+/// A fake screen capture source for tests. It reports a 1x1 resolution and sends no frames.
 #[derive(Clone)]
-/// A fake screen capture source, used for testing.
 pub struct TestScreenCaptureSource {}
 
-/// A fake screen capture stream, used for testing.
+/// A fake screen capture stream for tests. It reports the metadata of [`TestScreenCaptureSource`].
 pub struct TestScreenCaptureStream {}
 
 impl ScreenCaptureSource for TestScreenCaptureSource {
@@ -658,7 +658,7 @@ impl Platform for TestPlatform {
 }
 
 impl TestScreenCaptureSource {
-    /// Create a fake screen capture source, for testing.
+    /// Creates a fake screen capture source.
     #[cfg(any(test, feature = "test-support"))]
     pub fn new() -> Self {
         Self {}

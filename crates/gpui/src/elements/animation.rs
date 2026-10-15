@@ -10,22 +10,46 @@ use crate::{
 pub use easing::*;
 use smallvec::SmallVec;
 
-/// An animation that can be applied to an element.
+/// A timed change to an element, applied with [`AnimationExt::with_animation`].
+///
+/// An animation is a [`Motion`] with two more options: whether its phase follows the app's shared
+/// clock, and an optional cap on how often it redraws. A [`Duration`](std::time::Duration) turns
+/// into one linear pass.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use gpui::{Animation, Direction, Iterations, Motion, ease_out_quint, millis};
+///
+/// let once = Animation::new(Duration::from_millis(300)).with_easing(ease_out_quint());
+/// assert!(!once.synced);
+/// assert_eq!(once.motion.playback().iterations(), Iterations::default());
+///
+/// // Pass an alternating motion, then repeat it, to ping-pong forever.
+/// let ping_pong = Animation::new(Motion::new(millis(300)).alternate()).repeat();
+/// assert_eq!(ping_pong.motion.playback().iterations(), Iterations::Forever);
+/// assert_eq!(ping_pong.motion.playback().direction(), Direction::Alternate);
+///
+/// assert_eq!(Animation::new(millis(16)).with_max_fps(30.).max_fps, Some(30.0));
+/// ```
 #[derive(Clone)]
 pub struct Animation {
-    /// The timing, repetition, and easing applied to this animation.
+    /// The timing, repetition and easing of this animation.
     pub motion: Motion,
-    /// Whether to derive the phase from a shared clock. See [`Animation::repeat_synced`].
+    /// Whether the phase follows the app's shared clock rather than the time this element began
+    /// animating. See [`Animation::repeat_synced`].
     pub synced: bool,
-    /// The maximum number of times per second this animation re-renders.
-    /// When `None`, the animation re-renders on every frame.
+    /// The maximum number of re-renders per second. `None` re-renders on every frame.
+    /// See [`Animation::with_max_fps`].
     pub max_fps: Option<f32>,
 }
 
 impl Animation {
-    /// Creates an animation with the given motion.
+    /// Creates an animation from a [`Motion`] or a [`Duration`](std::time::Duration).
     ///
-    /// Duration inputs create one linear motion pass.
+    /// A duration creates one linear pass that runs once.
     pub fn new(motion: impl Into<Motion>) -> Self {
         Self {
             motion: motion.into(),
@@ -34,42 +58,97 @@ impl Animation {
         }
     }
 
-    /// Set the animation to loop when it finishes.
+    /// Repeats the animation forever.
+    ///
+    /// Each cycle starts again from the beginning. The direction doesn't reverse. To ping-pong,
+    /// build the motion with [`Motion::alternate`] and pass it to [`Animation::new`].
     pub fn repeat(mut self) -> Self {
         self.motion = self.motion.repeat_forever();
         self
     }
 
-    /// Set the animation to loop when it finishes, phase-locked to a clock shared by the whole [`App`].
+    /// Repeats the animation forever, with its phase set by a clock shared by the whole [`App`](crate::App).
+    ///
+    /// Elements that use it stay in step with each other. An element that mounts later joins the
+    /// shared phase, rather than starting from zero.
     pub fn repeat_synced(mut self) -> Self {
         self.motion = self.motion.repeat_forever();
         self.synced = true;
         self
     }
 
-    /// Sets easing without clamping the output, so curves may overshoot.
+    /// Sets the easing curve.
+    ///
+    /// The output isn't clamped. An overshooting curve gives values outside `0.0..=1.0`, so clamp
+    /// in your animator if the property can't take them. A curve such as [`ease_out_quint`] stays
+    /// within that range.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.motion = self.motion.with_easing(easing);
         self
     }
 
-    /// Limits re-renders to `max_fps` by scheduling a timer between frames.
-    /// Non-finite and non-positive values are ignored.
+    /// Caps re-renders at `max_fps` per second, using a timer between frames.
+    ///
+    /// A value that is not finite or not positive is ignored, and the animation re-renders on every
+    /// frame.
     pub fn with_max_fps(mut self, max_fps: f32) -> Self {
         self.max_fps = Some(max_fps);
         self
     }
 }
 
-/// An extension trait for adding the animation wrapper to both Elements and Components
+/// Adds animation methods to every element and component.
 ///
-/// Animations rendered through this trait automatically respect
-/// [`App::reduce_motion`](crate::App::reduce_motion): when it is set,
-/// the element is rendered in a static state (the end state for oneshot
-/// animations, the start state for repeating ones) and no animation frames are
-/// scheduled.
+/// It is implemented for any [`IntoElement`] type, so you can call these methods on a
+/// [`Div`](crate::Div) or on your own component.
+///
+/// Animations honor [`App::reduce_motion`](crate::App::reduce_motion). When it is set, the element
+/// renders in a static state: the end state for a one-pass animation, and the start state for a
+/// repeating one. No animation frames are scheduled. GPUI doesn't read the operating system's
+/// setting, so set it yourself with [`App::set_reduce_motion`](crate::App::set_reduce_motion).
 pub trait AnimationExt {
-    /// Render this component or element with an animation
+    /// Renders this element with `animation`, passing `animator` the eased progress on every frame.
+    ///
+    /// `animator` receives the element and a value from `0.0` to `1.0`, and returns the styled
+    /// element. The `id` identifies the animation across frames. Change it to start the animation
+    /// again, and keep it stable otherwise, or the animation restarts on every render.
+    ///
+    /// # Examples
+    ///
+    /// Under reduce motion, a one-pass animation renders at its end state, `1.0`.
+    ///
+    /// ```
+    /// use std::{cell::RefCell, rc::Rc, time::Duration};
+    ///
+    /// use gpui::{
+    ///     Animation, AnimationExt, Context, IntoElement, Render, TestApp, Window, div, prelude::*, px,
+    /// };
+    ///
+    /// struct Toast {
+    ///     deltas: Rc<RefCell<Vec<f32>>>,
+    /// }
+    ///
+    /// impl Render for Toast {
+    ///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    ///         let deltas = self.deltas.clone();
+    ///         div().child("Saved").with_animation(
+    ///             "toast-enter",
+    ///             Animation::new(Duration::from_millis(300)),
+    ///             move |toast, delta| {
+    ///                 deltas.borrow_mut().push(delta);
+    ///                 toast.opacity(delta).mt(px(8. * (1. - delta)))
+    ///             },
+    ///         )
+    ///     }
+    /// }
+    ///
+    /// let deltas = Rc::new(RefCell::new(Vec::new()));
+    /// let mut app = TestApp::new();
+    /// app.update(|cx| cx.set_reduce_motion(true));
+    /// let mut window = app.open_window(|_, _| Toast { deltas: deltas.clone() });
+    /// window.draw();
+    /// assert_eq!(deltas.borrow().last(), Some(&1.0));
+    /// ```
     fn with_animation(
         self,
         id: impl Into<ElementId>,
@@ -87,7 +166,59 @@ pub trait AnimationExt {
         }
     }
 
-    /// Render this component or element with a chain of animations
+    /// Renders this element with a sequence of animations, one after another.
+    ///
+    /// `animator` receives the index of the running step and its progress from `0.0` to `1.0`.
+    /// Each step starts when the one before it finishes. A repeating step never finishes, so only
+    /// the last step should repeat.
+    ///
+    /// Under reduce motion, the element renders at the end of the last step.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `animations` is empty. Debug builds assert this when the element is created.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::{cell::RefCell, rc::Rc, time::Duration};
+    ///
+    /// use gpui::{
+    ///     Animation, AnimationExt, Context, IntoElement, Render, TestApp, Window, div, ease_out_quint,
+    ///     prelude::*, px,
+    /// };
+    ///
+    /// struct Pop {
+    ///     steps: Rc<RefCell<Vec<(usize, f32)>>>,
+    /// }
+    ///
+    /// impl Render for Pop {
+    ///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    ///         let steps = self.steps.clone();
+    ///         div().child("Done").with_animations(
+    ///             "pop",
+    ///             vec![
+    ///                 Animation::new(Duration::from_millis(150)),
+    ///                 Animation::new(Duration::from_millis(300)).with_easing(ease_out_quint()),
+    ///             ],
+    ///             move |el, step, delta| {
+    ///                 steps.borrow_mut().push((step, delta));
+    ///                 match step {
+    ///                     0 => el.opacity(delta),
+    ///                     _ => el.opacity(1.0).mt(px(8. * (1. - delta))),
+    ///                 }
+    ///             },
+    ///         )
+    ///     }
+    /// }
+    ///
+    /// let steps = Rc::new(RefCell::new(Vec::new()));
+    /// let mut app = TestApp::new();
+    /// app.update(|cx| cx.set_reduce_motion(true));
+    /// let mut window = app.open_window(|_, _| Pop { steps: steps.clone() });
+    /// window.draw();
+    /// assert_eq!(steps.borrow().last(), Some(&(1, 1.0)));
+    /// ```
     fn with_animations(
         self,
         id: impl Into<ElementId>,
@@ -107,11 +238,12 @@ pub trait AnimationExt {
         }
     }
 
-    /// Renders this component or element at the value produced by a spring.
+    /// Renders this element at the value of a spring, passed to `animator`.
     ///
-    /// The element ID preserves position and velocity across target changes.
-    /// A newly mounted spring starts at its target unless configured with
-    /// [`SpringAnimation::from`].
+    /// The `id` keeps the spring's position and velocity across frames, so a retargeted spring
+    /// bends toward the new target. A newly mounted spring starts at its target, unless you set
+    /// a start with [`SpringAnimation::from`]. Under reduce motion, the spring jumps to its target.
+    /// See [`SpringAnimation`] for an example.
     fn with_spring<T>(
         self,
         id: impl Into<ElementId>,
@@ -146,7 +278,9 @@ pub trait AnimationExt {
 
 impl<E: IntoElement + 'static> AnimationExt for E {}
 
-/// A GPUI element that applies an animation to another element
+/// The element returned by [`AnimationExt::with_animation`] and [`AnimationExt::with_animations`].
+///
+/// It wraps the element being animated and runs the animator on each frame.
 pub struct AnimationElement<E> {
     id: ElementId,
     element: Option<E>,
@@ -154,7 +288,9 @@ pub struct AnimationElement<E> {
     animator: Box<dyn Fn(E, usize, f32) -> E + 'static>,
 }
 
-/// A GPUI element driven by a stateful spring.
+/// The element returned by [`AnimationExt::with_spring`].
+///
+/// It wraps the element being animated and renders it at the spring's current value.
 pub struct SpringAnimationElement<E> {
     id: ElementId,
     element: Option<E>,
@@ -176,8 +312,9 @@ impl<E: ParentElement> ParentElement for SpringAnimationElement<E> {
 }
 
 impl<E> SpringAnimationElement<E> {
-    /// Returns a new [`SpringAnimationElement<E>`] after applying the given function
-    /// to the element being animated.
+    /// Applies `f` to the element being animated, and returns the animation with the result.
+    ///
+    /// The spring's animator still runs on the element that `f` returns.
     pub fn map_element(mut self, f: impl FnOnce(E) -> E) -> SpringAnimationElement<E> {
         self.element = self.element.map(f);
         self
@@ -203,8 +340,26 @@ impl<E: ParentElement> ParentElement for AnimationElement<E> {
 }
 
 impl<E> AnimationElement<E> {
-    /// Returns a new [`AnimationElement<E>`] after applying the given function
-    /// to the element being animated.
+    /// Applies `f` to the element being animated, and returns the animation with the result.
+    ///
+    /// The animator still runs on the element that `f` returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use gpui::{Animation, AnimationExt, div, prelude::*, px};
+    ///
+    /// let _fade = div()
+    ///     .child("Saved")
+    ///     .with_animation(
+    ///         "fade",
+    ///         Animation::new(Duration::from_millis(200)),
+    ///         |el, delta| el.opacity(delta),
+    ///     )
+    ///     .map_element(|el| el.w(px(120.)));
+    /// ```
     pub fn map_element(mut self, f: impl FnOnce(E) -> E) -> AnimationElement<E> {
         self.element = self.element.map(f);
         self
@@ -480,17 +635,43 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
 mod easing {
     use std::f32::consts::PI;
 
-    /// The linear easing function, or delta itself
+    /// Returns `delta` unchanged. This is the default easing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::linear;
+    ///
+    /// assert_eq!(linear(0.25), 0.25);
+    /// ```
     pub fn linear(delta: f32) -> f32 {
         delta
     }
 
-    /// The quadratic easing function, delta * delta
+    /// Accelerates from rest. Returns `delta * delta`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::quadratic;
+    ///
+    /// assert_eq!(quadratic(0.5), 0.25);
+    /// ```
     pub fn quadratic(delta: f32) -> f32 {
         delta * delta
     }
 
-    /// The quadratic ease-in-out function, which starts and ends slowly but speeds up in the middle
+    /// Starts and ends slowly, and moves fastest at the midpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::ease_in_out;
+    ///
+    /// assert_eq!(ease_in_out(0.25), 0.125);
+    /// assert_eq!(ease_in_out(0.5), 0.5);
+    /// assert_eq!(ease_in_out(0.75), 0.875);
+    /// ```
     pub fn ease_in_out(delta: f32) -> f32 {
         if delta < 0.5 {
             2.0 * delta * delta
@@ -500,12 +681,44 @@ mod easing {
         }
     }
 
-    /// The Quint ease-out function, which starts quickly and decelerates to a stop
+    /// Starts quickly and decelerates to a stop.
+    ///
+    /// This returns the easing as a closure, so call it as `ease_out_quint()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use gpui::{Animation, ease_out_quint};
+    ///
+    /// let easing = ease_out_quint();
+    /// assert_eq!(easing(0.5), 0.96875);
+    /// assert_eq!(easing(1.0), 1.0);
+    ///
+    /// let animation = Animation::new(Duration::from_millis(300)).with_easing(ease_out_quint());
+    /// assert!(!animation.synced);
+    /// ```
     pub fn ease_out_quint() -> impl Fn(f32) -> f32 {
         move |delta| 1.0 - (1.0 - delta).powi(5)
     }
 
-    /// Apply the given easing function, first in the forward direction and then in the reverse direction
+    /// Runs `easing` forward over the first half, then backward over the second half.
+    ///
+    /// The motion returns to its start value. The result is a closure, so call it as `bounce(...)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{bounce, linear, quadratic};
+    ///
+    /// let easing = bounce(linear);
+    /// assert_eq!(easing(0.0), 0.0);
+    /// assert_eq!(easing(0.5), 1.0);
+    /// assert_eq!(easing(1.0), 0.0);
+    ///
+    /// assert_eq!(bounce(quadratic)(0.25), 0.25);
+    /// ```
     pub fn bounce(easing: impl Fn(f32) -> f32) -> impl Fn(f32) -> f32 {
         move |delta| {
             if delta < 0.5 {
@@ -516,7 +729,23 @@ mod easing {
         }
     }
 
-    /// A custom easing function for pulsating alpha that slows down as it approaches 0.1
+    /// Breathes between `min` and `max`, for idle indicators.
+    ///
+    /// Over one cycle the value is at `max` near a quarter of the way through, at `min` near three
+    /// quarters, and at the midpoint at the start, the middle and the end. Use it with
+    /// [`Animation::repeat_synced`](crate::Animation::repeat_synced) so that several indicators pulse together. The result is a
+    /// closure, so call it as `pulsating_between(min, max)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::pulsating_between;
+    ///
+    /// let breathe = pulsating_between(0.3, 1.0);
+    /// assert!((breathe(0.25) - 1.0).abs() < 1e-6);
+    /// assert!((breathe(0.75) - 0.3).abs() < 1e-6);
+    /// assert!((breathe(0.0) - 0.65).abs() < 1e-6);
+    /// ```
     pub fn pulsating_between(min: f32, max: f32) -> impl Fn(f32) -> f32 {
         let range = max - min;
 

@@ -1,6 +1,9 @@
 use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, Point, px};
 use anyhow::{Ok, Result};
 
+/// A fake display that the test platform reports as its only screen.
+///
+/// It is 1920 by 1080 logical pixels, with its origin at `(0, 0)`. Each one gets a new UUID.
 #[derive(Debug)]
 pub(crate) struct TestDisplay {
     id: DisplayId,
@@ -9,6 +12,7 @@ pub(crate) struct TestDisplay {
 }
 
 impl TestDisplay {
+    /// Creates the fake display, with a new UUID.
     pub fn new() -> Self {
         TestDisplay {
             id: DisplayId(1),

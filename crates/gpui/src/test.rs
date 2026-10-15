@@ -1,28 +1,32 @@
-//! Test support for GPUI.
+//! Support for the `#[gpui::test]` macro, and streams for observing entities in tests.
 //!
-//! GPUI provides first-class support for testing, which includes a macro to run test that rely on having a context,
-//! and a test implementation of the `ForegroundExecutor` and `BackgroundExecutor` which ensure that your tests run
-//! deterministically even in the face of arbitrary parallelism.
+//! `#[gpui::test]` runs a test function once per seed. Each `&TestAppContext`
+//! parameter gets its own app, and all the apps share one deterministic scheduler,
+//! so a failing seed replays the same interleaving. The functions in this module
+//! are used by the macro; you rarely need to call them directly. See the
+//! [testing guide](crate::_documentation::guides::testing).
 //!
-//! The output of the `gpui::test` macro is understood by other rust test runners, so you can use it with `cargo test`
-//! or `cargo-nextest`, or another runner of your choice.
-//!
-//! To make it possible to test collaborative user interfaces (like Zed) you can ask for as many different contexts
-//! as you need.
-//!
-//! ## Example
+//! # Example
 //!
 //! ```
-//! use gpui;
+//! use gpui::{AppContext, Global, TestAppContext};
+//!
+//! struct Name(&'static str);
+//! impl Global for Name {}
 //!
 //! #[gpui::test]
-//! async fn test_example(cx: &TestAppContext) {
-//!   assert!(true)
+//! fn test_counts_are_positive(cx: &mut TestAppContext) {
+//!     let count = cx.new(|_| 1usize);
+//!     cx.run_until_parked();
+//!     cx.read(|cx| assert!(*count.read(cx) > 0));
 //! }
 //!
 //! #[gpui::test]
-//! async fn test_collaboration_example(cx_a: &TestAppContext, cx_b: &TestAppContext) {
-//!   assert!(true)
+//! fn test_each_app_has_its_own_globals(cx_a: &mut TestAppContext, cx_b: &mut TestAppContext) {
+//!     cx_a.update(|cx| cx.set_global(Name("alice")));
+//!     cx_b.update(|cx| cx.set_global(Name("bob")));
+//!     cx_a.read_global::<Name, _>(|name, _| assert_eq!(name.0, "alice"));
+//!     cx_b.read_global::<Name, _>(|name, _| assert_eq!(name.0, "bob"));
 //! }
 //! ```
 use crate::{Entity, Subscription, TestAppContext, TestDispatcher};
@@ -34,12 +38,16 @@ use std::{
     pin::Pin,
 };
 
-/// Strategy injected into `#[gpui::property_test]` tests to control the seed
-/// given to the scheduler. Doesn't shrink, since all scheduler seeds are
-/// equivalent in complexity. If `$SEED` is set, it always uses that value.
+/// Returns a proptest strategy for scheduler seeds.
 ///
-/// Note: this function is not intended to be used directly. Rather, it is
-/// public so that it can be used from the `property_test` macro.
+/// When `SEED` is set, the strategy always produces that value. Otherwise it
+/// produces any `u64`. Seeds are not shrunk, so a failing seed is replayed as
+/// recorded rather than replaced with a smaller seed.
+/// This is for the `#[gpui::property_test]` macro.
+///
+/// # Panics
+///
+/// Panics if `SEED` is set but isn't a `u64`.
 pub fn seed_strategy() -> impl Strategy<Value = u64> {
     match std::env::var("SEED") {
         Ok(val) => Just(val.parse().unwrap()).boxed(),
@@ -47,13 +55,13 @@ pub fn seed_strategy() -> impl Strategy<Value = u64> {
     }
 }
 
-/// Applies a fixed RNG seed to a proptest config so that case generation
-/// is deterministic. Uses `$SEED` if set, otherwise defaults to `0`.
-/// This bridges the GPUI `SEED` env var to proptest's RNG seed, so that
-/// a single variable controls both the scheduler seed and case generation.
+/// Sets the RNG seed of a proptest config from `SEED`, or from `0` when it's unset.
 ///
-/// Note: this function is not intended to be used directly. Rather, it is
-/// public so that it can be used from the `property_test` macro.
+/// The same variable then controls both the scheduler seed and proptest's case
+/// generation. The `#[gpui::property_test]` macro uses this helper.
+///
+/// If `SEED` is not a `u64`, this function uses `0`. [`seed_strategy`] panics for
+/// the same input.
 pub fn apply_seed_to_proptest_config(
     mut config: proptest::test_runner::Config,
 ) -> proptest::test_runner::Config {
@@ -65,12 +73,11 @@ pub fn apply_seed_to_proptest_config(
     config
 }
 
-/// Similar to [`run_test`], but only runs the callback once, allowing
-/// [`FnOnce`] callbacks. This is intended for use with the
-/// `gpui::property_test` macro and generally should not be used directly.
+/// Runs `test_fn` once on a dispatcher for `seed`, and returns its result.
 ///
-/// Doesn't support many features of [`run_test`], since these are provided by
-/// proptest.
+/// Unlike [`run_test`], this runs once without retries, and `test_fn` can be an
+/// `FnOnce`. The `#[gpui::property_test]` macro uses it. If `test_fn` panics,
+/// the panic is re-raised after the dispatcher is dropped.
 pub fn run_test_once<R>(
     seed: u64,
     test_fn: Box<dyn UnwindSafe + FnOnce(TestDispatcher) -> R>,
@@ -89,9 +96,18 @@ pub fn run_test_once<R>(
     }
 }
 
-/// Run the given test function with the configured parameters.
-/// This is intended for use with the `gpui::test` macro
-/// and generally should not be used directly.
+/// Runs `test_fn` for each seed, retrying a failing seed up to `max_retries` times.
+///
+/// The `#[gpui::test]` macro calls this function. It chooses seeds from the
+/// macro's arguments and these environment variables:
+///
+/// - `ITERATIONS=n` overrides the number of iterations.
+/// - `SEED=n` runs only seed `n`, or, with more than one iteration, the seeds
+///   `n` to `n + iterations - 1`. It replaces `explicit_seeds`.
+///
+/// When more than one seed runs, each seed is printed before it runs, and a
+/// failing seed is printed when its last attempt fails. After the last failure,
+/// `on_fail_fn` runs, then the panic is re-raised.
 pub fn run_test(
     num_iterations: usize,
     explicit_seeds: &[u64],
@@ -154,42 +170,62 @@ fn calculate_seeds(
         .map(|seed| seed.parse().expect("invalid SEED variable as integer"))
         .ok();
 
-    let empty_range = || 0..0;
-
-    let iter = {
-        let env_range = if let Some(env_num) = env_num {
-            env_num..env_num + 1
-        } else {
-            empty_range()
-        };
-
-        // if `iterations` is 1 and !(`explicit_seeds` is non-empty || `SEED` is set), then add     the run `0`
-        // if `iterations` is 1 and  (`explicit_seeds` is non-empty || `SEED` is set), then discard the run `0`
-        // if `iterations` isn't 1 and `SEED` is set, do `SEED..SEED+iterations`
-        // otherwise, do `0..iterations`
-        let iterations_range = match (iterations, env_num) {
-            (1, None) if explicit_seeds.is_empty() => 0..1,
-            (1, None) | (1, Some(_)) => empty_range(),
-            (iterations, Some(env)) => env..env + iterations,
-            (iterations, None) => 0..iterations,
-        };
-
-        // if `SEED` is set, ignore `explicit_seeds`
-        let explicit_seeds = if env_num.is_some() {
-            &[]
-        } else {
-            explicit_seeds
-        };
-
-        env_range
-            .chain(iterations_range)
-            .chain(explicit_seeds.iter().copied())
-    };
+    let iter = seed_sequence(iterations, explicit_seeds, env_num);
     let is_multiple_runs = iter.clone().nth(1).is_some();
     (iter, is_multiple_runs)
 }
 
-/// A test struct for converting an observation callback into a stream.
+fn seed_sequence(
+    iterations: u64,
+    explicit_seeds: &[u64],
+    env_num: Option<u64>,
+) -> impl Iterator<Item = u64> + Clone + '_ {
+    // if `iterations` is 1 and `explicit_seeds` is non-empty, discard the run `0`
+    // if `SEED` is set, do `SEED..SEED+iterations` and ignore `explicit_seeds`
+    // otherwise, do `0..iterations` followed by `explicit_seeds`
+    let range = match (iterations, env_num) {
+        (1, None) if !explicit_seeds.is_empty() => 0..0,
+        (iterations, Some(env)) => env..env + iterations,
+        (iterations, None) => 0..iterations,
+    };
+    let explicit_seeds = if env_num.is_some() {
+        &[]
+    } else {
+        explicit_seeds
+    };
+    range.chain(explicit_seeds.iter().copied())
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::seed_sequence;
+
+    #[test]
+    fn environment_seed_starts_one_sequence_without_duplicate_first_run() {
+        assert_eq!(
+            seed_sequence(3, &[80], Some(17)).collect::<Vec<_>>(),
+            [17, 18, 19]
+        );
+        assert_eq!(seed_sequence(1, &[80], Some(17)).collect::<Vec<_>>(), [17]);
+    }
+
+    #[test]
+    fn explicit_seeds_replace_default_run_or_extend_iteration_range() {
+        assert_eq!(seed_sequence(1, &[], None).collect::<Vec<_>>(), [0]);
+        assert_eq!(
+            seed_sequence(1, &[17, 80], None).collect::<Vec<_>>(),
+            [17, 80]
+        );
+        assert_eq!(
+            seed_sequence(3, &[80], None).collect::<Vec<_>>(),
+            [0, 1, 2, 80]
+        );
+    }
+}
+
+/// A stream of unit values from an entity observation, created by [`observe`].
+///
+/// Dropping the stream stops the observation.
 pub struct Observation<T> {
     rx: Pin<Box<async_channel::Receiver<T>>>,
     _subscription: Subscription,
@@ -206,7 +242,10 @@ impl<T: 'static> futures::Stream for Observation<T> {
     }
 }
 
-/// observe returns a stream of the change events from the given `Entity`
+/// Returns a stream that yields `()` each time `entity` notifies.
+///
+/// Dropping the returned stream unsubscribes. For a stream that also ends when the
+/// entity is released, use [`TestAppContext::notifications`].
 pub fn observe<T: 'static>(entity: &Entity<T>, cx: &mut TestAppContext) -> Observation<()> {
     let (tx, rx) = async_channel::unbounded();
     let _subscription = cx.update(|cx| {

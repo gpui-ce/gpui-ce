@@ -1,19 +1,64 @@
 use crate::{Action, App, Platform, SharedString};
 
-/// A menu of the application, either a main menu or a submenu
+/// A menu in the application's menu bar, or a submenu inside another menu.
+///
+/// Build a menu with [`Menu::new`] and fill it with [`Menu::items`]. Pass the menus to
+/// [`App::set_menus`] to show them. Each call to `set_menus` replaces the whole menu bar.
+/// Only macOS draws the menu bar from these menus. Linux and Windows store them, and
+/// [`App::get_menus`] returns them, but they don't draw a menu bar.
+///
+/// Picking an [`MenuItem::Action`] dispatches its action through [`App::dispatch_action`].
+/// An [`App::on_action`] handler for that action runs for the menu item and for its key
+/// binding alike.
+///
+/// # Examples
+///
+/// ```standalone_crate
+/// use std::{cell::Cell, rc::Rc};
+///
+/// use gpui::{App, Menu, MenuItem, OsAction, SystemMenuType, TestApp, actions};
+///
+/// actions!(app_menu_example, [Preferences, Undo]);
+///
+/// fn set_up_menus(cx: &mut App, preferences_opened: Rc<Cell<bool>>) {
+///     // A menu item and a key binding for the same action share one handler.
+///     cx.on_action(move |_: &Preferences, _cx| preferences_opened.set(true));
+///     cx.on_action(|_: &Undo, _cx| {
+///         // Undo the last edit here.
+///     });
+///     cx.set_menus([
+///         Menu::new("App").items([
+///             MenuItem::os_submenu("Services", SystemMenuType::Services),
+///             MenuItem::separator(),
+///             MenuItem::action("Preferences...", Preferences),
+///         ]),
+///         Menu::new("Edit").items([MenuItem::os_action("Undo", Undo, OsAction::Undo)]),
+///     ]);
+/// }
+///
+/// # let opened = Rc::new(Cell::new(false));
+/// # let mut app = TestApp::new();
+/// # app.update(|cx| set_up_menus(cx, opened.clone()));
+/// // Picking the menu item dispatches its action. The test harness has no menu bar,
+/// // so it dispatches the action directly.
+/// # app.update(|cx| cx.dispatch_action(&Preferences));
+/// # assert!(opened.get());
+/// ```
 pub struct Menu {
-    /// The name of the menu
+    /// The title of the menu, as shown in the menu bar.
     pub name: SharedString,
 
-    /// The items in the menu
+    /// The entries of the menu, in display order.
     pub items: Vec<MenuItem>,
 
-    /// Whether this menu is disabled
+    /// Whether the menu is disabled. On macOS, a disabled submenu can't be opened.
     pub disabled: bool,
 }
 
 impl Menu {
-    /// Create a new Menu with the given name
+    /// Creates an empty menu with the given title.
+    ///
+    /// Add entries with [`Self::items`].
     pub fn new(name: impl Into<SharedString>) -> Self {
         Self {
             name: name.into(),
@@ -22,19 +67,24 @@ impl Menu {
         }
     }
 
-    /// Set items to be in this menu
+    /// Replaces the menu's entries with `items`, and returns the menu.
+    ///
+    /// The previous entries are discarded.
     pub fn items(mut self, items: impl IntoIterator<Item = MenuItem>) -> Self {
         self.items = items.into_iter().collect();
         self
     }
 
-    /// Set whether this menu is disabled
+    /// Sets whether the menu is disabled, and returns the menu.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
-    /// Create an OwnedMenu from this Menu
+    /// Converts this menu into an [`OwnedMenu`], the form that [`App::get_menus`] returns.
+    ///
+    /// Platforms call this when they store the menu bar set with [`App::set_menus`], so you
+    /// rarely need it.
     pub fn owned(self) -> OwnedMenu {
         OwnedMenu {
             name: self.name.to_string().into(),
@@ -44,19 +94,20 @@ impl Menu {
     }
 }
 
-/// OS menus are menus that are recognized by the operating system
-/// This allows the operating system to provide specialized items for
-/// these menus
+/// A submenu that the operating system fills in, such as the Services menu on macOS.
+///
+/// Create one with [`MenuItem::os_submenu`]. The operating system decides what the menu
+/// contains.
 pub struct OsMenu {
-    /// The name of the menu
+    /// The title of the menu.
     pub name: SharedString,
 
-    /// The type of menu
+    /// Which system menu to show.
     pub menu_type: SystemMenuType,
 }
 
 impl OsMenu {
-    /// Create an OwnedOsMenu from this OsMenu
+    /// Converts this menu into an [`OwnedOsMenu`].
     pub fn owned(self) -> OwnedOsMenu {
         OwnedOsMenu {
             name: self.name.to_string().into(),
@@ -65,56 +116,63 @@ impl OsMenu {
     }
 }
 
-/// The type of system menu
+/// The kinds of menu that the operating system fills in.
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum SystemMenuType {
-    /// The 'Services' menu in the Application menu on macOS
+    /// The Services menu in the application menu on macOS, which lists the services that
+    /// other apps provide.
     Services,
 }
 
-/// The different kinds of items that can be in a menu
+/// An entry in a [`Menu`]: a separator, a submenu, a system menu, or an action.
+///
+/// Build entries with the constructors on this type, such as [`MenuItem::action`] and
+/// [`MenuItem::separator`].
 pub enum MenuItem {
-    /// A separator between items
+    /// A horizontal line that separates groups of entries.
     Separator,
 
-    /// A submenu
+    /// A menu nested inside another menu.
     Submenu(Menu),
 
-    /// A menu, managed by the system (for example, the Services menu on macOS)
+    /// A submenu that the operating system fills in, such as the Services menu on macOS.
     SystemMenu(OsMenu),
 
-    /// An action that can be performed
+    /// An entry that dispatches an action when the user picks it.
     Action {
-        /// The name of this menu item
+        /// The label of the entry.
         name: SharedString,
 
-        /// The action to perform when this menu item is selected
+        /// The action dispatched when the entry is picked.
         action: Box<dyn Action>,
 
-        /// The OS Action that corresponds to this action, if any
-        /// See [`OsAction`] for more information
+        /// The standard command this entry stands for, if any. See [`OsAction`].
         os_action: Option<OsAction>,
 
-        /// Whether this action is checked
+        /// Whether the entry shows a checkmark. On macOS, the checkmark is shown when this is
+        /// `true`.
         checked: bool,
 
-        /// Whether this action is disabled
+        /// Whether the entry is disabled. On macOS, a disabled entry is greyed out and can't be
+        /// picked.
         disabled: bool,
     },
 }
 
 impl MenuItem {
-    /// Creates a new menu item that is a separator
+    /// Returns a separator entry.
     pub fn separator() -> Self {
         Self::Separator
     }
 
-    /// Creates a new menu item that is a submenu
+    /// Returns an entry that opens `menu` as a submenu.
     pub fn submenu(menu: Menu) -> Self {
         Self::Submenu(menu)
     }
 
-    /// Creates a new submenu that is populated by the OS
+    /// Returns a submenu titled `name` that the operating system fills in.
+    ///
+    /// Use it for menus like the macOS Services menu, which the system builds itself.
     pub fn os_submenu(name: impl Into<SharedString>, menu_type: SystemMenuType) -> Self {
         Self::SystemMenu(OsMenu {
             name: name.into(),
@@ -122,7 +180,10 @@ impl MenuItem {
         })
     }
 
-    /// Creates a new menu item that invokes an action
+    /// Returns an entry titled `name` that dispatches `action` when the user picks it.
+    ///
+    /// Use [`Self::os_action`] instead when the entry is a standard command, such as Copy
+    /// or Undo.
     pub fn action(name: impl Into<SharedString>, action: impl Action) -> Self {
         Self::Action {
             name: name.into(),
@@ -133,7 +194,11 @@ impl MenuItem {
         }
     }
 
-    /// Creates a new menu item that invokes an action and has an OS action
+    /// Returns an entry like [`Self::action`], tagged with the standard command it stands for.
+    ///
+    /// On macOS, Cut, Copy, Paste and Select All are sent to the responder chain, so the
+    /// focused text view handles them. Undo, Redo and entries without an `OsAction` dispatch
+    /// `action` as usual.
     pub fn os_action(
         name: impl Into<SharedString>,
         action: impl Action,
@@ -148,7 +213,7 @@ impl MenuItem {
         }
     }
 
-    /// Create an OwnedMenuItem from this MenuItem
+    /// Converts this entry into an [`OwnedMenuItem`].
     pub fn owned(self) -> OwnedMenuItem {
         match self {
             MenuItem::Separator => OwnedMenuItem::Separator,
@@ -170,9 +235,9 @@ impl MenuItem {
         }
     }
 
-    /// Set whether this menu item is checked
+    /// Sets whether the entry shows a checkmark, and returns the entry.
     ///
-    /// Only for [`MenuItem::Action`], otherwise, will be ignored
+    /// Has an effect only on [`MenuItem::Action`]. Other kinds of entry ignore it.
     pub fn checked(mut self, checked: bool) -> Self {
         match &mut self {
             MenuItem::Action { checked: old, .. } => {
@@ -183,9 +248,9 @@ impl MenuItem {
         self
     }
 
-    /// Returns whether this menu item is checked
+    /// Returns whether the entry shows a checkmark.
     ///
-    /// Only for [`MenuItem::Action`], otherwise, returns false
+    /// Returns `false` for every kind of entry except [`MenuItem::Action`].
     #[inline]
     pub fn is_checked(&self) -> bool {
         match self {
@@ -194,7 +259,10 @@ impl MenuItem {
         }
     }
 
-    /// Set whether this menu item is disabled
+    /// Sets whether the entry is disabled, and returns the entry.
+    ///
+    /// Has an effect on [`MenuItem::Action`] and [`MenuItem::Submenu`]. Other kinds of entry
+    /// ignore it.
     pub fn disabled(mut self, disabled: bool) -> Self {
         match &mut self {
             MenuItem::Action { disabled: old, .. } => {
@@ -208,9 +276,9 @@ impl MenuItem {
         self
     }
 
-    /// Returns whether this menu item is disabled
+    /// Returns whether the entry is disabled.
     ///
-    /// Only for [`MenuItem::Action`] and [`MenuItem::Submenu`], otherwise, returns false
+    /// Returns `false` for separators and system menus.
     #[inline]
     pub fn is_disabled(&self) -> bool {
         match self {
@@ -221,58 +289,57 @@ impl MenuItem {
     }
 }
 
-/// OS menus are menus that are recognized by the operating system
-/// This allows the operating system to provide specialized items for
-/// these menus
+/// An [`OsMenu`] in the form that [`App::get_menus`] returns.
 #[derive(Clone)]
 pub struct OwnedOsMenu {
-    /// The name of the menu
+    /// The title of the menu.
     pub name: SharedString,
 
-    /// The type of menu
+    /// Which system menu to show.
     pub menu_type: SystemMenuType,
 }
 
-/// A menu of the application, either a main menu or a submenu
+/// A [`Menu`] in the form that [`App::get_menus`] returns.
+///
+/// Its entries are [`OwnedMenuItem`]s. The data is the same as the [`Menu`] that was set.
 #[derive(Clone)]
 pub struct OwnedMenu {
-    /// The name of the menu
+    /// The title of the menu, as shown in the menu bar.
     pub name: SharedString,
 
-    /// The items in the menu
+    /// The entries of the menu, in display order.
     pub items: Vec<OwnedMenuItem>,
 
-    /// Whether this menu is disabled
+    /// Whether the menu is disabled.
     pub disabled: bool,
 }
 
-/// The different kinds of items that can be in a menu
+/// A [`MenuItem`] in the form that [`App::get_menus`] returns.
 pub enum OwnedMenuItem {
-    /// A separator between items
+    /// A horizontal line that separates groups of entries.
     Separator,
 
-    /// A submenu
+    /// A menu nested inside another menu.
     Submenu(OwnedMenu),
 
-    /// A menu, managed by the system (for example, the Services menu on macOS)
+    /// A submenu that the operating system fills in.
     SystemMenu(OwnedOsMenu),
 
-    /// An action that can be performed
+    /// An entry that dispatches an action when the user picks it.
     Action {
-        /// The name of this menu item
+        /// The label of the entry.
         name: String,
 
-        /// The action to perform when this menu item is selected
+        /// The action dispatched when the entry is picked.
         action: Box<dyn Action>,
 
-        /// The OS Action that corresponds to this action, if any
-        /// See [`OsAction`] for more information
+        /// The standard command this entry stands for, if any. See [`OsAction`].
         os_action: Option<OsAction>,
 
-        /// Whether this action is checked
+        /// Whether the entry shows a checkmark.
         checked: bool,
 
-        /// Whether this action is disabled
+        /// Whether the entry is disabled.
         disabled: bool,
     },
 }
@@ -304,27 +371,29 @@ impl Clone for OwnedMenuItem {
 // be moved to GPUI-provided actions that make this association
 // without leaking the platform details to GPUI users
 
-/// OS actions are actions that are recognized by the operating system
-/// This allows the operating system to provide specialized behavior for
-/// these actions
+/// A standard command that the operating system knows about, such as Copy or Undo.
+///
+/// Tag a menu entry with one of these using [`MenuItem::os_action`], so the operating system can
+/// route the command the way it does for other apps. On macOS, the entry's action is still
+/// dispatched for Undo and Redo, and the system handles Cut, Copy, Paste and Select All.
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum OsAction {
-    /// The 'cut' action
+    /// The Cut command.
     Cut,
 
-    /// The 'copy' action
+    /// The Copy command.
     Copy,
 
-    /// The 'paste' action
+    /// The Paste command.
     Paste,
 
-    /// The 'select all' action
+    /// The Select All command.
     SelectAll,
 
-    /// The 'undo' action
+    /// The Undo command.
     Undo,
 
-    /// The 'redo' action
+    /// The Redo command.
     Redo,
 }
 

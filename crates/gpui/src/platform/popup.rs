@@ -3,31 +3,47 @@ use thiserror::Error;
 
 use crate::{AnyWindowHandle, Bounds, Pixels, Point, util::FluentBuilder};
 
-/// Options for a popup anchored to a parent window, such as a menu, dropdown, or tooltip.
+/// Describes where a native popup goes, relative to a rectangle on its parent window.
 ///
-/// A popup is placed relative to an anchor rectangle on its parent window rather than at an
-/// absolute screen position. The platform resolves the final position, so this works both on
-/// systems where the compositor owns window placement (Wayland) and on platforms with absolute
-/// coordinates.
+/// Use a popup for menus, comboboxes, context menus and tooltips that should be able to leave
+/// the parent window's bounds. Use an in-window element for everything else. Pass the popup to
+/// [`WindowKind::AnchoredPopup`](crate::WindowKind::AnchoredPopup) in [`WindowOptions::kind`](crate::WindowOptions::kind).
+///
+/// The popup is placed relative to `anchor_rect` rather than at an absolute screen position.
+/// The platform resolves the final position. That works on Wayland, where the compositor places
+/// windows, and on platforms with absolute coordinates.
 ///
 /// The popup's size comes from `window_bounds` in [`WindowOptions`](crate::WindowOptions).
-/// The bounds' origin is ignored. All coordinates are in logical pixels.
+/// Wayland uses only the size, not the origin. All coordinates are in logical pixels.
 ///
-/// Pass the parent window and anchor rectangle to [`Self::new`], then chain setters
-/// to configure placement and input grabbing.
+/// Native popups are available on Wayland only. On macOS, Windows, X11 and the web, opening one
+/// returns a [`PopupNotSupportedError`] and you can draw the same content in the window instead.
+///
+/// Pass the parent window and anchor rectangle to [`PopupOptions::new`], then chain setters to
+/// configure placement and input grabbing.
+///
+/// # Examples
 ///
 /// ```
-/// use gpui::{
-///     AnyWindowHandle, Bounds, Pixels,
-///     popup::{PopupAnchor, PopupGravity, PopupOptions},
-/// };
+/// # use gpui::{Context, Render, TestApp, Window, div, prelude::*, px, point, size, Bounds};
+/// use gpui::popup::{PopupAnchor, PopupGravity, PopupOptions};
+/// # struct Root;
+/// # impl Render for Root {
+/// #     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+/// # }
+/// # let mut app = TestApp::new();
+/// # let _window = app.open_window(|_, _| Root);
+/// # let parent = app.windows()[0];
+/// // A dropdown below a button whose bounds are `anchor_rect`.
+/// let anchor_rect = Bounds::new(point(px(10.), px(20.)), size(px(80.), px(24.)));
+/// let options = PopupOptions::new(parent, anchor_rect)
+///     .anchor(PopupAnchor::BottomLeft)
+///     .gravity(PopupGravity::BottomRight)
+///     .grab(true);
 ///
-/// fn menu_options(parent: AnyWindowHandle, anchor_rect: Bounds<Pixels>) -> PopupOptions {
-///     PopupOptions::new(parent, anchor_rect)
-///         .anchor(PopupAnchor::BottomLeft)
-///         .gravity(PopupGravity::BottomRight)
-///         .grab(true)
-/// }
+/// assert_eq!(options.anchor, PopupAnchor::BottomLeft);
+/// assert_eq!(options.gravity, PopupGravity::BottomRight);
+/// assert!(options.grab);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, derive_setters::Setters)]
 #[setters(into)]
@@ -60,9 +76,9 @@ pub struct PopupOptions {
     /// user clicks outside of them or presses a dismissing key. Use it for menus and comboboxes,
     /// not for tooltips or other passive popups.
     ///
-    /// A grab must be requested while the triggering input is still active, in practice the
-    /// press of the mouse button that opens the popup. Open grabbing popups from a mouse-down
-    /// handler rather than a click handler, otherwise the grab is refused.
+    /// On Wayland, the grab uses the serial of the most recent mouse or key press, so open a
+    /// grabbing popup in response to a press. If the window hasn't received a press yet, the
+    /// popup opens without a grab.
     ///
     /// Automatic dismissal only covers input aimed at other applications. A click elsewhere in
     /// your own application still reaches it as usual, so closing the popup in that case is up
@@ -161,11 +177,14 @@ bitflags! {
     }
 }
 
-/// Returned when the current platform has no native popup implementation yet.
+/// Returned when a platform can't open a native popup window.
+///
+/// Opening a [`WindowKind::AnchoredPopup`](crate::WindowKind::AnchoredPopup) window fails with
+/// this error on macOS, Windows, X11 and the web. Wayland supports native popups.
 ///
 /// Native popups are separate from gpui's in-window popovers, which are drawn as elements inside
-/// an existing window. A caller that wants a popup on every platform should treat this error as
-/// a cue to fall back to that in-window rendering.
+/// an existing window. To show a popup on every platform, catch this error and draw the same
+/// content in the parent window instead.
 #[derive(Debug, Error)]
 #[error("popups are not supported on this platform")]
 pub struct PopupNotSupportedError;

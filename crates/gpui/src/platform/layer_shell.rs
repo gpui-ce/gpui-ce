@@ -54,23 +54,41 @@ pub enum KeyboardInteractivity {
     OnDemand,
 }
 
-/// Options for creating a layer_shell window.
+/// Configures a Wayland layer-shell surface, such as a panel, dock, or wallpaper.
 ///
-/// Chain setters on [`LayerShellOptions::default`] to configure the surface.
-/// Pass `None` to clear the exclusive zone, exclusive edge, or margins.
+/// Set this on [`WindowKind::LayerShell`](crate::WindowKind::LayerShell) when you open a window.
+/// Chain setters on [`LayerShellOptions::default`] to configure the surface. Pass `None` to
+/// clear the exclusive zone, exclusive edge, or margins.
+///
+/// The compositor applies the namespace, layer, anchor and margins. Opening the window fails
+/// with [`LayerShellNotSupportedError`] when the compositor doesn't support the layer-shell
+/// protocol. Layer shell exists only on Wayland, so this module is available only on Linux
+/// builds with the `wayland` feature.
+///
+/// # Examples
 ///
 /// ```
+/// # #[cfg(all(target_os = "linux", feature = "wayland"))]
+/// # fn main() {
 /// use gpui::{
 ///     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
 ///     px,
 /// };
 ///
+/// // A 40 px bar along the bottom edge, stretched across the screen.
 /// let options = LayerShellOptions::default()
 ///     .namespace("panel")
 ///     .layer(Layer::Top)
 ///     .anchor(Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM)
 ///     .exclusive_zone(px(40.0))
 ///     .keyboard_interactivity(KeyboardInteractivity::None);
+///
+/// assert_eq!(options.namespace, "panel");
+/// assert_eq!(options.layer, Layer::Top);
+/// assert_eq!(options.exclusive_zone, Some(px(40.0)));
+/// # }
+/// # #[cfg(not(all(target_os = "linux", feature = "wayland")))]
+/// # fn main() {}
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, derive_setters::Setters)]
 #[setters(into)]

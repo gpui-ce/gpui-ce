@@ -52,6 +52,15 @@ pub(crate) struct TestWindowState {
     start_external_drag_result: bool,
 }
 
+/// A window on the test platform. Tests use it to play the part of the operating system.
+///
+/// GPUI records what it asks of the window, such as frame requests, text input configuration,
+/// and prompts. Tests then simulate what the OS would send back, with methods such as
+/// [`Self::simulate_resize`] and [`Self::simulate_input`]. Nothing happens on its own, so a
+/// frame runs only when a test asks for one.
+///
+/// The scale factor is always 2.0. A headless renderer makes frames renderable;
+/// without one, drawing records the frame as complete without producing pixels.
 #[derive(Clone)]
 pub struct TestWindow(pub(crate) Rc<Mutex<TestWindowState>>);
 
@@ -117,6 +126,10 @@ impl TestWindow {
             start_external_drag_result: false,
         })))
     }
+    /// Runs the frame callback if GPUI has requested a frame. Returns whether a frame ran.
+    ///
+    /// If no frame callback is registered, the request remains pending and this
+    /// method returns `false`.
     pub fn simulate_scheduled_frame(&self) -> bool {
         let callback = {
             let mut state = self.0.lock();
@@ -136,24 +149,29 @@ impl TestWindow {
         true
     }
 
+    /// Returns whether GPUI has requested a frame that hasn't run yet.
     pub fn frame_scheduled(&self) -> bool {
         self.0.lock().frame_scheduled
     }
 
-    /// Returns whether this test window is visible.
+    /// Returns whether the window is visible. It starts visible when it was opened with `show` set.
     pub fn is_visible(&self) -> bool {
         self.0.lock().visible
     }
 
-    /// Every [`TextInputConfiguration`] forwarded to this window, in order.
+    /// Returns every [`TextInputConfiguration`] sent to this window, oldest first.
     pub fn text_input_configurations(&self) -> Vec<TextInputConfiguration> {
         self.0.lock().text_input_configurations.clone()
     }
 
+    /// Returns every [`TextInputStateChange`] sent to this window, oldest first.
     pub fn text_input_state_changes(&self) -> Vec<TextInputStateChange> {
         self.0.lock().text_input_state_changes.clone()
     }
 
+    /// Sets the window's content size and calls the resize callback, as the OS does on resize.
+    ///
+    /// The callback receives the new size and the scale factor, which is 2.0 in tests.
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
         let scale_factor = self.scale_factor();
         let mut lock = self.0.lock();
@@ -177,6 +195,9 @@ impl TestWindow {
         self.0.lock().active_status_change_callback = Some(callback);
     }
 
+    /// Sets the window's appearance and calls the appearance-changed callback.
+    ///
+    /// This is what the OS does when the user switches between light and dark mode.
     pub fn simulate_appearance_change(&self, appearance: WindowAppearance) {
         let mut lock = self.0.lock();
         lock.appearance = appearance;
@@ -188,13 +209,16 @@ impl TestWindow {
         self.0.lock().appearance_change_callback = Some(callback);
     }
 
-    /// Returns how many times this window's frame waker has been invoked.
+    /// Returns how many times GPUI has invoked this window's frame waker.
+    ///
+    /// Use it to check when GPUI asks the platform for a new frame.
     pub fn frame_wake_count(&self) -> usize {
         self.0.lock().frame_wake_count.get()
     }
 
-    /// Delivers a frame request to the window, as the platform's frame source
-    /// would.
+    /// Delivers a frame request, as the platform's display link would.
+    ///
+    /// GPUI draws the next frame if it registered a frame callback. Otherwise this does nothing.
     pub fn simulate_frame_request(&self, options: RequestFrameOptions) {
         let mut lock = self.0.lock();
         let Some(mut callback) = lock.request_frame_callback.take() else {
@@ -205,6 +229,10 @@ impl TestWindow {
         self.0.lock().request_frame_callback = Some(callback);
     }
 
+    /// Delivers `event` to the window's input callback, as the OS does for a key or mouse event.
+    ///
+    /// Returns `true` if a handler stopped the event from propagating. Returns `false` if the
+    /// event propagated, or if no input callback is registered.
     pub fn simulate_input(&mut self, event: PlatformInput) -> bool {
         let mut lock = self.0.lock();
         let Some(mut callback) = lock.input_callback.take() else {
@@ -216,10 +244,14 @@ impl TestWindow {
         !result.propagate
     }
 
+    /// Returns the files that GPUI offered in external drags, in order.
+    ///
+    /// Each entry pairs a path with `true` if it is a directory.
     pub fn external_drag_files(&self) -> Vec<(PathBuf, bool)> {
         self.0.lock().external_drag_files.clone()
     }
 
+    /// Sets the value that `start_external_drag` returns. The default is `false`.
     pub fn set_start_external_drag_result(&self, result: bool) {
         self.0.lock().start_external_drag_result = result;
     }
@@ -501,6 +533,7 @@ pub(crate) struct TestAtlasState {
     glyph_cache: GlyphAtlasCache,
 }
 
+/// An in-memory sprite atlas for tests. It records tile ids and sizes but stores no pixel data.
 pub(crate) struct TestAtlas(Mutex<TestAtlasState>);
 
 impl TestAtlasState {
@@ -529,6 +562,7 @@ impl TestAtlasState {
 }
 
 impl TestAtlas {
+    /// Creates an empty atlas.
     pub fn new() -> Self {
         TestAtlas(Mutex::new(TestAtlasState {
             next_id: 0,
