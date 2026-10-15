@@ -25,6 +25,7 @@ members = [
   "./crates/gpui_ce_util/",
   "./crates/gpui_path/",
   "./tooling/perf/",
+  "./site/player/",
 ]
 default-members = ["./crates/gpui/"]
 resolver = "3"

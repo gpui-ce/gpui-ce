@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPUI example</title>
+    <link data-trunk rel="rust" data-bin="gpui-player" data-wasm-opt="z" />
+    <style>
+      :root { color-scheme: light dark; }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      body {
+        display: grid;
+        place-items: center;
+        background: #ffffff;
+        color: #6b6b6b;
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #222222; color: #9a9a9a; }
+      }
+      body:has(canvas)::before { content: none; }
+      body::before { content: "Loading…"; }
+      canvas { position: fixed; inset: 0; }
+    </style>
+  </head>
+  <body></body>
+</html>
