@@ -16,7 +16,41 @@ use std::{
 
 use super::{App, AsyncWindowContext, Entity, KeystrokeEvent};
 
-/// The app context, with specialized behavior for the given entity.
+/// A mutable handle to the [`App`] that also knows which entity `T` you are working on.
+///
+/// GPUI passes a `Context<T>` to every callback that works on an entity. [`Entity::update`]
+/// and [`WeakEntity::update`] pass one to their closure, and render methods receive one as
+/// their last argument. Because `Context<T>` dereferences to [`App`], you can use any `App`
+/// method through it. The methods on `Context<T>` itself need the entity: [`Context::notify`],
+/// [`Context::emit`], [`Context::observe`], [`Context::subscribe`], [`Context::listener`] and
+/// [`Context::spawn`].
+///
+/// Use the context of the entity you're changing for anything about that entity, and use
+/// `&mut App` for work that spans the application. See
+/// [contexts](crate::_documentation::concepts::contexts) for when you get each kind of context.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{AppContext, Context, TestApp};
+/// struct Clock {
+///     ticks: u64,
+/// }
+///
+/// impl Clock {
+///     fn tick(&mut self, cx: &mut Context<Self>) {
+///         self.ticks += 1;
+///         cx.notify();
+///     }
+/// }
+///
+/// # let mut app = TestApp::new();
+/// # app.update(|cx| {
+/// let clock = cx.new(|_cx| Clock { ticks: 0 });
+/// clock.update(cx, |clock, cx| clock.tick(cx));
+/// assert_eq!(clock.read(cx).ticks, 1);
+/// # });
+/// ```
 pub struct Context<'a, T> {
     app: &'a mut App,
     entity_state: WeakEntity<T>,
@@ -41,25 +75,74 @@ impl<'a, T: 'static> Context<'a, T> {
         Self { app, entity_state }
     }
 
-    /// The entity id of the entity backing this context.
+    /// Returns the id of the entity this context works on.
     pub fn entity_id(&self) -> EntityId {
         self.entity_state.entity_id
     }
 
-    /// Returns a handle to the entity belonging to this context.
+    /// Returns a strong handle to the entity this context works on.
+    ///
+    /// The handle keeps the entity alive. Use [`Context::weak_entity`] when a callback should not
+    /// keep it alive.
     pub fn entity(&self) -> Entity<T> {
         self.weak_entity()
             .upgrade()
             .expect("The entity must be alive if we have a entity context")
     }
 
-    /// Returns a weak handle to the entity belonging to this context.
+    /// Returns a weak handle to the entity this context works on.
+    ///
+    /// Store the weak handle in callbacks and tasks that can outlive the current update. Upgrade it
+    /// when you need the entity, and handle the case where it has been released.
     pub fn weak_entity(&self) -> WeakEntity<T> {
         self.entity_state.clone()
     }
 
-    /// Arranges for the given function to be called whenever [`Context::notify`] is
-    /// called with the given entity.
+    /// Calls `on_notify` whenever `entity` calls [`Context::notify`].
+    ///
+    /// Use this to keep one entity in step with another. When `entity` changes, your callback can
+    /// read it and update your own state. The callback receives this entity mutably, a handle to the
+    /// observed entity, and a context for this entity. It runs after the update that called `notify`
+    /// finishes. Several notifications before that point deliver the callback once.
+    ///
+    /// The callback stays registered while the returned [`Subscription`] is alive. Keep it in a field
+    /// so the callback lasts as long as your entity, or call [`Subscription::detach`] to keep it for as
+    /// long as both entities exist. Once this entity is released, the callback is never called again.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{AppContext, Context, TestApp};
+    /// struct Counter {
+    ///     count: usize,
+    /// }
+    ///
+    /// struct Label {
+    ///     text: String,
+    /// }
+    ///
+    /// # let mut app = TestApp::new();
+    /// # let (counter, label) = app.update(|cx| {
+    /// let counter = cx.new(|_cx| Counter { count: 0 });
+    /// let label = cx.new(|cx: &mut Context<Label>| {
+    ///     cx.observe(&counter, |label, counter, cx| {
+    ///         label.text = counter.read(cx).count.to_string();
+    ///     })
+    ///     .detach();
+    ///     Label { text: String::new() }
+    /// });
+    /// (counter, label)
+    /// # });
+    /// # app.update(|cx| {
+    /// counter.update(cx, |counter, cx| {
+    ///     counter.count = 21;
+    ///     cx.notify();
+    /// });
+    /// # });
+    /// # app.read(|cx| assert_eq!(label.read(cx).text, "21"));
+    /// ```
+    ///
+    /// See [ownership and data flow](crate::_documentation::concepts::ownership).
     pub fn observe<W>(
         &mut self,
         entity: &Entity<W>,
@@ -80,7 +163,10 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Observe changes to ourselves
+    /// Calls `on_event` whenever this entity calls [`Context::notify`].
+    ///
+    /// It runs after the update that called `notify` finishes. Keep the returned
+    /// [`Subscription`] alive for as long as you want the callback to run.
     pub fn observe_self(
         &mut self,
         mut on_event: impl FnMut(&mut T, &mut Context<T>) + 'static,
@@ -94,7 +180,54 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Subscribe to an event type from another entity
+    /// Calls `on_event` whenever `entity` emits an event of type `Evt`.
+    ///
+    /// The emitting entity must implement [`EventEmitter<Evt>`](crate::EventEmitter). Events are
+    /// delivered after the update that emitted them finishes, in the order they were emitted. Each event
+    /// type needs its own subscription. The callback receives this entity mutably, a handle to the
+    /// emitting entity, the event, and a context for this entity.
+    ///
+    /// Keep the returned [`Subscription`] in a field, or call [`Subscription::detach`] to keep the
+    /// callback for as long as both entities exist.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{AppContext, Context, EventEmitter, TestApp};
+    /// struct Downloader;
+    ///
+    /// enum DownloadEvent {
+    ///     Finished { bytes: usize },
+    /// }
+    ///
+    /// impl EventEmitter<DownloadEvent> for Downloader {}
+    ///
+    /// struct StatusBar {
+    ///     message: String,
+    /// }
+    ///
+    /// # let mut app = TestApp::new();
+    /// # let (downloader, status) = app.update(|cx| {
+    /// let downloader = cx.new(|_cx| Downloader);
+    ///
+    /// let status = cx.new(|cx: &mut Context<StatusBar>| {
+    ///     cx.subscribe(&downloader, |status, _downloader, event: &DownloadEvent, _cx| match event {
+    ///         DownloadEvent::Finished { bytes } => {
+    ///             status.message = format!("Downloaded {bytes} bytes");
+    ///         }
+    ///     })
+    ///     .detach();
+    ///     StatusBar { message: String::new() }
+    /// });
+    /// (downloader, status)
+    /// # });
+    /// # app.update(|cx| {
+    /// downloader.update(cx, |_downloader, cx| {
+    ///     cx.emit(DownloadEvent::Finished { bytes: 512 });
+    /// });
+    /// # });
+    /// # app.read(|cx| assert_eq!(status.read(cx).message, "Downloaded 512 bytes"));
+    /// ```
     pub fn subscribe<T2, Evt>(
         &mut self,
         entity: &Entity<T2>,
@@ -116,7 +249,10 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Subscribe to an event type from ourself
+    /// Calls `on_event` whenever this entity emits an event of type `Evt`.
+    ///
+    /// This is [`Context::subscribe`] for events that this entity emits itself. Keep the returned
+    /// [`Subscription`] alive for as long as you want the callback to run.
     pub fn subscribe_self<Evt>(
         &mut self,
         mut on_event: impl FnMut(&mut T, &Evt, &mut Context<T>) + 'static,
@@ -131,7 +267,15 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Register a callback to be invoked when GPUI releases this entity.
+    /// Calls `on_release` when GPUI releases this entity.
+    ///
+    /// GPUI releases an entity at the end of the update in which its last strong handle was dropped.
+    /// The callback runs then, while the value still exists, and receives it mutably together with the
+    /// app. Use it to tear down resources the entity holds outside GPUI.
+    ///
+    /// The callback stays registered while the returned [`Subscription`] is alive. Dropping the
+    /// subscription cancels the callback. Call [`Subscription::detach`] to keep it until the entity is
+    /// released.
     pub fn on_release(&self, on_release: impl FnOnce(&mut T, &mut App) + 'static) -> Subscription
     where
         T: 'static,
@@ -147,7 +291,11 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to be run on the release of another entity
+    /// Calls `on_release` when `entity` is released.
+    ///
+    /// The callback receives this entity mutably and the released value. It doesn't run if this entity
+    /// has been released too. The callback stays registered while the returned [`Subscription`] is
+    /// alive.
     pub fn observe_release<T2>(
         &self,
         entity: &Entity<T2>,
@@ -172,7 +320,11 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to for updates to the given global
+    /// Calls `f` whenever the global of type `G` is set or updated.
+    ///
+    /// `f` runs after the update that changed the global finishes. It doesn't receive the value, so
+    /// read it with [`App::global`]. Keep the returned [`Subscription`] alive for as long as you want
+    /// the callback to run. To also receive a window, use [`Context::observe_global_in`].
     pub fn observe_global<G: 'static>(
         &mut self,
         mut f: impl FnMut(&mut T, &mut Context<T>) + 'static,
@@ -189,7 +341,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to be invoked when the application is about to restart.
+    /// Calls `on_restart` when the application is about to restart.
+    ///
+    /// The callback doesn't run if this entity has been released. Keep the returned [`Subscription`]
+    /// alive for as long as you want the callback to run.
     pub fn on_app_restart(
         &self,
         mut on_restart: impl FnMut(&mut T, &mut App) + 'static,
@@ -203,8 +358,11 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Arrange for the given function to be invoked whenever the application is quit.
-    /// The future returned from this callback will be polled for up to [crate::SHUTDOWN_TIMEOUT] until the app fully quits.
+    /// Calls `on_quit` when the application quits, and waits for the future it returns.
+    ///
+    /// GPUI polls the returned future for up to [`SHUTDOWN_TIMEOUT`](crate::SHUTDOWN_TIMEOUT) while the
+    /// app quits. Use this to save state before the process exits. The callback doesn't run if this
+    /// entity has been released.
     pub fn on_app_quit<Fut>(
         &self,
         mut on_quit: impl FnMut(&mut T, &mut Context<T>) -> Fut + 'static,
@@ -225,14 +383,87 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Tell GPUI that this entity has changed and observers of it should be notified.
+    /// Marks this entity as changed, so that the windows showing it are redrawn and its observers are
+    /// called.
+    ///
+    /// GPUI doesn't watch your fields: call `notify` after changing state that affects rendering or that
+    /// observers registered with [`Context::observe`] care about. The effects run when the current
+    /// update finishes, not during this call, and several notifications in one update are delivered
+    /// once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{AppContext, Context, TestApp};
+    /// struct Counter {
+    ///     count: usize,
+    /// }
+    ///
+    /// impl Counter {
+    ///     fn increment(&mut self, cx: &mut Context<Self>) {
+    ///         self.count += 1;
+    ///         cx.notify();
+    ///     }
+    /// }
+    ///
+    /// # let mut app = TestApp::new();
+    /// # let counter = app.update(|cx| cx.new(|_| Counter { count: 0 }));
+    /// # app.update(|cx| counter.update(cx, |counter, cx| counter.increment(cx)));
+    /// # app.read(|cx| assert_eq!(counter.read(cx).count, 1));
+    /// ```
+    ///
+    /// See [ownership and data flow](crate::_documentation::concepts::ownership).
     pub fn notify(&mut self) {
         self.app.notify(self.entity_state.entity_id);
     }
 
-    /// Spawn the future returned by the given function.
-    /// The function is provided a weak handle to the entity owned by this context and a context that can be held across await points.
-    /// The returned task must be held or detached.
+    /// Runs the future returned by `f` on the main thread, with a weak handle to this entity.
+    ///
+    /// `f` receives a [`WeakEntity<T>`] for this entity and an [`AsyncApp`]. Use the weak handle to
+    /// reach the entity after an `.await`. Its `update` returns an error if the entity has been released
+    /// in the meantime. Use the [`AsyncApp`] to reach the rest of the app.
+    ///
+    /// The returned [`Task`] cancels the future when it's dropped. Keep it in a field to cancel the work
+    /// when this entity changes, or call [`Task::detach`] to let it continue after the local handle
+    /// is gone. Detaching does not guarantee completion during shutdown. For work that needs a
+    /// window, use [`Context::spawn_in`]. Use [`AppContext::background_spawn`] inside the future
+    /// for work on the background executor; see [`BackgroundExecutor`](crate::BackgroundExecutor)
+    /// for platform differences.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{AppContext, Context, TestApp};
+    /// struct Search {
+    ///     results: Vec<String>,
+    /// }
+    ///
+    /// impl Search {
+    ///     fn run(&mut self, query: String, cx: &mut Context<Self>) {
+    ///         cx.spawn(async move |search, cx| {
+    ///             // A real app would await a network request here.
+    ///             let results = vec![format!("result for {query}")];
+    ///             search
+    ///                 .update(cx, |search, cx| {
+    ///                     search.results = results;
+    ///                     cx.notify();
+    ///                 })
+    ///                 .ok();
+    ///         })
+    ///         .detach();
+    ///     }
+    /// }
+    ///
+    /// # let mut app = TestApp::new();
+    /// # let search = app.update(|cx| cx.new(|_cx| Search { results: Vec::new() }));
+    /// app.update(|cx| {
+    ///     search.update(cx, |search, cx| search.run("gpui".to_string(), cx));
+    /// });
+    /// // `TestApp::update` runs the task before it returns.
+    /// app.read(|cx| assert_eq!(search.read(cx).results[0], "result for gpui"));
+    /// ```
+    ///
+    /// See [async work](crate::_documentation::guides::async_work).
     #[track_caller]
     pub fn spawn<AsyncFn, R>(&self, f: AsyncFn) -> Task<R>
     where
@@ -244,11 +475,47 @@ impl<'a, T: 'static> Context<'a, T> {
         self.app.spawn(async move |cx| f(this, cx).await)
     }
 
-    /// Convenience method for accessing view state in an event callback.
+    /// Wraps `f` in an event handler that receives this entity mutably.
     ///
-    /// Many GPUI callbacks take the form of `Fn(&E, &mut Window, &mut App)`,
-    /// but it's often useful to be able to access view state in these
-    /// callbacks. This method provides a convenient way to do so.
+    /// Element event handlers receive the event, a [`Window`] and an [`App`], but not your entity.
+    /// `listener` returns a handler that calls `f` with the entity, the event, the window and a context
+    /// for the entity. Pass the result to an element's handler method, such as `on_click`.
+    ///
+    /// The handler holds a weak handle to the entity, so an element that is still registered doesn't
+    /// keep its view alive. If the entity has been released, the handler does nothing. Call
+    /// [`Context::notify`] inside `f` to redraw the window after you change state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{Context, MouseButton, TestApp, Window, div, point, prelude::*, px};
+    ///
+    /// struct Counter {
+    ///     count: usize,
+    /// }
+    ///
+    /// impl Render for Counter {
+    ///     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    ///         div()
+    ///             .id("button")
+    ///             .size_full()
+    ///             .on_click(cx.listener(|counter, _event, _window, cx| {
+    ///                 counter.count += 1;
+    ///                 cx.notify();
+    ///             }))
+    ///     }
+    /// }
+    ///
+    /// let mut app = TestApp::new();
+    /// let mut window = app.open_window(|_window, _cx| Counter { count: 0 });
+    ///
+    /// window.simulate_click(point(px(10.), px(10.)), MouseButton::Left);
+    /// window.simulate_click(point(px(10.), px(10.)), MouseButton::Left);
+    ///
+    /// assert_eq!(window.read(|counter, _cx| counter.count), 2);
+    /// ```
+    ///
+    /// See [ownership and data flow](crate::_documentation::concepts::ownership).
     pub fn listener<E: ?Sized>(
         &self,
         f: impl Fn(&mut T, &E, &mut Window, &mut Context<T>) + 'static,
@@ -259,8 +526,11 @@ impl<'a, T: 'static> Context<'a, T> {
         }
     }
 
-    /// Convenience method for producing view state in a closure.
-    /// See `listener` for more details.
+    /// Wraps `f` in a closure that receives this entity mutably and returns a value.
+    ///
+    /// Use this when the caller needs the handler's return value. For event handlers, prefer
+    /// [`Context::listener`]. The returned closure holds a strong handle to this entity, so it
+    /// keeps the entity alive for as long as the closure exists.
     pub fn processor<E, R>(
         &self,
         f: impl Fn(&mut T, E, &mut Window, &mut Context<T>) -> R + 'static,
@@ -271,7 +541,15 @@ impl<'a, T: 'static> Context<'a, T> {
         }
     }
 
-    /// Run something using this entity and cx, when the returned struct is dropped
+    /// Returns a guard that calls `f` with this entity when the guard is dropped.
+    ///
+    /// The guard is returned as a `Deferred`. Call `abort` on it to cancel the callback. If the entity
+    /// has been released by the time the guard is dropped, `f` doesn't run.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the guard is dropped while the app is already borrowed, for example inside another
+    /// update of the same app, and the entity is still alive. Drop the guard from a later update instead.
     pub fn on_drop(
         &self,
         f: impl FnOnce(&mut T, &mut Context<T>) + 'static,
@@ -283,12 +561,16 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
-    /// Focus the given view in the given window. View type is required to implement Focusable.
+    /// Focuses `view` in `window`.
+    ///
+    /// `W` must implement [`Focusable`]. The focus change uses the focus handle that `view` returns.
     pub fn focus_view<W: Focusable>(&mut self, view: &Entity<W>, window: &mut Window) {
         window.focus(&view.focus_handle(self), self);
     }
 
-    /// Sets a given callback to be run on the next frame.
+    /// Runs `f` with this entity and `window` on the next frame of `window`.
+    ///
+    /// The callback runs once, during the next frame. It doesn't run if this entity has been released.
     pub fn on_next_frame(
         &self,
         window: &mut Window,
@@ -300,8 +582,11 @@ impl<'a, T: 'static> Context<'a, T> {
         window.on_next_frame(move |window, cx| view.update(cx, |view, cx| f(view, window, cx)));
     }
 
-    /// Schedules the given function to be run at the end of the current effect cycle, allowing entities
-    /// that are currently on the stack to be returned to the app.
+    /// Runs `f` with this entity and `window` at the end of the current effect cycle.
+    ///
+    /// Use it to change this entity from code that is still on the stack, such as a method called from
+    /// inside this entity's own update. The callback runs after the outermost update finishes, when the
+    /// entity is no longer borrowed. It doesn't run if this entity has been released.
     pub fn defer_in(
         &mut self,
         window: &Window,
@@ -317,7 +602,10 @@ impl<'a, T: 'static> Context<'a, T> {
         });
     }
 
-    /// Observe another entity for changes to its state, as tracked by [`Context::notify`].
+    /// Calls `on_notify` when `observed` calls [`Context::notify`], and passes it the window.
+    ///
+    /// Pass the window that displays this entity. If that window has been closed, the callback
+    /// does not run.
     pub fn observe_in<V2>(
         &mut self,
         observed: &Entity<V2>,
@@ -349,9 +637,10 @@ impl<'a, T: 'static> Context<'a, T> {
         )
     }
 
-    /// Subscribe to events emitted by another entity.
-    /// The entity to which you're subscribing must implement the [`EventEmitter`] trait.
-    /// The callback will be invoked with a reference to the current view, a handle to the emitting `Entity`, the event, a mutable reference to the `Window`, and the context for the entity.
+    /// Calls `on_event` when `emitter` emits an event of type `Evt`, and passes it the window.
+    ///
+    /// Pass the window that displays this entity. If that window has been closed, the callback
+    /// does not run.
     pub fn subscribe_in<Emitter, Evt>(
         &mut self,
         emitter: &Entity<Emitter>,
@@ -387,10 +676,9 @@ impl<'a, T: 'static> Context<'a, T> {
         )
     }
 
-    /// Register a callback to be invoked when the view is released.
+    /// Calls `on_release` with the window when this entity is released.
     ///
-    /// The callback receives a handle to the view's window. This handle may be
-    /// invalid, if the window was closed before the view was released.
+    /// The callback doesn't run if the window was closed before this entity was released.
     pub fn on_release_in(
         &mut self,
         window: &Window,
@@ -400,7 +688,9 @@ impl<'a, T: 'static> Context<'a, T> {
         self.app.observe_release_in(&entity, window, on_release)
     }
 
-    /// Register a callback to be invoked when the given Entity is released.
+    /// Calls `on_release` when `observed` is released, and passes it the window.
+    ///
+    /// The callback does not run if `window` has been closed, or if this entity has been released.
     pub fn observe_release_in<T2>(
         &self,
         observed: &Entity<T2>,
@@ -422,7 +712,10 @@ impl<'a, T: 'static> Context<'a, T> {
             })
     }
 
-    /// Register a callback to be invoked when the window is resized.
+    /// Calls `callback` when the bounds of `window` change.
+    ///
+    /// Keep the returned [`Subscription`] alive for as long as you want the callback to run. The callback
+    /// stops once this entity is released.
     pub fn observe_window_bounds(
         &self,
         window: &mut Window,
@@ -440,7 +733,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to be invoked when the window is activated or deactivated.
+    /// Calls `callback` when `window` becomes active or inactive.
+    ///
+    /// Keep the returned [`Subscription`] alive for as long as you want the callback to run. The callback
+    /// stops once this entity is released.
     pub fn observe_window_activation(
         &self,
         window: &mut Window,
@@ -458,7 +754,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Registers a callback to be invoked when the window appearance changes.
+    /// Calls `callback` when the system appearance changes between light and dark.
+    ///
+    /// Keep the returned [`Subscription`] alive for as long as you want the callback to run. The callback
+    /// stops once this entity is released.
     pub fn observe_window_appearance(
         &self,
         window: &mut Window,
@@ -476,7 +775,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Registers a callback to be invoked when the window button layout changes.
+    /// Calls `callback` when the window's titlebar button layout changes.
+    ///
+    /// Keep the returned [`Subscription`] alive for as long as you want the callback to run. The callback
+    /// stops once this entity is released.
     pub fn observe_button_layout_changed(
         &self,
         window: &mut Window,
@@ -494,9 +796,12 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to be invoked when a keystroke is received by the application
-    /// in any window. Note that this fires after all other action and event mechanisms have resolved
-    /// and that this API will not be invoked if the event's propagation is stopped.
+    /// Calls `f` for each key-down keystroke in any window that reaches the end of dispatch, or that a
+    /// key binding handles.
+    ///
+    /// The keystroke's `action` is set when a key binding handled it. The callback doesn't run when a
+    /// focused element's listener stops propagation. Keep the returned [`Subscription`] alive for as long
+    /// as you want the callback to run.
     pub fn observe_keystrokes(
         &mut self,
         mut f: impl FnMut(&mut T, &KeystrokeEvent, &mut Window, &mut Context<T>) + 'static,
@@ -524,7 +829,11 @@ impl<'a, T: 'static> Context<'a, T> {
         )
     }
 
-    /// Register a callback to be invoked when the window's pending input changes.
+    /// Calls `callback` when the pending input of `window` changes.
+    ///
+    /// Pending input is a partly typed key sequence, such as the first key of a multi-key binding. The
+    /// callback runs when the sequence starts, grows, or is cleared. Keep the returned [`Subscription`]
+    /// alive for as long as you want the callback to run.
     pub fn observe_pending_input(
         &self,
         window: &mut Window,
@@ -542,8 +851,11 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when the given focus handle receives focus.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Calls `listener` when `handle` becomes the focused element.
+    ///
+    /// The listener doesn't run when focus moves into a descendant of `handle`. Use [`Context::on_focus_in`]
+    /// to hear about that as well. Keep the returned [`Subscription`] alive for as long as you want the
+    /// listener to run.
     pub fn on_focus(
         &mut self,
         handle: &FocusHandle,
@@ -567,9 +879,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when the given focus handle or one of its descendants receives focus.
-    /// This does not fire if the given focus handle - or one of its descendants - was previously focused.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Calls `listener` when focus moves into `handle` or one of its descendants.
+    ///
+    /// The listener doesn't run when focus was already inside `handle` and moves to another descendant.
+    /// Keep the returned [`Subscription`] alive for as long as you want the listener to run.
     pub fn on_focus_in(
         &mut self,
         handle: &FocusHandle,
@@ -591,8 +904,12 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when the given focus handle loses focus.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Calls `listener` when `handle` stops being the focused element.
+    ///
+    /// The listener also runs when focus moves from `handle` to one of its descendants, since `handle`
+    /// is no longer the focused element. Use [`Context::on_focus_out`] to hear only about focus leaving
+    /// `handle` and its descendants. Keep the returned [`Subscription`] alive for as long as you want the
+    /// listener to run.
     pub fn on_blur(
         &mut self,
         handle: &FocusHandle,
@@ -616,10 +933,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when nothing in the window has focus.
-    /// This typically happens when the node that was focused is removed from the tree,
-    /// and this callback lets you chose a default place to restore the users focus.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Calls `listener` when no element in `window` has focus.
+    ///
+    /// This happens when the focused element is removed from the tree. Use it to move focus to a sensible
+    /// default. Keep the returned [`Subscription`] alive for as long as you want the listener to run.
     pub fn on_focus_lost(
         &mut self,
         window: &mut Window,
@@ -637,8 +954,10 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when the given focus handle or one of its descendants loses focus.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Calls `listener` when focus leaves `handle` or one of its descendants.
+    ///
+    /// The listener receives a [`FocusOutEvent`] that says which element lost focus. Keep the returned
+    /// [`Subscription`] alive for as long as you want the listener to run.
     pub fn on_focus_out(
         &mut self,
         handle: &FocusHandle,
@@ -668,10 +987,14 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Schedule a future to be run asynchronously.
-    /// The given callback is invoked with a [`WeakEntity<V>`] to avoid leaking the entity for a long-running process.
-    /// It's also given an [`AsyncWindowContext`], which can be used to access the state of the entity across await points.
-    /// The returned future will be polled on the main thread.
+    /// Runs the future returned by `f` on the main thread, with a weak handle to this entity and a window
+    /// context.
+    ///
+    /// `f` receives an [`AsyncWindowContext`] for `window`, so the future can reach it after an
+    /// `.await`. Window operations through the context return errors once the window has closed.
+    ///
+    /// The returned [`Task`] cancels the future when it's dropped. Call [`Task::detach`] to let the future
+    /// run to completion.
     #[track_caller]
     pub fn spawn_in<AsyncFn, R>(&self, window: &Window, f: AsyncFn) -> Task<R>
     where
@@ -682,10 +1005,10 @@ impl<'a, T: 'static> Context<'a, T> {
         window.spawn(self, async move |cx| f(view, cx).await)
     }
 
-    /// Schedule a future to be run asynchronously with the given priority.
-    /// The given callback is invoked with a [`WeakEntity<V>`] to avoid leaking the entity for a long-running process.
-    /// It's also given an [`AsyncWindowContext`], which can be used to access the state of the entity across await points.
-    /// The returned future will be polled on the main thread.
+    /// Runs the future returned by `f` on the main thread at `priority`, with a weak handle to this entity
+    /// and a window context.
+    ///
+    /// The returned [`Task`] cancels the future when it is dropped.
     #[track_caller]
     pub fn spawn_in_with_priority<AsyncFn, R>(
         &self,
@@ -701,7 +1024,11 @@ impl<'a, T: 'static> Context<'a, T> {
         window.spawn_with_priority(priority, self, async move |cx| f(view, cx).await)
     }
 
-    /// Register a callback to be invoked when the given global state changes.
+    /// Calls `f` with the window whenever the global of type `G` is set or updated.
+    ///
+    /// Pass the window this entity is shown in. If that window is unavailable, for example during a nested
+    /// update of it, the callback is skipped for that change and stays registered. The callback stops
+    /// once this entity is released.
     pub fn observe_global_in<G: Global>(
         &mut self,
         window: &Window,
@@ -731,7 +1058,14 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a callback to be invoked when the given Action type is dispatched to the window.
+    /// Calls `listener` when an action of type `action_type` is dispatched to `window`.
+    ///
+    /// Pass `TypeId::of::<A>()` for the action type `A`. The listener receives the action as `&dyn Any`
+    /// together with the [`DispatchPhase`], so it can tell capture from bubble. It also gets the window and
+    /// a context for this entity.
+    ///
+    /// Like [`Window::on_action`], the listener is registered for the next frame only. Call this during
+    /// paint, on every frame that should handle the action.
     pub fn on_action(
         &mut self,
         action_type: TypeId,
@@ -748,7 +1082,10 @@ impl<'a, T: 'static> Context<'a, T> {
         });
     }
 
-    /// Move focus to the current view, assuming it implements [`Focusable`].
+    /// Focuses this entity's focus handle in `window`.
+    ///
+    /// This entity must implement [`Focusable`]. The focus change happens at the end of the current effect
+    /// cycle.
     pub fn focus_self(&mut self, window: &mut Window)
     where
         T: Focusable,
@@ -761,7 +1098,50 @@ impl<'a, T: 'static> Context<'a, T> {
 }
 
 impl<T> Context<'_, T> {
-    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
+    /// Emits `event` from this entity to its subscribers.
+    ///
+    /// Subscribers registered with [`Context::subscribe`] or [`App::subscribe`] for this event type
+    /// receive it after the current update finishes, in the order the events were emitted. Emitting an
+    /// event that nobody subscribed to does nothing. This entity must implement [`EventEmitter<Evt>`](crate::EventEmitter).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{AppContext, Context, EventEmitter, TestApp};
+    /// struct Button;
+    ///
+    /// struct Clicked {
+    ///     times: usize,
+    /// }
+    ///
+    /// impl EventEmitter<Clicked> for Button {}
+    ///
+    /// struct Tally {
+    ///     clicks: usize,
+    /// }
+    ///
+    /// # let mut app = TestApp::new();
+    /// # let (button, tally) = app.update(|cx| {
+    /// let button = cx.new(|_cx| Button);
+    /// let tally = cx.new(|cx: &mut Context<Tally>| {
+    ///     cx.subscribe(&button, |tally, _button, event: &Clicked, _cx| {
+    ///         tally.clicks += event.times;
+    ///     })
+    ///     .detach();
+    ///     Tally { clicks: 0 }
+    /// });
+    /// (button, tally)
+    /// # });
+    /// # app.update(|cx| {
+    /// button.update(cx, |_button, cx| {
+    ///     cx.emit(Clicked { times: 2 });
+    ///     cx.emit(Clicked { times: 1 });
+    /// });
+    /// # });
+    /// # app.read(|cx| assert_eq!(tally.read(cx).clicks, 3));
+    /// ```
+    ///
+    /// See [ownership and data flow](crate::_documentation::concepts::ownership).
     pub fn emit<Evt>(&mut self, event: Evt)
     where
         T: EventEmitter<Evt>,
