@@ -1,6 +1,6 @@
 //! Accessibility support, provided by [AccessKit][accesskit].
 //!
-//! There are user-facing guide-level docs [here](crate::_accessibility).
+//! There are user-facing guide-level docs [here](crate::_documentation::guides::accessibility).
 //!
 //! ## Architecture
 //!
@@ -18,32 +18,22 @@
 //!                              └────────────────────────────────┘   └─────────────────────┘
 //! ```
 //!
-//! In order for GPUI apps to be usable for people using assistive technology,
-//! we must do a few things:
-//! - Inform the system when the UI changes meaningfully. This includes:
-//!   - Reporting new/removed/changed UI elements
-//!   - *Not* reporting irrelevant UI changes, e.g. an invisible `div()` being
-//!     added.
-//!   - Reporting the appearance and capabilities of each UI element. For example:
-//!     - What does this piece of text say?
-//!     - How far along is this progress bar?
-//!     - Can this node be focused?
-//!     - Can this node have a value directly assigned? (e.g. a slider)
-//! - Allowing the system to interact with the UI by dispatching actions to
-//!   nodes. Note that AccessKit has its own [`Action`] type, which is not the
-//!   [`crate::Action`] trait.
-//! - Activate and deactivate accessibility features when requested by the
-//!   system.
+//! To work with assistive technology, a GPUI app must:
+//! - report meaningful UI changes, including new, removed and changed nodes;
+//! - describe each node's role, value and capabilities;
+//! - dispatch actions from assistive technology to nodes; and
+//! - activate or deactivate accessibility when the system requests it.
 //!
-//! Activating and deactivating at the right time is trivial, so I won't go into
-//! detail here. The other two are almost orthogonal in implementation.
+//! AccessKit has its own [`Action`] type, separate from GPUI's [`crate::Action`]
+//! trait.
 //!
 //! The state for both lives in the [`A11y`] struct in this module.
 //!
 //! ### Reporting UI changes
 //!
-//! Every frame, we build a [`TreeUpdate`] and send it to the platform-specific
-//! adapter. A [`TreeUpdate`] is a representation of a subset of the UI tree.
+//! While assistive technology is active, we build a [`TreeUpdate`] every frame
+//! and send it to the platform-specific adapter. A [`TreeUpdate`] represents a
+//! subset of the UI tree.
 //! When the adapter receives the update, it diffs it against the previous
 //! update, and calls platform-specific APIs to inform screen readers about the
 //! changes. Nodes may have been created, destroyed, or updated.
@@ -55,8 +45,8 @@
 //! We derive the node ID from the [`GlobalElementId`] in
 //! [`GlobalElementId::accesskit_node_id`]. Nodes without [`GlobalElementId`]s
 //! cannot produce an AccessKit [`NodeId`], and so are not included in the
-//! accessibility tree. We try to warn when using accessibility APIs on
-//! [`div()`] without setting an ID.
+//! accessibility tree. When a focused element has no node, we log that once per
+//! focus change (see [`A11y::note_focus_without_node`]).
 //!
 //! This all happens in [`Drawable::prepaint`]. The [`A11y`] struct maintains a
 //! stack of nodes during prepainting, which we can use to calculate the
@@ -73,9 +63,8 @@
 //! referred to as "synthetic children" of the element providing a non-default
 //! [`Element::a11y_synthetic_children`] implementation.
 //!
-//! The user is provided a builder-style API using [`A11ySubtreeBuilder`], which
-//! allows them to create push nodes that are children of the current node, as
-//! well as modify the current node itself.
+//! [`A11ySubtreeBuilder`] lets an element add children to its current node and
+//! modify that node.
 //!
 //! GPUI calls this callback *after* prepainting (and just before popping the
 //! corresponding element), since this step may need prepaint information to be
@@ -84,10 +73,9 @@
 //!
 //! ### Responding to actions
 //!
-//! On adapter creation, we provide a callback to the adapter, which can be used
-//! to dispatch actions. This callback forwards to [`A11y::action_listeners`], a
-//! mapping from [`NodeId`]s to action handlers (basically just `Box<dyn
-//! Fn()>`).
+//! When the adapter is created, GPUI gives it a callback for dispatching actions.
+//! The callback looks up handlers in [`A11y::action_listeners`], which maps
+//! [`NodeId`]s to boxed callbacks.
 //!
 //! This is populated in:
 //! - [`Window::on_a11y_action`], which is called by:
@@ -322,8 +310,14 @@ impl A11y {
     }
 }
 
-/// Builder API for synthetic children. See the docs for
-/// [`Element::a11y_synthetic_children`].
+/// Adds accessibility nodes for things an element draws but doesn't model as elements.
+///
+/// GPUI passes a builder to [`Element::a11y_synthetic_children`] (or to the closure given to
+/// [`StatefulInteractiveElement::a11y_synthetic_children`]) after the element is prepainted. The
+/// builder exists only for that call. Nodes you add become children of the element's node. Use
+/// it for things like the lines of a text editor, which users can read and select but which
+/// aren't separate elements. See the
+/// [accessibility guide](crate::_documentation::guides::accessibility#expose-elements-that-gpui-doesnt-draw-as-nodes).
 pub struct A11ySubtreeBuilder<'a> {
     parent_id: NodeId,
     nodes: &'a mut A11yNodeBuilder,
@@ -349,12 +343,30 @@ impl<'a> A11ySubtreeBuilder<'a> {
         self
     }
 
-    /// Derive a [`NodeId`] for a synthetic child.
+    /// Returns a stable node id for a synthetic child, derived from `key`.
     ///
-    /// The generated ID is based on the hash of `key`, as well as the parent's
-    /// ID. This means that `key`s must be unique within the same
-    /// [`Element::a11y_synthetic_children`] call, but may be duplicated across
-    /// different calls.
+    /// The id is a hash of `key` and the parent node's id. Keys must be unique within one
+    /// [`Element::a11y_synthetic_children`] call. The same key in a later frame gives the same id,
+    /// so assistive technology sees the same node. Use [`Self::push_child`] with the returned id.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use gpui::{Role, accesskit, div, prelude::*};
+    ///
+    /// // Two runs of text in one text field, each with its own stable node id.
+    /// let field = div()
+    ///     .id("field")
+    ///     .role(Role::TextInput)
+    ///     .a11y_synthetic_children(|builder| {
+    ///         for (index, text) in ["Hello", "world"].into_iter().enumerate() {
+    ///             let mut run = accesskit::Node::new(Role::TextRun);
+    ///             run.set_value(text);
+    ///             builder.push_child(builder.synthetic_node_id(index), run);
+    ///         }
+    ///     });
+    /// # let _ = field;
+    /// ```
     pub fn synthetic_node_id(&self, key: impl Hash) -> NodeId {
         let mut hasher = std::hash::DefaultHasher::default();
         self.parent_id.0.hash(&mut hasher);
@@ -362,10 +374,12 @@ impl<'a> A11ySubtreeBuilder<'a> {
         NodeId(hasher.finish())
     }
 
-    /// Append a synthetic leaf node as a child of this element's node.
+    /// Adds `node` with the given `id` as a leaf child of this element's node.
     ///
-    /// Returns `false` if a node with this id is already present in the tree,
-    /// in which case the node is discarded.
+    /// Returns `true` if the node was added. A node id can appear only once in a frame's tree.
+    /// If `id` is already used, the new node is dropped and this returns `false`. In debug builds,
+    /// a duplicate id panics instead. Use [`Self::synthetic_node_id`] to get an id that stays the
+    /// same between frames.
     pub fn push_child(&mut self, id: NodeId, node: accesskit::Node) -> bool {
         let pushed = self.nodes.push_leaf(id, node);
         #[cfg(debug_assertions)]
@@ -383,7 +397,10 @@ impl<'a> A11ySubtreeBuilder<'a> {
         pushed
     }
 
-    /// A mutable reference to the parent node.
+    /// Returns a mutable reference to this element's own node, so you can set its properties.
+    ///
+    /// Use it to set properties such as the value or the label of the element from inside
+    /// [`Element::a11y_synthetic_children`]. The reference is valid only for that call.
     pub fn parent_node(&mut self) -> &mut accesskit::Node {
         self.nodes
             .current_node_mut()
