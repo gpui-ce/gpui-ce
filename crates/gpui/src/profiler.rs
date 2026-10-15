@@ -1,3 +1,18 @@
+//! Timing for tasks, actions and window frames.
+//!
+//! Recording is compiled in with the `profiler` feature. Without it, the functions
+//! that return timings return empty results, and the recording functions do nothing.
+//! Even with the feature, task and frame events in the trace buffers are kept only
+//! while tracing is on; [`set_trace_enabled`] controls that state. The foreground journal,
+//! which `App::foreground_journal` reads, records them regardless. With the feature, each
+//! window also keeps its histograms, whether or not tracing is on.
+//!
+//! To see frame times on screen, set the debug frame overlay mode with
+//! `Window::set_debug_frame_overlay_mode`. To read the numbers in code, call
+//! `Window::frame_duration_snapshot` and `Window::input_latency_snapshot`. Those
+//! three window methods exist only with the `profiler` feature. The
+//! [performance guide](crate::_documentation::guides::performance) walks through them.
+
 #[cfg(feature = "profiler")]
 use hdrhistogram::Histogram;
 use itertools::Itertools;
@@ -37,29 +52,34 @@ use serde::{Deserialize, Serialize};
 use crate::{Action, App, WindowId};
 use crate::{SharedString, TasksIncluded};
 
+/// Returns the task timings of every live thread.
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
 pub fn get_all_timings(included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
     ThreadTaskTimings::collect(upgraded_thread_timings(), included)
 }
 
+/// Returns the task timings of the calling thread.
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
 pub fn get_current_thread_timings(included: TasksIncluded) -> gpui::ThreadTaskTimings {
     gpui::profiler::get_current_thread_task_timings(included)
 }
 
+/// Returns and resets the task statistics of every live thread.
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
 pub fn take_all_stats(included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
     ThreadTaskStatistics::collect_and_reset(upgraded_thread_timings(), included)
 }
 
+/// Returns no timings, because the `profiler` feature is off.
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
 pub fn get_all_timings(_included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
     Vec::new()
 }
+/// Returns an empty timing for the calling thread, because the `profiler` feature is off.
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
 pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskTimings {
@@ -71,22 +91,29 @@ pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskT
         total_pushed: 0,
     }
 }
+/// Returns no statistics, because the `profiler` feature is off.
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
 pub fn take_all_stats(_included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
     Vec::new()
 }
 
+/// The instant a task poll ended, either by yielding or by finishing.
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone)]
 pub struct YieldTime(pub Instant);
 
+/// One completed poll of a task.
 #[doc(hidden)]
 #[derive(Copy, Clone)]
 pub struct TaskTiming {
+    /// Where the task was spawned.
     pub location: &'static core::panic::Location<'static>,
+    /// When the task was spawned.
     pub spawned: SpawnTime,
+    /// When this poll started.
     pub start: Instant,
+    /// When this poll yielded or finished.
     pub end: YieldTime,
 }
 
@@ -101,16 +128,20 @@ impl std::fmt::Debug for TaskTiming {
     }
 }
 
+/// A task poll that is still running on its thread.
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone)]
 pub struct ActiveTiming {
+    /// Where the task was spawned.
     pub location: &'static core::panic::Location<'static>,
+    /// When the task was spawned.
     pub spawned: SpawnTime,
+    /// When this poll started.
     pub start: Instant,
 }
 
 impl TaskTiming {
-    /// A task timing with a duration of zero. Any task will replace this in history.
+    /// Returns a timing with zero duration, used to fill the statistics before any task has run.
     pub fn placeholder() -> Self {
         let now = Instant::now();
         Self {
@@ -121,6 +152,7 @@ impl TaskTiming {
         }
     }
 
+    /// Returns how long this poll ran, from start until it yielded or finished.
     #[inline(always)]
     pub fn poll_duration(&self) -> Duration {
         self.end.0 - self.start
@@ -132,18 +164,27 @@ impl TaskTiming {
     }
 }
 
+/// The recorded task polls of one thread.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct ThreadTaskTimings {
+    /// The thread's name, if it has one.
     pub thread_name: Option<String>,
+    /// The thread's ID.
     pub thread_id: ThreadId,
+    /// Completed polls, oldest first, and the running poll if it was requested.
     pub timings: Vec<TaskTiming>,
+    /// The longest polls and runtimes seen on this thread.
     pub stats: TaskStatistics,
+    /// The number of polls recorded since the thread started. This can be larger than
+    /// `timings.len()`, because the buffer keeps only the most recent polls.
     pub total_pushed: u64,
 }
 
 impl ThreadTaskTimings {
-    /// Convert upgraded per-thread timings into their structured format.
+    /// Copies the given threads' recorded polls into [`ThreadTaskTimings`] values.
+    ///
+    /// The running poll is included only when `included` is [`TasksIncluded::CompletedAndRunning`].
     pub fn collect(
         timings: Vec<(ThreadId, Arc<GuardedTaskTimings>)>,
         included: TasksIncluded,
@@ -183,15 +224,23 @@ impl ThreadTaskTimings {
     }
 }
 
+/// The task statistics of one thread, taken from the thread's recorder.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct ThreadTaskStatistics {
+    /// The thread's name, if it has one.
     pub thread_name: Option<String>,
+    /// The thread's ID.
     pub thread_id: ThreadId,
+    /// The statistics that were taken.
     pub stats: TaskStatistics,
 }
 
 impl ThreadTaskStatistics {
+    /// Takes each thread's statistics and resets them to [`TaskStatistics::default`].
+    ///
+    /// The running poll is folded into the statistics when `include_running` is
+    /// [`TasksIncluded::CompletedAndRunning`].
     pub fn collect_and_reset(
         timings: Vec<(ThreadId, Arc<GuardedTaskTimings>)>,
         include_running: TasksIncluded,
@@ -255,16 +304,16 @@ impl From<&core::panic::Location<'static>> for SerializedLocation {
 /// Serializable variant of [`TaskTiming`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedTaskTiming {
-    /// Location of the timing
+    /// Where the task was spawned
     pub location: SerializedLocation,
-    /// Time at which the measurement was reported in nanoseconds
+    /// Start of the poll, in nanoseconds after the anchor passed to [`Self::convert`]
     pub start: u128,
-    /// Duration of the measurement in nanoseconds
+    /// How long the poll ran, in nanoseconds
     pub duration: u128,
 }
 
 impl SerializedTaskTiming {
-    /// Convert an array of [`TaskTiming`] into their serializable format
+    /// Converts a slice of [`TaskTiming`] values into their serializable format.
     ///
     /// # Params
     ///
@@ -286,7 +335,10 @@ impl SerializedTaskTiming {
         serialized
     }
 
-    /// `anchor` - [`Instant`] that should be earlier than all timings to use as base anchor
+    /// Converts one [`TaskTiming`] into its serializable format.
+    ///
+    /// `anchor` is the [`Instant`] that `start` is measured from. It should be no later than
+    /// the timing's start.
     pub fn from(anchor: Instant, timing: TaskTiming) -> SerializedTaskTiming {
         let start = timing.start.duration_since(anchor).as_nanos();
         let duration = timing.end.0.duration_since(timing.start).as_nanos();
@@ -330,6 +382,7 @@ impl SerializedThreadTaskTimings {
     }
 }
 
+/// The polls one thread recorded since the previous [`ProfilingCollector::collect_unseen`] call.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct ThreadTimingsDelta {
@@ -350,6 +403,7 @@ pub struct ProfilingCollector {
 }
 
 impl ProfilingCollector {
+    /// Creates a collector that reports timings relative to `startup_time`.
     pub fn new(startup_time: Instant) -> Self {
         Self {
             startup_time,
@@ -357,10 +411,14 @@ impl ProfilingCollector {
         }
     }
 
+    /// Returns the instant that serialized timings are measured from.
     pub fn startup_time(&self) -> Instant {
         self.startup_time
     }
 
+    /// Returns the polls recorded since the previous call, one entry per thread that has new polls.
+    ///
+    /// Polls that were evicted from a thread's buffer before this call are skipped.
     pub fn collect_unseen(
         &mut self,
         all_timings: Vec<ThreadTaskTimings>,
@@ -404,6 +462,7 @@ impl ProfilingCollector {
         deltas
     }
 
+    /// Forgets every cursor, so the next [`Self::collect_unseen`] returns all buffered polls.
     pub fn reset(&mut self) {
         self.cursors.clear();
     }
@@ -418,21 +477,30 @@ const MAX_TASK_TIMINGS: usize = (16 * 1024 * 1024) / core::mem::size_of::<TaskTi
 #[doc(hidden)]
 pub(crate) type TaskTimings = VecDeque<TaskTiming>;
 
+/// A thread's timings behind a spinlock, shared between the thread and the profiler.
 #[doc(hidden)]
 pub type GuardedTaskTimings = spin::Mutex<ThreadTimings>;
 
+/// A weak handle to one thread's timings, kept in [`GLOBAL_THREAD_TIMINGS`].
 #[doc(hidden)]
 pub struct GlobalThreadTimings {
+    /// The thread's ID.
     pub thread_id: ThreadId,
+    /// A weak handle, so the registry doesn't keep a finished thread's timings alive.
     pub timings: std::sync::Weak<GuardedTaskTimings>,
 }
 
+/// The five longest polls and the five longest runtimes seen on one thread.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct TaskStatistics {
+    /// The poll duration a poll must reach to be recorded in `longest_poll_times`.
     pub poll_time_to_beat: Duration,
+    /// The runtime a task must reach to be recorded in `longest_runtimes`.
     pub runtime_to_beat: Duration,
+    /// The five polls that ran the longest before yielding.
     pub longest_poll_times: [TaskTiming; 5],
+    /// The five tasks that ran the longest from spawn to their last poll.
     pub longest_runtimes: [TaskTiming; 5],
 }
 
@@ -482,16 +550,17 @@ impl TaskStatistics {
             let to_replace = self
                 .longest_poll_times
                 .iter()
-                .position_min_by_key(|task| task.since_spawn())
+                .position_min_by_key(|task| task.poll_duration())
                 .expect("guarded by the comparison with nth_longest_yield_time");
             self.longest_poll_times[to_replace] = task;
 
             self.poll_time_to_beat = self
                 .longest_poll_times
                 .iter()
-                .map(|task| task.since_spawn())
+                .map(|task| task.poll_duration())
                 .min()
-                .expect("never empty");
+                .expect("never empty")
+                .max(Duration::from_micros(100));
         }
     }
 
@@ -512,11 +581,13 @@ impl TaskStatistics {
                 .iter()
                 .map(|task| task.since_spawn())
                 .min()
-                .expect("never empty");
+                .expect("never empty")
+                .max(Duration::from_micros(100));
         }
     }
 }
 
+/// Every thread that has recorded timings, so the profiler can read them from any thread.
 #[doc(hidden)]
 pub static GLOBAL_THREAD_TIMINGS: spin::Mutex<Vec<GlobalThreadTimings>> =
     spin::Mutex::new(Vec::new());
@@ -539,6 +610,7 @@ fn upgraded_thread_timings() -> Vec<(ThreadId, Arc<GuardedTaskTimings>)> {
 }
 
 thread_local! {
+    /// This thread's timings. Created on first use and registered in [`GLOBAL_THREAD_TIMINGS`].
     #[doc(hidden)]
     pub static THREAD_TIMINGS: LazyCell<Arc<GuardedTaskTimings>> = LazyCell::new(|| {
         let current_thread = std::thread::current();
@@ -560,17 +632,26 @@ thread_local! {
     });
 }
 
+/// The timing state of one thread: its completed polls, the running poll and its statistics.
 #[doc(hidden)]
 pub struct ThreadTimings {
+    /// The thread's name, if it has one.
     pub thread_name: Option<String>,
+    /// The thread's ID.
     pub thread_id: ThreadId,
+    /// Completed polls, oldest first. Holds about 16 MiB of entries and drops the oldest first.
     pub timings: TaskTimings,
+    /// The poll that is running now, if any.
     pub running: Option<ActiveTiming>,
+    /// The longest polls and runtimes seen on this thread.
     pub stats: TaskStatistics,
+    /// The number of polls pushed to `timings` since the thread started, including evicted ones.
+    /// Counts only while tracing is on.
     pub total_pushed: u64,
 }
 
 impl ThreadTimings {
+    /// Creates empty timing state for a thread.
     pub fn new(thread_name: Option<String>, thread_id: ThreadId) -> Self {
         ThreadTimings {
             thread_name,
@@ -582,6 +663,7 @@ impl ThreadTimings {
         }
     }
 
+    /// Marks a poll as started now. Called before each task poll.
     #[cfg(feature = "profiler")]
     pub fn update_running_task(
         &mut self,
@@ -595,9 +677,15 @@ impl ThreadTimings {
             start,
         });
     }
+    /// Does nothing, because the `profiler` feature is off.
     #[cfg(not(feature = "profiler"))]
     pub fn update_running_task(&mut self, _: SpawnTime, _: &'static std::panic::Location<'_>) {}
 
+    /// Ends the running poll at `ended`, records it in the statistics and, while tracing is on, in the buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no poll is running. It must follow a call to [`Self::update_running_task`].
     #[cfg(feature = "profiler")]
     pub fn save_task_timing(&mut self, ended: YieldTime) -> TaskTiming {
         let ActiveTiming {
@@ -628,11 +716,14 @@ impl ThreadTimings {
         }
         timing
     }
+    /// Does nothing, because the `profiler` feature is off.
     #[cfg(not(feature = "profiler"))]
     pub fn save_task_timing(&mut self, _: YieldTime) {}
 
-    // Running tasks are included in the reliability trace, which is written
-    // whenever the foreground executor makes no progress for > n seconds
+    /// Returns a copy of this thread's recorded polls and statistics.
+    ///
+    /// The running poll is included when `includes` is [`TasksIncluded::CompletedAndRunning`],
+    /// with its end set to the time of this call.
     pub fn get_thread_task_timings(&self, includes: TasksIncluded) -> ThreadTaskTimings {
         ThreadTaskTimings {
             thread_name: self.thread_name.clone(),
@@ -673,6 +764,7 @@ impl Drop for ThreadTimings {
     }
 }
 
+/// Marks a task poll as started on the calling thread. Called by the scheduler before each poll.
 #[doc(hidden)]
 pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Location<'_>) {
     #[cfg(feature = "profiler")]
@@ -682,6 +774,7 @@ pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Lo
     });
 }
 
+/// Ends the task poll that [`update_running_task`] started on the calling thread.
 #[doc(hidden)]
 pub fn save_task_timing() {
     let yielded_at = YieldTime(Instant::now());
@@ -696,6 +789,7 @@ pub fn save_task_timing() {
     });
 }
 
+/// Returns the calling thread's recorded polls and statistics.
 #[doc(hidden)]
 pub fn get_current_thread_task_timings(include_running: TasksIncluded) -> ThreadTaskTimings {
     THREAD_TIMINGS.with(|timings| timings.lock().get_thread_task_timings(include_running))
@@ -705,13 +799,25 @@ const TRACE_SETTING_ENABLED: u64 = 1 << 63;
 const TRACE_SCOPE_COUNT_MASK: u64 = TRACE_SETTING_ENABLED - 1;
 static TRACE_STATE: AtomicU64 = AtomicU64::new(0);
 
-/// Enables or disables profiler trace collection at runtime.
+/// Turns trace collection on or off, and returns `true` if the setting changed.
 ///
-/// When transitioning from enabled to disabled, `add_task_timing` becomes
-/// cheaper since only cheap statistics are gathered. The existing per-thread
-/// task buffers and the frame-event buffer are cleared so stale data isn't
-/// reported after a later re-enable. Active trace scopes keep collection enabled
-/// until the last scope ends. Calls with the current setting are a no-op.
+/// While tracing is off, task polls and frame events update only the cheap
+/// statistics, and nothing is added to the trace buffers. Turning tracing off
+/// clears the per-thread task buffers and the frame-event buffer, unless a trace
+/// scope is still active, so a later re-enable doesn't report stale data. Active
+/// trace scopes keep collection on until the last scope ends, whatever this
+/// setting is. Passing the current setting changes nothing and returns `false`.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::profiler::{set_trace_enabled, trace_enabled};
+///
+/// assert!(set_trace_enabled(true));
+/// assert!(trace_enabled());
+/// assert!(!set_trace_enabled(true), "already on, so nothing changed");
+/// set_trace_enabled(false);
+/// ```
 pub fn set_trace_enabled(enabled: bool) -> bool {
     let mut state = TRACE_STATE.load(Ordering::Acquire);
     loop {
@@ -742,9 +848,11 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
     }
 }
 
+/// Keeps trace collection on while it lives. Created by [`trace_scope`].
 #[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
 pub(crate) struct TraceGuard;
 
+/// Starts a trace scope, so tracing stays on until the returned guard is dropped.
 #[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
 pub(crate) fn trace_scope() -> TraceGuard {
     let incremented = TRACE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
@@ -769,7 +877,7 @@ impl Drop for TraceGuard {
     }
 }
 
-/// Returns whether profiler trace collection is enabled.
+/// Returns `true` while trace collection is on, either from [`set_trace_enabled`] or from an active trace scope.
 pub fn trace_enabled() -> bool {
     TRACE_STATE.load(Ordering::Relaxed) != 0
 }
@@ -790,14 +898,14 @@ fn clear_trace_buffers() {
     }
 }
 
-/// Timing for a single drawn window frame.
+/// The timing of one drawn window frame. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 #[derive(Debug, Copy, Clone)]
 pub struct FrameTiming {
     /// The window that was drawn.
     pub window_id: WindowId,
     /// When the frame first became dirty (its first invalidation). `None` if
-    /// profiler tracing was not yet enabled when the invalidation occurred.
+    /// nothing invalidated the window since its previous draw.
     pub dirty_at: Option<Instant>,
     /// Number of invalidations coalesced into this frame.
     pub invalidations: u64,
@@ -822,7 +930,7 @@ impl FrameTiming {
     }
 }
 
-/// Work spent submitting a window frame to the platform.
+/// The work spent submitting a window frame to the platform. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 #[derive(Debug, Copy, Clone)]
 pub struct PresentTiming {
@@ -845,7 +953,7 @@ impl PresentTiming {
     }
 }
 
-/// A frame event observed by the profiler.
+/// A frame event observed by the profiler. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 #[derive(Debug, Copy, Clone)]
 pub enum FrameEvent {
@@ -855,8 +963,9 @@ pub enum FrameEvent {
     Present(PresentTiming),
 }
 
-/// A point-in-time snapshot of the frame-duration histograms for a window,
-/// suitable for external formatting.
+/// A point-in-time copy of a window's frame-duration histograms, for formatting or logging.
+///
+/// Get one with [`Window::frame_duration_snapshot`]. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 #[derive(Clone)]
 pub struct FrameDurationSnapshot {
@@ -869,8 +978,9 @@ pub struct FrameDurationSnapshot {
     pub present_interval_histogram: Histogram<u64>,
 }
 
-/// A point-in-time snapshot of the input-latency histograms for a window,
-/// suitable for external formatting.
+/// A point-in-time copy of a window's input-latency histograms, for formatting or logging.
+///
+/// Get one with [`Window::input_latency_snapshot`]. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 #[derive(Clone)]
 pub struct InputLatencySnapshot {
@@ -898,7 +1008,8 @@ enum WindowActivity {
 ///
 /// Aggregate histograms are always populated when the `profiler` feature is
 /// compiled in. Individual draw and present events are added to the global
-/// profiler buffer only while tracing is enabled.
+/// profiler buffer only while tracing is enabled. Each window owns one. Read its
+/// results with [`Window::frame_duration_snapshot`] and [`Window::input_latency_snapshot`].
 #[cfg(feature = "profiler")]
 pub struct WindowProfiler {
     window_id: WindowId,
@@ -919,7 +1030,11 @@ pub struct WindowProfiler {
 
 #[cfg(feature = "profiler")]
 impl WindowProfiler {
-    /// Creates a profiler for a window.
+    /// Creates a profiler for the window `window_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the histograms can't be allocated.
     pub fn new(window_id: WindowId) -> anyhow::Result<Self> {
         let profiler = Self {
             window_id,
@@ -951,8 +1066,10 @@ impl WindowProfiler {
         Ok(profiler)
     }
 
-    /// Records the beginning of an input dispatch. `kind` names the platform
+    /// Records the start of an input dispatch. `kind` names the platform
     /// input variant being dispatched (see [`crate::PlatformInput::kind_name`]).
+    ///
+    /// Each call needs a matching [`Self::end_input`].
     pub fn begin_input(&mut self, kind: &'static str) {
         journal::begin_foreground_turn();
         self.active_activities.push(WindowActivity::Input {
@@ -961,7 +1078,11 @@ impl WindowProfiler {
         });
     }
 
-    /// Records the end of an input dispatch.
+    /// Records the end of the input dispatch that [`Self::begin_input`] started.
+    ///
+    /// If the input caused an invalidation and didn't arrive during a draw, it counts
+    /// toward the input-latency histograms at the next present. Input that arrives
+    /// during a draw is counted in `mid_draw_events_dropped` instead.
     pub fn end_input(&mut self, caused_invalidation: bool) {
         let Some(WindowActivity::Input { started_at, kind }) = self.active_activities.pop() else {
             debug_assert!(false, "input activity must be the current window activity");
@@ -993,7 +1114,7 @@ impl WindowProfiler {
         }
     }
 
-    /// Records the beginning of an action handler.
+    /// Records the start of the handler for `action`. Pair it with [`Self::end_action_handler`].
     pub fn begin_action_handler(&mut self, action: &(dyn Action + 'static), cx: &mut App) {
         journal::begin_foreground_turn();
         let name = actions::update_running_action(action, cx);
@@ -1019,7 +1140,7 @@ impl WindowProfiler {
         journal::end_foreground_turn();
     }
 
-    /// Records the beginning of a window draw.
+    /// Records the start of a window draw. Pair it with [`Self::end_draw`].
     pub fn begin_draw(&mut self) {
         journal::begin_foreground_turn();
         let started_at = Instant::now();
@@ -1028,7 +1149,10 @@ impl WindowProfiler {
             .push(WindowActivity::Draw { started_at });
     }
 
-    /// Records the end of a window draw and returns the draw duration.
+    /// Records the end of the draw that [`Self::begin_draw`] started, and returns how long it took.
+    ///
+    /// `dirty_at` is when the frame was first invalidated, and `invalidations` is how many
+    /// invalidations this frame covers. Returns [`Duration::ZERO`] if no draw was begun.
     pub fn end_draw(&mut self, dirty_at: Option<Instant>, invalidations: u64) -> Duration {
         let Some(WindowActivity::Draw {
             started_at: draw_start,
@@ -1053,10 +1177,12 @@ impl WindowProfiler {
         draw_duration
     }
 
-    /// Records that a frame was presented.
+    /// Records that the window's latest frame was presented between `present_start`
+    /// and `present_end`.
     ///
-    /// `next_frame_scheduled` marks the animation state for the interval ending
-    /// at the next newly drawn frame's presentation.
+    /// `window_active` says whether the window is active, and `next_frame_scheduled`
+    /// says whether another frame is already requested. Together they decide whether
+    /// the gap until the next newly drawn frame counts as an animation interval.
     pub fn record_present(
         &mut self,
         present_start: Instant,
@@ -1072,7 +1198,8 @@ impl WindowProfiler {
         );
     }
 
-    /// Returns a snapshot of the current input-latency histograms.
+    /// Returns a copy of the input-latency histograms. Latency runs from the first input
+    /// that caused an invalidation to the present of the frame it caused.
     pub fn input_latency_snapshot(&self) -> InputLatencySnapshot {
         InputLatencySnapshot {
             latency_histogram: self.input_latency_histogram.clone(),
@@ -1081,7 +1208,7 @@ impl WindowProfiler {
         }
     }
 
-    /// Returns a snapshot of the current frame-duration histograms.
+    /// Returns a copy of the frame-duration histograms, in nanoseconds.
     pub fn frame_duration_snapshot(&self) -> FrameDurationSnapshot {
         FrameDurationSnapshot {
             dirty_to_present_histogram: self.dirty_to_present_histogram.clone(),
@@ -1184,9 +1311,10 @@ static FRAME_TIMINGS: spin::Mutex<FrameTimings> = spin::Mutex::new(FrameTimings 
     total_pushed: 0,
 });
 
-/// Records a frame event.
+/// Adds a frame event to the global trace buffer.
 ///
-/// No-op unless profiler tracing is enabled via [`set_trace_enabled`].
+/// Does nothing unless tracing is enabled with [`set_trace_enabled`]. Available with the
+/// `profiler` feature.
 #[cfg(feature = "profiler")]
 pub fn record_frame_event(event: FrameEvent) {
     if !trace_enabled() {
@@ -1202,8 +1330,10 @@ pub fn record_frame_event(event: FrameEvent) {
     frames.total_pushed += 1;
 }
 
-/// Drains frame events recorded after this collector was created, tracking a
-/// cursor so each call to [`Self::collect_unseen`] returns only new entries.
+/// Reads the frame events recorded after this collector was created.
+///
+/// Each call to [`Self::collect_unseen`] returns only the events recorded since the
+/// previous call. Available with the `profiler` feature.
 #[cfg(feature = "profiler")]
 pub struct FrameTimingCollector {
     cursor: u64,
@@ -1248,6 +1378,52 @@ impl FrameTimingCollector {
 mod tests {
     use super::*;
     use std::sync::{Mutex, MutexGuard};
+
+    #[test]
+    fn long_poll_sample_is_ranked_by_poll_time_not_wait_time() {
+        let spawned = Instant::now();
+        let mut stats = TaskStatistics::default();
+        for microseconds in [500, 100, 400, 200, 300, 50, 350, 150, 600] {
+            // Every task waited 10 seconds to start, which must not affect its ranking.
+            let start = spawned + Duration::from_secs(10);
+            stats.add_yield_timing(TaskTiming {
+                location: std::panic::Location::caller(),
+                spawned: SpawnTime(spawned),
+                start,
+                end: YieldTime(start + Duration::from_micros(microseconds)),
+            });
+        }
+
+        let mut retained = stats.longest_poll_times.map(|task| task.poll_duration());
+        retained.sort();
+        assert_eq!(
+            retained,
+            [300, 350, 400, 500, 600].map(Duration::from_micros)
+        );
+        assert_eq!(stats.poll_time_to_beat, Duration::from_micros(300));
+    }
+
+    #[test]
+    fn short_polls_do_not_fill_unused_long_poll_slots() {
+        let spawned = Instant::now();
+        let mut stats = TaskStatistics::default();
+        for microseconds in [200, 50, 100, 20] {
+            stats.add_yield_timing(TaskTiming {
+                location: std::panic::Location::caller(),
+                spawned: SpawnTime(spawned),
+                start: spawned,
+                end: YieldTime(spawned + Duration::from_micros(microseconds)),
+            });
+        }
+
+        assert_eq!(stats.poll_time_to_beat, Duration::from_micros(100));
+        let retained = stats
+            .longest_poll_times
+            .iter()
+            .filter(|task| !task.poll_duration().is_zero())
+            .count();
+        assert_eq!(retained, 2, "only the 200 and 100 microsecond polls count");
+    }
 
     #[test]
     fn records_draw_events_only_while_tracing() {
