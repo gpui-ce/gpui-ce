@@ -156,16 +156,15 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
-# Examples in the documentation use `TestApp`, so GPUI's own tests always
-# build with `test-support`.
-gpui = { path = ".", package = "gpui-ce", features = ["test-support"] }
 accesskit_consumer.workspace = true
 backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 gpui_ce_elements = { path = "../gpui_elements" }
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+# Enable TestApp for doctests through the existing platform dependency. A self
+# dependency would link GPUI's Windows application manifest twice in unit tests.
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
 gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }

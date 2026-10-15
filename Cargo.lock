@@ -2437,7 +2437,6 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
- "gpui-ce",
  "gpui-ce-fonts",
  "gpui_ce_collections",
  "gpui_ce_elements",
