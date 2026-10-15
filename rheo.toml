@@ -1,5 +1,0 @@
-version = "0.3.1"
-content_dir = "docs/pages"
-
-[[html.assets]]
-css_stylesheet = "./docs/media/sidebar.css"
