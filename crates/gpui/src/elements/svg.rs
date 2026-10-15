@@ -92,7 +92,6 @@ impl Svg {
         self.data_path = Some(path);
         self
     }
-
 }
 
 impl Element for Svg {

@@ -557,8 +557,8 @@ impl Filter {
     /// Whether this filter has no visible effect, so painting can skip it entirely (and the
     /// element can avoid the offscreen isolation pass when *all* of its filters are identities).
     ///
-/// Each variant defines its own no-op case. A filter that returns `true` is dropped before it
-/// reaches the renderer.
+    /// Each variant defines its own no-op case. A filter that returns `true` is dropped before it
+    /// reaches the renderer.
     pub fn is_identity(&self) -> bool {
         match self {
             Filter::Blur(radius) => *radius <= Pixels::ZERO,

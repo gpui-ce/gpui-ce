@@ -22,7 +22,7 @@ use crate::{
 /// use std::{cell::Cell, rc::Rc};
 ///
 /// use gpui::{
-///     Context, IntoElement, Point, Pixels, Render, TestApp, Window, canvas, fill, point, prelude::*,
+///     Context, IntoElement, PaintQuad, Point, Pixels, Render, TestApp, Window, canvas, point, prelude::*,
 ///     px, rgb,
 /// };
 ///
@@ -38,7 +38,7 @@ use crate::{
 ///         canvas(
 ///             move |bounds, _window, _cx| origin.set(Some(bounds.origin)),
 ///             move |bounds, _prepaint_result, window, _cx| {
-///                 window.paint_quad(fill(bounds, rgb(0x2563eb)));
+///                 window.paint_quad(PaintQuad::new(bounds).background(rgb(0x2563eb)));
 ///                 painted.set(true);
 ///             },
 ///         )
