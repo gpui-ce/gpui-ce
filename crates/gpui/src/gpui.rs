@@ -47,7 +47,6 @@ pub mod profiler;
     feature = "test-support",
     feature = "bench-support"
 ))]
-#[expect(missing_docs)]
 pub mod queue;
 mod resize;
 mod scene;
