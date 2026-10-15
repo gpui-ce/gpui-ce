@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[package.metadata.cargo-machete]
+# Used by text_input and todos, imported through the examples! macro.
+ignored = ["gpui_ce_elements"]
+
 [lints]
 workspace = true
 
