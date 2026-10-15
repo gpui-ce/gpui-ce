@@ -86,7 +86,7 @@ read it, and elements to display it and receive clicks. Their lifetimes differ:
 the entity survives between frames, while each render builds a new element tree.
 
 * **[`App`] owns entity state.** [`App::new`] stores a value and returns an
-  [`Entity<T>`]: a clonable handle for reading and updating it through a
+  [`Entity<T>`]: a cloneable handle for reading and updating it through a
   context. Entities connect shared state to observers and dependent views;
   [ownership](crate::_documentation::concepts::ownership) explains their lifetimes.
 * **A view is an entity that can [`Render`].** When a view renders, it builds
