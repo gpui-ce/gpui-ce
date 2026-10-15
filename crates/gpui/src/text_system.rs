@@ -52,18 +52,31 @@ impl TextRangeExt for str {
     }
 }
 
-/// An opaque identifier for a specific font.
+/// An opaque identifier for a font face that the [`TextSystem`] has resolved.
+///
+/// Get one with [`TextSystem::resolve_font`]. The id is valid for the lifetime of
+/// the [`TextSystem`] that produced it and is used for metrics and glyph rasterization.
 #[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FontId(pub usize);
 
-/// Number of subpixel glyph variants along the X axis.
+/// The number of horizontal subpixel positions each glyph is rasterized at.
+///
+/// Glyphs are rasterized at quarter-pixel offsets along the X axis so that
+/// positions which fall between device pixels stay sharp.
 pub const SUBPIXEL_VARIANTS_X: u8 = 4;
 
-/// Number of subpixel glyph variants along the Y axis.
+/// The number of vertical subpixel positions each glyph is rasterized at.
+///
+/// Glyphs are not offset vertically, so there is one variant along the Y axis.
 pub const SUBPIXEL_VARIANTS_Y: u8 = 1;
 
-/// The GPUI text rendering sub system.
+/// The platform-independent font database and metrics cache, shared by all windows.
+///
+/// Get it from [`App::text_system`](crate::App::text_system) and use it to register fonts with
+/// [`TextSystem::add_fonts`], to measure glyphs and to resolve [`Font`]s to
+/// [`FontId`]s. To shape text for painting, use the [`WindowTextSystem`] of the
+/// window, which also caches the layouts.
 pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
@@ -71,7 +84,10 @@ pub struct TextSystem {
 }
 
 impl TextSystem {
-    /// Create a new TextSystem with the given platform text system.
+    /// Creates a text system that delegates font work to `platform_text_system`.
+    ///
+    /// GPUI creates the text system for each application. You don't need to call this
+    /// yourself, except in tests that supply their own platform text system.
     pub fn new(platform_text_system: Arc<dyn PlatformTextSystem>) -> Self {
         TextSystem {
             platform_text_system,
@@ -80,14 +96,49 @@ impl TextSystem {
         }
     }
 
-    /// Get a list of all available font names from the operating system.
+    /// Returns the font family names that this text system can resolve.
+    ///
+    /// Use these names as [`Font::family`] values. On the web, the list contains
+    /// only the families registered with [`TextSystem::add_fonts`] and the
+    /// `.SystemUIFont` alias, because the web has no system fonts.
     pub fn all_font_names(&self) -> Vec<String> {
         self.platform_text_system.all_font_names()
     }
 
-    /// Adds font data to the text system.
+    /// Registers font files so that [`Font`]s can resolve to them.
     ///
-    /// Font family names come from each font's embedded name table.
+    /// Each entry is the bytes of one font file, such as a `.ttf` or `.otf`.
+    /// Use `Cow::Borrowed` for bytes compiled into the binary with
+    /// `include_bytes!`, and `Cow::Owned` for bytes loaded at runtime. The
+    /// family names come from each font's name table, so pass those names to
+    /// [`font`] or set [`Font::family`] to use them.
+    ///
+    /// The web starts with an empty font database, so add the fonts your
+    /// application uses before you open a window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an entry contains no font face that the platform
+    /// supports. The parley backend, used on macOS, Windows, Linux, and the web, checks
+    /// every entry before it registers any, so a failed call leaves the set of
+    /// fonts unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::TestApp;
+    /// # use std::borrow::Cow;
+    /// # let mut app = TestApp::new();
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/../../assets/fonts/lilex/Lilex-Regular.ttf"
+    /// ));
+    /// app.text_system()
+    ///     .add_fonts(vec![Cow::Borrowed(bytes.as_slice())])
+    ///     .expect("Lilex is a valid font");
+    /// ```
+    ///
+    /// See [text](crate::_documentation::guides::text) for how fonts are chosen.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         // Serialize registration with cache misses so an in-flight lookup cannot
         // repopulate a stale miss after the newly registered fonts become available.
@@ -97,7 +148,7 @@ impl TextSystem {
         result
     }
 
-    /// Get the FontId for the configure font family and style.
+    /// Resolves a font family and style to a cached [`FontId`].
     fn font_id(&self, font: &Font) -> Result<FontId> {
         fn clone_font_id_result(font_id: &Result<FontId>) -> Result<FontId> {
             match font_id {
@@ -124,21 +175,31 @@ impl TextSystem {
         }
     }
 
-    /// Resolves the specified font using backend-owned aliases and fallbacks.
+    /// Resolves a [`Font`] to the [`FontId`] of the face that will be used to draw it.
+    ///
+    /// Resolution applies the family, weight, style, width, and fallbacks, and
+    /// the result is cached. Use the returned id with the metric methods on this
+    /// type, such as [`TextSystem::ascent`].
     ///
     /// # Panics
     ///
-    /// Panics if the backend cannot resolve the font.
+    /// Panics if the platform cannot resolve the font. Pass the family name of
+    /// a font from [`TextSystem::all_font_names`] or one added with
+    /// [`TextSystem::add_fonts`] to avoid this.
     pub fn resolve_font(&self, font: &Font) -> FontId {
         self.font_id(font)
             .unwrap_or_else(|error| panic!("failed to resolve font '{}': {error}", font.family))
     }
 
-    /// Prewarm any system font caches needed to shape text.
+    /// Resolves each font and loads its platform caches ahead of time.
     ///
-    /// This may be expensive, so callers should generally invoke it on a
-    /// background executor. Missing entries are still populated on demand by
-    /// the normal shaping path.
+    /// Loading system fonts can be slow, so call this from a background
+    /// executor before the first frame that uses the fonts. Fonts that are not
+    /// prewarmed are loaded when they are first used.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any font cannot be resolved, as [`TextSystem::resolve_font`] does.
     pub fn prewarm_fonts(&self, fonts: &[Font]) {
         let mut font_ids = SmallVec::<[FontId; 8]>::new();
         for font in fonts {
@@ -150,14 +211,20 @@ impl TextSystem {
         self.platform_text_system.prewarm_fonts(&font_ids);
     }
 
-    /// Get the bounding box for the given font and font size.
-    /// A font's bounding box is the smallest rectangle that could enclose all glyphs
-    /// in the font. superimposed over one another.
+    /// Returns the font's bounding box at `font_size` in logical pixels.
+    ///
+    /// The bounding box is the smallest rectangle that encloses every glyph in
+    /// the font when they are all drawn at the same origin.
     pub fn bounding_box(&self, font_id: FontId, font_size: Pixels) -> Bounds<Pixels> {
         self.read_metrics(font_id, |metrics| metrics.bounding_box(font_size))
     }
 
-    /// Get the typographic bounds for the given character, in the given font and size.
+    /// Returns the bounding rectangle of the glyph for `character` at `font_size` in logical pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the font has no glyph for `character` or the platform
+    /// cannot read its bounds.
     pub fn typographic_bounds(
         &self,
         font_id: FontId,
@@ -176,7 +243,14 @@ impl TextSystem {
         }))
     }
 
-    /// Get the advance width for the given character, in the given font and size.
+    /// Returns the advance of `ch` at `font_size`: how far the pen moves after drawing it.
+    ///
+    /// The `width` of the result is the advance, which is the glyph's horizontal
+    /// width in the font, not its ink width. Layout uses it to place the next character.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the font has no glyph for `ch`.
     pub fn advance(&self, font_id: FontId, font_size: Pixels, ch: char) -> Result<Size<Pixels>> {
         let glyph_id = self
             .platform_text_system
@@ -188,30 +262,37 @@ impl TextSystem {
         Ok(result * font_size)
     }
 
-    /// Get the number of font size units per 'em square',
-    /// Per MDN: "an abstract square whose height is the intended distance between
-    /// lines of type in the same type size"
+    /// Returns the number of font units in the font's em square.
+    ///
+    /// The em square is the grid that font sizes are measured on. Divide a
+    /// font-unit measurement by this value to get a fraction of the font size.
     pub fn units_per_em(&self, font_id: FontId) -> u32 {
         self.read_metrics(font_id, |metrics| metrics.units_per_em)
     }
 
-    /// Get the recommended distance from the baseline for the given font
+    /// Returns the distance from the baseline up to the top of the font's tallest glyphs, at `font_size`.
     pub fn ascent(&self, font_id: FontId, font_size: Pixels) -> Pixels {
         self.read_metrics(font_id, |metrics| metrics.ascent(font_size))
     }
 
-    /// Get the recommended distance below the baseline for the given font,
-    /// in single spaced text.
+    /// Returns the distance from the baseline down to the bottom of the font's lowest glyphs, at `font_size`.
+    ///
+    /// The value is positive. It is the distance below the baseline, not a
+    /// signed coordinate.
     pub fn descent(&self, font_id: FontId, font_size: Pixels) -> Pixels {
         self.read_metrics(font_id, |metrics| metrics.descent(font_size))
     }
 
-    /// Get the x-height for the given font and font size.
+    /// Returns the height of lowercase `x` at `font_size`.
     pub fn x_height(&self, font_id: FontId, font_size: Pixels) -> Pixels {
         self.read_metrics(font_id, |metrics| metrics.x_height(font_size))
     }
 
-    /// Get the recommended baseline offset for the given font and line height.
+    /// Returns the distance from the top of a line box of `line_height` to the baseline.
+    ///
+    /// The ascent and descent are centered in the line box, so extra
+    /// `line_height` is split evenly above and below the glyphs. Use this to
+    /// place text inside a box with a fixed height.
     pub fn baseline_offset(
         &self,
         font_id: FontId,
@@ -238,7 +319,16 @@ impl TextSystem {
         }
     }
 
-    /// Rasterizes a glyph and validates its placement and pixel buffer.
+    /// Rasterizes one glyph to pixels, and checks that the result is well formed.
+    ///
+    /// GPUI calls this when it draws a glyph that is not in the glyph atlas yet.
+    /// Application code rarely needs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform cannot rasterize the glyph, or if the
+    /// pixel buffer does not match the size and format it reports. See
+    /// [`RasterizedGlyph::validate`].
     pub fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<ValidatedRasterizedGlyph> {
         let glyph = self.platform_text_system.rasterize_glyph(params)?;
 
@@ -276,7 +366,17 @@ impl TextSystem {
     }
 }
 
-/// The GPUI text layout subsystem.
+/// The text layout subsystem for one window, with a cache of shaped lines.
+///
+/// Get it with [`Window::text_system`](crate::Window::text_system). It derefs to the shared [`TextSystem`],
+/// so you can call font methods on it directly.
+///
+/// Layout methods such as [`WindowTextSystem::shape_line`] and
+/// [`WindowTextSystem::shape_text`] cache their results. A layout is reused when
+/// the same text, font size, and shaping settings are requested again. The cache
+/// keeps a layout only while the next frame uses it, so a layout that a frame
+/// doesn't request is dropped at the end of that frame. Changing only colors or
+/// decorations reuses the glyphs and repaints them.
 #[derive(Deref)]
 pub struct WindowTextSystem {
     line_layout_cache: LineLayoutCache,
@@ -285,7 +385,9 @@ pub struct WindowTextSystem {
 }
 
 impl WindowTextSystem {
-    /// Create a new WindowTextSystem with the given TextSystem.
+    /// Creates a window text system with an empty layout cache on top of `text_system`.
+    ///
+    /// GPUI creates one for each window. You don't need to call this yourself.
     pub fn new(text_system: Arc<TextSystem>) -> Self {
         Self {
             line_layout_cache: LineLayoutCache::new(text_system.platform_text_system.clone()),
@@ -305,12 +407,38 @@ impl WindowTextSystem {
         self.line_layout_cache.truncate_layouts(index)
     }
 
-    /// Shape the given line, at the given font_size, for painting to the screen.
-    /// Subsets of the line can be styled independently with the `runs` parameter.
+    /// Shapes one line of text, ready to paint.
     ///
-    /// Note that this method can only shape a single line of text. It will panic
-    /// if the text contains newlines. If you need to shape multiple lines of text,
-    /// use [`Self::shape_text`] instead.
+    /// Use this for a single line of text that you paint with [`ShapedLine::paint`].
+    /// For text that can wrap or has several paragraphs, use [`Self::shape_text`].
+    /// `runs` styles the text, and the run lengths must add up to `text.len()`.
+    /// Each run's [`TextRun::font`] selects the face used for its bytes.
+    ///
+    /// The result is cached for the frame, as described on [`WindowTextSystem`].
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `text` contains a `\n`. Release builds don't
+    /// check this, and the result for such text is not meaningful. Use
+    /// [`Self::shape_text`] for multiple lines.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+    /// # let mut app = TestApp::new();
+    /// # let mut window = app.open_window(|_window, _cx| EmptyView);
+    /// window.update(|_view, window, _cx| {
+    ///     let run = TextRun {
+    ///         len: "Hello".len(),
+    ///         font: font("Lilex"),
+    ///         color: hsla(0., 0., 0., 1.),
+    ///         ..Default::default()
+    ///     };
+    ///     let line = window.text_system().shape_line("Hello".into(), px(16.), &[run]);
+    ///     assert_eq!(line.len(), 5);
+    /// });
+    /// ```
     pub fn shape_line(
         &self,
         text: SharedString,
@@ -327,15 +455,60 @@ impl WindowTextSystem {
         ShapedLine { layout, text }
     }
 
-    /// Shape a multi line string of text, at the given font_size, for painting to the screen.
-    /// Subsets of the text can be styled independently with the `runs` parameter,
-    /// where each run gives the number of UTF-8 bytes that it styles. Runs must cover the
-    /// complete string and end on UTF-8 character boundaries.
+    /// Shapes text that may span several lines, ready to paint.
     ///
-    /// If `wrap_width` is provided, the line breaks will be adjusted to fit within the given width.
+    /// This is the function to use for paragraphs. Each `\n` starts a new line.
+    /// When `wrap_width` is `Some`, lines wrap at word boundaries to fit within
+    /// that many logical pixels. A word wider than that is not split, so it
+    /// overflows. `None` disables soft wrapping, and only `\n` breaks lines.
+    /// With a wrap width, `line_clamp = Some(n)` limits soft wrapping: once the
+    /// budget is exhausted, the rest of each paragraph occupies an unwrapped line.
+    /// Hard paragraph breaks are preserved, so the total can exceed `n`.
+    /// `Some(0)` behaves like `Some(1)` and disables soft wrapping; it does not hide text.
     ///
-    /// The backend receives the complete string. Hard breaks, trailing empty lines, bidi
-    /// paragraphs, wrapping, and `line_clamp` therefore share one layout model.
+    /// `runs` styles the text. Each run gives the number of UTF-8 bytes it covers,
+    /// and the runs must cover the whole string and end on character boundaries.
+    /// The `Result` is currently always `Ok`.
+    ///
+    /// Shaping is cached as described on [`WindowTextSystem`]. To lay out text
+    /// inside an element, use [`StyledText`](crate::StyledText) instead. See
+    /// [text](crate::_documentation::guides::text) for an overview.
+    ///
+    /// # Examples
+    ///
+    /// This example supplies the platform's real text system. [`TestApp::new`](crate::TestApp::new)
+    /// uses a simplified test shaper, which does not reproduce paragraph layout.
+    ///
+    /// ```standalone_crate
+    /// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+    /// let text_system = gpui_platform::current_platform(true).text_system();
+    /// let mut app = TestApp::with_text_system(text_system);
+    /// # let mut window = app.open_window(|_window, _cx| EmptyView);
+    /// window.update(|_view, window, _cx| {
+    ///     let text = "first line\nsecond line";
+    ///     let run = TextRun {
+    ///         len: text.len(),
+    ///         font: font(".SystemUIFont"),
+    ///         color: hsla(0., 0., 0., 1.),
+    ///         ..Default::default()
+    ///     };
+    ///     let shaped = window
+    ///         .text_system()
+    ///         .shape_text(text, px(16.), &[run.clone()], Some(px(200.)), None)
+    ///         .unwrap();
+    ///     assert_eq!(shaped.len(), text.len());
+    ///
+    ///     // A clamp cannot remove the hard break between these paragraphs.
+    ///     let zero = window.text_system()
+    ///         .shape_text(text, px(16.), &[run.clone()], Some(px(20.)), Some(0))
+    ///         .unwrap();
+    ///     let one = window.text_system()
+    ///         .shape_text(text, px(16.), &[run], Some(px(20.)), Some(1))
+    ///         .unwrap();
+    ///     assert_eq!(zero.line_count(), 2);
+    ///     assert_eq!(one.line_count(), 2);
+    /// });
+    /// ```
     pub fn shape_text<S: AsRef<str> + Into<SharedString>>(
         &self,
         text: S,
@@ -356,7 +529,11 @@ impl WindowTextSystem {
         )
     }
 
-    /// Shapes a complete text document with explicit direction and alignment options.
+    /// Shapes a text document with explicit paragraph direction, alignment, and bidi options.
+    ///
+    /// This is the lower-level form of [`Self::shape_text`]. Use it when text
+    /// must align within a width different from its wrap width, or must follow
+    /// a specific paragraph direction. The `Result` is currently always `Ok`.
     #[doc(hidden)]
     pub fn shape_text_with_options<S: AsRef<str> + Into<SharedString>>(
         &self,
@@ -373,15 +550,20 @@ impl WindowTextSystem {
         Ok(ShapedText { layout, text })
     }
 
-    /// Layout text and atomic element boxes in one inline formatting context.
+    /// Lays out text and atomic boxes together, the way an inline element flows in a paragraph.
+    ///
+    /// Each box is an element that sits between characters, such as an icon or
+    /// a badge. Text wraps around the boxes. The result is cached like other
+    /// layouts.
     pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
         self.line_layout_cache.layout_inline(request)
     }
 
-    /// Layout the given line of text, at the given font_size.
-    /// Subsets of the line can be styled independently with the `runs` parameter.
-    /// Generally, you should prefer to use [`Self::shape_line`] instead, which
-    /// can be painted directly.
+    /// Lays out one line of text and returns the backend's [`LineLayout`].
+    ///
+    /// Most code should call [`Self::shape_line`] instead, which returns a
+    /// [`ShapedLine`] that you can paint. Use this only when you need the raw
+    /// layout. `text` must not contain newlines, and nothing checks this here.
     pub fn layout_line(&self, text: &str, font_size: Pixels, runs: &[TextRun]) -> Arc<LineLayout> {
         self.line_layout_cache
             .layout_line(&SharedString::new(text), font_size, runs)
@@ -392,8 +574,21 @@ impl WindowTextSystem {
     }
 }
 
-/// The degree of blackness or stroke thickness of a font. This value ranges from 100.0 to 900.0,
-/// with 400.0 as normal.
+/// The weight of a font, from [`FontWeight::THIN`] (100) to [`FontWeight::BLACK`] (900).
+///
+/// Weight selects how thick the strokes of a face are. [`FontWeight::NORMAL`]
+/// (400) is the default, and [`FontWeight::BOLD`] (700) is what [`Font::bold`]
+/// sets. The value is a plain `f32`, so you can use values between the named
+/// constants when the font has faces for them.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{FontWeight, font};
+/// let heading = font("Lilex").bold();
+/// assert_eq!(heading.weight, FontWeight::BOLD);
+/// assert_eq!(FontWeight::default(), FontWeight::NORMAL);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize, Add, Sub, FromStr)]
 #[serde(transparent)]
 pub struct FontWeight(pub f32);
@@ -476,15 +671,17 @@ impl schemars::JsonSchema for FontWeight {
     }
 }
 
-/// Allows italic or oblique faces to be selected.
+/// Selects an italic or oblique face when the font family has one.
+///
+/// Use [`Font::italic`] to set [`FontStyle::Italic`].
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash, Default, Serialize, Deserialize, JsonSchema)]
 pub enum FontStyle {
-    /// A face that is neither italic not obliqued.
+    /// The upright face of the family.
     #[default]
     Normal,
-    /// A form that is generally cursive in nature.
+    /// The italic face, which is usually a cursive design.
     Italic,
-    /// A typically-sloped version of the regular face.
+    /// A sloped version of the upright face.
     Oblique,
 }
 
@@ -494,22 +691,49 @@ impl Display for FontStyle {
     }
 }
 
-/// A styled run of text, for use in [`crate::TextLayout`].
+/// A stretch of text that shares one font and style.
+///
+/// Text layout takes a slice of runs whose `len` values add up to the length of
+/// the text. Each run styles the bytes that follow the runs before it. Runs
+/// control how text is shaped and painted, so changing a run's `color`,
+/// `background_color`, `underline`, or `strikethrough` does not reshape the text.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{TextRun, font, hsla};
+/// let text = "Hello world";
+/// let runs = [
+///     TextRun {
+///         len: 6,
+///         font: font("Lilex"),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     },
+///     TextRun {
+///         len: 5,
+///         font: font("Lilex").bold(),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     },
+/// ];
+/// assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+/// ```
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TextRun {
-    /// A number of utf8 bytes
+    /// The number of UTF-8 bytes this run covers.
     pub len: usize,
     /// The font to use for this run.
     pub font: Font,
-    /// The color
+    /// The color of the glyphs.
     pub color: Hsla,
-    /// The background color (if any)
+    /// The background color behind the glyphs, or `None` for no background.
     pub background_color: Option<Hsla>,
-    /// The underline style (if any)
+    /// The underline drawn under the glyphs, or `None` for no underline.
     pub underline: Option<UnderlineStyle>,
-    /// The strikethrough style (if any)
+    /// The strikethrough drawn through the glyphs, or `None` for none.
     pub strikethrough: Option<StrikethroughStyle>,
-    /// Letter spacing applied between glyphs, in pixels.
+    /// The extra space added between glyphs, in logical pixels, or `None` for no extra space.
     pub letter_spacing: Option<Pixels>,
 }
 
@@ -553,7 +777,8 @@ pub struct InlineBidiScope {
 pub struct TextLayoutOptions {
     /// Optional soft-wrap width.
     pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
+    /// Soft-wrap line budget. Hard paragraph breaks are preserved; `Some(0)` behaves
+    /// like `Some(1)`. See [`WindowTextSystem::shape_text`].
     pub line_clamp: Option<usize>,
     /// Width used for horizontal alignment, independently of wrapping.
     pub alignment_width: Option<Pixels>,
@@ -969,37 +1194,78 @@ impl Hash for RenderGlyphParams {
     }
 }
 
-/// The configuration details for identifying a specific font.
+/// The face to use for text: a font family plus its weight, width, style, features, and fallbacks.
+///
+/// Build one with [`font`] and then adjust it with the builder methods, or set
+/// the public fields directly. The [`TextSystem`] caches lookups by `Font`, so
+/// equal fonts share one lookup.
+///
+/// The default is the family `.SystemUIFont`, which the platform maps to its
+/// system interface font. Use a named family when the look must be the same
+/// on every platform.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{Font, FontStyle, FontWeight, font};
+/// let heading = font("Lilex").bold();
+/// assert_eq!(heading.weight, FontWeight::BOLD);
+///
+/// let quote = Font {
+///     style: FontStyle::Italic,
+///     ..font("Source Serif 4")
+/// };
+/// assert_eq!(quote.style, FontStyle::Italic);
+/// ```
+///
+/// See [text](crate::_documentation::guides::text) for how fonts are chosen and
+/// how to add your own.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Font {
-    /// The font family name.
+    /// The font family name, such as `"Lilex"`.
     ///
-    /// The special name ".SystemUIFont" is used to identify the system UI font, which varies based on platform.
+    /// The special name `.SystemUIFont` refers to the system interface font,
+    /// which differs by platform. Names come from [`TextSystem::all_font_names`].
     pub family: SharedString,
 
-    /// The font features to use.
+    /// The OpenType features to apply, such as ligatures or tabular figures.
     pub features: FontFeatures,
 
-    /// The fallbacks fonts to use.
+    /// Families to try, in order, when [`Font::family`] has no glyph for a character.
     pub fallbacks: Option<FontFallbacks>,
 
-    /// The font weight.
+    /// The weight of the face. See [`FontWeight`].
     pub weight: FontWeight,
 
-    /// The font width. Exhaustive font literals must supply this field.
+    /// The width of the face. Exhaustive font literals must supply this field.
     pub width: FontWidth,
 
-    /// The font style.
+    /// Whether to select the italic or oblique face. See [`FontStyle`].
     pub style: FontStyle,
 }
 
 impl Default for Font {
+    /// Returns the `.SystemUIFont` family with normal weight, width, and style.
     fn default() -> Self {
         font(".SystemUIFont")
     }
 }
 
-/// Get a [`Font`] for a given name.
+/// Returns a [`Font`] for `family`, with normal weight, width, and style.
+///
+/// Pass a family name from [`TextSystem::all_font_names`] or one you added with
+/// [`TextSystem::add_fonts`]. Chain [`Font::bold`] or [`Font::italic`] to change
+/// the style.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{FontStyle, FontWeight, font};
+/// let body = font("Lilex");
+/// assert_eq!(body.family.as_ref(), "Lilex");
+/// assert_eq!(body.weight, FontWeight::NORMAL);
+/// assert_eq!(body.style, FontStyle::Normal);
+/// ```
 pub fn font(family: impl Into<SharedString>) -> Font {
     Font {
         family: family.into(),
@@ -1012,90 +1278,93 @@ pub fn font(family: impl Into<SharedString>) -> Font {
 }
 
 impl Font {
-    /// Set this Font to be bold
+    /// Returns this font with the weight set to [`FontWeight::BOLD`].
     pub fn bold(mut self) -> Self {
         self.weight = FontWeight::BOLD;
         self
     }
 
-    /// Set this Font to be italic
+    /// Returns this font with the style set to [`FontStyle::Italic`].
     pub fn italic(mut self) -> Self {
         self.style = FontStyle::Italic;
         self
     }
 }
 
-/// A struct for storing font metrics.
-/// It is used to define the measurements of a typeface.
+/// The measurements of a typeface, in font units.
+///
+/// Get the values for a font with [`TextSystem::resolve_font`] and the
+/// `TextSystem` metric methods. The methods on this type convert the values to
+/// pixels at a given font size. Use the font-unit fields directly only when
+/// you need exact values.
 #[derive(Clone, Copy, Debug)]
 pub struct FontMetrics {
-    /// The number of font units that make up the "em square",
-    /// a scalable grid for determining the size of a typeface.
+    /// The number of font units that make up the em square, the grid that font sizes are measured on.
     pub units_per_em: u32,
 
-    /// The vertical distance from the baseline of the font to the top of the glyph covers.
+    /// The distance from the baseline up to the top of the tallest glyphs, in font units.
     pub ascent: f32,
 
-    /// The vertical distance from the baseline of the font to the bottom of the glyph covers.
+    /// The distance from the baseline down to the bottom of the lowest glyphs, in font units.
     pub descent: f32,
 
-    /// The recommended additional space to add between lines of type.
+    /// The extra space the font recommends between lines, in font units.
     pub line_gap: f32,
 
-    /// The suggested position of the underline.
+    /// The suggested vertical position of the underline, in font units.
     pub underline_position: f32,
 
-    /// The suggested thickness of the underline.
+    /// The suggested thickness of the underline, in font units.
     pub underline_thickness: f32,
 
-    /// The height of a capital letter measured from the baseline of the font.
+    /// The height of a capital letter above the baseline, in font units.
     pub cap_height: f32,
 
-    /// The height of a lowercase x.
+    /// The height of a lowercase `x` above the baseline, in font units.
     pub x_height: f32,
 
-    /// The outer limits of the area that the font covers.
-    /// Corresponds to the xMin / xMax / yMin / yMax values in the OpenType `head` table
+    /// The outer limits of the area that the font covers, in font units.
+    /// Corresponds to the xMin / xMax / yMin / yMax values in the OpenType `head` table.
     pub bounding_box: Bounds<f32>,
 }
 
 impl FontMetrics {
-    /// Returns the vertical distance from the baseline of the font to the top of the glyph covers in pixels.
+    /// Returns the distance from the baseline up to the tallest glyphs, in pixels at `font_size`.
     pub fn ascent(&self, font_size: Pixels) -> Pixels {
         Pixels((self.ascent / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the vertical distance from the baseline of the font to the bottom of the glyph covers in pixels.
+    /// Returns the distance from the baseline down to the lowest glyphs, in pixels at `font_size`.
     pub fn descent(&self, font_size: Pixels) -> Pixels {
         Pixels((self.descent / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the recommended additional space to add between lines of type in pixels.
+    /// Returns the recommended extra space between lines, in pixels at `font_size`.
     pub fn line_gap(&self, font_size: Pixels) -> Pixels {
         Pixels((self.line_gap / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the suggested position of the underline in pixels.
+    /// Returns the suggested position of the underline, in pixels at `font_size`.
     pub fn underline_position(&self, font_size: Pixels) -> Pixels {
         Pixels((self.underline_position / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the suggested thickness of the underline in pixels.
+    /// Returns the suggested thickness of the underline, in pixels at `font_size`.
     pub fn underline_thickness(&self, font_size: Pixels) -> Pixels {
         Pixels((self.underline_thickness / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the height of a capital letter measured from the baseline of the font in pixels.
+    /// Returns the height of a capital letter above the baseline, in pixels at `font_size`.
     pub fn cap_height(&self, font_size: Pixels) -> Pixels {
         Pixels((self.cap_height / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the height of a lowercase x in pixels.
+    /// Returns the height of a lowercase `x` above the baseline, in pixels at `font_size`.
     pub fn x_height(&self, font_size: Pixels) -> Pixels {
         Pixels((self.x_height / self.units_per_em as f32) * font_size.0)
     }
 
-    /// Returns the outer limits of the area that the font covers in pixels.
+    /// Returns the outer limits of the area that the font covers, in pixels at `font_size`.
     pub fn bounding_box(&self, font_size: Pixels) -> Bounds<Pixels> {
         (self.bounding_box / self.units_per_em as f32 * font_size.0).map(px)
     }

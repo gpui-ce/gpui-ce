@@ -17,81 +17,93 @@ use std::{
     },
 };
 
-/// A laid-out and styled text document.
+/// The shaped and laid-out form of a string of text, ready to measure and paint.
+///
+/// `LineLayout` is what the text backend returns for one piece of text. Most
+/// code gets it indirectly through [`ShapedLine`](crate::ShapedLine) or
+/// [`ShapedText`](crate::ShapedText), and reads it through the methods on
+/// [`ShapedTextLayout`]. Use the public fields when you need the raw geometry,
+/// such as the width of the widest visual line.
 #[derive(Clone, Debug)]
 pub struct LineLayout {
-    /// The document's base font size.
+    /// The base font size the text was shaped at, in logical pixels.
     pub font_size: Pixels,
-    /// The width of the widest visual line.
+    /// The width of the widest visual line, in logical pixels.
     pub width: Pixels,
-    /// The document's ascent.
+    /// The distance from the baseline up to the top of the tallest glyphs.
     pub ascent: Pixels,
-    /// The document's descent.
+    /// The distance from the baseline down to the bottom of the lowest glyphs.
     pub descent: Pixels,
-    /// Visual lines in paint order. Unwrapped layouts contain one line.
+    /// The visual lines in top-to-bottom order. Without soft wraps or hard breaks, there is one line.
     pub visual_lines: SmallVec<[VisualLine; 1]>,
-    /// Style-specific paint runs referenced by `visual_lines`.
+    /// The runs of glyphs that share one style, referenced by each visual line.
     pub paint_fragments: Vec<PaintFragment>,
     /// The length of the source text in UTF-8 bytes.
     pub len: usize,
-    /// Backend-native interaction model.
+    /// The backend's interaction model, used for caret movement and hit testing.
     pub platform_layout: Arc<dyn PlatformTextLayout>,
 }
 
-/// Font metrics used to construct the vertical extents of an inline line.
+/// Font metrics that set the vertical extent of an inline line.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct InlineTextMetrics {
-    /// Distance above the text baseline.
+    /// The distance from the baseline up to the top of the tallest glyphs.
     pub ascent: Pixels,
-    /// Distance below the text baseline.
+    /// The distance from the baseline down to the bottom of the lowest glyphs.
     pub descent: Pixels,
-    /// Height of a lowercase x in the inline container's font.
+    /// The height of a lowercase `x` in the container's font.
     pub x_height: Pixels,
 }
 
-/// A row in an inline layout.
+/// One row of an inline layout, positioned relative to the layout's origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InlineVisualLine {
-    /// The row origin relative to the inline layout.
+    /// The top-left corner of the row, relative to the inline layout.
     pub origin: Point<Pixels>,
-    /// The row size before it is placed in its containing element.
+    /// The size of the row, including the room that atomic boxes need.
     pub size: Size<Pixels>,
-    /// The baseline relative to `origin.y`.
+    /// The baseline of the row, measured down from `origin.y`.
     pub baseline: Pixels,
 }
 
-/// The position assigned to an element embedded in text.
+/// An atomic box from an inline layout, with the position the layout gave it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PositionedInlineBox {
-    /// The caller-provided box identifier.
+    /// The identifier from the matching [`InlineBoxRequest::id`].
     pub id: u64,
-    /// Index of the visual line containing this box.
+    /// The index of the visual line that contains this box.
     pub line_index: usize,
-    /// The box bounds relative to the complete inline layout.
+    /// The bounds of the box, relative to the complete inline layout.
     pub bounds: Bounds<Pixels>,
 }
 
-/// The native geometry occupied by a text range on one visual line.
+/// The area that a text range covers on one visual line.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InlineRangeGeometry {
-    /// Bounds relative to the complete text layout.
+    /// The bounds of the range on this line, relative to the complete layout.
     pub bounds: Bounds<Pixels>,
-    /// Index of the visual line containing these bounds.
+    /// The index of the visual line that contains `bounds`.
     pub visual_line_index: usize,
 }
 
-/// Text and element boxes laid out in one inline formatting context.
+/// Text and atomic boxes laid out together, following inline paragraph flow.
+///
+/// Use [`WindowTextSystem::layout_inline`](crate::WindowTextSystem::layout_inline)
+/// to build one. Paint it with
+/// [`InlineLayout::paint_background`] and [`InlineLayout::paint`]. Place each box from
+/// [`InlineLayout::boxes`] in the surrounding element yourself; GPUI paints the text but does
+/// not render the box contents.
 #[derive(Clone, Debug)]
 pub struct InlineLayout {
-    /// The shaped text shared with the ordinary GPUI paint pipeline.
+    /// The shaped text, which the ordinary paint pipeline draws.
     pub layout: Arc<LineLayout>,
-    /// Per-row block geometry from the text backend.
+    /// The position and height of each visual line.
     pub lines: Vec<InlineVisualLine>,
-    /// Positioned element boxes.
+    /// The position of each atomic box.
     pub boxes: Vec<PositionedInlineBox>,
-    /// Shared horizontal anchor used to align every visual line.
+    /// The horizontal offset that aligns every visual line in the layout.
     pub alignment_offset: Pixels,
-    /// Natural size of the complete inline layout.
+    /// The natural size of the complete layout.
     pub size: Size<Pixels>,
 }
 
@@ -215,25 +227,34 @@ pub fn align_inline_boxes(
     size.height = line_y;
 }
 
-/// Backend-owned text interaction for a laid-out string.
+/// The text interaction model that a backend provides for one laid-out string.
 ///
-/// Byte positions are UTF-8 boundaries. Geometry is in GPUI layout coordinates, using the
-/// caller-provided line height. Implementations must preserve visual order and caret affinity.
+/// GPUI calls these methods for hit testing, caret movement, and selection. The
+/// backend does this work because only it knows the glyph clusters, bidi
+/// runs, and line breaks. Application code does not implement or call this trait
+/// directly. Use the methods on [`ShapedTextLayout`] instead.
 ///
-/// A cluster is one backend-defined caret step. It may contain several Unicode scalar values, such
-/// as a combining sequence or an emoji ZWJ sequence. Logical clusters are independent of visual
-/// direction and soft-wrapped rows.
+/// Byte positions are UTF-8 boundaries. Geometry is in GPUI layout coordinates,
+/// using the caller-provided line height. Implementations must preserve visual
+/// order and caret affinity.
+///
+/// A cluster is one backend-defined caret step. It may contain several Unicode
+/// scalar values, such as a combining sequence or an emoji ZWJ sequence. Logical
+/// clusters are independent of visual direction and soft-wrapped rows.
 pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
-    /// Length of the source text in UTF-8 bytes.
+    /// Returns the length of the source text in UTF-8 bytes.
     fn len(&self) -> usize;
 
-    /// Number of visual lines.
+    /// Returns the number of visual lines, after wrapping and clamping.
     fn line_count(&self) -> usize;
 
-    /// Natural layout size reported by the backend.
+    /// Returns the natural size of the layout that the backend reports.
     fn size(&self) -> Size<Pixels>;
 
     /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
+    ///
+    /// Returns `Ok` when the point is inside a visual row. Otherwise it returns
+    /// `Err` with the closest index.
     fn byte_index_from_pixel_point(
         &self,
         pixel_point: Point<Pixels>,
@@ -322,16 +343,16 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     ) -> Range<usize>;
 }
 
-/// A direction in visual, rather than logical, text order.
+/// A direction in visual order, which is left and right on screen, regardless of text direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisualDirection {
-    /// Move toward the visual left.
+    /// Toward the left edge of the screen.
     Left,
-    /// Move toward the visual right.
+    /// Toward the right edge of the screen.
     Right,
 }
 
-/// The direction of a semantic text movement.
+/// The direction of a semantic text movement, such as an arrow key or a Home key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextDirection {
     /// Move toward the visual left.
@@ -348,16 +369,16 @@ pub enum TextDirection {
     End,
 }
 
-/// The boundary at which a semantic text movement stops.
+/// The unit that a semantic text movement stops at.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextBoundary {
-    /// One backend-defined caret step. [`PlatformTextLayout::normalized_caret`] and
-    /// [`PlatformTextLayout::adjacent_visual_caret`] govern visual stops, while
+    /// One backend-defined caret step, such as one grapheme cluster.
+    ///
+    /// The backend decides what a cluster is. [`PlatformTextLayout::normalized_caret`]
+    /// and [`PlatformTextLayout::adjacent_visual_caret`] find visual stops, and
     /// [`PlatformTextLayout::logical_cluster_before`] and
     /// [`PlatformTextLayout::logical_cluster_after`] return logical ranges.
-    /// [`PlatformTextSystem::layout_text`] provides [`LineLayout::platform_layout`].
-    /// Platform constructors use `gpui_ce_parley`, whose logical ranges are graphemes and
-    /// visual movement follows Parley cursors. Other backends may differ.
+    /// Layouts from the Parley backend, which the platforms use, step by grapheme.
     Cluster,
     /// A word boundary.
     Word,
@@ -369,10 +390,11 @@ pub enum TextBoundary {
     Document,
 }
 
-/// A semantic caret movement handled by the native text layout.
+/// A caret movement described by a direction and a unit, such as "to the end of the word".
 ///
 /// `direction` chooses where to move, and `boundary` chooses the unit. Consecutive vertical
-/// movements reuse the returned preferred horizontal coordinate.
+/// movements reuse the returned preferred horizontal coordinate, so moving up or down keeps
+/// the column you started in. Build one with [`TextDirection::with_boundary`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TextMovement {
     /// The direction in which to move.
@@ -382,7 +404,7 @@ pub struct TextMovement {
 }
 
 impl TextDirection {
-    /// Creates a semantic movement in this direction with the requested boundary.
+    /// Returns a [`TextMovement`] in this direction that stops at `boundary`.
     pub const fn with_boundary(self, boundary: TextBoundary) -> TextMovement {
         TextMovement {
             direction: self,
@@ -391,19 +413,21 @@ impl TextDirection {
     }
 }
 
-/// A semantic selection derived from a point.
+/// The unit selected by a double or triple click at a point.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextSelectionKind {
-    /// Select a word.
+    /// The word under the point.
     Word,
-    /// Select a soft-wrapped visual row.
+    /// The soft-wrapped visual row under the point.
     VisualLine,
-    /// Select a line delimited by a hard break.
+    /// The line between hard breaks under the point.
     HardLine,
 }
 
-/// A horizontal row produced by shaping and line breaking. Soft wrapping can split one logical
-/// line across several rows; bidirectional ordering does not change logical UTF-8 byte ranges.
+/// One row of text produced by shaping and line breaking.
+///
+/// Soft wrapping can split one logical line across several rows. Bidirectional
+/// ordering changes the visual order of glyphs but not the logical UTF-8 byte ranges.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VisualLine {
     /// The logical UTF-8 byte range assigned to this row.
@@ -421,7 +445,10 @@ pub struct VisualLine {
     pub direction: crate::ResolvedDirection,
 }
 
-/// GPUI paint properties carried through Parley's brush.
+/// The paint properties of one run of text: color, background, underline, and strikethrough.
+///
+/// These come from the [`TextRun`] that covers the glyphs. They are kept apart from
+/// the shaping, so changing them does not reshape the text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaintStyle {
     /// Glyph foreground color.
@@ -434,7 +461,7 @@ pub struct PaintStyle {
     pub strikethrough: Option<StrikethroughStyle>,
 }
 
-/// A positioned, style-specific glyph run painted on one visual line.
+/// A run of glyphs that share one font and one style, positioned on a visual line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintFragment {
     /// Index of the input text run that supplies paint properties.
@@ -455,16 +482,16 @@ pub struct PaintFragment {
     pub strikethrough_offset: Option<Pixels>,
 }
 
-/// A single glyph, ready to paint.
+/// One glyph in a shaped line, ready to paint.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapedGlyph {
-    /// The ID for this glyph, as determined by the text system.
+    /// The glyph's ID in the font, as chosen by the text system.
     pub id: GlyphId,
 
-    /// The position of this glyph in its containing line.
+    /// The glyph origin, relative to the start of its visual line.
     pub position: Point<Pixels>,
 
-    /// Whether this glyph is an emoji
+    /// Whether the glyph is a color emoji, which paints through the emoji path.
     pub is_emoji: bool,
 }
 
@@ -503,7 +530,10 @@ pub fn is_paragraph_separator(character: char) -> bool {
 }
 
 impl CaretAffinity {
-    /// Returns the affinity for a caret placed after inserted text.
+    /// Returns the affinity for a caret placed right after `text` was inserted.
+    ///
+    /// Returns [`CaretAffinity::Downstream`] when `text` is empty or ends with a hard line break,
+    /// so the caret starts the next line. Otherwise it returns [`CaretAffinity::Upstream`].
     pub fn for_inserted_text(text: &str) -> Self {
         Self::from(text)
     }
@@ -523,7 +553,11 @@ impl From<&str> for CaretAffinity {
     }
 }
 
-/// A byte position together with the information needed to place it visually.
+/// A position between characters, given as a UTF-8 byte index plus the side it attaches to.
+///
+/// The index alone is ambiguous at a soft wrap or a bidi boundary, because the
+/// same byte can sit at the end of one row or the start of the next. The
+/// affinity decides which.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct CaretPosition {
     /// The logical UTF-8 byte index.
@@ -556,10 +590,10 @@ impl CaretPosition {
     }
 }
 
-/// An affinity-aware text selection.
+/// A text selection with an anchor and a caret, each with its own affinity.
 ///
-/// The anchor stays fixed while the caret is the active endpoint. Either endpoint may be the
-/// logical start or end of the selected byte range.
+/// The anchor stays fixed while the caret moves. The caret can be on either side
+/// of the anchor, so use [`CaretSelection::byte_range`] to get the range in logical order.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CaretSelection {
     /// The fixed position of the selection, which may be its logical start or end.
@@ -583,8 +617,8 @@ impl From<CaretPosition> for CaretSelection {
     }
 }
 
-/// Creates a downstream-affinity selection whose caret is `start` and anchor is `end`.
 impl From<Range<usize>> for CaretSelection {
+    /// Creates a selection whose caret is at `range.start` and whose anchor is at `range.end`.
     fn from(range: Range<usize>) -> Self {
         Self {
             anchor: CaretPosition::attached_to_next_cluster(range.end),
@@ -594,17 +628,19 @@ impl From<Range<usize>> for CaretSelection {
 }
 
 impl CaretSelection {
-    /// Returns whether the selection is empty.
+    /// Returns whether the anchor and the caret have the same byte index.
+    ///
+    /// Affinity is ignored, so a caret at a wrap point with two affinities is still empty.
     pub fn is_empty(&self) -> bool {
         self.anchor.index == self.caret.index
     }
 
-    /// Compares the active caret's UTF-8 byte index with the fixed anchor's index.
+    /// Compares the caret's byte index with the anchor's. `Less` means the caret is before the anchor.
     pub fn endpoint_ordering(self) -> std::cmp::Ordering {
         self.caret.index.cmp(&self.anchor.index)
     }
 
-    /// Returns the selected UTF-8 byte range in logical order.
+    /// Returns the selected UTF-8 byte range, with the smaller index first.
     pub fn byte_range(self) -> Range<usize> {
         self.anchor.index.min(self.caret.index)..self.anchor.index.max(self.caret.index)
     }
@@ -626,21 +662,23 @@ impl CaretSelection {
     }
 }
 
-/// The result of calculating movement through a laid-out document.
+/// The destination of a caret movement, and the column to keep across vertical moves.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CaretMovement<T = CaretPosition> {
     /// The value at the requested destination.
     pub result: T,
-    /// The horizontal coordinate from the layout's left edge retained across consecutive vertical
-    /// movements.
+    /// The horizontal position, from the layout's left edge, to keep across consecutive
+    /// vertical movements. Pass it back in on the next move so the caret keeps its column.
     pub vertical_navigation_x: Option<Pixels>,
 }
 
-/// The result of calculating a selection movement through a laid-out document.
+/// The result of moving a selection: the new anchor and caret, and the column to keep.
 pub type CaretSelectionMovement = CaretMovement<CaretSelection>;
 
 impl CaretMovement<CaretSelection> {
-    /// Moves or extends the selection to `caret`, clearing the retained vertical coordinate.
+    /// Moves the caret to `caret`, or extends the selection to it when `extend` is true.
+    ///
+    /// Either way, the retained vertical coordinate is cleared.
     pub fn move_or_select_to(self, caret: CaretPosition, extend: bool) -> Self {
         let result = if extend {
             self.result.with_caret(caret)
@@ -655,31 +693,37 @@ impl CaretMovement<CaretSelection> {
     }
 }
 
-/// The layout of shaped text, including its optional wrapping constraint.
+/// Shaped text with its wrap width, which is how a layout is measured and queried.
+///
+/// Get one from [`WindowTextSystem::shape_text`](crate::WindowTextSystem::shape_text).
+/// [`ShapedText`](crate::ShapedText) derefs to it. Its methods convert between
+/// pixel positions and UTF-8 byte indices, so you can place a caret or find the
+/// character under the mouse. All positions are in logical pixels, relative to
+/// the top-left corner of the text.
 #[derive(Debug)]
 pub struct ShapedTextLayout {
-    /// The laid out document.
+    /// The laid-out document.
     pub layout: Arc<LineLayout>,
 
-    /// The width constraint, when wrapping is enabled.
+    /// The width that lines wrap at, or `None` when the text does not wrap.
     pub wrap_width: Option<Pixels>,
 }
 
 impl ShapedTextLayout {
-    /// The length of the underlying text, in utf8 bytes.
+    /// Returns the length of the text in UTF-8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.layout.platform_layout.len()
     }
 
-    /// The document width, capped by the wrapping constraint.
+    /// Returns the width of the widest line, capped at the wrap width.
     pub fn width(&self) -> Pixels {
         self.wrap_width
             .unwrap_or(Pixels::MAX)
             .min(self.layout.width)
     }
 
-    /// The size of the complete text for the given line height.
+    /// Returns the size of the whole layout, with each line `line_height` tall.
     pub fn size(&self, line_height: Pixels) -> Size<Pixels> {
         Size {
             width: self.width(),
@@ -692,12 +736,12 @@ impl ShapedTextLayout {
         self.layout.platform_layout.line_count()
     }
 
-    /// The ascent of a line in this layout
+    /// Returns the distance from the baseline up to the tallest glyphs.
     pub fn ascent(&self) -> Pixels {
         self.layout.ascent
     }
 
-    /// The descent of a line in this layout
+    /// Returns the distance from the baseline down to the lowest glyphs.
     pub fn descent(&self) -> Pixels {
         self.layout.descent
     }
@@ -712,7 +756,7 @@ impl ShapedTextLayout {
         &self.layout.paint_fragments[line.paint_fragment_range.clone()]
     }
 
-    /// The font size of this layout
+    /// Returns the base font size that the text was shaped at, in logical pixels.
     pub fn font_size(&self) -> Pixels {
         self.layout.font_size
     }
@@ -734,14 +778,18 @@ impl ShapedTextLayout {
             .byte_index_from_pixel_point(pixel_point, line_height)
     }
 
-    /// The closest UTF-8 byte index to a point in GPUI layout coordinates.
+    /// Returns the UTF-8 byte index of the cluster boundary closest to a point.
     ///
-    /// Closest means the character boundary closest to the given position.
-    /// The backend only returns cluster boundaries. For right-to-left clusters, the
-    /// visual left edge maps to the logical end and the visual right edge maps to the logical
-    /// start. Zero-width clusters share a stop with an adjacent cluster and use visual order to
-    /// break ties.
+    /// Use this for a click or drag that should always land on the nearest character,
+    /// even when the point is outside the text. For right-to-left clusters, the visual
+    /// left edge maps to the logical end and the visual right edge maps to the logical
+    /// start. Zero-width clusters share a stop with an adjacent cluster, and visual order
+    /// breaks the tie.
     ///
+    /// # Errors
+    ///
+    /// Returns `Err` with the index when the point is outside a visual line, and `Ok`
+    /// otherwise. Both cases give an index, so use either value.
     pub fn closest_byte_index_for_pixel_point(
         &self,
         pixel_point: Point<Pixels>,
@@ -754,8 +802,8 @@ impl ShapedTextLayout {
 
     /// Returns the closest backend-native caret for a point in GPUI layout coordinates.
     ///
-    /// Positions outside a visual line return the caret at that edge in `Err`, matching
-    /// [`Self::closest_byte_index_for_pixel_point`].
+    /// Returns `Err` with the caret at that edge when the point is outside a visual line,
+    /// the same way as [`Self::closest_byte_index_for_pixel_point`].
     pub fn closest_caret_for_pixel_point(
         &self,
         pixel_point: Point<Pixels>,
@@ -766,11 +814,11 @@ impl ShapedTextLayout {
             .caret_from_pixel_point(pixel_point, line_height)
     }
 
-    /// Returns the visual position in pixels for a UTF-8 byte index.
+    /// Returns the top-left corner of the caret for a UTF-8 byte index, or `None` if the index is past the end.
     ///
-    /// The backend maps cluster boundaries to direction-aware visual edges. An index
-    /// inside an atomic cluster snaps to its logical start. On a shared wrap boundary, the cluster
-    /// starting at the index owns the position, so the caret moves to the following visual line.
+    /// The position is on the cluster boundary, at the visual edge that matches the text direction.
+    /// An index inside an atomic cluster snaps to the start of that cluster. On a soft-wrap
+    /// boundary, the index places the caret at the start of the following visual line.
     pub fn visual_position_for_byte_index(
         &self,
         byte_index: usize,
@@ -786,7 +834,7 @@ impl ShapedTextLayout {
         )
     }
 
-    /// Returns the visual position in pixels for an affinity-aware caret.
+    /// Returns the top-left corner of the caret for `caret`, or `None` if the caret has no position.
     pub fn visual_position_for_caret(
         &self,
         caret: CaretPosition,
@@ -798,12 +846,14 @@ impl ShapedTextLayout {
             .map(|bounds| bounds.origin)
     }
 
-    /// Snaps a byte position to a valid cluster boundary while preserving affinity when possible.
+    /// Moves a caret onto a valid cluster boundary, keeping its affinity when it can.
     pub fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
         self.layout.platform_layout.normalized_caret(caret)
     }
 
-    /// Returns the adjacent caret stop in visual order.
+    /// Returns the next caret stop to the left or right of `caret` on screen.
+    ///
+    /// Returns `None` when there is no caret stop in that direction.
     pub fn adjacent_visual_caret(
         &self,
         caret: CaretPosition,
@@ -814,18 +864,20 @@ impl ShapedTextLayout {
             .adjacent_visual_caret(caret, direction)
     }
 
-    /// Returns the logical cluster immediately before the caret.
+    /// Returns the byte range of the cluster before `caret` in logical order.
     pub fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
         self.layout.platform_layout.logical_cluster_before(caret)
     }
 
-    /// Returns the logical cluster immediately after the caret.
+    /// Returns the byte range of the cluster after `caret` in logical order.
     pub fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>> {
         self.layout.platform_layout.logical_cluster_after(caret)
     }
 
-    /// Returns the caret and retained horizontal coordinate after applying `movement`.
-    /// This only calculates the destination and does not mutate editor state.
+    /// Returns where the caret lands after `movement`, without changing any state.
+    ///
+    /// Pass the `vertical_navigation_x` from the previous move to keep the caret's column
+    /// across consecutive up or down moves. The result carries the new value.
     pub fn caret_movement(
         &self,
         caret: CaretPosition,
@@ -837,16 +889,17 @@ impl ShapedTextLayout {
             .caret_movement(caret, movement, vertical_navigation_x)
     }
 
-    /// Returns a moved or extended affinity-aware selection using visual text order.
+    /// Returns where a selection lands after `movement`, using visual order.
     ///
-    /// Horizontal movement without extension collapses a non-empty selection toward the requested
-    /// visual edge. Other movement starts at the caret. Extending keeps the anchor fixed.
+    /// Without `extend`, a left or right cluster or word move on a non-empty selection collapses
+    /// it to the visual edge in that direction. Other moves start from the caret. With `extend`, the
+    /// anchor stays fixed and the caret moves.
     ///
-    /// `selection` is the current anchor and active caret.
-    /// `movement` supplies the direction and boundary.
-    /// `extend` keeps the anchor fixed when true and collapses the result when false.
-    /// `vertical_navigation_x` carries the horizontal target across vertical movements.
-    /// `line_height` converts caret positions into comparable visual coordinates.
+    /// - `selection` is the current anchor and caret.
+    /// - `movement` gives the direction and the unit.
+    /// - `extend` keeps the anchor fixed when `true`, and collapses the selection when `false`.
+    /// - `vertical_navigation_x` carries the column across vertical moves.
+    /// - `line_height` converts caret positions into comparable visual coordinates.
     pub fn selection_movement(
         &self,
         selection: CaretSelection,
