@@ -19,29 +19,24 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-/// An [`Element`] that renders text.
+/// An [`Element`] that lays out and paints one text string.
 ///
-/// In general, [`Text`] objects should be created via the [`text`] macro:
+/// In general, [`Text`] objects should be created via the [`text!`](crate::text!) macro:
 /// ```rust
 /// # use gpui::*;
 /// # fn render() -> impl IntoElement {
 /// div().child(text!("hello"))
 /// # }
 /// ```
-/// ## IDs and Accessibility
+/// # IDs and accessibility
 ///
-/// [`Text`] elements have an ID. This ID is primarily used to produce nodes in
-/// the accessibility tree, which allows the text to be visible to screen
-/// readers and other assistive technologies.
+/// A [`Text`] id identifies its node in the accessibility tree. Screen readers use that node to
+/// read the text and to observe later changes.
 ///
-/// This ID is stable across frames. If the same text, with the same ID, is
-/// present in two consecutive frames, no updates are reported to the screen
-/// reader. If the text changes, but the ID stays the same, then the screen
-/// reader will be notified that a text node's content has changed. **However**,
-/// if the ID changes, then the screen reader will be notified that a node has
-/// been removed, and a new node has been added.
+/// Keep the id stable when the text represents the same piece of content. With the same id,
+/// AccessKit reports a text update; with a new id, it reports a removed node and a new node.
 ///
-/// When using the [`text`] macro, each invocation of the macro will get a
+/// When using the [`text!`](crate::text!) macro, each invocation of the macro will get a
 /// unique ID, derived from its position in the source code (filename, line, and
 /// column). For example:
 /// ```rust
@@ -57,13 +52,11 @@ use unicode_segmentation::UnicodeSegmentation;
 /// // equal, because the same `text!` invocation produced them
 /// assert_eq!(x.id(), y.id());
 /// ```
-/// When the contents of an invocation of [`text`] do not change, this
-/// distinction is less relevant (with the caveat that you still need to take
-/// care to ensure that duplicate IDs do not appear).
+/// When the contents do not change, the distinction usually does not matter, but duplicate ids
+/// still produce ambiguous accessibility nodes.
 ///
-/// However, when a [`text`] invocation's argument *does* change, you should
-/// consider whether this change should be reported as a node "updating its
-/// contents", or an old node being destroyed and a new node being created.
+/// When the argument changes, choose whether that is an update to the existing node or a new
+/// piece of content, and keep or change the id accordingly.
 #[derive(Debug, Clone)]
 pub struct Text {
     id: Option<ElementId>,
@@ -73,7 +66,7 @@ pub struct Text {
 impl Text {
     /// Create a new [`Text`] element with a specific ID.
     ///
-    /// If you want a unique ID to be assigned automatically, use the [`text`]
+    /// If you want a unique ID to be assigned automatically, use the [`text!`](crate::text!)
     /// macro. The docs for [`Text`] have more detail about choosing IDs.
     #[inline]
     pub const fn new(id: ElementId, text: SharedString) -> Self {
@@ -82,13 +75,10 @@ impl Text {
 
     /// Create a new [`Text`] element that is inaccessible to screen readers.
     ///
-    /// In order for text to be accessible to screen readers, it must have an ID
-    /// provided. If you want text to be accessible, either use [`text`] to have
-    /// an ID automatically assigned, or use [`Text::new`] to manually assign an
-    /// ID.
+    /// Text without an id has no accessibility node. Use [`text!`](crate::text!) for a generated
+    /// id or [`Text::new`] to choose one.
     ///
-    /// This function is intended for use inside custom UI components, where
-    /// accessible properties may be set on parent containers.
+    /// Use it for decorative text or text whose parent supplies the accessible representation.
     #[inline]
     pub const fn new_inaccessible(text: SharedString) -> Self {
         Self { id: None, text }
@@ -126,9 +116,11 @@ impl DerefMut for Text {
     }
 }
 
-/// Trivial hash function for the location information produced by the [`text`]
-/// macro. Not covered by semver guarantees. Performance is not particularly
-/// significant because it's only used on small strings in const contexts.
+/// Hashes the source location that the [`text`] macro records.
+///
+/// This is an implementation detail of the macro. It is not covered by semver
+/// guarantees, so don't call it directly. Performance doesn't matter because it
+/// runs only on short strings in const contexts.
 #[doc(hidden)]
 pub const fn __hash_text_macro_location_unstable_do_not_use(s: &'static str) -> u64 {
     const BASIS: u64 = 0xcbf29ce484222325;
@@ -145,18 +137,25 @@ pub const fn __hash_text_macro_location_unstable_do_not_use(s: &'static str) -> 
     hash
 }
 
-/// Create a new [`Text`] element.
+/// Creates a [`Text`] element that has an ID, so that screen readers can read it.
+///
+/// Without `id = ...`, the macro derives the ID from the file, line, and column
+/// of the call. Two calls on different lines get different IDs, and the same
+/// call produces the same ID every time. With `id = ...`, you choose the ID,
+/// which is useful when the text must keep its ID even if the code moves.
+///
+/// Use [`Text::new_inaccessible`] to skip the accessibility node.
+///
+/// # Examples
 ///
 /// ```rust
 /// # use gpui::*;
 /// let a = text!("hello");
 /// let b = text!(id = "farewell-message", "hello");
-///
+/// assert_ne!(a.id(), b.id());
 /// ```
 ///
-/// Text created with this macro is *accessible*. The macro generates an ID
-/// based on the source location. See the docs for [`Text`] for a more in-depth
-/// explanation of the significance of the ID of a [`Text`] element.
+/// See the docs for [`Text`] for how the ID affects accessibility updates.
 #[macro_export]
 macro_rules! text {
     (id = $id:expr, $text:expr) => {{ $crate::Text::new($id.into(), $text.into()) }};
@@ -384,11 +383,34 @@ impl IntoElement for SharedString {
     }
 }
 
-/// Renders text with runs of different styles.
+/// Text that is laid out and painted with a different style for each run.
 ///
-/// Callers are responsible for setting the correct style for each run.
-/// For text with a uniform style, you can usually avoid calling this constructor
-/// and just pass text directly.
+/// Use `StyledText` when part of the text needs its own color, weight, font, or
+/// decoration. Pass the text to [`StyledText::new`], then add highlights or
+/// explicit runs. Text with a single style doesn't need this type. Pass a
+/// `&str` or [`SharedString`] to the element tree directly.
+///
+/// `StyledText` wraps to the width it is given and paints each run with its own
+/// [`TextRun`]. Read the laid-out text with [`StyledText::layout`], which returns a
+/// [`TextLayout`] for hit testing and measurement.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// # fn render() -> impl IntoElement {
+/// StyledText::new("Warning: disk almost full").with_highlights([(
+///     0..8,
+///     HighlightStyle {
+///         color: Some(hsla(0., 0.8, 0.5, 1.)),
+///         font_weight: Some(FontWeight::BOLD),
+///         ..Default::default()
+///     },
+/// )])
+/// # }
+/// ```
+///
+/// See [text](crate::_documentation::guides::text) for an overview of text in GPUI.
 pub struct StyledText {
     text: SharedString,
     runs: Option<Vec<TextRun>>,
@@ -398,7 +420,10 @@ pub struct StyledText {
 }
 
 impl StyledText {
-    /// Construct a new styled text element from the given string.
+    /// Creates a styled text element for `text`, with no styling beyond the inherited text style.
+    ///
+    /// Add styling with [`StyledText::with_highlights`], [`StyledText::with_default_highlights`],
+    /// [`StyledText::with_runs`], or [`StyledText::with_font_family_overrides`].
     pub fn new(text: impl Into<SharedString>) -> Self {
         StyledText {
             text: text.into(),
@@ -409,13 +434,28 @@ impl StyledText {
         }
     }
 
-    /// Get the layout for this element. This can be used to map indices to pixels and vice versa.
+    /// Returns the layout of this element, for mapping between byte indices and pixels.
+    ///
+    /// The layout is filled in while the element is laid out and prepainted. Its query
+    /// methods panic if called before that, so call them from event handlers or after
+    /// the frame has been drawn. [`TextLayout`] is cheap to clone and shares its state.
     pub fn layout(&self) -> &TextLayout {
         &self.layout
     }
 
-    /// Set the styling attributes for the given text, as well as
-    /// as any ranges of text that have had their style customized.
+    /// Styles the text with `default_style`, with `highlights` applied over it.
+    ///
+    /// The runs are computed now, from `default_style`. Use this when you have a
+    /// [`TextStyle`] in hand. Otherwise use [`StyledText::with_highlights`], which
+    /// takes the inherited style at layout time.
+    ///
+    /// Each range must lie on character boundaries inside the text. The ranges must
+    /// be sorted by start and must not overlap.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if a range is outside the text, or if this element
+    /// already has highlights from [`StyledText::with_highlights`].
     pub fn with_default_highlights(
         mut self,
         default_style: &TextStyle,
@@ -429,8 +469,30 @@ impl StyledText {
         self.with_runs(runs)
     }
 
-    /// Set the styling attributes for the given text, as well as
-    /// as any ranges of text that have had their style customized.
+    /// Applies `highlights` over the inherited text style of the element.
+    ///
+    /// Each highlight is a byte range and a [`HighlightStyle`]. The inherited style
+    /// is read from the window when the element is laid out, so a highlight changes
+    /// only the properties it sets. Text outside every range keeps the inherited style.
+    ///
+    /// The ranges must be sorted by start, must not overlap, and must lie on
+    /// character boundaries. Debug builds check that each range is inside the text.
+    /// Release builds don't check, and unsorted ranges give wrong layouts or panic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// # fn render() -> impl IntoElement {
+    /// StyledText::new("Press Enter to save").with_highlights([(
+    ///     6..11,
+    ///     HighlightStyle {
+    ///         font_weight: Some(FontWeight::BOLD),
+    ///         ..Default::default()
+    ///     },
+    /// )])
+    /// # }
+    /// ```
     pub fn with_highlights(
         mut self,
         highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
@@ -477,11 +539,13 @@ impl StyledText {
         runs
     }
 
-    /// Override the font family for specific byte ranges of the text.
+    /// Sets the font family for byte ranges of the text.
     ///
-    /// This is resolved lazily at layout time, so the overrides are applied
-    /// on top of the inherited text style from the parent element.
-    /// Can be combined with [`with_highlights`](Self::with_highlights).
+    /// The family is applied at layout time, on top of the inherited style. An
+    /// override changes the family of a run only when that run lies entirely
+    /// inside the override's range. Runs are split only at highlight boundaries,
+    /// so to make an override cover part of the text, add a highlight at each
+    /// edge of the range. Can be combined with [`with_highlights`](Self::with_highlights).
     ///
     /// The overrides must be sorted by range start and non-overlapping.
     /// Each override range must fall on character boundaries.
@@ -537,7 +601,15 @@ impl StyledText {
         runs.unwrap_or_else(|| vec![default_style.to_run(self.text.len())])
     }
 
-    /// Set the text runs for this piece of text.
+    /// Sets the runs that style the text. Each run gives its byte length and its [`TextRun`].
+    ///
+    /// The run lengths must add up to the length of the text exactly, and each run
+    /// must end on a character boundary.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the runs don't cover the text exactly, or if a run ends inside a
+    /// character. In debug builds the message includes the text and the run.
     pub fn with_runs(mut self, runs: Vec<TextRun>) -> Self {
         let mut text = &*self.text;
         for run in &runs {
@@ -614,7 +686,15 @@ impl IntoElement for StyledText {
     }
 }
 
-/// The Layout for TextElement. This can be used to map indices to pixels and vice versa.
+/// The laid-out state of a text element, for mapping between byte indices and pixels.
+///
+/// Get one from [`StyledText::layout`], or from the text state that other text
+/// elements keep. Clones share the same state. The query methods read the most
+/// recent layout, so a query made after a relayout returns the new result.
+///
+/// The text elements fill this in during layout and prepaint. The query methods
+/// panic if the element hasn't been laid out yet, and the ones that need pixel
+/// positions panic if it hasn't been prepainted.
 #[derive(Default, Clone)]
 pub struct TextLayout(Rc<TextLayoutState>);
 
@@ -762,24 +842,31 @@ mod text_transform_tests {
     }
 }
 
-/// Determines which part of overflowing text is removed.
+/// The part of an overflowing line that is removed and replaced by the affix.
+///
+/// The variants correspond to [`TextOverflow::Truncate`], [`TextOverflow::TruncateStart`],
+/// and [`TextOverflow::TruncateMiddle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TruncateFrom {
-    /// Remove text from the start.
+    /// Remove text from the start, keeping the end visible.
     Start,
-    /// Remove text from the end.
+    /// Remove text from the end, keeping the start visible.
     End,
-    /// Remove text from the middle while retaining both ends.
+    /// Remove text from the middle, keeping both ends visible.
     Middle,
 }
 
-/// Metadata about how text should be truncated. Generated during text layout via `TextLayout::evaluate_overflow`.
+/// How a text element should truncate its text to fit, computed during layout.
+///
+/// [`TextLayout::evaluate_overflow`] creates this from the [`TextStyle`]'s
+/// `text_overflow`. Pass it to [`TextLayout::apply_truncation`] to get the
+/// shortened text.
 pub struct TextLayoutTruncation {
-    /// The width that the text can occupy before it is truncated.
+    /// The width that each visual line can occupy before it is truncated, or `None` for no limit.
     pub width: Option<Pixels>,
-    /// The text to affix to the displayed text if truncating (e.g. an ellipsis `...`).
+    /// The text to show in place of the removed text, such as `"…"`.
     pub affix: SharedString,
-    /// What side of the text will be truncated if it does not fit.
+    /// The side of the text that is removed when it doesn't fit.
     pub source: TruncateFrom,
 }
 
@@ -801,7 +888,10 @@ impl TextLayoutTruncation {
 }
 
 impl TextLayout {
-    /// Evaluates the width to wrap the text at.
+    /// Returns the width that text wraps at, or `None` when it doesn't wrap.
+    ///
+    /// Text does not wrap when `white_space` is [`WhiteSpace::Nowrap`]. Otherwise
+    /// the width comes from [`TextLayout::evaluate_alignment_width`].
     pub fn evaluate_wrap_width(
         white_space: &WhiteSpace,
         known_dimensions: Size<Option<Pixels>>,
@@ -809,11 +899,19 @@ impl TextLayout {
     ) -> Option<Pixels> {
         match white_space {
             WhiteSpace::Nowrap => None,
-            WhiteSpace::Normal => Self::evaluate_alignment_width(known_dimensions, available_space),
+            WhiteSpace::Normal => known_dimensions.width.or(match available_space.width {
+                crate::AvailableSpace::Definite(width) => Some(width),
+                // Wrap at every opportunity, so the min-content width is the longest unbreakable run.
+                crate::AvailableSpace::MinContent => Some(Pixels::ZERO),
+                crate::AvailableSpace::MaxContent => None,
+            }),
         }
     }
 
-    /// Evaluates the containing width used to align text independently of wrapping.
+    /// Returns the width that text aligns within, from the known or available width.
+    ///
+    /// The known width wins. Otherwise a definite available width is used. Under
+    /// min-content or max-content sizing, this returns `None`.
     pub fn evaluate_alignment_width(
         known_dimensions: Size<Option<Pixels>>,
         available_space: Size<crate::AvailableSpace>,
@@ -824,7 +922,10 @@ impl TextLayout {
         })
     }
 
-    /// Evaluates how truncation should be applied if the text overflows the available space.
+    /// Returns how the text should be truncated, from the style's `text_overflow`.
+    ///
+    /// When the style has no `text_overflow`, the result has no width and an empty affix,
+    /// so the text is never truncated.
     pub fn evaluate_overflow(
         text_style: &TextStyle,
         known_dimensions: Size<Option<Pixels>>,
@@ -873,7 +974,12 @@ impl TextLayout {
         (options, truncation)
     }
 
-    /// Conditionally applies truncation to some text and outputs how the text should be displayed.
+    /// Shortens `text` so that it fits `truncation.width`, and returns the text to display.
+    ///
+    /// When `truncation.width` is `None`, the text and runs come back unchanged. Otherwise
+    /// the removed part is replaced by `truncation.affix`, on the side given by
+    /// `truncation.source`. Wrapping and `line_clamp` from `text_style` still apply.
+    /// The returned runs match the returned text. They borrow `runs` when nothing changes.
     pub fn apply_truncation<'runs>(
         text: SharedString,
         text_style: &TextStyle,
@@ -1080,7 +1186,16 @@ impl TextLayout {
         })
     }
 
-    /// Get the byte index into the input of the pixel position.
+    /// Returns the UTF-8 byte index of the character at `pixel_point`, in window coordinates.
+    ///
+    /// Returns `Ok` with the index of the character under the point. Returns `Err`
+    /// with `0` when the point is above the text. Points to the side of or below the
+    /// text return `Err` with the closest index. Use this for hit testing, such as
+    /// placing a caret on click.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out or prepainted.
     pub fn index_for_position(&self, pixel_point: Point<Pixels>) -> Result<usize, usize> {
         let element_state = self.measured();
         let bounds = element_state
@@ -1099,7 +1214,14 @@ impl TextLayout {
         document.byte_index_for_pixel_point(pixel_point - bounds.origin, line_height)
     }
 
-    /// Get the pixel position for the given byte index.
+    /// Returns the top-left corner of the caret for `byte_index`, in window coordinates.
+    ///
+    /// Returns `None` if the text has no shaped layout, or if `byte_index` is past the end
+    /// of the text. Use this to place a caret or an overlay at a position in the text.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out or prepainted.
     pub fn position_for_index(&self, byte_index: usize) -> Option<Point<Pixels>> {
         let element_state = self.measured();
         let bounds = element_state
@@ -1111,14 +1233,28 @@ impl TextLayout {
         Some(bounds.origin + document.visual_position_for_byte_index(byte_index, line_height)?)
     }
 
-    /// Retrieve the layout for the line containing the given byte index.
+    /// Returns the shaped layout of the text, or `None` if `index` is past the end or the
+    /// text has not been shaped.
+    ///
+    /// The layout covers the whole text, not one visual line or paragraph.
+    /// Use [`TextLayout::line_layouts`] to get every layout in source order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<ShapedTextLayout>> {
         let element_state = self.measured();
         let document = element_state.document.as_ref()?;
         (index <= document.len()).then(|| document.layout.clone())
     }
 
-    /// Retrieve all line layouts in source order.
+    /// Returns the shaped layout of the text as a collection with one entry.
+    ///
+    /// This returns an empty collection if the text has not been shaped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn line_layouts(&self) -> SmallVec<[Arc<ShapedTextLayout>; 1]> {
         self.measured()
             .document
@@ -1127,22 +1263,45 @@ impl TextLayout {
             .collect()
     }
 
-    /// The bounds of this layout.
+    /// Returns the window bounds of the element, as set during prepaint.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been prepainted.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.measured().bounds.unwrap()
     }
 
-    /// The line height for this layout.
+    /// Returns the line height that the text is laid out with, in logical pixels.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn line_height(&self) -> Pixels {
         self.measured().line_height
     }
 
-    /// The UTF-8 length of the underlying text.
+    /// Returns the length of the shaped text in UTF-8 bytes.
+    ///
+    /// This is the length after any text transform or truncation. It is `0`
+    /// when the text has not been shaped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn len(&self) -> usize {
         self.measured().len
     }
 
-    /// The text for this layout.
+    /// Returns the text that was shaped, as a `String`.
+    ///
+    /// This is the text after any [`TextTransform`] and truncation. A truncated
+    /// text includes the affix, such as an ellipsis. It returns an empty string if
+    /// the text has not been shaped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn text(&self) -> String {
         self.measured()
             .document
@@ -1150,7 +1309,15 @@ impl TextLayout {
             .map_or_else(String::new, |document| document.text.to_string())
     }
 
-    /// The text for this layout (with soft-wraps as newlines)
+    /// Returns the shaped text with each visual line followed by a `\n`, except the last.
+    ///
+    /// Soft wraps therefore become `\n`. A hard line break keeps its own `\n` as part of
+    /// its line, so it is followed by one more `\n`. Use this to copy wrapped text as it
+    /// appears on screen.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the element hasn't been laid out.
     pub fn wrapped_text(&self) -> String {
         let mut accumulator = String::new();
         let element_state = self.measured();
@@ -1455,7 +1622,9 @@ impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> BoundaryWindow<Bound
     }
 }
 
-/// Keeps the measured candidate with its output. Even an estimated starting point must fit.
+/// Returns the largest fitting candidate with its measured output, or the marker-only
+/// candidate when none fits. The starting `keep` is only an estimate; a candidate that
+/// doesn't fit narrows the search.
 pub(crate) fn truncate_with_measured_candidates<Layout>(
     text: &str,
     boundaries: impl DoubleEndedIterator<Item = usize> + Clone,
@@ -1683,7 +1852,27 @@ mod truncation_tests {
     }
 }
 
-/// A text element that can be interacted with.
+/// A [`StyledText`] that reports clicks, hovers, and tooltips for character ranges.
+///
+/// Give it an ID, so that GPUI can track the mouse between frames. Then attach
+/// the behavior you need: [`InteractiveText::on_click`] for ranges of text,
+/// [`InteractiveText::on_hover`] for the character under the mouse, and
+/// [`InteractiveText::tooltip`] for a tooltip per character.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// # fn render() -> impl IntoElement {
+/// InteractiveText::new(
+///     "terms",
+///     StyledText::new("Read the terms or skip"),
+/// )
+/// .on_click(vec![9..14], |_range_index, _window, _cx| {
+///     // Open the terms here.
+/// })
+/// # }
+/// ```
 pub struct InteractiveText {
     element_id: ElementId,
     text: StyledText,
@@ -1700,6 +1889,9 @@ struct InteractiveTextClickEvent {
     mouse_up_index: usize,
 }
 
+/// The per-element state that [`InteractiveText`] keeps between frames.
+///
+/// This is an implementation detail. Application code doesn't use it.
 #[doc(hidden)]
 #[derive(Default)]
 pub struct InteractiveTextState {
@@ -1708,9 +1900,11 @@ pub struct InteractiveTextState {
     active_tooltip: Rc<RefCell<Option<ActiveTooltip>>>,
 }
 
-/// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
 impl InteractiveText {
-    /// Creates a new InteractiveText from the given text.
+    /// Creates an interactive text element with the given ID and styled text.
+    ///
+    /// The ID must be unique among siblings. It keys the mouse state that
+    /// survives between frames.
     pub fn new(id: impl Into<ElementId>, text: StyledText) -> Self {
         Self {
             element_id: id.into(),
@@ -1723,8 +1917,12 @@ impl InteractiveText {
         }
     }
 
-    /// on_click is called when the user clicks on one of the given ranges, passing the index of
-    /// the clicked range.
+    /// Calls `listener` when the user presses and releases the mouse inside one of `ranges`.
+    ///
+    /// The listener receives the index in `ranges` of the matching range. The press
+    /// and the release must both fall inside the same range. A press in one range
+    /// and a release in another calls nothing. If the ranges overlap, the listener
+    /// runs once for each range that contains both points.
     pub fn on_click(
         mut self,
         ranges: Vec<Range<usize>>,
@@ -1742,8 +1940,12 @@ impl InteractiveText {
         self
     }
 
-    /// on_hover is called when the mouse moves over a character within the text, passing the
-    /// index of the hovered character, or None if the mouse leaves the text.
+    /// Calls `listener` as the mouse moves over the text.
+    ///
+    /// The listener receives the byte index of the character under the mouse, or
+    /// `None` when the mouse is over the element but not over a character. It runs only
+    /// when that value changes, and not when the mouse leaves the element. It also
+    /// receives the [`MouseMoveEvent`].
     pub fn on_hover(
         mut self,
         listener: impl Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App) + 'static,
@@ -1752,7 +1954,10 @@ impl InteractiveText {
         self
     }
 
-    /// tooltip lets you specify a tooltip for a given character index in the string.
+    /// Sets a tooltip for each character, as chosen by `builder`.
+    ///
+    /// `builder` receives the byte index of the character under the mouse. It returns
+    /// the view to show as the tooltip, or `None` for no tooltip at that character.
     pub fn tooltip(
         mut self,
         builder: impl Fn(usize, &mut Window, &mut App) -> Option<AnyView> + 'static,
@@ -1998,6 +2203,59 @@ mod tests {
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
     const TEXT_BACKGROUND_COLOR: Hsla = hsla(0.37, 0.65, 0.42, 1.0);
+
+    #[test]
+    fn wrap_width_of_a_min_content_probe_breaks_at_every_opportunity() {
+        let space = |width| Size {
+            width,
+            height: AvailableSpace::MaxContent,
+        };
+        let unknown = Size::default();
+        let wrap_width = |white_space, known: Size<Option<Pixels>>, space| {
+            TextLayout::evaluate_wrap_width(&white_space, known, space)
+        };
+
+        assert_eq!(
+            wrap_width(
+                WhiteSpace::Normal,
+                unknown,
+                space(AvailableSpace::MinContent)
+            ),
+            Some(Pixels::ZERO)
+        );
+        assert_eq!(
+            wrap_width(
+                WhiteSpace::Normal,
+                unknown,
+                space(AvailableSpace::MaxContent)
+            ),
+            None
+        );
+        assert_eq!(
+            wrap_width(
+                WhiteSpace::Normal,
+                unknown,
+                space(AvailableSpace::Definite(px(80.)))
+            ),
+            Some(px(80.))
+        );
+        let known = Size {
+            width: Some(px(50.)),
+            height: None,
+        };
+        assert_eq!(
+            wrap_width(WhiteSpace::Normal, known, space(AvailableSpace::MinContent)),
+            Some(px(50.))
+        );
+        assert_eq!(
+            wrap_width(
+                WhiteSpace::Nowrap,
+                unknown,
+                space(AvailableSpace::MinContent)
+            ),
+            None
+        );
+    }
 
     #[gpui::test]
     fn text_measurement_replaces_state_when_wrap_width_changes(cx: &mut TestAppContext) {

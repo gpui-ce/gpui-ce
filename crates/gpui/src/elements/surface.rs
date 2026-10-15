@@ -8,13 +8,17 @@ use crate::{
 use core_video::pixel_buffer::CVPixelBuffer;
 use refineable::Refineable;
 
-/// A source of a surface's content.
+/// The frame that a [`Surface`] shows.
+///
+/// Each variant exists only on the platforms that can show it. On macOS, pass a `CVPixelBuffer`.
+/// On Windows, pass a Windows Graphics Capture frame. On Linux and FreeBSD, or with the
+/// `custom-gpu` feature, pass a GPU texture.
 #[derive(Clone)]
 pub enum SurfaceSource {
-    /// A macOS image buffer from CoreVideo
+    /// A macOS image buffer from CoreVideo.
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
-    /// A GPU texture handle (type-erased to avoid depending on wgpu)
+    /// A GPU texture, with its size in device pixels.
     #[cfg(any(
         target_os = "linux",
         target_os = "freebsd",
@@ -105,14 +109,21 @@ impl From<crate::ScreenCaptureFrame> for SurfaceSource {
     }
 }
 
-/// A surface element.
+/// An element that shows a platform video or capture frame, such as a camera feed.
+///
+/// Create one with [`surface`]. The frame is scaled into the element's bounds with [`ObjectFit`],
+/// and the element's opacity applies to it. Corner radii are not applied yet.
 pub struct Surface {
     source: SurfaceSource,
     object_fit: ObjectFit,
     style: StyleRefinement,
 }
 
-/// Create a new surface element.
+/// Creates a [`Surface`] that shows `source`.
+///
+/// The frame is scaled with [`ObjectFit::Contain`] unless you change it with [`Surface::object_fit`].
+/// Size the element with [`Styled`] methods, such as `.size_full()`, because the frame doesn't
+/// give it a size.
 pub fn surface(source: impl Into<SurfaceSource>) -> Surface {
     Surface {
         source: source.into(),
@@ -122,7 +133,7 @@ pub fn surface(source: impl Into<SurfaceSource>) -> Surface {
 }
 
 impl Surface {
-    /// Set the object fit for the image.
+    /// Sets how the frame is scaled to the element's bounds.
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.object_fit = object_fit;
         self

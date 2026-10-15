@@ -1135,7 +1135,8 @@ impl PlatformTextLayout for ParleyLayout {
 
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
-        let line_index = self.line_index_at_block(geometry.y0 as f32);
+        // The cursor's top edge can sit on the previous line's block range, so use its midpoint.
+        let line_index = self.line_index_at_block(((geometry.y0 + geometry.y1) * 0.5) as f32);
 
         Some(Bounds::from_corners(
             point(px(geometry.x0 as f32), line_height * line_index),
@@ -1303,7 +1304,8 @@ impl PlatformTextLayout for ParleyLayout {
                 };
 
                 let geometry = cursor.geometry(&self.layout, 0.0);
-                let line_index = self.line_index_at_block(geometry.y0 as f32);
+                let line_index =
+                    self.line_index_at_block(((geometry.y0 + geometry.y1) * 0.5) as f32);
                 let target_ix = line_index
                     .checked_add_signed(delta)
                     .filter(|&target_ix| self.layout.get(target_ix).is_some());
@@ -2626,6 +2628,69 @@ mod tests {
                 "{family}: strikethrough={strikethrough:?}, ascent={:?}",
                 layout.ascent
             );
+        }
+    }
+
+    #[test]
+    fn wrapped_document_end_caret_stays_on_the_final_visual_line() {
+        let system = test_system();
+        let text = "Cafe\u{301} — Straße — click a wrapped line to inspect its UTF-8 byte index.";
+        let line_height = px(28.);
+
+        for family in [IBM_PLEX.family, SOURCE_SERIF.family] {
+            for width in [px(120.), px(240.), px(280.)] {
+                let layout = layout_wrapped(
+                    &system,
+                    text,
+                    px(18.),
+                    &[text_run(text, family)],
+                    width,
+                    None,
+                );
+                let native = &layout.platform_layout;
+                let last_line = native.line_count() - 1;
+                assert!(last_line > 0, "{family}, {width:?}: text did not wrap");
+
+                let end = native
+                    .caret_bounds(
+                        CaretPosition::attached_to_next_cluster(text.len()),
+                        line_height,
+                    )
+                    .unwrap();
+                assert_eq!(end.origin.y, line_height * last_line, "{family}, {width:?}");
+
+                // Down and up must visit every row in turn.
+                let mut caret = CaretPosition::attached_to_next_cluster(0);
+                let mut navigation_x = None;
+                for expected_line in 1..=last_line {
+                    let moved = native.caret_movement(
+                        caret,
+                        Direction::Down.with_boundary(Boundary::VisualLine),
+                        navigation_x,
+                    );
+                    caret = moved.result;
+                    navigation_x = moved.vertical_navigation_x;
+                    assert_eq!(
+                        native.caret_bounds(caret, line_height).unwrap().origin.y,
+                        line_height * expected_line,
+                        "down: {family}, {width:?}"
+                    );
+                }
+                for expected_line in (0..last_line).rev() {
+                    let moved = native.caret_movement(
+                        caret,
+                        Direction::Up.with_boundary(Boundary::VisualLine),
+                        navigation_x,
+                    );
+                    caret = moved.result;
+                    navigation_x = moved.vertical_navigation_x;
+                    assert_eq!(
+                        native.caret_bounds(caret, line_height).unwrap().origin.y,
+                        line_height * expected_line,
+                        "up: {family}, {width:?}"
+                    );
+                }
+            }
         }
     }
 

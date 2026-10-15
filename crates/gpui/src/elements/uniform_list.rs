@@ -1,8 +1,11 @@
-//! A scrollable list of elements with uniform height, optimized for large lists.
-//! Rather than use the full taffy layout system, uniform_list simply measures
-//! the first element and then lays out all remaining elements in a line based on that
-//! measurement. This is much faster than the full layout system, but only works for
-//! elements with uniform height.
+//! Lists of rows that all have the same height, rendered lazily.
+//!
+//! [`uniform_list`] renders only the rows in the viewport. It measures one row, then
+//! places every row at `index * height`, so it never runs layout on rows that are
+//! off screen. Use [`crate::list`] when rows have different heights.
+//!
+//! The [lists and scrolling guide](crate::_documentation::guides::lists_and_scrolling) compares
+//! both list elements and shows how to keep their state on a view.
 
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, Entity, GlobalElementId, Hitbox,
@@ -15,9 +18,56 @@ use std::{cell::RefCell, cmp, ops::Range, rc::Rc};
 
 use super::ListHorizontalSizingBehavior;
 
-/// uniform_list provides lazy rendering for a set of items that are of uniform height.
-/// When rendered into a container with overflow-y: hidden and a fixed (or max) height,
-/// uniform_list will only render the visible subset of items.
+/// Creates a list of rows that all have the same height, and renders only the rows in view.
+///
+/// Use this for long lists, such as tables, file trees or contact lists, when every row has
+/// the same height. Use [`list`](fn@crate::list) when rows vary in height.
+///
+/// `f` receives the range of visible row indices and returns one element per row, in order.
+/// Each frame it runs for the visible range. It also runs for a single row to measure it, in
+/// both layout and prepaint.
+/// So `f` must accept any range within `0..item_count`, and every row it returns must be the
+/// height of the measured row.
+///
+/// The list sets its own overflow to scroll. Give it a bounded height, from its parent or from
+/// [`Styled::h`] or [`Styled::size_full`]. By default the height comes from the style. With
+/// [`UniformList::with_sizing_behavior`] set to [`ListSizingBehavior::Infer`], a list with no
+/// bounded height is as tall as all its rows, so every row is in view and gets rendered.
+///
+/// Rows outside the viewport are not created. Keep your data on your view and index into it
+/// from `f`, because row elements are dropped as they scroll away.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// # use std::{cell::Cell, rc::Rc};
+/// struct Contacts {
+///     names: Rc<Vec<String>>,
+///     widest_batch: Rc<Cell<usize>>,
+/// }
+///
+/// impl Render for Contacts {
+///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+///         let names = self.names.clone();
+///         let widest_batch = self.widest_batch.clone();
+///         uniform_list("contacts", names.len(), move |range, _window, _cx| {
+///             widest_batch.set(widest_batch.get().max(range.len()));
+///             range
+///                 .map(|ix| div().id(ix).h(px(32.)).child(names[ix].clone()))
+///                 .collect::<Vec<_>>()
+///         })
+///         .size_full()
+///     }
+/// }
+/// # let mut app = TestApp::new();
+/// # let widest_batch = Rc::new(Cell::new(0));
+/// # let names: Rc<Vec<String>> = Rc::new((0..10_000).map(|ix| format!("Contact {ix}")).collect());
+/// # let mut window = app.open_window(|_, _| Contacts { names, widest_batch: widest_batch.clone() });
+/// # window.draw();
+/// // Only the rows on screen are passed to the closure, never all 10,000.
+/// # assert!(widest_batch.get() > 0 && widest_batch.get() < 1_000);
+/// ```
 #[track_caller]
 pub fn uniform_list<R>(
     id: impl Into<ElementId>,
@@ -54,7 +104,9 @@ where
     }
 }
 
-/// A list element for efficiently laying out and displaying a list of uniform-height elements.
+/// The element returned by [`uniform_list`]. Configure it with the builder methods, then
+/// return it from `render`. To read or set the scroll position, pass a
+/// [`UniformListScrollHandle`] to [`UniformList::track_scroll`].
 pub struct UniformList {
     item_count: usize,
     item_to_measure_index: usize,
@@ -68,71 +120,82 @@ pub struct UniformList {
     horizontal_sizing_behavior: ListHorizontalSizingBehavior,
 }
 
-/// Frame state used by the [UniformList].
+/// The rows and decorations that a [`UniformList`] lays out for one frame. You don't construct it.
 pub struct UniformListFrameState {
     items: SmallVec<[AnyElement; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
 }
 
-/// A handle for controlling the scroll position of a uniform list.
-/// This should be stored in your view and passed to the uniform_list on each frame.
+/// A handle that reads and sets the scroll position of a [`UniformList`].
+///
+/// Store it on your view, and pass it to [`UniformList::track_scroll`] when you build the list
+/// each frame. Clones share the same state.
+///
+/// Scroll requests (`scroll_to_*`) take effect during the next prepaint, not immediately. A
+/// request does nothing until a list tracks the handle.
 #[derive(Clone, Debug, Default)]
 pub struct UniformListScrollHandle(pub Rc<RefCell<UniformListScrollState>>);
 
-/// Where to place the element scrolled to.
+/// Where a scroll request places the target row in the viewport.
+///
+/// The list stops at its first and last row, so a row near either end can't always reach the
+/// position you ask for. It lands at the closest position the list allows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollStrategy {
-    /// Place the element at the top of the list's viewport.
+    /// Places the row at the top of the viewport.
     Top,
-    /// Attempt to place the element in the middle of the list's viewport.
-    /// May not be possible if there's not enough list items above the item scrolled to:
-    /// in this case, the element will be placed at the closest possible position.
+    /// Places the row in the middle of the viewport, as close as the start and end of the list allow.
     Center,
-    /// Attempt to place the element at the bottom of the list's viewport.
-    /// May not be possible if there's not enough list items above the item scrolled to:
-    /// in this case, the element will be placed at the closest possible position.
+    /// Places the row at the bottom of the viewport, as close as the end of the list allows.
     Bottom,
-    /// If the element is not visible attempt to place it at:
-    /// - The top of the list's viewport if the target element is above currently visible elements.
-    /// - The bottom of the list's viewport if the target element is above currently visible elements.
+    /// Moves the least amount that shows the row. A row above the viewport is placed at the top,
+    /// and a row below it at the bottom. A row that is already fully visible doesn't move the list.
     Nearest,
 }
 
 #[derive(Clone, Copy, Debug)]
 #[allow(missing_docs)]
+/// A scroll request that waits for the next prepaint.
 pub struct DeferredScrollToItem {
-    /// The item index to scroll to
+    /// The row to scroll to.
     pub item_index: usize,
-    /// The scroll strategy to use
+    /// Where the row should land.
     pub strategy: ScrollStrategy,
-    /// The offset in number of items
+    /// The number of rows to keep clear, as described for
+    /// [`UniformListScrollHandle::scroll_to_item_with_offset`].
     pub offset: usize,
+    /// Whether to apply `strategy` even when the row is already visible.
     pub scroll_strict: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 #[allow(missing_docs)]
+/// The state that a [`UniformListScrollHandle`] shares with its [`UniformList`].
 pub struct UniformListScrollState {
+    /// The scroll position of the list. [`UniformList::track_scroll`] shares it with the list.
     pub base_handle: ScrollHandle,
+    /// A scroll request from a `scroll_to_*` method, applied and cleared on the next prepaint.
     pub deferred_scroll_to_item: Option<DeferredScrollToItem>,
-    /// Size of the item, captured during last layout.
+    /// The viewport and content sizes from the last prepaint, or `None` before the first one.
     pub last_item_size: Option<ItemSize>,
-    /// Whether the list was vertically flipped during last layout.
+    /// Whether item 0 is at the bottom of the list, as set by [`UniformList::y_flipped`].
     pub y_flipped: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-/// The size of the item and its contents.
+/// The sizes of a [`UniformList`]'s viewport and of all its rows, from the last prepaint.
 pub struct ItemSize {
-    /// The size of the item.
+    /// The size of the viewport, after the list's border and padding.
     pub item: Size<Pixels>,
-    /// The size of the item's contents, which may be larger than the item itself,
-    /// if the item was bounded by a parent element.
+    /// The size of all the rows together: the row height times the row count, and the
+    /// width of the content, which is wider than the viewport when rows overflow horizontally.
     pub contents: Size<Pixels>,
 }
 
 impl UniformListScrollHandle {
-    /// Create a new scroll handle to bind to a uniform list.
+    /// Creates a handle that isn't attached to a list yet.
+    ///
+    /// Pass it to [`UniformList::track_scroll`] when you build the list.
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(UniformListScrollState {
             base_handle: ScrollHandle::new(),
@@ -142,11 +205,45 @@ impl UniformListScrollHandle {
         })))
     }
 
-    /// Scroll the list so that the given item index is visible.
+    /// Scrolls the least amount that brings row `ix` fully into view, placed by `strategy`.
     ///
-    /// This uses non-strict scrolling: if the item is already fully visible, no scrolling occurs.
-    /// If the item is out of view, it scrolls the minimum amount to bring it into view according
-    /// to the strategy.
+    /// This is non-strict: a row that is already fully visible doesn't move the list, so
+    /// `ScrollStrategy::Top` does nothing for a visible row. Use [`Self::scroll_to_item_strict`]
+    /// to place the row every time. The scroll takes effect on the next prepaint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// struct Rows {
+    ///     scroll: UniformListScrollHandle,
+    /// }
+    ///
+    /// impl Render for Rows {
+    ///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    ///         div().h(px(320.)).child(
+    ///             uniform_list("rows", 100, |range, _window, _cx| {
+    ///                 range
+    ///                     .map(|ix| div().id(ix).h(px(32.)).child(format!("Row {ix}")))
+    ///                     .collect::<Vec<_>>()
+    ///             })
+    ///             .track_scroll(&self.scroll)
+    ///             .size_full(),
+    ///         )
+    ///     }
+    /// }
+    /// # let mut app = TestApp::new();
+    /// # let mut window = app.open_window(|_, _| Rows { scroll: UniformListScrollHandle::new() });
+    /// window.update(|rows, _, _| rows.scroll.scroll_to_item(3, ScrollStrategy::Top));
+    /// window.draw();
+    /// // Row 3 is already in the 320px viewport, so the list didn't move.
+    /// window.read(|rows, _| assert_eq!(rows.scroll.0.borrow().base_handle.offset().y, px(0.)));
+    ///
+    /// window.update(|rows, _, _| rows.scroll.scroll_to_item_strict(3, ScrollStrategy::Top));
+    /// window.draw();
+    /// // The strict form puts row 3 at the top: 3 rows of 32px scrolled past.
+    /// window.read(|rows, _| assert_eq!(rows.scroll.0.borrow().base_handle.offset().y, px(-96.)));
+    /// ```
     pub fn scroll_to_item(&self, ix: usize, strategy: ScrollStrategy) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -156,10 +253,12 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list so that the given item index is at scroll strategy position.
+    /// Places row `ix` where `strategy` says, even when the row is already visible.
     ///
-    /// This uses strict scrolling: the item will always be scrolled to match the strategy position,
-    /// even if it's already visible. Use this when you need precise positioning.
+    /// Unlike [`Self::scroll_to_item`], this forces the requested placement when the strategy
+    /// supports one. With [`ScrollStrategy::Nearest`], a visible row still doesn't move. Use it
+    /// when a row must land at a fixed position, such as the top after a keyboard jump. The scroll
+    /// takes effect on the next prepaint; see [`Self::scroll_to_item`] for an example.
     pub fn scroll_to_item_strict(&self, ix: usize, strategy: ScrollStrategy) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -169,16 +268,16 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list to the given item index with an offset in number of items.
+    /// Scrolls like [`Self::scroll_to_item`], and keeps `offset` rows clear at the top of the viewport.
     ///
-    /// This uses non-strict scrolling: if the item is already visible within the offset region,
-    /// no scrolling occurs.
+    /// `offset` shrinks the viewport by that many rows from the top, and `strategy` places the
+    /// row in what remains:
+    /// - [`ScrollStrategy::Top`] puts the row just below the cleared rows.
+    /// - [`ScrollStrategy::Center`] centers the row in the rows below the cleared rows.
+    /// - [`ScrollStrategy::Bottom`] places the row at the bottom of the viewport. `offset` affects
+    ///   only whether the row counts as already visible, not where it lands.
     ///
-    /// The offset parameter shrinks the effective viewport by the specified number of items
-    /// from the corresponding edge, then applies the scroll strategy within that reduced viewport:
-    /// - `ScrollStrategy::Top`: Shrinks from top, positions item at the new top
-    /// - `ScrollStrategy::Center`: Shrinks from top, centers item in the reduced viewport
-    /// - `ScrollStrategy::Bottom`: Shrinks from bottom, positions item at the new bottom
+    /// This is non-strict, so a row that is visible below the cleared rows doesn't move the list.
     pub fn scroll_to_item_with_offset(&self, ix: usize, strategy: ScrollStrategy, offset: usize) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -188,16 +287,9 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list so that the given item index is at the exact scroll strategy position with an offset.
+    /// Places row `ix` like [`Self::scroll_to_item_with_offset`], even when the row is already visible.
     ///
-    /// This uses strict scrolling: the item will always be scrolled to match the strategy position,
-    /// even if it's already visible.
-    ///
-    /// The offset parameter shrinks the effective viewport by the specified number of items
-    /// from the corresponding edge, then applies the scroll strategy within that reduced viewport:
-    /// - `ScrollStrategy::Top`: Shrinks from top, positions item at the new top
-    /// - `ScrollStrategy::Center`: Shrinks from top, centers item in the reduced viewport
-    /// - `ScrollStrategy::Bottom`: Shrinks from bottom, positions item at the new bottom
+    /// The `offset` rules are the same as for [`Self::scroll_to_item_with_offset`].
     pub fn scroll_to_item_strict_with_offset(
         &self,
         ix: usize,
@@ -212,12 +304,18 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Check if the list is flipped vertically.
+    /// Returns whether item 0 is at the bottom of the list, as set by [`UniformList::y_flipped`]
+    /// on the last frame.
     pub fn y_flipped(&self) -> bool {
         self.0.borrow().y_flipped
     }
 
-    /// Get the index of the topmost visible child.
+    /// Returns the index of the first visible row.
+    ///
+    /// If a scroll request is pending, this returns the row that request targets instead, so the
+    /// value is right after a request and one frame later. It is zero before the first prepaint.
+    ///
+    /// Only available with the `test-support` feature, or in GPUI's own tests.
     #[cfg(any(test, feature = "test-support"))]
     pub fn logical_scroll_top_index(&self) -> usize {
         let this = self.0.borrow();
@@ -227,7 +325,9 @@ impl UniformListScrollHandle {
             .unwrap_or_else(|| this.base_handle.logical_scroll_top().0)
     }
 
-    /// Checks if the list can be scrolled vertically.
+    /// Returns whether the rows are taller than the viewport, as of the last prepaint.
+    ///
+    /// Returns `false` before the first prepaint.
     pub fn is_scrollable(&self) -> bool {
         if let Some(size) = self.0.borrow().last_item_size {
             size.contents.height > size.item.height
@@ -236,8 +336,9 @@ impl UniformListScrollHandle {
         }
     }
 
-    /// Whether the list is scrolled to the end, or `None` if the list is
-    /// not scrollable.
+    /// Returns whether the list shows its last row, or `None` if the list isn't scrollable.
+    ///
+    /// `None` is also returned before the first prepaint.
     pub fn is_scrolled_to_end(&self) -> Option<bool> {
         let state = self.0.borrow();
         let max_offset = state.base_handle.max_offset();
@@ -248,7 +349,7 @@ impl UniformListScrollHandle {
         Some(-offset.y >= max_offset.y)
     }
 
-    /// Scroll to the bottom of the list.
+    /// Scrolls to the last row, as a request for the next prepaint.
     pub fn scroll_to_bottom(&self) {
         self.scroll_to_item(usize::MAX, ScrollStrategy::Bottom);
     }
@@ -420,7 +521,8 @@ impl Element for UniformList {
                     }) = shared_scroll_to_item
                     {
                         if y_flipped {
-                            item_index = self.item_count.saturating_sub(item_index + 1);
+                            item_index =
+                                self.item_count.saturating_sub(item_index.saturating_add(1));
                         }
                         let list_height = padded_bounds.size.height;
                         let mut updated_scroll_offset = shared_scroll_offset.borrow_mut();
@@ -579,11 +681,66 @@ impl IntoElement for UniformList {
     }
 }
 
-/// A decoration for a [`UniformList`]. This can be used for various things,
-/// such as rendering indent guides, or other visual effects.
+/// An element drawn over the rows of a [`UniformList`], such as indent guides.
+///
+/// Add one with [`UniformList::with_decoration`]. The list computes it each frame, after the rows.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// # use std::{cell::Cell, ops::Range, rc::Rc};
+/// struct CountCalls(Rc<Cell<usize>>);
+///
+/// impl UniformListDecoration for CountCalls {
+///     fn compute(
+///         &self,
+///         _visible_range: Range<usize>,
+///         _bounds: Bounds<Pixels>,
+///         _scroll_offset: Point<Pixels>,
+///         _item_height: Pixels,
+///         _item_count: usize,
+///         _window: &mut Window,
+///         _cx: &mut App,
+///     ) -> AnyElement {
+///         self.0.set(self.0.get() + 1);
+///         div().into_any_element()
+///     }
+/// }
+///
+/// struct Rows {
+///     calls: Rc<Cell<usize>>,
+///     scroll: UniformListScrollHandle,
+/// }
+///
+/// impl Render for Rows {
+///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+///         uniform_list("rows", 100, |range, _window, _cx| {
+///             range
+///                 .map(|ix| div().id(ix).h(px(32.)).child(format!("Row {ix}")))
+///                 .collect::<Vec<_>>()
+///         })
+///         .track_scroll(&self.scroll)
+///         .with_decoration(CountCalls(self.calls.clone()))
+///         .size_full()
+///     }
+/// }
+/// # let mut app = TestApp::new();
+/// # let calls = Rc::new(Cell::new(0));
+/// # let mut window = app.open_window(|_, _| Rows {
+/// #     calls: calls.clone(),
+/// #     scroll: UniformListScrollHandle::new(),
+/// # });
+/// window.draw();
+/// assert!(calls.get() > 0);
+/// ```
 pub trait UniformListDecoration {
-    /// Compute the decoration element, given the visible range of list items,
-    /// the bounds of the list, and the height of each item.
+    /// Returns the element to draw, given the rows in view and the list's geometry.
+    ///
+    /// `visible_range` holds the rows in view. `bounds` has the viewport's size, moved by
+    /// `scroll_offset`, so that row `ix` is at `bounds.origin + point(0, item_height * ix)`.
+    /// `scroll_offset` is zero or negative, and `item_count` is the number of rows. The element
+    /// is laid out at `bounds`.
     fn compute(
         &self,
         visible_range: Range<usize>,
@@ -622,21 +779,31 @@ impl<T: UniformListDecoration + 'static> UniformListDecoration for Entity<T> {
 }
 
 impl UniformList {
-    /// Selects a specific list item for measurement.
+    /// Chooses the row that sets the width and height of every row. `None` measures row 0.
+    ///
+    /// An index past the last row measures the last row. The list measures the chosen row every
+    /// frame, so the row should be cheap to render.
     pub fn with_width_from_item(mut self, item_index: Option<usize>) -> Self {
         self.item_to_measure_index = item_index.unwrap_or(0);
         self
     }
 
-    /// Sets the sizing behavior, similar to the `List` element.
+    /// Sets how the list sizes itself, like [`List::with_sizing_behavior`](crate::List::with_sizing_behavior).
+    ///
+    /// [`ListSizingBehavior::Auto`], the default, takes the size from the style.
+    /// [`ListSizingBehavior::Infer`] makes the list as tall as all its rows, up to the space its
+    /// parent gives it.
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
         self
     }
 
-    /// Sets the horizontal sizing behavior, controlling the way list items laid out horizontally.
-    /// With [`ListHorizontalSizingBehavior::Unconstrained`] behavior, every item and the list itself will
-    /// have the size of the widest item and lay out pushing the `end_slot` to the right end.
+    /// Sets whether rows can be wider than the list.
+    ///
+    /// With [`ListHorizontalSizingBehavior::FitList`], the default, rows are no wider than the list.
+    /// With [`ListHorizontalSizingBehavior::Unconstrained`], the content is as wide as the row
+    /// chosen by [`Self::with_width_from_item`], and the list scrolls horizontally when that is
+    /// wider than the list.
     pub fn with_horizontal_sizing_behavior(
         mut self,
         behavior: ListHorizontalSizingBehavior,
@@ -653,7 +820,7 @@ impl UniformList {
         self
     }
 
-    /// Adds a decoration element to the list.
+    /// Adds a decoration that is drawn over the rows. Decorations are drawn in the order added.
     pub fn with_decoration(mut self, decoration: impl UniformListDecoration + 'static) -> Self {
         self.decorations.push(Box::new(decoration));
         self
@@ -683,14 +850,23 @@ impl UniformList {
         item_to_measure.layout_as_root(available_space, window, cx)
     }
 
-    /// Track and render scroll state of this list with reference to the given scroll handle.
+    /// Connects the list to `handle`, so the list reads scroll requests from it and writes its
+    /// scroll position to it.
+    ///
+    /// Without this, the list still scrolls with the wheel, but nothing outside it can read or
+    /// set the position.
     pub fn track_scroll(mut self, handle: &UniformListScrollHandle) -> Self {
         self.interactivity.tracked_scroll_handle = Some(handle.0.borrow().base_handle.clone());
         self.scroll_handle = Some(handle.clone());
         self
     }
 
-    /// Sets whether the list is flipped vertically, such that item 0 appears at the bottom.
+    /// Puts item 0 at the bottom of the list, so the first row sits at the bottom and the last at
+    /// the top.
+    ///
+    /// The list keeps its scroll position on the same rows when the value changes. This only takes
+    /// effect when a handle is set with [`Self::track_scroll`]. Call it after `track_scroll`,
+    /// because it reads the handle that `track_scroll` sets.
     pub fn y_flipped(mut self, y_flipped: bool) -> Self {
         if let Some(ref scroll_handle) = self.scroll_handle {
             let mut scroll_state = scroll_handle.0.borrow_mut();
@@ -724,6 +900,38 @@ impl InteractiveElement for UniformList {
 #[cfg(test)]
 mod test {
     use crate::TestAppContext;
+
+    #[gpui::test]
+    fn scroll_to_bottom_in_flipped_list_does_not_overflow(cx: &mut TestAppContext) {
+        use crate::{
+            AppContext as _, Context, IntoElement, Render, Styled, UniformListScrollHandle, Window,
+            div, px, size, uniform_list,
+        };
+
+        struct FlippedRows(UniformListScrollHandle);
+        impl Render for FlippedRows {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                uniform_list("rows", 47, |range, _, _| {
+                    range.map(|_| div().h(px(20.))).collect()
+                })
+                .track_scroll(&self.0)
+                .y_flipped(true)
+                .size_full()
+            }
+        }
+
+        let handle = UniformListScrollHandle::new();
+        let window = cx.open_window(size(px(200.), px(200.)), |_, _| FlippedRows(handle.clone()));
+        let mut draw = || {
+            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        draw();
+        handle.scroll_to_bottom();
+        draw();
+        assert_eq!(handle.0.borrow().base_handle.offset().y, px(0.));
+        assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
+    }
 
     #[gpui::test]
     fn test_scroll_strategy_nearest(cx: &mut TestAppContext) {

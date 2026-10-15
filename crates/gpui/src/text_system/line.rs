@@ -11,7 +11,31 @@ use std::sync::{
 static GLYPH_PAINT_ERRORS: AtomicUsize = AtomicUsize::new(0);
 const MAX_LOGGED_GLYPH_PAINT_ERRORS: usize = 20;
 
-/// A line of text that has been shaped and decorated.
+/// A shaped line that is ready to measure and paint.
+///
+/// [`WindowTextSystem::shape_line`](crate::WindowTextSystem::shape_line) does
+/// the expensive shaping work. Reuse the result to measure with
+/// [`ShapedLine::width`] and paint on each frame. Paint backgrounds first with
+/// [`ShapedLine::paint_background`] when a row needs to sit behind other content.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+/// # let mut app = TestApp::new();
+/// # let mut window = app.open_window(|_window, _cx| EmptyView);
+/// window.update(|_view, window, _cx| {
+///     let run = TextRun {
+///         len: "Hi".len(),
+///         font: font("Lilex"),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     };
+///     let line = window.text_system().shape_line("Hi".into(), px(16.), &[run]);
+///     assert_eq!(line.text.as_ref(), "Hi");
+///     assert_eq!(line.len(), 2);
+/// });
+/// ```
 #[derive(Clone, Debug, Deref, DerefMut)]
 pub struct ShapedLine {
     #[deref]
@@ -22,21 +46,34 @@ pub struct ShapedLine {
 }
 
 impl ShapedLine {
-    /// The length of the line in utf-8 bytes.
+    /// Returns the length of the line in UTF-8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.layout.len
     }
 
-    /// The width of the shaped line in pixels.
+    /// Returns the width of the line in logical pixels.
     ///
-    /// This is the glyph advance width computed by the text shaping system and is useful for
-    /// incrementally advancing a "pen" when painting multiple fragments on the same row.
+    /// This is the glyph advance width from the text shaping system. Use it to
+    /// advance a "pen" when you paint several lines or fragments on one row.
     pub fn width(&self) -> Pixels {
         self.layout.width
     }
 
-    /// Paint the line of text to the window.
+    /// Paints the glyphs, underlines, and strikethroughs of the line.
+    ///
+    /// `origin` is the top-left corner of the line box, which is `line_height`
+    /// tall. The baseline is placed inside that box, centered by the font's
+    /// ascent and descent. When `align_width` is `Some`, the line is aligned
+    /// within that width using `align`. Otherwise it is aligned in its own width.
+    ///
+    /// Call this during paint. Background colors are not painted here, so call
+    /// [`ShapedLine::paint_background`] first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the window's paint layer fails. A glyph that
+    /// fails to paint is logged and skipped, and the call still succeeds.
     pub fn paint(
         &self,
         origin: Point<Pixels>,
@@ -59,7 +96,10 @@ impl ShapedLine {
         )
     }
 
-    /// Paint the background of the line to the window.
+    /// Paints the background color of each run in the line.
+    ///
+    /// The arguments match [`ShapedLine::paint`]. Call this before `paint`, so
+    /// that the glyphs are drawn over the backgrounds.
     pub fn paint_background(
         &self,
         origin: Point<Pixels>,
@@ -83,7 +123,36 @@ impl ShapedLine {
     }
 }
 
-/// Text that has been shaped and decorated by the text layout system.
+/// Shaped text that may contain hard breaks and soft-wrapped lines.
+///
+/// [`WindowTextSystem::shape_text`](crate::WindowTextSystem::shape_text) returns
+/// one visual line for each wrapped or hard-broken line. Paint it with
+/// [`ShapedText::paint`], and paint backgrounds first with
+/// [`ShapedText::paint_background`]. It derefs to [`ShapedTextLayout`], so the
+/// same result supplies measurements such as [`ShapedTextLayout::size`] and
+/// [`ShapedTextLayout::line_count`].
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+/// # let mut app = TestApp::new();
+/// # let mut window = app.open_window(|_window, _cx| EmptyView);
+/// window.update(|_view, window, _cx| {
+///     let text = "Hello\nworld";
+///     let run = TextRun {
+///         len: text.len(),
+///         font: font("Lilex"),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     };
+///     let shaped = window
+///         .text_system()
+///         .shape_text(text, px(16.), &[run], None, None)
+///         .unwrap();
+///     assert_eq!(shaped.len(), text.len());
+/// });
+/// ```
 #[derive(Debug, Deref, DerefMut)]
 pub struct ShapedText {
     #[deref]
@@ -94,13 +163,23 @@ pub struct ShapedText {
 }
 
 impl ShapedText {
-    /// The length of the text in UTF-8 bytes.
+    /// Returns the length of the text in UTF-8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.layout.len()
     }
 
-    /// Paint this text to the window.
+    /// Paints the glyphs and decorations of every visual line.
+    ///
+    /// `origin` is the top-left corner of the first line. Each following line
+    /// starts `line_height` below the previous one. `bounds` supplies the width
+    /// used for alignment; when it is `None`, the layout's wrap width is used.
+    /// See [`ShapedLine::paint`] for how the arguments place the text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the window's paint layer fails. A glyph that
+    /// fails to paint is logged and skipped.
     pub fn paint(
         &self,
         origin: Point<Pixels>,
@@ -128,7 +207,8 @@ impl ShapedText {
         )
     }
 
-    /// Paint the background of this text to the window.
+    /// Paints the background colors of every visual line before the foreground.
+    /// The arguments have the same meaning as [`ShapedText::paint`].
     pub fn paint_background(
         &self,
         origin: Point<Pixels>,
@@ -158,7 +238,10 @@ impl ShapedText {
 }
 
 impl InlineLayout {
-    /// Paint the text-run backgrounds in this inline layout.
+    /// Paints the background color of each text run in the inline layout.
+    ///
+    /// `origin` is the top-left corner of the layout's box. Call this before
+    /// [`InlineLayout::paint`].
     pub fn paint_background(
         &self,
         origin: Point<Pixels>,
@@ -168,7 +251,10 @@ impl InlineLayout {
         paint_inline_layout(self, origin, TextPaintPass::Background, window, cx)
     }
 
-    /// Paint the glyphs and foreground decorations in this inline layout.
+    /// Paints the glyphs and underlines or strikethroughs of the inline layout.
+    ///
+    /// `origin` is the top-left corner of the layout's box. This method paints
+    /// only text. The atomic boxes in [`InlineLayout::boxes`] are not painted here.
     pub fn paint(&self, origin: Point<Pixels>, window: &mut Window, cx: &mut App) -> Result<()> {
         paint_inline_layout(self, origin, TextPaintPass::Foreground, window, cx)
     }

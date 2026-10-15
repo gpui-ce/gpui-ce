@@ -28,25 +28,51 @@ use thiserror::Error;
 
 use super::{Stateful, StatefulInteractiveElement};
 
-/// The delay before showing the loading state.
+/// How long an image may take to load before the [`StyledImage::with_loading`] placeholder appears.
+///
+/// An image that finishes within this delay never shows the placeholder, so fast loads don't flash.
 pub const LOADING_DELAY: Duration = Duration::from_millis(200);
 
-/// A type alias to the resource loader that the `img()` element uses.
+/// The asset loader that [`img`] uses for [`ImageSource::Resource`] sources: URLs, file paths and
+/// [`crate::AssetRegistry`] entries.
 ///
-/// Note: that this is only for Resources, like URLs or file paths.
-/// Custom loaders, or external images will not use this asset loader
+/// The other [`ImageSource`] variants don't use it. Use `App::remove_asset::<ImgResourceLoader>`
+/// with a [`Resource`] to evict one entry.
 pub type ImgResourceLoader = AssetLogger<ImageAssetLoader>;
 
-/// A source of image content.
+/// Where an [`img`] element gets its pixels.
+///
+/// You rarely build this yourself. Each argument to [`img`] converts into one variant: a string,
+/// a [`PathBuf`](std::path::PathBuf) or a [`SharedUri`] becomes [`ImageSource::Resource`], an
+/// `Arc<Image>` becomes [`ImageSource::Image`], and an `Arc<RenderImage>` becomes
+/// [`ImageSource::Render`].
+///
+/// # How a string is read
+///
+/// A `&str`, `String` or `SharedString` is a URL if the `url` crate parses it, and an asset path
+/// otherwise. Any scheme counts, so `"https://example.com/a.png"` is a URL, and so are
+/// `"c:/logo.png"` (a Windows drive path) and `"data:..."`. URLs go to the app's HTTP client, which
+/// normally rejects schemes it doesn't handle. `"images/logo.png"` has no scheme, so it is looked
+/// up in the [`crate::AssetRegistry`].
+///
+/// To skip that check, convert a [`PathBuf`](std::path::PathBuf) or a [`SharedUri`] instead. A
+/// `PathBuf` always reads the file system, and a `SharedUri` always fetches.
 #[derive(Clone)]
 pub enum ImageSource {
-    /// The image content will be loaded from some resource location
+    /// Load the image from a [`Resource`]: a URL, a file path or a name in the [`crate::AssetRegistry`].
+    ///
+    /// The bytes load in the background and are cached by source.
     Resource(Resource),
-    /// Cached image data
+    /// Pixels that are already decoded. Nothing is loaded, and the frames are drawn as they are.
     Render(Arc<RenderImage>),
-    /// Cached image data
+    /// Encoded bytes in an [`Image`], such as a PNG or an SVG. The image is decoded in the
+    /// background and cached under the [`Image`]'s ID, which is a hash of its bytes.
     Image(Arc<Image>),
-    /// A custom loading function to use
+    /// A function that the element calls on every layout and paint to get the image.
+    ///
+    /// Return `None` while the image is not ready, `Some(Ok(..))` with the image, or
+    /// `Some(Err(..))` to show the fallback. gpui doesn't cache the result, so the function must be
+    /// fast or cache its own result.
     Custom(Arc<dyn Fn(&mut Window, &mut App) -> Option<Result<Arc<RenderImage>, ImageCacheError>>>),
 }
 
@@ -125,7 +151,9 @@ where
     }
 }
 
-/// The style of an image element.
+/// The settings that the [`StyledImage`] methods set on an image element.
+///
+/// Reach it through [`StyledImage::image_style`]. You don't create one directly.
 pub struct ImageStyle {
     grayscale: bool,
     object_fit: ObjectFit,
@@ -144,32 +172,77 @@ impl Default for ImageStyle {
     }
 }
 
-/// Style an image element.
+/// Styling methods for image elements, implemented by [`Img`] and `Stateful<Img>`.
+///
+/// Each method returns `self`, so calls chain after [`img`].
 pub trait StyledImage: Sized {
-    /// Get a mutable [ImageStyle] from the element.
+    /// Returns the [`ImageStyle`] that the methods on this trait write to.
     fn image_style(&mut self) -> &mut ImageStyle;
 
-    /// Set the image to be displayed in grayscale.
+    /// Draws the image in grayscale when `grayscale` is `true`. The default is `false`.
     fn grayscale(mut self, grayscale: bool) -> Self {
         self.image_style().grayscale = grayscale;
         self
     }
 
-    /// Set the object fit for the image.
+    /// Sets how the image fills its box. The default is [`ObjectFit::Contain`].
+    ///
+    /// The fit matters only when the box's aspect ratio differs from the image's, so set both a
+    /// width and a height. With no size set, the box is the image's natural size, and every fit
+    /// looks the same.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// let avatar = img("images/avatar.png")
+    ///     .size(px(48.))
+    ///     .rounded_full()
+    ///     .object_fit(ObjectFit::Cover);
+    /// ```
     fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.image_style().object_fit = object_fit;
         self
     }
 
-    /// Set a fallback function that will be invoked to render an error view should
-    /// the image fail to load.
+    /// Sets the closure that builds the element to show when the image fails to load.
+    ///
+    /// Failures include a missing asset, a non-success HTTP status, bytes that don't decode, and a
+    /// URL that the HTTP client can't fetch. The closure runs again on each layout where the
+    /// fallback is shown, so keep it cheap.
     fn with_fallback(mut self, fallback: impl Fn() -> AnyElement + 'static) -> Self {
         self.image_style().fallback = Some(Box::new(fallback));
         self
     }
 
-    /// Set a fallback function that will be invoked to render a view while the image
-    /// is still being loaded.
+    /// Sets the closure that builds a placeholder to show while the image loads.
+    ///
+    /// The placeholder appears only if loading takes longer than [`LOADING_DELAY`], so a quick load
+    /// never shows it. The placeholder and the fallback are children of the image element, so the
+    /// element's own size and style still apply.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// let photo = img("https://example.com/photo.jpg")
+    ///     .size(px(240.))
+    ///     .with_loading(|| {
+    ///         div()
+    ///             .size(px(240.))
+    ///             .bg(rgb(0xe5e7eb))
+    ///             .into_any_element()
+    ///     })
+    ///     .with_fallback(|| {
+    ///         div()
+    ///             .size(px(240.))
+    ///             .flex()
+    ///             .items_center()
+    ///             .justify_center()
+    ///             .child("Image unavailable")
+    ///             .into_any_element()
+    ///     });
+    /// ```
     fn with_loading(mut self, loading: impl Fn() -> AnyElement + 'static) -> Self {
         self.image_style().loading = Some(Box::new(loading));
         self
@@ -188,7 +261,10 @@ impl StyledImage for Stateful<Img> {
     }
 }
 
-/// An image element.
+/// An image element, made by [`img`].
+///
+/// It is a styled, interactive element. Style it with [`Styled`] and [`StyledImage`], and attach
+/// event handlers with [`InteractiveElement`].
 pub struct Img {
     interactivity: Interactivity,
     source: ImageSource,
@@ -196,7 +272,29 @@ pub struct Img {
     image_cache: Option<AnyImageCache>,
 }
 
-/// Create a new image element.
+/// Creates an image element that draws `source`.
+///
+/// Building the element does no work. The image starts loading the first time the element is laid
+/// out, on a background thread. Until it loads, the element has no size unless you set one, and it
+/// draws nothing unless you set a [`StyledImage::with_loading`] placeholder. Once the image loads,
+/// the element takes the image's natural size. If you set only a width or only a height, the other
+/// dimension follows the aspect ratio.
+///
+/// `source` is anything that converts into an [`ImageSource`]. That type explains how a string is
+/// read.
+///
+/// Loaded images are cached, so a second `img` with the same source reuses the decoded image. See
+/// the [images guide](crate::_documentation::guides::images_and_assets) for the cache rules, and
+/// [`crate::image_cache`] to scope them to a group of images.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// let remote = img("https://example.com/avatar.png");
+/// let bundled = img("images/logo.png");
+/// let local = img(std::path::PathBuf::from("assets/banner.jpg"));
+/// ```
 #[track_caller]
 pub fn img(source: impl Into<ImageSource>) -> Img {
     Img {
@@ -208,7 +306,18 @@ pub fn img(source: impl Into<ImageSource>) -> Img {
 }
 
 impl Img {
-    /// A list of all format extensions currently supported by this img element
+    /// Returns the file extensions that `img` can decode, in lowercase and without the dot.
+    ///
+    /// The list is the extensions of `image::ImageFormat` plus `svg`. gpui decides whether a file
+    /// loads by reading its bytes, not its extension, so the list is a guide.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// assert!(Img::extensions().contains(&"png"));
+    /// assert!(Img::extensions().contains(&"svg"));
+    /// ```
     pub fn extensions() -> &'static [&'static str] {
         // This is the list in [image::ImageFormat::from_extension] + `svg`
         &[
@@ -217,15 +326,11 @@ impl Img {
         ]
     }
 
-    /// Sets the image cache for the current node.
+    /// Uses `image_cache` for this image, instead of the cache from an ancestor.
     ///
-    /// If the `image_cache` is not explicitly provided, the function will determine the image cache by:
-    ///
-    /// 1. Checking if any ancestor node of the current node contains an `ImageCacheElement`, If such a node exists, the image cache specified by that ancestor will be used.
-    /// 2. If no ancestor node contains an `ImageCacheElement`, the global image cache will be used as a fallback.
-    ///
-    /// This mechanism provides a flexible way to manage image caching, allowing precise control when needed,
-    /// while ensuring a default behavior when no cache is explicitly specified.
+    /// Without this call, the image uses the cache of the nearest ancestor [`crate::image_cache`] element,
+    /// or the app-wide asset cache if there is none. Only [`ImageSource::Resource`] sources go
+    /// through an image cache. The other variants ignore it.
     #[inline]
     pub fn image_cache<I: ImageCache>(self, image_cache: &Entity<I>) -> Self {
         Self {
@@ -249,6 +354,42 @@ impl DerefMut for Stateful<Img> {
     }
 }
 
+/// Frames shorter than this are treated as this long, so zero-delay frames can't stall playback.
+const MIN_FRAME_DELAY: Duration = Duration::from_millis(1);
+
+/// Steps an animation forward by `elapsed`, returning the new frame index and the time already
+/// spent in that frame. Advances through every frame covered by `elapsed`, including multiple
+/// frames when one update spans several frame intervals.
+fn advance_animation(
+    mut frame_index: usize,
+    elapsed: Duration,
+    frame_count: usize,
+    frame_delay: impl Fn(usize) -> Duration,
+) -> (usize, Duration) {
+    if frame_count == 0 {
+        return (0, elapsed);
+    }
+
+    let delay = |index| frame_delay(index).max(MIN_FRAME_DELAY);
+    frame_index %= frame_count;
+
+    // Whole cycles end on the same frame, so skip them rather than stepping through each.
+    let cycle_nanos = (0..frame_count)
+        .map(|index| delay(index).as_nanos())
+        .sum::<u128>();
+    let remainder_nanos = elapsed.as_nanos() % cycle_nanos;
+    let mut remaining = Duration::new(
+        (remainder_nanos / 1_000_000_000) as u64,
+        (remainder_nanos % 1_000_000_000) as u32,
+    );
+
+    while remaining >= delay(frame_index) {
+        remaining -= delay(frame_index);
+        frame_index = (frame_index + 1) % frame_count;
+    }
+    (frame_index, remaining)
+}
+
 /// The image state between frames
 struct ImgState {
     frame_index: usize,
@@ -256,7 +397,10 @@ struct ImgState {
     started_loading: Option<(Instant, Task<()>)>,
 }
 
-/// The image layout state between frames
+/// The per-frame state that an [`Img`] passes from layout to paint.
+///
+/// It holds the frame of an animated image to draw, and the placeholder or fallback element when
+/// one is showing.
 pub struct ImgLayoutState {
     frame_index: usize,
     replacement: Option<AnyElement>,
@@ -320,18 +464,17 @@ impl Element for Img {
                                 state.frame_index = state.frame_index.min(max_frame_index);
                                 if frame_count > 1 && !cx.reduce_motion() {
                                     if window.is_window_active() {
-                                        let current_time = Instant::now();
+                                        let current_time = cx.background_executor().now();
                                         if let Some(last_frame_time) = state.last_frame_time {
                                             let elapsed = current_time - last_frame_time;
-                                            let frame_duration =
-                                                Duration::from(data.delay(state.frame_index));
-
-                                            if elapsed >= frame_duration {
-                                                state.frame_index =
-                                                    (state.frame_index + 1) % frame_count;
-                                                state.last_frame_time =
-                                                    Some(current_time - (elapsed - frame_duration));
-                                            }
+                                            let (frame_index, remainder) = advance_animation(
+                                                state.frame_index,
+                                                elapsed,
+                                                frame_count,
+                                                |index| Duration::from(data.delay(index)),
+                                            );
+                                            state.frame_index = frame_index;
+                                            state.last_frame_time = Some(current_time - remainder);
                                         } else {
                                             state.last_frame_time = Some(current_time);
                                         }
@@ -400,7 +543,8 @@ impl Element for Img {
                         None => {
                             if let Some(state) = &mut state {
                                 if let Some((started_loading, _)) = state.started_loading {
-                                    if started_loading.elapsed() > LOADING_DELAY
+                                    if cx.background_executor().now() - started_loading
+                                        > LOADING_DELAY
                                         && let Some(loading) = self.style.loading.as_ref()
                                     {
                                         let mut element = loading();
@@ -416,7 +560,8 @@ impl Element for Img {
                                         })
                                         .ok();
                                     });
-                                    state.started_loading = Some((Instant::now(), task));
+                                    state.started_loading =
+                                        Some((cx.background_executor().now(), task));
                                 }
                             }
                         }
@@ -574,7 +719,10 @@ impl ImageSource {
         }
     }
 
-    /// Remove this image source from the asset system
+    /// Evicts this source from the app's asset cache, so the next `img` that uses it loads it again.
+    ///
+    /// Only [`ImageSource::Resource`] and [`ImageSource::Image`] are in that cache, so the other
+    /// variants do nothing. Images held by an [`crate::image_cache`] element are not affected.
     pub fn remove_asset(&self, cx: &mut App) {
         match self {
             ImageSource::Resource(resource) => {
@@ -585,8 +733,10 @@ impl ImageSource {
         }
     }
 
-    /// Check whether this image source is present in the asset system (loading
-    /// or loaded), without fetching it.
+    /// Returns `true` if this source is loading or loaded in the app's asset cache. Starts no load.
+    ///
+    /// Available with the `test-support` feature. Use it in tests to check that an image was
+    /// requested or evicted.
     #[cfg(any(test, feature = "test-support"))]
     pub fn is_asset_cached(&self, cx: &App) -> bool {
         match self {
@@ -613,7 +763,13 @@ impl Asset for ImageDecoder {
     }
 }
 
-/// An image loader for the GPUI asset system
+/// Loads and decodes a [`Resource`] into a [`RenderImage`]. [`img`] uses it, through
+/// [`ImgResourceLoader`], for URLs, file paths and registry entries.
+///
+/// The bytes come from the source. URLs go through the HTTP client and must return a success
+/// status. Paths are read from disk. Registry names are read from the [`crate::AssetRegistry`]. The format
+/// is then guessed from the bytes. Anything the `image` crate recognizes is decoded, and every
+/// frame that decodes is kept for GIF and animated WebP. Anything else is parsed as SVG.
 #[derive(Clone)]
 pub enum ImageAssetLoader {}
 
@@ -743,32 +899,36 @@ impl Asset for ImageAssetLoader {
     }
 }
 
-/// An error that can occur when interacting with the image cache.
+/// Why an image failed to load or decode.
+///
+/// [`StyledImage::with_fallback`] is shown when you get one of these. The cache keeps the error
+/// with the image, so every element that shows the image sees the same error.
 #[derive(Debug, Error, Clone)]
 pub enum ImageCacheError {
-    /// Some other kind of error occurred
+    /// A general failure, such as a failed HTTP request, or a GIF or WebP whose frames all failed
+    /// to decode.
     #[error("error: {0}")]
     Other(#[from] Arc<anyhow::Error>),
-    /// An error that occurred while reading the image from disk.
+    /// A file could not be read, such as a [`Resource::Path`] that doesn't exist.
     #[error("IO error: {0}")]
     Io(Arc<std::io::Error>),
-    /// An error that occurred while processing an image.
+    /// The HTTP response had a status other than success.
     #[error("unexpected http status for {uri}: {status}, body: {body}")]
     BadStatus {
-        /// The URI of the image.
+        /// The URI that was requested.
         uri: SharedUri,
         /// The HTTP status code.
         status: http::StatusCode,
-        /// The HTTP response body.
+        /// The first line of the response body.
         body: String,
     },
-    /// An error that occurred while processing an asset.
+    /// A name was not found in the [`crate::AssetRegistry`].
     #[error("asset error: {0}")]
     Asset(SharedString),
-    /// An error that occurred while processing an image.
+    /// The `image` crate could not decode the bytes.
     #[error("image error: {0}")]
     Image(Arc<ImageError>),
-    /// An error that occurred while processing an SVG.
+    /// The SVG could not be parsed or rendered.
     #[error("svg error: {0}")]
     Usvg(Arc<usvg::Error>),
 }
@@ -800,8 +960,10 @@ impl From<image::ImageError> for ImageCacheError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParentElement as _, TestAppContext, canvas, div, point, px, size};
-    use image::{Frame, ImageBuffer, Rgba};
+    use crate::{
+        Context, ParentElement as _, Render, TestAppContext, Window, canvas, div, point, px, size,
+    };
+    use image::{Delay, Frame, ImageBuffer, Rgba};
 
     const TEST_IMG_ID: &str = "test-img";
 
@@ -815,6 +977,99 @@ mod tests {
     fn test_image_with_size(width: u32, height: u32) -> Arc<RenderImage> {
         let frame = Frame::new(ImageBuffer::from_pixel(width, height, Rgba([0, 0, 0, 0])));
         Arc::new(RenderImage::new(SmallVec::from_elem(frame, 1)))
+    }
+
+    /// An animation whose frames are 1, 2 and 3 pixels wide, lasting 100, 200 and 300 ms.
+    fn animated_image() -> Arc<RenderImage> {
+        let frames = [(1, 100), (2, 200), (3, 300)].map(|(width, delay_ms)| {
+            Frame::from_parts(
+                ImageBuffer::from_pixel(width, 1, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(delay_ms, 1),
+            )
+        });
+        Arc::new(RenderImage::new(SmallVec::from_iter(frames)))
+    }
+
+    struct AnimatedImageView(Arc<RenderImage>);
+
+    impl Render for AnimatedImageView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            img(ImageSource::Render(self.0.clone()))
+                .id(TEST_IMG_ID)
+                .size_full()
+        }
+    }
+
+    #[test]
+    fn advance_animation_steps_through_every_covered_frame() {
+        let delays = [100, 200, 300].map(Duration::from_millis);
+        let advance = |frame, elapsed_ms| {
+            advance_animation(frame, Duration::from_millis(elapsed_ms), 3, |ix| delays[ix])
+        };
+
+        assert_eq!(advance(0, 0), (0, Duration::ZERO));
+        assert_eq!(advance(0, 99), (0, Duration::from_millis(99)));
+        assert_eq!(advance(0, 340), (2, Duration::from_millis(40)));
+        assert_eq!(advance(2, 375), (0, Duration::from_millis(75)));
+        // A full cycle plus 150 ms: back to the first frame, 50 ms into the second.
+        assert_eq!(advance(0, 750), (1, Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn advance_animation_skips_whole_cycles_and_bounds_zero_delay_frames() {
+        let delays = [
+            Duration::ZERO,
+            Duration::from_millis(2),
+            Duration::from_millis(3),
+        ];
+        // Zero delays count as 1 ms, so a cycle lasts 6 ms.
+        let elapsed = Duration::from_millis(4);
+        let expected = advance_animation(1, elapsed, 3, |ix| delays[ix]);
+        assert_eq!(
+            advance_animation(1, elapsed + Duration::from_millis(6) * 500_000, 3, |ix| {
+                delays[ix]
+            }),
+            expected
+        );
+        assert_eq!(
+            advance_animation(0, Duration::from_millis(1), 2, |_| Duration::ZERO),
+            (1, Duration::ZERO)
+        );
+    }
+
+    #[gpui::test]
+    fn animated_image_follows_the_executor_clock(cx: &mut TestAppContext) {
+        let (_, window) = cx.add_window_view(|_, _| AnimatedImageView(animated_image()));
+        window.update(|window, _| window.activate());
+        let clock = window.cx.background_executor.clone();
+        let frame_width_after = |window: &mut crate::VisualTestContext, elapsed_ms: u64| {
+            clock.advance_clock(Duration::from_millis(elapsed_ms));
+            window.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.draw(cx).clear(cx);
+                window
+                    .rendered_frame
+                    .scene
+                    .polychrome_sprites
+                    .last()
+                    .expect("animated image should paint a sprite")
+                    .tile
+                    .bounds
+                    .size
+                    .width
+                    .0
+            })
+        };
+
+        for (elapsed_ms, expected_width) in [(0, 1), (99, 1), (1, 2), (1_100, 1), (99, 1), (1, 2)] {
+            assert_eq!(
+                frame_width_after(window, elapsed_ms),
+                expected_width,
+                "after {elapsed_ms} ms"
+            );
+        }
     }
 
     /// Overwrites the cached `frame_index` of the sibling `img` during paint.

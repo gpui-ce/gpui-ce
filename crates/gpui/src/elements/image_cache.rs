@@ -10,8 +10,24 @@ use refineable::Refineable;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, sync::Arc};
 
-/// An image cache element, all its child img elements will use the cache specified by this element.
-/// Note that this could as simple as passing an `Entity<T: ImageCache>`
+/// Scopes an image cache to the [`img`](crate::img) elements below it.
+///
+/// Each image in the children uses the cache that `image_cache_provider` returns, instead of the
+/// app-wide cache. Pass an `Entity` of an [`ImageCache`] to share one cache, or [`retain_all`] to get
+/// a cache that lives with this element's state. The provider is called on every layout and paint.
+///
+/// Only [`crate::ImageSource::Resource`] sources use the cache. See [`crate::Img::image_cache`].
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// let gallery = image_cache(retain_all("gallery")).children((0..3).map(|ix| {
+///     img(format!("https://example.com/photos/{ix}.jpg"))
+///         .size(px(120.))
+///         .into_any_element()
+/// }));
+/// ```
 pub fn image_cache(image_cache_provider: impl ImageCacheProvider) -> ImageCacheElement {
     ImageCacheElement {
         image_cache_provider: Box::new(image_cache_provider),
@@ -20,7 +36,9 @@ pub fn image_cache(image_cache_provider: impl ImageCacheProvider) -> ImageCacheE
     }
 }
 
-/// A dynamically typed image cache, which can be used to store any image cache
+/// A type-erased [`ImageCache`], so one [`img`](crate::img) can hold any cache type.
+///
+/// Built from an `Entity` of an [`ImageCache`] with `From`.
 #[derive(Clone)]
 pub struct AnyImageCache {
     image_cache: AnyEntity,
@@ -42,8 +60,8 @@ impl<I: ImageCache> From<Entity<I>> for AnyImageCache {
 }
 
 impl AnyImageCache {
-    /// Load an image given a resource
-    /// returns the result of loading the image if it has finished loading, or None if it is still loading
+    /// Asks the cache for `resource`. Returns `None` while the image loads, and the result once it is
+    /// ready. See [`ImageCache::load`].
     pub fn load(
         &self,
         resource: &Resource,
@@ -68,7 +86,8 @@ mod any_image_cache {
     }
 }
 
-/// An image cache element.
+/// The element that [`image_cache`] returns. It installs the cache for its children during layout
+/// and paint, and lays out like a `div`.
 pub struct ImageCacheElement {
     image_cache_provider: Box<dyn ImageCacheProvider>,
     style: StyleRefinement,
@@ -161,14 +180,18 @@ impl Element for ImageCacheElement {
     }
 }
 
-/// An image loading task associated with an image cache.
+/// A background load of one image, shared so that every caller waits on the same work.
+///
+/// Its output is the decoded image or the error.
 pub type ImageLoadingTask = Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>>;
 
-/// An image cache item
+/// An entry in a [`RetainAllImageCache`]: a load in progress, or its finished result.
 pub enum ImageCacheItem {
-    /// The associated image is currently loading
+    /// The image is still loading. [`ImageCacheItem::get`] moves the item to `Loaded` once the task
+    /// finishes.
     Loading(ImageLoadingTask),
-    /// This item has loaded an image.
+    /// The load finished with this result. Errors are kept too, so a failed image is not retried
+    /// until its entry is removed.
     Loaded(Result<Arc<RenderImage>, ImageCacheError>),
 }
 
@@ -185,7 +208,10 @@ impl std::fmt::Debug for ImageCacheItem {
 }
 
 impl ImageCacheItem {
-    /// Attempt to get the image from the cache item.
+    /// Returns the result if the load has finished, without waiting.
+    ///
+    /// Once the load has finished, the item is stored as [`ImageCacheItem::Loaded`]. Returns `None`
+    /// while the load is still running.
     pub fn get(&mut self) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         match self {
             ImageCacheItem::Loading(task) => {
@@ -198,11 +224,17 @@ impl ImageCacheItem {
     }
 }
 
-/// An object that can handle the caching and unloading of images.
-/// Implementations of this trait should ensure that images are removed from all windows when they are no longer needed.
+/// A store of decoded images that [`img`](crate::img) elements read from.
+///
+/// Implement it to control how images load and when they are released. [`RetainAllImageCache`]
+/// keeps every image until you clear it. Release images you no longer need, so they are removed
+/// from all windows.
 pub trait ImageCache: 'static {
-    /// Load an image given a resource
-    /// returns the result of loading the image if it has finished loading, or None if it is still loading
+    /// Returns the image for `resource` if it is ready, or `None` while it loads.
+    ///
+    /// This runs on every layout and paint of each image that uses the cache, so it must return
+    /// quickly. Start the load in the background, return `None`, and notify the current view when
+    /// the load finishes, as [`RetainAllImageCache`] does. The element is then drawn again.
     fn load(
         &mut self,
         resource: &Resource,
@@ -211,10 +243,13 @@ pub trait ImageCache: 'static {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>>;
 }
 
-/// An object that can create an ImageCache during the render phase.
-/// See the ImageCache trait for more information.
+/// Creates the [`AnyImageCache`] for an [`image_cache`] element.
+///
+/// An `Entity` of an [`ImageCache`] implements it, and so does the provider from [`retain_all`].
 pub trait ImageCacheProvider: 'static {
-    /// Called during the request_layout phase to create an ImageCache.
+    /// Returns the cache for the children of an [`image_cache`] element.
+    ///
+    /// Called in both the layout and the paint phase.
     fn provide(&mut self, _window: &mut Window, _cx: &mut App) -> AnyImageCache;
 }
 
@@ -224,7 +259,12 @@ impl<T: ImageCache> ImageCacheProvider for Entity<T> {
     }
 }
 
-/// An implementation of ImageCache, that uses an LRU caching strategy to unload images when the cache is full
+/// An [`ImageCache`] that keeps every image it loads until you clear it, remove a source, or drop
+/// the cache.
+///
+/// Create one with [`RetainAllImageCache::new`], or let [`retain_all`] create one for an element.
+/// Loads run on the background executor, and the view that asked is notified when each finishes.
+/// Dropping the cache drops its decoded images from the windows.
 pub struct RetainAllImageCache(HashMap<u64, ImageCacheItem>);
 
 impl fmt::Debug for RetainAllImageCache {
@@ -236,7 +276,10 @@ impl fmt::Debug for RetainAllImageCache {
 }
 
 impl RetainAllImageCache {
-    /// Create a new image cache.
+    /// Creates a cache as an app entity. Its images are dropped from the windows when the entity is
+    /// released.
+    ///
+    /// Keep the returned `Entity` alive for as long as its images are needed.
     #[inline]
     pub fn new(cx: &mut App) -> Entity<Self> {
         let e = cx.new(|_cx| RetainAllImageCache(HashMap::new()));
@@ -251,9 +294,10 @@ impl RetainAllImageCache {
         e
     }
 
-    /// Load an image from the given source.
+    /// Returns the image for `source`, starting its load on the first request.
     ///
-    /// Returns `None` if the image is loading.
+    /// Returns `None` while the image loads. After that, it returns the same result on every call,
+    /// including an error. Requests for one source share a single load. See [`ImageCache::load`].
     pub fn load(
         &mut self,
         source: &Resource,
@@ -285,7 +329,9 @@ impl RetainAllImageCache {
         None
     }
 
-    /// Clear the image cache.
+    /// Removes every entry and drops the decoded images from the windows.
+    ///
+    /// A load still in progress is forgotten, so the next request for its source starts again.
     pub fn clear(&mut self, window: &mut Window, cx: &mut App) {
         for (_, mut item) in std::mem::replace(&mut self.0, HashMap::new()) {
             if let Some(Ok(image)) = item.get() {
@@ -294,7 +340,8 @@ impl RetainAllImageCache {
         }
     }
 
-    /// Remove the image from the cache by the given source.
+    /// Removes one source and drops its decoded image from the windows. The next request for it
+    /// loads it again.
     pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
         let hash = hash(source);
         if let Some(mut item) = self.0.remove(&hash)
@@ -304,12 +351,12 @@ impl RetainAllImageCache {
         }
     }
 
-    /// Returns the number of images in the cache.
+    /// Returns the number of sources in the cache, including ones still loading.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Returns true if the cache is empty.
+    /// Returns `true` if the cache holds no sources, including ones still loading.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -326,12 +373,26 @@ impl ImageCache for RetainAllImageCache {
     }
 }
 
-/// Constructs a retain-all image cache that uses the element state associated with the given ID.
+/// Returns a provider for an [`image_cache`] element that keeps one [`RetainAllImageCache`] in
+/// the element state under `id`.
+///
+/// The cache lasts as long as the element state, which is dropped when the element is no longer
+/// rendered. Give each gallery its own `id`, so they don't share a cache. For the bigger picture,
+/// see the [images guide](crate::_documentation::guides::images_and_assets).
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::*;
+/// let thumbnails = image_cache(retain_all("thumbnails")).child(
+///     img("https://example.com/thumb.png").size(px(64.)),
+/// );
+/// ```
 pub fn retain_all(id: impl Into<ElementId>) -> RetainAllImageCacheProvider {
     RetainAllImageCacheProvider { id: id.into() }
 }
 
-/// A provider struct for creating a retain-all image cache inline
+/// The [`ImageCacheProvider`] that [`retain_all`] returns.
 pub struct RetainAllImageCacheProvider {
     id: ElementId,
 }
