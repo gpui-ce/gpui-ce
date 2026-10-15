@@ -1690,12 +1690,12 @@ mod tests {
             // Three wide and two tall, before the transformation.
             bounds: Bounds {
                 origin: Point {
-                    x: sp(0.0),
-                    y: sp(0.0),
+                    x: scaled(0.0),
+                    y: scaled(0.0),
                 },
                 size: Size {
-                    width: sp(3.0),
-                    height: sp(2.0),
+                    width: scaled(3.0),
+                    height: scaled(2.0),
                 },
             },
             content_mask,
@@ -1724,10 +1724,13 @@ mod tests {
     fn mask_at(x: f32, y: f32, width: f32, height: f32) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: Bounds {
-                origin: Point { x: sp(x), y: sp(y) },
+                origin: Point {
+                    x: scaled(x),
+                    y: scaled(y),
+                },
                 size: Size {
-                    width: sp(width),
-                    height: sp(height),
+                    width: scaled(width),
+                    height: scaled(height),
                 },
             },
             ..Default::default()
@@ -1759,12 +1762,12 @@ mod tests {
         let mut background = quad();
         background.bounds = Bounds {
             origin: Point {
-                x: sp(3.5),
-                y: sp(1.5),
+                x: scaled(3.5),
+                y: scaled(1.5),
             },
             size: Size {
-                width: sp(1.0),
-                height: sp(1.0),
+                width: scaled(1.0),
+                height: scaled(1.0),
             },
         };
         scene.insert_primitive(background);
