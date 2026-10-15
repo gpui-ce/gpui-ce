@@ -1,24 +1,28 @@
 <img src="assets/readme/banner.png" alt="GPUI Community Edition banner" width="100%">
 
 <p align="center">
-  <a href="https://gpui-ce.github.io">Website</a> ​ · ​ <a href="crates/gpui/examples/learn">Examples</a> ​ · ​ <a href="https://discord.gg/ENGHGjrYEn">Discord</a>
+  <a href="https://gpui-ce.github.io">Website</a> ​ · ​ <a href="https://docs.rs/gpui-ce">Docs</a> ​ · ​ <a href="crates/gpui/examples">Examples</a> ​ · ​ <a href="https://discord.gg/ENGHGjrYEn">Discord</a>
 </p>
 
-# GPUI - Community Edition
+# GPUI Community Edition
 
-GPUI-CE is a fork of Zed's [GPUI](https://gpui.rs) UI Framework.
+GPUI-CE is a community fork of Zed's [GPUI](https://gpui.rs), a GPU-accelerated
+UI framework for Rust. It supports macOS, Windows, Linux, and the web.
 
-It's mostly API compatible with upstream, but that is changing!
+A view builds an element tree from the state held in its entity. Input handlers
+update that state through a context; `notify` requests the next redraw. For API
+and feature differences from Zed's GPUI, see the
+[upstream guide](crates/gpui/docs/upstream.md).
 
-## Overview:
+## Overview
 
-- Web-inspired Styling & Layout
+- Layout and styling
 
   Build views with familiar elements, flex layouts, and Tailwind-style methods:
 
   ```rust
   div()
-      .id("some_id_123")
+      .id("greeting")
       .flex()
       .items_center()
       .gap_2()
@@ -31,11 +35,14 @@ It's mostly API compatible with upstream, but that is changing!
       .child("Hello, GPUI")
   ```
 
-  [Layout example](crates/gpui/examples/learn/layout.rs) ​ · ​ [Styling example](crates/gpui/examples/learn/styling.rs)
+  [Layout example](crates/gpui/examples/layout.rs) ​ · ​ [Styling example](crates/gpui/examples/styling.rs)
 
 - State and events
 
-  Use `Entity<T>` to access view and shared application state. Observe changes and call `cx.notify()` when state changes to notify observers and update the view. For a view with a `count` field:
+  The app stores a view's state; an `Entity<T>` lets other code read and update
+  it through a context. Mutation alone does not redraw a window. In this
+  counter's `render` method, the click handler changes the count and announces
+  the change with `cx.notify()`:
 
   ```rust
   div()
@@ -47,11 +54,14 @@ It's mostly API compatible with upstream, but that is changing!
       }))
   ```
 
-  [Interaction example](crates/gpui/examples/learn/interactive_elements.rs)
+  [Counter example](crates/gpui/examples/counter.rs) ·
+  [State and ownership](crates/gpui/docs/concepts/ownership.md)
 
-- Actions and keybinds
+- Actions and key bindings
 
-  Define typed actions and bind them to keyboard shortcuts. Call `register_keybinds` during app setup to bind Space and Backspace in the focused counter:
+  Typed actions name operations independently of the keys that trigger them.
+  During app setup, bind Space and Backspace to actions in the `Counter` key
+  context:
 
   ```rust
   use gpui::{App, KeyBinding, actions};
@@ -66,7 +76,8 @@ It's mostly API compatible with upstream, but that is changing!
   }
   ```
 
-  Connect the view's focus handle and action handlers:
+  In the view, set that key context, track its focus handle, and register the
+  action handlers. The bindings apply while focus is inside this element:
 
   ```rust
   div()
@@ -77,11 +88,13 @@ It's mostly API compatible with upstream, but that is changing!
       .child(format!("Count: {}", self.count))
   ```
 
-  [Keybind example](crates/gpui/examples/learn/actions_and_keybinds.rs)
+  [Keyboard example](crates/gpui/examples/keyboard.rs) ·
+  [Focus and dispatch](crates/gpui/docs/concepts/input-dispatch.md)
 
 - Virtualized lists
 
-  Use `uniform_list` for large collections of equal-height rows. GPUI requests the item ranges needed for the visible area as you scroll.
+  Use `uniform_list` for large collections of equal-height rows. It builds the
+  rows needed for the viewport and a small buffer as you scroll:
 
   ```rust
   uniform_list("items", 10_000, |range, _window, _cx| {
@@ -96,11 +109,12 @@ It's mostly API compatible with upstream, but that is changing!
   .h(px(300.0))
   ```
 
-  [List example](crates/gpui/examples/learn/uniform_list.rs)
+  [List example](crates/gpui/examples/list.rs)
 
 - Custom drawing
 
-  Use `canvas` to paint directly within a view. Implement `Element` when you need control over layout and rendering, such as for a code editor or custom widget.
+  `canvas` paints inside bounds assigned by GPUI's layout system. For a custom
+  control that also needs its own layout or input handling, implement `Element`.
 
   ```rust
   canvas(
@@ -112,17 +126,34 @@ It's mostly API compatible with upstream, but that is changing!
   .size(px(80.0))
   ```
 
-  [Drawing example](crates/gpui/examples/learn/custom_drawing.rs)
+  [Drawing example](crates/gpui/examples/canvas.rs)
+
+## Learn
+
+The tutorial, guides, and concepts are included in rustdoc alongside the API
+reference. Documentation snippets are compiled or run as doctests; complete
+example programs are checked separately by Cargo.
+
+- [Tutorial](https://docs.rs/gpui-ce/latest/gpui/_documentation/tutorial/index.html): build a task-list app, from the first window through tests.
+- [Guides](https://docs.rs/gpui-ce/latest/gpui/_documentation/guides/index.html): get a specific job done.
+- [Concepts](https://docs.rs/gpui-ce/latest/gpui/_documentation/concepts/index.html): connect ownership, rendering, layout, input, and scheduling.
+- [Examples](crates/gpui/examples): complete programs. Run one with `cargo run --example counter`, or see them live on [the website](https://gpui-ce.github.io).
+
+To read the documentation for this checkout, run `just docs` and open
+`target/doc/gpui/index.html`. [`docs/writing-docs.md`](docs/writing-docs.md)
+explains how to contribute to it.
 
 ## Setup
-View the [setup guide](SETUP.md) for installation instructions.
 
-## FAQ
-- Q: What is our AI Policy?
-  A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
+The [project guide](crates/gpui/docs/guides/start-a-project.md) creates a
+standalone app. [SETUP.md](SETUP.md) covers building this repository.
 
-- Q: What is the long-term goal of GPUI-CE?
-  A: To become the go-to Rust GUI library for applications of any size. We want reusable components, native platform integration, and control over performance. We build on Zed's work and continue to bring in upstream fixes.
+## Project goals and policy
 
-- Q: How does the project compare to other forks in the ecosystem?
-  A: Other forks often develop around the applications that use them. GPUI-CE aims to support a broad range of applications, with a focus on stability.
+GPUI-CE aims to support Rust applications of different sizes, with reusable
+components, native platform integration, and control over rendering. The
+project builds on Zed's work and continues to incorporate upstream fixes.
+
+Contributions follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/).
+Contributors are responsible for understanding and reviewing their work.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to discuss and submit changes.
