@@ -144,31 +144,59 @@ where
     }
 }
 
-/// A handle to a subscription created by GPUI. When dropped, the subscription
-/// is cancelled and the callback will no longer be invoked.
+/// A handle to a callback that GPUI calls until the handle is dropped.
+///
+/// Methods such as [`Context::observe`](crate::Context::observe),
+/// [`Context::subscribe`](crate::Context::subscribe) and
+/// [`App::observe`](crate::App::observe) return a `Subscription`. Dropping it cancels the
+/// callback. Keep it in a field to tie the callback to the lifetime of the entity that owns the
+/// field. Call [`Subscription::detach`] to keep the callback registered without holding the
+/// handle.
 #[must_use]
 pub struct Subscription {
     unsubscribe: Option<Box<dyn FnOnce() + 'static>>,
 }
 
 impl Subscription {
-    /// Creates a new subscription with a callback that gets invoked when
-    /// this subscription is dropped.
+    /// Creates a subscription that runs `unsubscribe` when it's dropped.
+    ///
+    /// Use it to give your own resource the same drop-to-cancel behavior as the subscriptions that GPUI
+    /// returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::Subscription;
+    /// # use std::{cell::Cell, rc::Rc};
+    /// let cleaned_up = Rc::new(Cell::new(false));
+    ///
+    /// let subscription = Subscription::new({
+    ///     let cleaned_up = cleaned_up.clone();
+    ///     move || cleaned_up.set(true)
+    /// });
+    /// assert!(!cleaned_up.get());
+    ///
+    /// drop(subscription);
+    /// assert!(cleaned_up.get());
+    /// ```
     pub fn new(unsubscribe: impl 'static + FnOnce()) -> Self {
         Self {
             unsubscribe: Some(Box::new(unsubscribe)),
         }
     }
 
-    /// Detaches the subscription from this handle. The callback will
-    /// continue to be invoked until the entities it has been
-    /// subscribed to are dropped
+    /// Forgets the cancellation handle and leaves the callback registered.
+    ///
+    /// A callback created by GPUI may still remove itself when an entity it depends on is released.
+    /// Detaching does not run the `unsubscribe` callback supplied to [`Subscription::new`].
     pub fn detach(mut self) {
         self.unsubscribe.take();
     }
 
-    /// Joins two subscriptions into a single subscription. Detach will
-    /// detach both interior subscriptions.
+    /// Combines two subscriptions into one cancellation handle.
+    ///
+    /// Dropping the result cancels both subscriptions. Calling [`Subscription::detach`] on the result
+    /// detaches both.
     pub fn join(mut subscription_a: Self, mut subscription_b: Self) -> Self {
         let a_unsubscribe = subscription_a.unsubscribe.take();
         let b_unsubscribe = subscription_b.unsubscribe.take();
