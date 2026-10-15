@@ -1,16 +1,28 @@
 use crate::{Action, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, SharedString};
 use std::{any::TypeId, collections::HashMap};
 
-/// A generic collection of `Action` -> keystrokes which can be bound under a shared key-context.
-/// Use `as_keybindings` to create an iterator of `KeyBinding` to provide to `App::bind_keys`.
+/// A set of actions and the keystrokes that trigger each one, to be bound together in one key
+/// context.
 ///
-/// ```rust
-/// # use gpui::{ActionBindingCollection, Action};
-/// gpui::actions!([MyAction]);
-/// # #[gpui::test]
-/// # fn test(app: &mut gpui::TestAppContext) {
-/// app.bind_keys(ActionBindingCollection::default().with::<MyAction>("enter").as_keybindings(None));
-/// # }
+/// Use it when one action has several keystrokes, or when a group of bindings shares a context.
+/// Build it with [`with`](Self::with), then turn it into [`KeyBinding`]s with
+/// [`as_keybindings`](Self::as_keybindings) and pass them to
+/// [`App::bind_keys`](crate::App::bind_keys).
+///
+/// # Examples
+///
+/// ```standalone_crate
+/// use gpui::{ActionBindingCollection, actions};
+///
+/// actions!(collection_docs, [Submit]);
+///
+/// let bindings = ActionBindingCollection::default()
+///     .with::<Submit>("enter")
+///     .with::<Submit>("ctrl-enter");
+///
+/// // One binding per keystroke, all in the `Form` context.
+/// let bindings: Vec<_> = bindings.as_keybindings(Some("Form")).collect();
+/// assert_eq!(bindings.len(), 2);
 /// ```
 #[derive(Default)]
 pub struct ActionBindingCollection {
@@ -27,7 +39,12 @@ struct ActionBindingEntry {
 }
 
 impl ActionBindingCollection {
-    /// Adds a keystroke to an action in the collection.
+    /// Adds `keystrokes` as a trigger for the action type `A`, and returns the collection.
+    ///
+    /// The action is built with `A::default()` once per type, so `A` must be a type you can
+    /// construct with `Default`, such as an action declared with [`actions!`](crate::actions).
+    /// Keystrokes aren't parsed here. They are parsed by [`as_keybindings`](Self::as_keybindings),
+    /// which panics on an invalid one.
     pub fn with<A: Action + Default>(mut self, keystrokes: impl Into<SharedString>) -> Self {
         let action_id = TypeId::of::<A>();
         let entry = self.entries.entry(action_id);
@@ -39,8 +56,18 @@ impl ActionBindingCollection {
         self
     }
 
-    /// Creates an iterator of `KeyBinding` which represents all action+keystrokes in this collection bound to the same key-context.
-    /// This sequence can be provided to `App::bind_keys`, and any elements which use the same `InteractiveElement::key_context` will receive the bound actions.
+    /// Returns one [`KeyBinding`] for each action and keystroke in the collection, all in `context`.
+    ///
+    /// Pass `None` for `context` to make the bindings apply everywhere. Elements that declare a
+    /// matching [`key_context`](crate::InteractiveElement::key_context) receive the actions.
+    /// The order of the bindings is unspecified, because the collection is a hash map keyed by
+    /// action type. Bindings for different actions on the same keystrokes therefore have no
+    /// defined precedence.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a keystroke fails to parse, or if `context` is not a valid key context
+    /// predicate.
     pub fn as_keybindings(&self, context: Option<&str>) -> impl Iterator<Item = KeyBinding> {
         let context_predicate =
             context.map(|context| KeyBindingContextPredicate::parse(context).unwrap().into());

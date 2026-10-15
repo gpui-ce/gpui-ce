@@ -1,53 +1,15 @@
-//! KeyDispatch is where GPUI deals with binding actions to key events.
+//! Turns keystrokes into actions, and resolves which handlers run for them.
 //!
-//! The key pieces to making a key binding work are to define an action,
-//! implement a method that takes that action as a type parameter,
-//! and then to register the action during render on a focused node
-//! with a keymap context:
+//! Rendering records a dispatch tree for each frame. When a key is pressed,
+//! [`DispatchTree::dispatch_key`] combines the pending sequence with the new
+//! keystroke and asks the [`Keymap`] which bindings match. The result tells the
+//! window which actions to run, whether to wait for another keystroke, and which
+//! earlier input to replay when a sequence stops matching.
 //!
-//! ```ignore
-//! actions!(editor,[Undo, Redo]);
-//!
-//! impl Editor {
-//!   fn undo(&mut self, _: &Undo, _window: &mut Window, _cx: &mut Context<Self>) { ... }
-//!   fn redo(&mut self, _: &Redo, _window: &mut Window, _cx: &mut Context<Self>) { ... }
-//! }
-//!
-//! impl Render for Editor {
-//!   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-//!     div()
-//!       .track_focus(&self.focus_handle(cx))
-//!       .key_context("Editor")
-//!       .on_action(cx.listener(Editor::undo))
-//!       .on_action(cx.listener(Editor::redo))
-//!     ...
-//!    }
-//! }
-//!```
-//!
-//! The keybindings themselves are managed independently by calling cx.bind_keys().
-//! (Though mostly when developing Zed itself, you just need to add a new line to
-//!  assets/keymaps/default-{platform}.json).
-//!
-//! ```ignore
-//! cx.bind_keys([
-//!   KeyBinding::new("cmd-z", Editor::undo, Some("Editor")),
-//!   KeyBinding::new("cmd-shift-z", Editor::redo, Some("Editor")),
-//! ])
-//! ```
-//!
-//! With all of this in place, GPUI will ensure that if you have an Editor that contains
-//! the focus, hitting cmd-z will Undo.
-//!
-//! In real apps, it is a little more complicated than this, because typically you have
-//! several nested views that each register keyboard handlers. In this case action matching
-//! bubbles up from the bottom. For example in Zed, the Workspace is the top-level view, which contains Pane's, which contain Editors. If there are conflicting keybindings defined
-//! then the Editor's bindings take precedence over the Pane's bindings, which take precedence over the Workspace.
-//!
-//! In GPUI, keybindings are not limited to just single keystrokes, you can define
-//! sequences by separating the keys with a space:
-//!
-//!  KeyBinding::new("cmd-k left", pane::SplitLeft, Some("Pane"))
+//! The public model is described in [keyboard input](crate::_documentation::concepts::input_dispatch):
+//! define an action, register an `on_action` handler on an element with a
+//! `key_context`, and bind keystrokes to the action with `cx.bind_keys`.
+//! A binding in a deeper context wins; ties go to the binding added later.
 
 use crate::{
     Action, ActionRegistry, App, DispatchPhase, EntityId, FocusId, KeyBinding, KeyContext, Keymap,
@@ -63,11 +25,18 @@ use std::{
     rc::Rc,
 };
 
-/// ID of a node within `DispatchTree`. Note that these are **not** stable between frames, and so a
-/// `DispatchNodeId` should only be used with the `DispatchTree` that provided it.
+/// Identifies a node within one [`DispatchTree`].
+///
+/// Node ids are not stable across frames. Use an id only with the tree that
+/// produced it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct DispatchNodeId(usize);
 
+/// The nodes of one window's dispatch tree, built during rendering.
+///
+/// Nodes are added in paint order while `node_stack` tracks the node being built.
+/// The tree also records key contexts, views, and the nodes associated with each
+/// focus handle.
 pub(crate) struct DispatchTree {
     node_stack: Vec<DispatchNodeId>,
     pub(crate) context_stack: Vec<KeyContext>,
@@ -79,6 +48,7 @@ pub(crate) struct DispatchTree {
     action_registry: Rc<ActionRegistry>,
 }
 
+/// One element's entry in the dispatch tree: its key context, focus, and listeners.
 #[derive(Default)]
 pub(crate) struct DispatchNode {
     pub key_listeners: Vec<KeyListener>,
@@ -90,6 +60,9 @@ pub(crate) struct DispatchNode {
     parent: Option<DispatchNodeId>,
 }
 
+/// A run of nodes copied from the previous frame because its element did not re-render.
+///
+/// [`refresh_node_id`](Self::refresh_node_id) maps an old node ID to its position in the new tree.
 pub(crate) struct ReusedSubtree {
     old_range: Range<usize>,
     new_range: Range<usize>,
@@ -112,12 +85,17 @@ impl ReusedSubtree {
     }
 }
 
+/// A pending keystroke that no longer leads to a binding and must be dispatched again.
+///
+/// `bindings` contains bindings completed by this keystroke. They run before the
+/// replay continues with the rest of the input.
 #[derive(Default, Debug)]
 pub(crate) struct Replay {
     pub(crate) keystroke: Keystroke,
     pub(crate) bindings: SmallVec<[KeyBinding; 1]>,
 }
 
+/// The actions and input state produced by one key press.
 #[derive(Default, Debug)]
 pub(crate) struct DispatchResult {
     pub(crate) pending: SmallVec<[Keystroke; 1]>,
@@ -130,6 +108,7 @@ pub(crate) struct DispatchResult {
 type KeyListener = Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Window, &mut App)>;
 type ModifiersChangedListener = Rc<dyn Fn(&ModifiersChangedEvent, &mut Window, &mut App)>;
 
+/// A handler registered with `on_action` for one action type.
 #[derive(Clone)]
 pub(crate) struct DispatchActionListener {
     pub(crate) action_type: TypeId,
@@ -150,6 +129,7 @@ impl DispatchTree {
         }
     }
 
+    /// Empties the tree, ready for the next frame.
     pub fn clear(&mut self) {
         self.node_stack.clear();
         self.context_stack.clear();
@@ -159,10 +139,12 @@ impl DispatchTree {
         self.view_node_ids.clear();
     }
 
+    /// Returns the number of nodes in the tree.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
+    /// Adds a node as a child of the active node, and makes it the active node.
     pub fn push_node(&mut self) -> DispatchNodeId {
         let parent = self.node_stack.last().copied();
         let node_id = DispatchNodeId(self.nodes.len());
@@ -175,6 +157,7 @@ impl DispatchTree {
         node_id
     }
 
+    /// Makes `node_id` the active node, popping nodes until its parent is on top of the stack.
     pub fn set_active_node(&mut self, node_id: DispatchNodeId) {
         let next_node_parent = self.nodes[node_id.0].parent;
         while self.node_stack.last().copied() != next_node_parent && !self.node_stack.is_empty() {
@@ -212,17 +195,20 @@ impl DispatchTree {
         }
     }
 
+    /// Sets the key context of the active node and pushes it onto the context stack.
     pub fn set_key_context(&mut self, context: KeyContext) {
         self.active_node().context = Some(context.clone());
         self.context_stack.push(context);
     }
 
+    /// Marks the active node as tracking `focus_id`, so that the focus can find it.
     pub fn set_focus_id(&mut self, focus_id: FocusId) {
         let node_id = *self.node_stack.last().unwrap();
         self.nodes[node_id.0].focus_id = Some(focus_id);
         self.focusable_node_ids.insert(focus_id, node_id);
     }
 
+    /// Marks the active node as belonging to the view `view_id`, unless it already is the top view.
     pub fn set_view_id(&mut self, view_id: EntityId) {
         if self.view_stack.last().copied() != Some(view_id) {
             let node_id = *self.node_stack.last().unwrap();
@@ -232,6 +218,7 @@ impl DispatchTree {
         }
     }
 
+    /// Closes the active node, popping its context and view from their stacks.
     pub fn pop_node(&mut self) {
         let node = &self.nodes[self.active_node_id().unwrap().0];
         if node.context.is_some() {
@@ -261,6 +248,9 @@ impl DispatchTree {
         target.modifiers_changed_listeners = mem::take(&mut source.modifiers_changed_listeners);
     }
 
+    /// Copies the nodes in `old_range` from `source` into this tree, and returns where they landed.
+    ///
+    /// `contains_focus` on the result is true if the focused handle is among the copied nodes.
     pub fn reuse_subtree(
         &mut self,
         old_range: Range<usize>,
@@ -307,6 +297,7 @@ impl DispatchTree {
         }
     }
 
+    /// Removes the nodes from `index` on, and forgets their focus and view IDs.
     pub fn truncate(&mut self, index: usize) {
         for node in &self.nodes[index..] {
             if let Some(focus_id) = node.focus_id {
@@ -320,16 +311,19 @@ impl DispatchTree {
         self.nodes.truncate(index);
     }
 
+    /// Adds a key listener to the active node.
     pub fn on_key_event(&mut self, listener: KeyListener) {
         self.active_node().key_listeners.push(listener);
     }
 
+    /// Adds a modifiers-changed listener to the active node.
     pub fn on_modifiers_changed(&mut self, listener: ModifiersChangedListener) {
         self.active_node()
             .modifiers_changed_listeners
             .push(listener);
     }
 
+    /// Adds an action listener for `action_type` to the active node.
     pub fn on_action(
         &mut self,
         action_type: TypeId,
@@ -343,6 +337,7 @@ impl DispatchTree {
             });
     }
 
+    /// Returns whether `child` is `parent` or is inside it in the focus tree.
     pub fn focus_contains(&self, parent: FocusId, child: FocusId) -> bool {
         if parent == child {
             return true;
@@ -360,6 +355,8 @@ impl DispatchTree {
         false
     }
 
+    /// Returns one instance of each action that has a listener on the path to `target`, skipping
+    /// any action that can't be built with no input.
     pub fn available_actions(&self, target: DispatchNodeId) -> Vec<Box<dyn Action>> {
         let mut actions = Vec::<Box<dyn Action>>::new();
         for node_id in self.dispatch_path(target) {
@@ -379,6 +376,7 @@ impl DispatchTree {
         actions
     }
 
+    /// Returns whether some node on the path to `target` has a listener for `action`'s type.
     pub fn is_action_available(&self, action: &dyn Action, target: DispatchNodeId) -> bool {
         for node_id in self.dispatch_path(target) {
             let node = &self.nodes[node_id.0];
@@ -393,7 +391,7 @@ impl DispatchTree {
         false
     }
 
-    /// Returns key bindings that invoke an action on the currently focused element. Bindings are
+    /// Returns key bindings that invoke `action` in `context_stack`. Bindings are
     /// returned in the order they were added. For display, the last binding should take precedence.
     ///
     /// Bindings are only included if they are the highest precedence match for their keystrokes, so
@@ -560,6 +558,7 @@ impl DispatchTree {
         (input, to_replay)
     }
 
+    /// Returns the nodes from the root down to `target`, inclusive.
     pub fn dispatch_path(&self, target: DispatchNodeId) -> SmallVec<[DispatchNodeId; 32]> {
         let mut dispatch_path: SmallVec<[DispatchNodeId; 32]> = SmallVec::new();
         let mut current_node_id = Some(target);
@@ -571,6 +570,7 @@ impl DispatchTree {
         dispatch_path
     }
 
+    /// Returns the focus handles from the root down to `focus_id`, inclusive.
     pub fn focus_path(&self, focus_id: FocusId) -> SmallVec<[FocusId; 8]> {
         let mut focus_path: SmallVec<[FocusId; 8]> = SmallVec::new();
         let mut current_node_id = self.focusable_node_ids.get(&focus_id).copied();
@@ -585,6 +585,7 @@ impl DispatchTree {
         focus_path
     }
 
+    /// Returns the views from `view_id` up to the root, nearest first.
     pub fn view_path_reversed(&self, view_id: EntityId) -> impl Iterator<Item = EntityId> {
         let mut current_node_id = self.view_node_ids.get(&view_id).copied();
 
@@ -595,6 +596,7 @@ impl DispatchTree {
         .filter_map(|node| node.view_id)
     }
 
+    /// Returns the node with `node_id`.
     pub fn node(&self, node_id: DispatchNodeId) -> &DispatchNode {
         &self.nodes[node_id.0]
     }
@@ -604,15 +606,18 @@ impl DispatchTree {
         &mut self.nodes[active_node_id.0]
     }
 
+    /// Returns the node that tracks the focus handle `target`, if any.
     pub fn focusable_node_id(&self, target: FocusId) -> Option<DispatchNodeId> {
         self.focusable_node_ids.get(&target).copied()
     }
 
+    /// Returns the ID of the first node, which is the root of the tree. The tree must not be empty.
     pub fn root_node_id(&self) -> DispatchNodeId {
         debug_assert!(!self.nodes.is_empty());
         DispatchNodeId(0)
     }
 
+    /// Returns the node currently being built, or `None` if no node is open.
     pub fn active_node_id(&self) -> Option<DispatchNodeId> {
         self.node_stack.last().copied()
     }
