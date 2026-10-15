@@ -1,15 +1,66 @@
-//! Convenience crate that re-exports GPUI's platform traits and the
-//! `current_platform` constructor so consumers don't need `#[cfg]` gating.
+//! Selects GPUI's platform for the current operating system.
+//!
+//! Call [`application`] to get a [`gpui::Application`] for an interactive app,
+//! or [`headless`] for tests and tools that don't need a display. This crate
+//! picks the macOS, Windows, Linux or web platform for you, so your code needs
+//! no `#[cfg]` gates for each OS. It also re-exports [`Platform`], the trait
+//! that each platform implements.
+//!
+//! ```no_run
+//! # extern crate gpui_ce_platform as gpui_platform;
+//! use gpui::{App, Context, IntoElement, Render, Window, WindowOptions, div, prelude::*};
+//!
+//! struct HelloWorld;
+//!
+//! impl Render for HelloWorld {
+//!     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+//!         div().child("Hello, world!")
+//!     }
+//! }
+//!
+//! fn main() {
+//!     gpui_platform::application().run(|cx: &mut App| {
+//!         cx.open_window(WindowOptions::default(), |_window, cx| cx.new(|_| HelloWorld))
+//!             .unwrap();
+//!         cx.activate(true);
+//!     });
+//! }
+//! ```
 
 pub use gpui::Platform;
 
 use std::rc::Rc;
 
-/// Returns a background executor for the current platform.
+/// Returns a [`gpui::BackgroundExecutor`] from a new headless platform.
+///
+/// Use it where no `App` exists, such as in a tool or a test helper. Each call
+/// creates a platform to get the executor, so keep the returned value instead of
+/// calling this in a loop. Inside an app, use `background_executor` on the
+/// context instead.
+///
+/// ```no_run
+/// # extern crate gpui_ce_platform as gpui_platform;
+/// let executor = gpui_platform::background_executor();
+/// executor.spawn(async { println!("running in the background") }).detach();
+/// ```
 pub fn background_executor() -> gpui::BackgroundExecutor {
     current_platform(true).background_executor()
 }
 
+/// Returns an [`gpui::Application`] for an interactive app on the current platform.
+///
+/// On macOS, Windows and Linux this connects to the window system. On the web,
+/// it calls `application_with_web_backend` with `WebBackendPreference::Auto`, which
+/// tries WebGPU and then WebGL2. If neither backend can initialize, `run` reports the
+/// platform startup failure instead of opening a window. Call
+/// [`gpui::Application::run`] on the result to start the event loop.
+///
+/// ```no_run
+/// # extern crate gpui_ce_platform as gpui_platform;
+/// gpui_platform::application().run(|cx| {
+///     cx.quit();
+/// });
+/// ```
 pub fn application() -> gpui::Application {
     #[cfg(target_family = "wasm")]
     {
@@ -20,13 +71,38 @@ pub fn application() -> gpui::Application {
     gpui::Application::with_platform(current_platform(false))
 }
 
+/// Returns an [`gpui::Application`] that doesn't connect to a display.
+///
+/// Use it for tests, command-line tools and servers that render without showing
+/// a window. Use [`application`] for an app with a visible UI.
+///
+/// ```no_run
+/// # extern crate gpui_ce_platform as gpui_platform;
+/// gpui_platform::headless().run(|cx| {
+///     cx.quit();
+/// });
+/// ```
 pub fn headless() -> gpui::Application {
     gpui::Application::with_platform(current_platform(true))
 }
 
+/// The rendering backend that the web platform uses.
+///
+/// `Auto` (the default) prefers browser WebGPU and falls back to WebGL2. `WebGpu`
+/// and `WebGl` force one backend. Pass it to `application_with_web_backend`.
 #[cfg(target_family = "wasm")]
 pub use gpui_web::WebBackendPreference;
 
+/// Returns an [`gpui::Application`] for the web, using the given rendering backend.
+///
+/// The application allows background work to run on Web Workers when `gpui_web`
+/// is built with multithreading support. Use `WebBackendPreference::Auto` for the
+/// default choice, or force `WebGpu` or `WebGl` to pick a backend.
+///
+/// # Panics
+///
+/// Panics if the code isn't running in a browser window, because the platform
+/// needs a `window` object.
 #[cfg(target_family = "wasm")]
 pub fn application_with_web_backend(backend_preference: WebBackendPreference) -> gpui::Application {
     let platform = Rc::new(gpui_web::WebPlatform::new_with_backend(
@@ -37,7 +113,17 @@ pub fn application_with_web_backend(backend_preference: WebBackendPreference) ->
     gpui::Application::with_platform(platform).with_http_client(http_client)
 }
 
-/// Unlike `application`, this function returns a single-threaded web application.
+/// Returns a web [`gpui::Application`] that runs all of its work on the main thread.
+///
+/// Unlike [`application`] on the web, this doesn't allow background work to run
+/// on Web Workers. It uses the automatic rendering backend, so it is suitable for
+/// deployments that want a single-threaded dispatcher. Build without shared-memory
+/// WebAssembly linker flags when the deployment cannot provide cross-origin isolation;
+/// this function cannot change the memory mode of an already-built binary.
+///
+/// # Panics
+///
+/// Panics if the code isn't running in a browser window.
 #[cfg(target_family = "wasm")]
 pub fn single_threaded_web() -> gpui::Application {
     let platform = Rc::new(gpui_web::WebPlatform::new(false));
@@ -45,15 +131,27 @@ pub fn single_threaded_web() -> gpui::Application {
     gpui::Application::with_platform(platform).with_http_client(http_client)
 }
 
-/// Initializes panic hooks and logging for the web platform.
-/// Call this before running the application in a wasm_bindgen entrypoint.
+/// Sets up panic reporting and logging for the web platform.
+///
+/// Panics are printed to the browser console with their messages. Log output
+/// goes to the console too. Call this once at the start of your
+/// `#[wasm_bindgen]` entry point, before you create an application.
 #[cfg(target_family = "wasm")]
 pub fn web_init() {
     console_error_panic_hook::set_once();
     gpui_web::init_logging();
 }
 
-/// Returns the default [`Platform`] for the current OS.
+/// Returns the default [`Platform`] for the current operating system.
+///
+/// `headless` decides whether the platform connects to the window system.
+/// `false` is for an interactive app, and `true` is for tests and tools that
+/// do not need a display. On the web it has no effect. Each call creates a new platform.
+/// Most code should use [`application`] or [`headless`] instead.
+///
+/// # Panics
+///
+/// Panics on Windows if the platform can't be initialized.
 pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     #[cfg(target_os = "macos")]
     {
@@ -80,7 +178,11 @@ pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     }
 }
 
-/// Returns a new [`HeadlessRenderer`] for the current platform, if available.
+/// Returns a [`gpui::PlatformHeadlessRenderer`] for drawing without a window.
+///
+/// Returns `None` on platforms that have no headless renderer. It is available
+/// only with the `bench-support` or `test-support` feature. On macOS it returns a
+/// Metal renderer.
 #[cfg(any(feature = "bench-support", feature = "test-support"))]
 pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRenderer>> {
     #[cfg(target_os = "macos")]
