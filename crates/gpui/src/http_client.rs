@@ -1,17 +1,35 @@
 use futures::future::BoxFuture;
 use http::StatusCode;
 
-/// A simple HTTP response.
+/// An HTTP status code and a fully buffered response body.
+///
+/// The body is owned bytes, so a caller can decode an image or inspect an error response
+/// after the request has finished. This interface does not expose response headers or a stream.
 pub struct HttpResponse {
-    /// The HTTP status code.
+    /// The status returned by the server, including error statuses such as `404 Not Found`.
     pub status: StatusCode,
-    /// The response body bytes.
+    /// The complete response body, read before the response is returned.
     pub body: Vec<u8>,
 }
 
-/// A trait for making HTTP requests.
+/// The transport GPUI uses for resources such as image URLs.
+///
+/// Install an implementation with [`crate::Application::with_http_client`]; code inside the
+/// app retrieves it with [`crate::App::http_client`]. A newly created app uses
+/// [`NullHttpClient`], so URL-backed loads fail until a client is installed. The web
+/// constructors in `gpui_platform` install a fetch-based client; native applications must
+/// provide one before loading URL-backed assets.
+///
+/// For tests, [`BlockedHttpClient`] rejects network access. With the `test-support` feature,
+/// `FakeHttpClient` supplies a fixed status without making a request. The
+/// [images guide](crate::_documentation::guides::images_and_assets) explains loading,
+/// failure placeholders and cache eviction for a retry.
 pub trait HttpClient: 'static + Send + Sync {
-    /// Perform a GET request and return the full response.
+    /// Sends a GET request to `url` and returns its status and complete body.
+    ///
+    /// Follow redirects when `follow_redirects` is `true`. Return `Err` for a transport or
+    /// body-read failure. Receiving an HTTP error status, such as 404, is still an `Ok`
+    /// response: callers inspect [`HttpResponse::status`] and decide whether to use the body.
     fn get(
         &self,
         url: &str,
@@ -19,7 +37,9 @@ pub trait HttpClient: 'static + Send + Sync {
     ) -> BoxFuture<'static, anyhow::Result<HttpResponse>>;
 }
 
-/// An HTTP client that always returns an error.
+/// An [`HttpClient`] that fails every request because no client was configured.
+///
+/// A new app uses it until you install another client. The error text is `No HttpClient available`.
 pub struct NullHttpClient;
 
 impl HttpClient for NullHttpClient {
@@ -32,11 +52,14 @@ impl HttpClient for NullHttpClient {
     }
 }
 
-/// An HTTP client that blocks all requests.
+/// An [`HttpClient`] that refuses every request with an I/O `PermissionDenied` error.
+///
+/// Install it when a run must not reach the network, such as a hermetic test.
 pub struct BlockedHttpClient;
 
 impl BlockedHttpClient {
-    /// Create a new `BlockedHttpClient`.
+    /// Creates a client that refuses every request. This is the same value as
+    /// [`Default::default`].
     pub fn new() -> Self {
         Self
     }
@@ -64,7 +87,9 @@ impl HttpClient for BlockedHttpClient {
     }
 }
 
-/// A fake HTTP client for testing.
+/// An [`HttpClient`] for tests that answers every request with one status and an empty body.
+///
+/// Available in unit tests and with the `test-support` feature. It never performs network I/O.
 #[cfg(any(test, feature = "test-support"))]
 pub struct FakeHttpClient {
     status: StatusCode,
@@ -72,14 +97,14 @@ pub struct FakeHttpClient {
 
 #[cfg(any(test, feature = "test-support"))]
 impl FakeHttpClient {
-    /// Create a fake client that returns 404 responses.
+    /// Returns a client that answers every request with `404 Not Found`.
     pub fn with_404_response() -> std::sync::Arc<dyn HttpClient> {
         std::sync::Arc::new(Self {
             status: StatusCode::NOT_FOUND,
         })
     }
 
-    /// Create a fake client that returns 200 responses.
+    /// Returns a client that answers every request with `200 OK`.
     pub fn with_200_response() -> std::sync::Arc<dyn HttpClient> {
         std::sync::Arc::new(Self {
             status: StatusCode::OK,
