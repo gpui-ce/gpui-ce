@@ -3139,7 +3139,7 @@ impl AnyDrag {
 
     /// Returns true if the type of the internal value matches the provided type.
     pub fn is_type<T: 'static>(&self) -> bool {
-        self.value.type_id() == TypeId::of::<T>()
+        self.value.as_ref().type_id() == TypeId::of::<T>()
     }
 }
 
@@ -3371,6 +3371,17 @@ mod test {
             for window in &windows[1..] {
                 assert_eq!(controller.tabs(window.window_id()).unwrap().len(), 1);
             }
+        });
+    }
+
+    #[gpui::test]
+    fn drag_type_matches_the_payload(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let view = cx.new(|_| Empty);
+            let drag = super::AnyDrag::new(String::from("row"), view);
+            assert!(drag.is_type::<String>());
+            assert!(!drag.is_type::<usize>());
+            assert!(!drag.is_type::<std::sync::Arc<dyn std::any::Any>>());
         });
     }
 
