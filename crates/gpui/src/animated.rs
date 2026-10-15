@@ -2,7 +2,7 @@ use std::{ops::Sub, time::Duration};
 
 use crate::{AnyMotion, Lerp, Progress};
 
-/// A sampled animated value and its activity state.
+/// A value sampled from an [`Animated`], together with its activity and progress.
 #[derive(Clone)]
 pub struct AnimatedSample<T> {
     /// The interpolated value at the sampled time.
@@ -11,12 +11,36 @@ pub struct AnimatedSample<T> {
     /// Whether another sample may produce a different value.
     pub is_active: bool,
 
-    /// Eased presentation progress between the interruption anchor and logical
-    /// target, which may overshoot zero through one.
+    /// Eased presentation progress from the interruption point to the target. An easing curve may
+    /// take it outside `0.0..=1.0`.
     pub progress: Progress,
 }
 
-/// A logical value together with the state required to animate its changes.
+/// A value that animates toward a target, and keeps the state it needs to change course.
+///
+/// `Animated` stores the logical target, the motion, and when the current run started. When the
+/// target changes mid-run, the new run starts from the value on screen at that moment, so the
+/// motion doesn't jump. [`Transition`](crate::Transition) and style transitions are built on it.
+///
+/// `Time` is the clock type. The default is [`std::time::Instant`]. Any `Time` that subtracts to a
+/// [`Duration`](std::time::Duration) works, and a `Duration` makes the examples deterministic.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use gpui::{Animated, Motion, millis, secs};
+///
+/// let motion = Motion::new(secs(1));
+/// let mut value = Animated::<f32, Duration>::new(0.0, motion.clone());
+///
+/// assert!(value.set(10.0, &motion, Duration::ZERO));
+/// assert_eq!(value.sample(millis(500)).value, 5.0);
+///
+/// // Setting the same target again changes nothing.
+/// assert!(!value.set(10.0, &motion, millis(500)));
+/// ```
 #[derive(Clone)]
 pub struct Animated<T, Time = std::time::Instant> {
     value: T,
@@ -33,7 +57,7 @@ where
     T: Lerp + Clone + PartialEq,
     Time: Copy + Sub<Time, Output = Duration>,
 {
-    /// Creates a completed animated value.
+    /// Creates a value at rest at `value`. `motion` describes how later changes animate.
     pub fn new(value: T, motion: impl Into<AnyMotion>) -> Self {
         Self {
             initial_value: value.clone(),
@@ -46,7 +70,9 @@ where
         }
     }
 
-    /// Returns the logical target value.
+    /// Returns the logical target: the value most recently given to [`set`](Self::set).
+    ///
+    /// This is not the value on screen during a run. Use [`sample`](Self::sample) for that.
     pub fn value(&self) -> &T {
         &self.value
     }
@@ -73,12 +99,14 @@ where
         }
     }
 
-    /// Updates the logical target using the current presentation as the
-    /// interruption anchor.
+    /// Sets a new target and starts a run from the current presentation.
     ///
-    /// Reverse-first playback flips motion progress into anchor-to-target
-    /// progress. A custom easing curve that starts away from zero can still
-    /// cause an initial jump.
+    /// The run begins at `now`, using `motion`, and starts from the value on screen at that
+    /// moment. Returns `true` if the target changed. Setting the current target again returns
+    /// `false` and leaves the run alone.
+    ///
+    /// Reverse-first playback flips motion progress into anchor-to-target progress. A custom
+    /// easing curve that starts away from zero can still cause an initial jump.
     pub fn set(&mut self, value: T, motion: impl Into<AnyMotion>, now: Time) -> bool {
         self.retarget(value, motion, now, true)
     }
@@ -115,7 +143,9 @@ where
         true
     }
 
-    /// Sets the logical and sampled value without animation.
+    /// Sets the target and the value on screen to `value`, with no animation.
+    ///
+    /// This stops any run in progress.
     pub fn jump_to(&mut self, value: T) {
         self.value = value.clone();
         self.last_value = value;
@@ -135,7 +165,9 @@ where
         }
     }
 
-    /// Restores the value used to initialize this animation.
+    /// Restores the value this animation was created with, with no animation.
+    ///
+    /// This stops any run in progress.
     pub fn reset(&mut self) {
         self.value = self.initial_value.clone();
         self.last_value = self.initial_value.clone();
@@ -143,7 +175,11 @@ where
         self.started_at = None;
     }
 
-    /// Evaluates the interpolated value at the supplied time.
+    /// Returns the value presented at `now`, and whether the animation can still change.
+    ///
+    /// Call this once per frame. After a run finishes, the sample returns its final value with
+    /// `is_active` set to `false`, and that value becomes the anchor for the next change. Before a
+    /// run starts, sampling returns the last settled value.
     pub fn sample(&mut self, now: Time) -> AnimatedSample<T> {
         let Some(started_at) = self.started_at else {
             return AnimatedSample {
