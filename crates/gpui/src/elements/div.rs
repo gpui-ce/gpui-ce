@@ -2525,6 +2525,9 @@ impl Element for Div {
                 child_min = child_min.min(&child_bounds.origin);
                 child_max = child_max.max(&child_bounds.bottom_right());
                 state.child_bounds.push(child_bounds);
+                if has_prepaint_listener {
+                    children_bounds.push(child_bounds);
+                }
             }
             (child_max - child_min).into()
         } else {
@@ -5059,6 +5062,49 @@ impl ScrollHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn tracked_scroll_reports_children_to_prepaint_listener(cx: &mut TestAppContext) {
+        struct ScrollView {
+            bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+            handle: ScrollHandle,
+        }
+
+        impl Render for ScrollView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let bounds = self.bounds.clone();
+                div()
+                    .on_children_prepainted(move |children, _, _| {
+                        *bounds.borrow_mut() = children;
+                    })
+                    .id("scrolling-container")
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.handle)
+                    .child(div().h(px(20.)).flex_shrink_0())
+                    .child(div().h(px(30.)).flex_shrink_0())
+            }
+        }
+
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scroll_handle = ScrollHandle::new();
+        let window = cx.open_window(size(px(100.), px(100.)), |_, _| ScrollView {
+            bounds: captured.clone(),
+            handle: scroll_handle.clone(),
+        });
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+
+        let bounds = captured.borrow();
+        assert_eq!(bounds.len(), 2);
+        assert_eq!(bounds[0].size.height, px(20.));
+        assert_eq!(bounds[1].size.height, px(30.));
+        assert_eq!(bounds[1].top(), bounds[0].bottom());
+        assert_eq!(scroll_handle.bounds_for_item(0), Some(bounds[0]));
+        assert_eq!(scroll_handle.bounds_for_item(1), Some(bounds[1]));
+    }
 
     #[gpui::test]
     fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
