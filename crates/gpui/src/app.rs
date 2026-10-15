@@ -590,7 +590,7 @@ impl SystemWindowTabController {
                 tabs.push(tab);
             }
         } else {
-            let new_group_id = controller.tab_groups.len();
+            let new_group_id = controller.tab_groups.keys().max().map_or(0, |id| id + 1);
             controller.tab_groups.insert(new_group_id, tabs);
         }
     }
@@ -3341,6 +3341,37 @@ mod test {
         });
 
         assert!(completed.get());
+    }
+
+    #[gpui::test]
+    fn adding_a_tab_group_after_removal_preserves_other_groups(cx: &mut TestAppContext) {
+        use super::{SystemWindowTab, SystemWindowTabController};
+
+        let windows: Vec<_> = (0..4).map(|_| cx.add_window(|_, _| Empty)).collect();
+        cx.update(|cx| {
+            for (ix, window) in windows.iter().take(3).enumerate() {
+                SystemWindowTabController::add_tab(
+                    cx,
+                    window.window_id(),
+                    vec![SystemWindowTab::new(
+                        format!("Window {ix}").into(),
+                        (*window).into(),
+                    )],
+                );
+            }
+            SystemWindowTabController::remove_tab(cx, windows[0].window_id());
+            SystemWindowTabController::add_tab(
+                cx,
+                windows[3].window_id(),
+                vec![SystemWindowTab::new("New window".into(), windows[3].into())],
+            );
+
+            let controller = cx.global::<SystemWindowTabController>();
+            assert_eq!(controller.tab_groups.len(), 3);
+            for window in &windows[1..] {
+                assert_eq!(controller.tabs(window.window_id()).unwrap().len(), 1);
+            }
+        });
     }
 
     #[test]
