@@ -12,31 +12,31 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{iter, mem, ops::Range};
 
-/// Use this struct for interfacing with the 'debug_below' styling from your own elements.
-/// If a parent element has this style set on it, then this struct will be set as a global in
-/// GPUI.
+/// Lets a custom element read the `debug_below` setting in debug builds.
+///
+/// When an ancestor enables that setting, GPUI installs this type as a global.
 #[cfg(debug_assertions)]
 pub struct DebugBelow;
 
 #[cfg(debug_assertions)]
 impl crate::Global for DebugBelow {}
 
-/// How to fit the image into the bounds of the element.
+/// How an image is sized and positioned inside an element's bounds.
 pub enum ObjectFit {
-    /// The image will be stretched to fill the bounds of the element.
+    /// Stretches the image to fill both dimensions, ignoring its aspect ratio.
     Fill,
-    /// The image will be scaled to fit within the bounds of the element.
+    /// Scales the image to fit inside the bounds, preserving its aspect ratio.
     Contain,
-    /// The image will be scaled to cover the bounds of the element.
+    /// Scales the image to cover the bounds, preserving its aspect ratio and cropping overflow.
     Cover,
-    /// The image will be scaled down to fit within the bounds of the element.
+    /// Keeps the image's size when it fits; otherwise scales it down like [`ObjectFit::Contain`].
     ScaleDown,
-    /// The image will maintain its original size.
+    /// Keeps the image's original size and places it at the bounds' origin.
     None,
 }
 
 impl ObjectFit {
-    /// Get the bounds of the image within the given bounds.
+    /// Returns the image rectangle produced by this fit mode.
     pub fn get_bounds(
         &self,
         bounds: Bounds<Pixels>,
@@ -134,7 +134,7 @@ impl ObjectFit {
     }
 }
 
-/// The minimum size of a column or row in a grid layout
+/// The minimum size of a grid column or row.
 #[derive(
     Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default, JsonSchema, Serialize, Deserialize,
 )]
@@ -148,7 +148,7 @@ pub enum GridTemplateMinSize {
     MaxContent,
 }
 
-/// A simplified representation of the grid-template-* value
+/// The portion of a grid template that describes track sizes.
 #[derive(
     Copy,
     Clone,
@@ -225,7 +225,25 @@ impl RingStyle {
     }
 }
 
-/// The CSS styling that can be applied to an element via the `Styled` trait
+/// The resolved styling of an element, which GPUI uses to lay out and paint it.
+///
+/// You rarely build a `Style` yourself. The methods of [`Styled`] write into a
+/// [`StyleRefinement`], and GPUI applies that refinement over `Style::default()` when it
+/// draws the element. A default `Style` uses [`Display::Block`] and is visible.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{Display, Refineable, Style, StyleRefinement};
+///
+/// let mut style = Style::default();
+/// assert_eq!(style.display, Display::Block);
+///
+/// let mut refinement = StyleRefinement::default();
+/// refinement.display = Some(Display::Flex);
+/// style.refine(&refinement);
+/// assert_eq!(style.display, Display::Flex);
+/// ```
 #[derive(Clone, Refineable, Debug)]
 #[refineable(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
@@ -241,7 +259,7 @@ pub struct Style {
     /// How this element participates in Unicode bidirectional text formatting.
     pub unicode_bidi: UnicodeBidi,
 
-    /// Whether `unicode_bidi` was authored rather than supplied by its initial value.
+    /// Whether `unicode_bidi` was set explicitly rather than left at its initial value.
     #[doc(hidden)]
     pub unicode_bidi_explicit: bool,
 
@@ -252,7 +270,7 @@ pub struct Style {
     /// Edge fade distances for overflow masking.
     #[refineable]
     pub overflow_fade: Edges<AbsoluteLength>,
-    /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
+    /// How much space (in logical pixels or rems) should be reserved for the scrollbars of `Overflow::Scroll` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
     pub allow_concurrent_scroll: bool,
@@ -268,19 +286,16 @@ pub struct Style {
     ///
     /// ## Motivation
     ///
-    /// On the web when scrolling with the mouse wheel, scrolling up and down will always scroll the Y axis, even when
-    /// the mouse is over a horizontally-scrollable element.
+    /// On the web, a vertical mouse wheel scrolls the Y axis even over a horizontally scrollable
+    /// element.
     ///
     /// The only way to scroll horizontally is to hold down `Shift` while scrolling, which then changes the scroll axis
     /// to the X axis.
     ///
-    /// Currently, GPUI operates differently from the web in that it will scroll an element in either the X or Y axis
-    /// when scrolling with just the mouse wheel. This causes problems when scrolling in a vertical list that contains
-    /// horizontally-scrollable elements, as when you get to the horizontally-scrollable elements the scroll will be
-    /// hijacked.
+    /// GPUI can otherwise choose either axis for mouse-wheel input. In a vertical list with
+    /// horizontally scrollable children, that can send the list's scroll gesture to a child.
     ///
-    /// Ideally we would match the web's behavior and not have a need for this, but right now we're adding this opt-in
-    /// style property to limit the potential blast radius.
+    /// Set this property to keep each gesture on its initial axis.
     pub restrict_scroll_to_axis: bool,
 
     // Position properties
@@ -424,7 +439,7 @@ impl StyleRefinement {
     }
 }
 
-/// The value of the visibility property, similar to the CSS property `visibility`
+/// Whether an element is painted while it remains in layout.
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Visibility {
     /// The element should be drawn as normal.
@@ -495,7 +510,7 @@ pub enum UnicodeBidi {
     Plaintext,
 }
 
-/// The possible values of the box-shadow property
+/// The values accepted by an element's box-shadow style.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, derive_setters::Setters)]
 #[setters(generate = false)]
 pub struct BoxShadow {
@@ -515,9 +530,9 @@ pub struct BoxShadow {
 }
 
 impl BoxShadow {
-    /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
-    /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
-    /// spread radius, and inset.
+    /// Creates a new [`BoxShadow`] with the given offset and color. The blur and spread
+    /// radii are 0 and the shadow is outset. Use the builder methods to change them, or to
+    /// make the shadow inset.
     pub fn new(offset_x: Pixels, offset_y: Pixels, color: impl Into<Background>) -> Self {
         Self {
             color: color.into(),
@@ -542,9 +557,8 @@ impl Filter {
     /// Whether this filter has no visible effect, so painting can skip it entirely (and the
     /// element can avoid the offscreen isolation pass when *all* of its filters are identities).
     ///
-    /// Each variant declares its own no-op case here rather than the pipeline special-casing
-    /// blur — adding a filter that this returns `true` for is silently dropped before it ever
-    /// reaches the renderer.
+/// Each variant defines its own no-op case. A filter that returns `true` is dropped before it
+/// reaches the renderer.
     pub fn is_identity(&self) -> bool {
         match self {
             Filter::Blur(radius) => *radius <= Pixels::ZERO,
@@ -563,17 +577,16 @@ impl Filter {
 /// The scene-space (device-pixel) form of a [`Filter`], carried on the scene primitives that the
 /// renderers consume. Produced by [`Filter::scale`]; pixel magnitudes are in [`ScaledPixels`].
 ///
-/// This is intentionally a separate enum from [`Filter`] (rather than reusing it) so the scene
-/// stays in device space like every other primitive, and so the renderers `match` on it
-/// exhaustively — adding a filter variant breaks each backend's match, forcing a deliberate
-/// implement-or-decline decision per backend instead of silently rendering nothing.
+/// The scene stores filters separately so their magnitudes stay in device pixels alongside the
+/// other scene primitives. Matches are exhaustive: adding a filter variant requires handling it
+/// in the scene conversion and renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScaledFilter {
     /// A gaussian blur with the given radius, in scaled (device) pixels.
     Blur(ScaledPixels),
 }
 
-/// How to handle whitespace in text
+/// How text handles whitespace and line wrapping.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum WhiteSpace {
     /// Normal line wrapping when text overflows the width of the element
@@ -583,7 +596,7 @@ pub enum WhiteSpace {
     Nowrap,
 }
 
-/// How to truncate text that overflows the width of the element
+/// How text is truncated when it exceeds the element's width.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TextOverflow {
     /// Truncate the text at the end when it doesn't fit, and represent this truncation by
@@ -599,7 +612,7 @@ pub enum TextOverflow {
     TruncateMiddle(SharedString),
 }
 
-/// How to align text within the element
+/// How text is aligned within the element.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum TextAlign {
     /// Align text to the start edge for the line's direction.
@@ -621,7 +634,7 @@ pub enum TextAlign {
 
 /// Case mapping applied at layout time while keeping **UTF-8 byte lengths** unchanged.
 ///
-/// [`TextTransform::Uppercase`] and [`TextTransform::Lowercase`] use Unicode full case folding via
+/// [`TextTransform::Uppercase`] and [`TextTransform::Lowercase`] use Unicode case mapping via
 /// [`char::to_uppercase`] / [`char::to_lowercase`]. If mapping a code point would change its UTF-8
 /// length, or would replace one scalar value with more than one character, the **original**
 /// character is kept. That keeps indices into the underlying buffer aligned with hit-testing and
@@ -646,7 +659,30 @@ pub enum TextTransform {
     Capitalize,
 }
 
-/// The properties that can be used to style text in GPUI
+/// The text properties of an element: font, size, color and spacing.
+///
+/// Text properties inherit into child elements, so a value set on a container applies to
+/// its text unless a child sets its own. Set them with the methods of [`Styled`], such as
+/// [`Styled::text_color`] and [`Styled::text_size`], or refine a `TextStyle` directly.
+///
+/// The default text style uses black text, the `.SystemUIFont` family, a font size of
+/// `1rem` (16px at the default rem size), and a line height of the golden ratio times the
+/// font size.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{AbsoluteLength, Refineable, TextStyle, TextStyleRefinement, hsla, rems};
+///
+/// let mut style = TextStyle::default();
+/// assert_eq!(style.font_size, AbsoluteLength::from(rems(1.)));
+///
+/// let mut refinement = TextStyleRefinement::default();
+/// refinement.color = Some(hsla(0., 1., 0.5, 1.));
+/// refinement.font_size = Some(AbsoluteLength::from(rems(1.5)));
+/// style.refine(&refinement);
+/// assert_eq!(style.color, hsla(0., 1., 0.5, 1.));
+/// ```
 #[derive(Refineable, Clone, Debug, PartialEq)]
 #[refineable(Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextStyle {
@@ -837,7 +873,7 @@ pub struct HighlightStyle {
     /// The underline style of the text
     pub underline: Option<UnderlineStyle>,
 
-    /// The underline style of the text
+    /// The strikethrough style of the text
     pub strikethrough: Option<StrikethroughStyle>,
 
     /// Similar to the CSS `opacity` property, this will cause the text to be less vibrant.
@@ -857,7 +893,7 @@ impl Style {
         }
     }
 
-    /// Returns true if the style is visible and the background is opaque.
+    /// Returns true if the style has a background that is not fully transparent. Visibility is not checked.
     pub fn has_opaque_background(&self) -> bool {
         self.background
             .as_ref()
@@ -1238,7 +1274,7 @@ impl From<&TextStyle> for HighlightStyle {
 }
 
 impl HighlightStyle {
-    /// Create a highlight style with just a color
+    /// Creates a highlight style with a foreground color.
     pub fn color(color: Hsla) -> Self {
         Self {
             color: Some(color),
@@ -1357,9 +1393,7 @@ pub fn combine_highlights(
     })
 }
 
-/// Used to control how child nodes are aligned.
-/// For Flexbox it controls alignment in the cross axis
-/// For Grid it controls alignment in the block axis
+/// Aligns children along the cross axis in flexbox and the block axis in grid.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/align-items)
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
@@ -1386,23 +1420,21 @@ pub enum AlignItems {
     /// Stretch to fill the container
     Stretch,
 }
-/// Used to control how child nodes are aligned.
-/// Does not apply to Flexbox, and will be ignored if specified on a flex container
-/// For Grid it controls alignment in the inline axis
+/// Aligns grid children along the inline axis.
+///
+/// Flexbox ignores this property on the container.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/justify-items)
 pub type JustifyItems = AlignItems;
-/// Used to control how the specified nodes is aligned.
-/// Overrides the parent Node's `AlignItems` property.
-/// For Flexbox it controls alignment in the cross axis
-/// For Grid it controls alignment in the block axis
+/// Aligns one child along the cross axis in flexbox or the block axis in grid.
+///
+/// It overrides the parent's `AlignItems` value for that child.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/align-self)
 pub type AlignSelf = AlignItems;
-/// Used to control how the specified nodes is aligned.
-/// Overrides the parent Node's `JustifyItems` property.
-/// Does not apply to Flexbox, and will be ignored if specified on a flex child
-/// For Grid it controls alignment in the inline axis
+/// Aligns one grid child along the inline axis.
+///
+/// It overrides the parent's `JustifyItems` value. Flexbox ignores it.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/justify-self)
 pub type JustifySelf = AlignItems;
@@ -1425,9 +1457,7 @@ pub enum VerticalAlign {
     Bottom,
 }
 
-/// Sets the distribution of space between and around content items
-/// For Flexbox it controls alignment in the cross axis
-/// For Grid it controls alignment in the block axis
+/// Distributes free space between flex lines or grid tracks along the cross axis.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/align-content)
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
@@ -1462,14 +1492,12 @@ pub enum AlignContent {
     SpaceAround,
 }
 
-/// Sets the distribution of space between and around content items
-/// For Flexbox it controls alignment in the main axis
-/// For Grid it controls alignment in the inline axis
+/// Distributes free space between flex items or grid tracks along the main or inline axis.
 ///
 /// [MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/justify-content)
 pub type JustifyContent = AlignContent;
 
-/// Sets the layout used for the children of this node
+/// Selects the layout algorithm used for this element's children.
 ///
 /// Defaults to flex layout. Block containers arrange text and inline children in paragraphs.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -1496,7 +1524,7 @@ pub enum Display {
     None,
 }
 
-/// Controls whether flex items are forced onto one line or can wrap onto multiple lines.
+/// Controls whether flex items stay on one line or wrap onto multiple lines.
 ///
 /// Defaults to [`FlexWrap::NoWrap`]
 ///
@@ -1513,13 +1541,11 @@ pub enum FlexWrap {
     WrapReverse,
 }
 
-/// The direction of the flexbox layout main axis.
+/// The direction of a flex container's main axis.
 ///
-/// There are always two perpendicular layout axes: main (or primary) and cross (or secondary).
-/// Adding items will cause them to be positioned adjacent to each other along the main axis.
-/// By varying this value throughout your tree, you can create complex axis-aligned layouts.
-///
-/// Items are always aligned relative to the cross axis, and justified relative to the main axis.
+/// A flex container has a main axis, where children are placed, and a perpendicular cross axis,
+/// where they are aligned. `justify-*` properties act on the main axis; `align-*` properties act
+/// on the cross axis.
 ///
 /// The default behavior is [`FlexDirection::Row`].
 ///
@@ -1546,17 +1572,16 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-/// How children overflowing their container should affect layout
+/// How overflow affects layout and the scroll region.
 ///
-/// In CSS the primary effect of this property is to control whether contents of a parent container that overflow that container should
-/// be displayed anyway, be clipped, or trigger the container to become a scroll container. However it also has secondary effects on layout,
-/// the main ones being:
+/// GPUI uses this enum for the layout effects of CSS `overflow`; clipping and scrolling are
+/// applied while the element is painted. Its main layout effects are:
 ///
 ///   - The automatic minimum size Flexbox/CSS Grid items with non-`Visible` overflow is `0` rather than being content based
 ///   - `Overflow::Scroll` nodes have space in the layout reserved for a scrollbar (width controlled by the `scrollbar_width` property)
 ///
-/// In Taffy, we only implement the layout related secondary effects as we are not concerned with drawing/painting. The amount of space reserved for
-/// a scrollbar is controlled by the `scrollbar_width` property. If this is `0` then `Scroll` behaves identically to `Hidden`.
+/// Taffy supplies the layout effects. The amount of space reserved for a scrollbar is controlled
+/// by `scrollbar_width`; when it is `0`, `Scroll` reserves no space and lays out like `Hidden`.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/overflow>
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -1583,10 +1608,10 @@ pub enum Overflow {
 /// This controls both how the origin is determined for the [`Style::position`] field,
 /// and whether or not the item will be controlled by flexbox's layout algorithm.
 ///
-/// WARNING: this enum follows the behavior of [CSS's `position` property](https://developer.mozilla.org/en-US/docs/Web/CSS/position),
-/// which can be unintuitive.
+/// The behavior follows [CSS `position`](https://developer.mozilla.org/en-US/docs/Web/CSS/position),
+/// including its interaction with layout and offsets.
 ///
-/// [`Position::Relative`] is the default value, in contrast to the default behavior in CSS.
+/// [`Position::Relative`] is GPUI's default; CSS defaults to `static`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
 // Copy of taffy::style type of the same name, to derive JsonSchema.
 pub enum Position {
@@ -1598,7 +1623,7 @@ pub enum Position {
     /// Otherwise, it is placed relative to the origin.
     /// No space is created for the item in the page layout, and its size will not be altered.
     ///
-    /// WARNING: to opt-out of layouting entirely, you must use [`Display::None`] instead on your [`Style`] object.
+    /// To remove the item from layout and painting, use [`Display::None`] instead.
     Absolute,
 }
 

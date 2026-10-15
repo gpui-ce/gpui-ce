@@ -57,6 +57,12 @@ struct DirectionMetadata {
     resolved: LayoutDirectionHandle,
 }
 
+/// Computes element layout with Taffy, a flexbox and grid engine, for one frame.
+///
+/// Window code creates one node per element with [`Self::request_layout`] or
+/// [`Self::request_measured_layout`], then calls [`Self::compute_layout`] on the root and
+/// [`Self::layout_bounds`] to read each node's position. The engine is cleared at the end of each
+/// frame, so a [`LayoutId`] is valid only in the frame that created it.
 pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
@@ -74,6 +80,7 @@ pub struct TaffyLayoutEngine {
 const EXPECT_MESSAGE: &str = "we should avoid taffy layout errors by construction if possible";
 
 impl TaffyLayoutEngine {
+    /// Creates an engine with no nodes.
     pub fn new() -> Self {
         let mut taffy = TaffyTree::new();
         taffy.disable_rounding();
@@ -91,6 +98,9 @@ impl TaffyLayoutEngine {
         }
     }
 
+    /// Removes every node and cached result, so the engine can start a new frame.
+    ///
+    /// Any [`LayoutId`] from before the call is invalid afterwards.
     pub fn clear(&mut self) {
         self.taffy.clear();
         self.absolute_layout_bounds.clear();
@@ -103,6 +113,10 @@ impl TaffyLayoutEngine {
         self.directions.clear();
     }
 
+    /// Adds a node styled by `style`, with `children` as its child nodes, and returns its id.
+    ///
+    /// `rem_size` and `scale_factor` resolve the style's lengths. Lengths in `rem` use
+    /// `rem_size`; layout is snapped to device pixels using `scale_factor`.
     pub fn request_layout(
         &mut self,
         style: Style,
@@ -130,6 +144,12 @@ impl TaffyLayoutEngine {
         node_id
     }
 
+    /// Adds a leaf node whose size comes from `measure`, and returns its id.
+    ///
+    /// Use it for content whose size depends on the space it gets, such as text. Taffy calls
+    /// `measure` during [`Self::compute_layout`] with the known width and height, if any, and
+    /// the available space along each axis. `measure` returns the content's size in logical
+    /// pixels.
     pub fn request_measured_layout(
         &mut self,
         style: Style,
@@ -422,6 +442,11 @@ impl TaffyLayoutEngine {
         Ok(edges)
     }
 
+    /// Lays out the subtree under `id` for the given available space.
+    ///
+    /// Call it on the root node with the space the window offers. It calls each measured node's
+    /// `measure` closure as needed. Read the results with [`Self::layout_bounds`] afterwards.
+    /// Calling it again with a different available space recomputes the subtree.
     #[cfg_attr(feature = "stacker", stacksafe::stacksafe)]
     pub fn compute_layout(
         &mut self,
@@ -627,6 +652,10 @@ impl TaffyLayoutEngine {
     // snapped independently, but the raw content-box origin can carry a
     // 1dp residual into descendants.
 
+    /// Returns the node's bounds in logical pixels, relative to the window.
+    ///
+    /// Call [`Self::compute_layout`] first. The result is cached until the next layout and is
+    /// returned in logical pixels after device-pixel snapping, so neighboring boxes meet exactly.
     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
         if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
             return layout;
@@ -692,7 +721,11 @@ impl TaffyLayoutEngine {
     }
 }
 
-/// A unique identifier for a layout node, generated when requesting a layout from Taffy
+/// An id for a node in the layout tree of the current frame.
+///
+/// [`Window::request_layout`](crate::Window::request_layout) returns one for each element. Pass
+/// the ids of an element's children when you request its layout, and read a node's position
+/// with the window's layout bounds methods. An id is valid only in the frame that created it.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct LayoutId(NodeId);
@@ -1077,23 +1110,26 @@ where
     }
 }
 
-/// The space available for an element to be laid out in
+/// How much space an element is given along one axis when it is laid out.
+///
+/// Measured elements receive one of these in their `measure` closure. A
+/// [`Definite`](Self::Definite) amount is a fixed width or height. The other two ask for the
+/// element's natural size, as CSS `min-content` and `max-content` do.
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
 pub enum AvailableSpace {
-    /// The amount of space available is the specified number of pixels
+    /// The element has exactly this many logical pixels of space.
     Definite(Pixels),
-    /// The amount of space available is indefinite and the node should be laid out under a min-content constraint
+    /// The element is sized to its smallest possible content, as with CSS `min-content`.
     #[default]
     MinContent,
-    /// The amount of space available is indefinite and the node should be laid out under a max-content constraint
+    /// The element is sized to its largest natural content, as with CSS `max-content`.
     MaxContent,
 }
 
 impl AvailableSpace {
     /// Returns a `Size` with both width and height set to `AvailableSpace::MinContent`.
     ///
-    /// This function is useful when you want to create a `Size` with the minimum content constraints
-    /// for both dimensions.
+    /// Use it when an element should be measured at its smallest content size on both axes.
     ///
     /// # Examples
     ///
