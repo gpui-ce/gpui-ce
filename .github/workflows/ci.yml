@@ -85,6 +85,24 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: just clippy
 
+  # Documentation: rustdoc with warnings denied, so broken links fail the build.
+  # Doc examples run with the tests below.
+  docs:
+    runs-on: ubuntu-latest
+    needs: [orchestrate]
+    if: needs.orchestrate.outputs.run_style == 'true'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
+      - uses: hustcer/setup-nu@v3
+      - uses: extractions/setup-just@v2
+      - run: just docs
+
   # Spell check
   typos:
     runs-on: ubuntu-latest

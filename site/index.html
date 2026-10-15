@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPUI Community Edition</title>
+    <meta name="description" content="A GPU-accelerated UI framework for Rust on macOS, Windows, Linux, and the web." />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="./">GPUI <span>Community Edition</span></a>
+        <nav>
+          <a href="api/gpui/_documentation/tutorial/index.html">Tutorial</a>
+          <a href="api/gpui/_documentation/guides/index.html">Guides</a>
+          <a href="api/gpui/_documentation/examples/index.html">Examples</a>
+          <a href="api/gpui/index.html">API</a>
+          <a href="https://github.com/gpui-ce/gpui-ce">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div class="wrap">
+          <div>
+            <h1>GPU-rendered interfaces in Rust.</h1>
+            <p>
+              Build views with flexbox, grid, and Tailwind-style methods. Keep application state
+              in entities and notify GPUI when it changes. GPUI handles layout and GPU rendering
+              on macOS, Windows, Linux, and the web.
+            </p>
+            <div class="buttons">
+              <a class="button primary" href="api/gpui/_documentation/tutorial/index.html">Start the tutorial</a>
+              <a class="button" href="api/gpui/_documentation/examples/index.html">Browse examples</a>
+            </div>
+          </div>
+          <figure class="demo">
+            <iframe src="play/?example=animation" title="The animation example, running live" loading="lazy"></iframe>
+            <figcaption class="caption">
+              <span>GPUI, running in your browser</span>
+              <a href="api/gpui/_documentation/examples/animation/index.html">animation.rs</a>
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <section>
+        <div class="wrap">
+          <h2>What GPUI gives you</h2>
+          <p>Developed for the Zed editor, GPUI provides the building blocks for custom application interfaces.</p>
+          <div class="grid">
+            <a class="card" href="api/gpui/_documentation/concepts/the_frame/index.html">
+              <h3>Rendered on the GPU</h3>
+              <p>Layout and painting produce a scene of batched shapes, text, and images for the platform renderer.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/concepts/layout_and_style/index.html">
+              <h3>Flexbox and grid</h3>
+              <p>Flexbox and grid, styled with methods like <code>.flex()</code>, <code>.gap_4()</code> and <code>.rounded_lg()</code>.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/concepts/ownership/index.html">
+              <h3>State with one owner</h3>
+              <p>The app owns entity state. Contexts provide access, and notifications connect changes to observers and rendering.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/guides/keyboard/index.html">
+              <h3>Keyboard first</h3>
+              <p>Typed actions, key bindings with contexts, and focus handling are built in.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/guides/animation/index.html">
+              <h3>Motion</h3>
+              <p>Animate elements and style changes with easing and springs. A shared setting lets the app reduce motion.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/guides/testing/index.html">
+              <h3>Made to be tested</h3>
+              <p>Drive views headlessly with simulated input and a deterministic scheduler.</p>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap">
+          <h2>Learn GPUI</h2>
+          <p>The documentation is organized by what you're trying to do.</p>
+          <div class="grid">
+            <a class="card" href="api/gpui/_documentation/tutorial/index.html">
+              <h3>Tutorial</h3>
+              <p>Build a complete app, one idea at a time.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/guides/index.html">
+              <h3>Guides</h3>
+              <p>Get a specific job done: shortcuts, lists, async work, drawing, testing.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/concepts/index.html">
+              <h3>Concepts</h3>
+              <p>How GPUI works underneath, and why it was designed this way.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/examples/index.html">
+              <h3>Examples</h3>
+              <p>Read complete programs and run browser examples beside their source.</p>
+            </a>
+            <a class="card" href="api/gpui/index.html">
+              <h3>API reference</h3>
+              <p>Types, methods, defaults, and failure conditions, with snippets checked by rustdoc.</p>
+            </a>
+            <a class="card" href="api/gpui/_documentation/comparison/index.html">
+              <h3>Comparison</h3>
+              <p>Compare UI structure, state management, and rendering across Rust toolkits.</p>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <span>GPUI Community Edition is a community fork of <a href="https://gpui.rs">Zed's GPUI</a>. Apache-2.0.</span>
+        <span>
+          <a href="https://github.com/gpui-ce/gpui-ce">GitHub</a> ·
+          <a href="https://discord.gg/ENGHGjrYEn">Discord</a> ·
+          <a href="https://crates.io/crates/gpui-ce">crates.io</a>
+        </span>
+      </div>
+    </footer>
+
+  </body>
+</html>

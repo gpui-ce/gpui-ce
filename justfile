@@ -98,6 +98,44 @@ test-doc:
     @echo "🧪 Running doc tests..."
     cargo test --workspace --doc --no-fail-fast
 
+
+[doc('Build the API reference and the GPUI book, failing on broken links')]
+[group('docs')]
+docs *flags:
+    #!/usr/bin/env nu
+    print "📚 Building documentation..."
+    with-env {RUSTDOCFLAGS: "-D warnings"} {
+        cargo doc --no-deps -p gpui-ce -p gpui_ce_platform -p gpui_ce_elements --features gpui-ce/test-support {{ flags }}
+    }
+
+[doc('Build the website into target/site: landing page, API docs and book, live examples')]
+[group('docs')]
+site:
+    #!/usr/bin/env nu
+    let out = $"($env.PWD)/target/site"
+    rm -rf $out
+    mkdir $out
+
+    print "📚 API reference and book..."
+    with-env {RUSTDOCFLAGS: $"--html-in-header ($env.PWD)/site/rustdoc-header.html"} {
+        cargo doc --no-deps -p gpui-ce -p gpui_ce_platform -p gpui_ce_elements --features gpui-ce/test-support
+    }
+    cp -r target/doc $"($out)/api"
+
+    print "▶️  Live examples..."
+    do { cd site/player; trunk build --release --dist $"($out)/play" --public-url ./ }
+
+    print "🌐 Landing page..."
+    cp site/index.html site/style.css $out
+    mkdir $"($out)/fonts"
+    cp assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf assets/fonts/lilex/Lilex-Regular.ttf $"($out)/fonts"
+    print $"✅ Built ($out)"
+
+[doc('Serve target/site on http://localhost:8000')]
+[group('docs')]
+site-serve: site
+    python3 -m http.server --directory target/site 8000
+
 [doc('Run tests with nextest (faster parallel runner)')]
 [group('testing')]
 test-nextest:

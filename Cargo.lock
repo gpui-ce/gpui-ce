@@ -2507,6 +2507,16 @@ name = "gpui-ce-fonts"
 version = "0.2.2"
 
 [[package]]
+name = "gpui-player"
+version = "0.0.0"
+dependencies = [
+ "gpui-ce",
+ "gpui_ce_elements",
+ "gpui_ce_platform",
+ "web-sys",
+]
+
+[[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
 dependencies = [

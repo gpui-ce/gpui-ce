@@ -1,0 +1,25 @@
+[package]
+name = "gpui-player"
+version = "0.0.0"
+description = "Runs GPUI's examples in a web page, and checks that each one opens"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.cargo-machete]
+# Used by text_input and todos, imported through the examples! macro.
+ignored = ["gpui_ce_elements"]
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_ce_elements = { path = "../../crates/gpui_elements" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+web-sys = { version = "0.3", features = ["Location", "UrlSearchParams", "Window"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

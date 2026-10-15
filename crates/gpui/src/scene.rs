@@ -984,7 +984,7 @@ pub struct Quad {
     /// The width of each border edge, in scaled pixels.
     pub border_widths: Edges<ScaledPixels>,
     /// How smooth the corners are, from `0.0` for circular arcs to `1.0`. Set by
-    /// [`crate::Window::paint_quad_with_corner_smoothing`].
+    /// [`crate::PaintQuad::corner_smoothing`] when passed to [`crate::Window::paint_quad`].
     pub corner_smoothing: f32,
     /// Padding for the GPU struct layout. [`crate::Window`] always sets it to `0`.
     pub padding: u32,
