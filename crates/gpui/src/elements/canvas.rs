@@ -5,8 +5,60 @@ use crate::{
     Style, StyleRefinement, Styled, Window,
 };
 
-/// Construct a canvas element with the given paint callback.
-/// Useful for adding short term custom drawing to a view.
+/// Creates a [`Canvas`] that draws with the painting methods on [`Window`].
+///
+/// Use it for custom drawing that doesn't need its own element type, such as a chart or a debug
+/// overlay. `prepaint` runs once the canvas's bounds are known, and returns a value. `paint` runs
+/// later in the same frame, with the same bounds and that value. Draw in `paint`, with calls such
+/// as [`Window::paint_quad`]. Use `prepaint` for work that needs the bounds, such as computing
+/// points from them.
+///
+/// The canvas has no content to size it, so give it a size with a [`Styled`] method, such as
+/// `.size_full()`. For a reusable drawing with its own state, implement [`Element`] instead.
+///
+/// # Example
+///
+/// ```
+/// use std::{cell::Cell, rc::Rc};
+///
+/// use gpui::{
+///     Context, IntoElement, Point, Pixels, Render, TestApp, Window, canvas, fill, point, prelude::*,
+///     px, rgb,
+/// };
+///
+/// struct Swatch {
+///     origin: Rc<Cell<Option<Point<Pixels>>>>,
+///     painted: Rc<Cell<bool>>,
+/// }
+///
+/// impl Render for Swatch {
+///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+///         let origin = self.origin.clone();
+///         let painted = self.painted.clone();
+///         canvas(
+///             move |bounds, _window, _cx| origin.set(Some(bounds.origin)),
+///             move |bounds, _prepaint_result, window, _cx| {
+///                 window.paint_quad(fill(bounds, rgb(0x2563eb)));
+///                 painted.set(true);
+///             },
+///         )
+///         .size_full()
+///     }
+/// }
+///
+/// let origin = Rc::new(Cell::new(None));
+/// let painted = Rc::new(Cell::new(false));
+/// let mut app = TestApp::new();
+/// let mut window = app.open_window({
+///     let origin = origin.clone();
+///     let painted = painted.clone();
+///     move |_window, _cx| Swatch { origin, painted }
+/// });
+///
+/// window.draw();
+/// assert_eq!(origin.get(), Some(point(px(0.), px(0.))));
+/// assert!(painted.get());
+/// ```
 pub fn canvas<T>(
     prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
     paint: impl 'static + FnOnce(Bounds<Pixels>, T, &mut Window, &mut App),
@@ -18,8 +70,11 @@ pub fn canvas<T>(
     }
 }
 
-/// A canvas element, meant for accessing the low level paint API without defining a whole
-/// custom element
+/// An element that runs custom drawing code, created with [`canvas`].
+///
+/// Its two callbacks run once each, in the `prepaint` and `paint` phases of the frame that
+/// created it. Use a canvas when a callback is enough. Implement [`Element`] when the drawing needs
+/// its own state across frames.
 pub struct Canvas<T> {
     prepaint: Option<Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>>,
     paint: Option<Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>>,
