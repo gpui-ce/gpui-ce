@@ -11,9 +11,40 @@ use std::rc::Rc;
 #[path = "screen_capture/windows.rs"]
 mod platform;
 
-/// Populates the receiver with the screens that can be captured.
+/// Lists the screens that can be captured. The result arrives on the returned receiver.
 ///
-/// Wayland source discovery can't enumerate portal targets; prefer `start_default_target_source`.
+/// Enumeration runs on a background thread. The receiver resolves once it finishes, with the
+/// screens as [`ScreenCaptureSource`]s. It resolves with an error if the platform can't list
+/// screens. A screen that fails to initialize is left out of the list and logged. Each source
+/// can then be captured with [`ScreenCaptureSource::stream`].
+///
+/// This module exists only in Windows builds with the `screen-capture` feature.
+///
+/// # Examples
+///
+/// ```no_run
+/// # #[cfg(all(target_os = "windows", feature = "screen-capture"))]
+/// # fn main() {
+/// use gpui::{App, screen_capture};
+///
+/// fn list_screens(cx: &App) {
+///     let sources = screen_capture::screen_sources(cx.foreground_executor());
+///     cx.foreground_executor()
+///         .spawn(async move {
+///             if let Ok(Ok(sources)) = sources.await {
+///                 for source in sources {
+///                     if let Ok(metadata) = source.metadata() {
+///                         println!("{:?}", metadata.label);
+///                     }
+///                 }
+///             }
+///         })
+///         .detach();
+/// }
+/// # }
+/// # #[cfg(not(all(target_os = "windows", feature = "screen-capture")))]
+/// # fn main() {}
+/// ```
 pub fn screen_sources(
     foreground_executor: &ForegroundExecutor,
 ) -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCaptureSource>>>> {

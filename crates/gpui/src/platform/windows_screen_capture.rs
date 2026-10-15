@@ -2,7 +2,12 @@ use crate::{DevicePixels, Size};
 use std::sync::Arc;
 use windows_061::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
-/// A Windows Graphics Capture frame backed by its native D3D11 texture.
+/// A frame from Windows Graphics Capture, backed by its native Direct3D 11 texture.
+///
+/// GPUI delivers these inside a [`ScreenCaptureFrame`](crate::ScreenCaptureFrame) to the
+/// callback passed to [`ScreenCaptureSource::stream`](crate::ScreenCaptureSource::stream). Read
+/// the texture directly to share it with your own Direct3D code. The texture is shared between
+/// clones of the frame.
 #[derive(Clone)]
 pub struct WindowsScreenCaptureFrame {
     texture: Arc<ID3D11Texture2D>,
