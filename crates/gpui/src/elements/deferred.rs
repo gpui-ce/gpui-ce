@@ -139,7 +139,6 @@ impl Deferred {
         self.priority = DeferredPriority::Auto;
         self
     }
-
 }
 
 /// How the draw priority of a [`Deferred`] element is chosen.
