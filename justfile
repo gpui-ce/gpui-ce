@@ -98,6 +98,16 @@ test-doc:
     @echo "🧪 Running doc tests..."
     cargo test --workspace --doc --no-fail-fast
 
+
+[doc('Build the API reference and the GPUI book, failing on broken links')]
+[group('docs')]
+docs *flags:
+    #!/usr/bin/env nu
+    print "📚 Building documentation..."
+    with-env {RUSTDOCFLAGS: "-D warnings"} {
+        cargo doc --no-deps -p gpui-ce -p gpui_ce_platform -p gpui_ce_elements --features gpui-ce/test-support {{ flags }}
+    }
+
 [doc('Run tests with nextest (faster parallel runner)')]
 [group('testing')]
 test-nextest:
