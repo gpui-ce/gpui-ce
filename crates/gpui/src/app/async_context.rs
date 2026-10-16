@@ -1,8 +1,8 @@
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, BackgroundExecutor, BorrowAppContext, Context, Entity,
-    EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton, PromptLevel,
-    Render, Reservation, Result, Subscription, Task, VisualContext, WeakEntity, Window,
-    WindowHandle, context::*,
+    AnyView, AnyWindowHandle, App, AppCell, AsEntityId, BackgroundExecutor, BorrowAppContext,
+    Context, Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton,
+    PromptLevel, Render, Reservation, Result, Subscription, Task, VisualContext, WeakEntity,
+    Window, WindowHandle, context::*,
 };
 use anyhow::{Context as _, bail};
 use derive_more::{Deref, DerefMut};
@@ -346,7 +346,7 @@ impl AppContextEntity for AsyncWindowContext {
         self.app.read_entity(handle, read)
     }
 
-    fn notify(&mut self, entity_id: EntityId) {
+    fn notify(&mut self, entity_id: impl AsEntityId) {
         self.app.notify(entity_id);
     }
 

@@ -1,5 +1,5 @@
 use crate::{
-    Action, AnyWindowHandle, App, AppCell, AssetRegistry, AsyncApp, AvailableSpace,
+    Action, AnyWindowHandle, App, AppCell, AsEntityId, AssetRegistry, AsyncApp, AvailableSpace,
     BackgroundExecutor, BorrowAppContext, Bounds, Capslock, ClipboardItem, DrawPhase, Drawable,
     Element, Empty, EntityId, EventEmitter, ForegroundExecutor, Global, InputEvent, Keystroke,
     Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -959,7 +959,7 @@ impl AppContextEntity for VisualTestContext {
         self.cx.read_entity(handle, read)
     }
 
-    fn notify(&mut self, entity_id: EntityId) {
+    fn notify(&mut self, entity_id: impl AsEntityId) {
         self.cx.notify(entity_id)
     }
 
