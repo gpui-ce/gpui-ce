@@ -1,7 +1,7 @@
 //! Module containing various [`AppContext`] subdomain traits for common accessors of [`App`].
 use crate::{
-    AnyView, AnyWindowHandle, App, Context, Entity, EntityId, EventEmitter, Global, GpuiBorrow,
-    Reservation, Result, Window, WindowHandle,
+    AnyView, AnyWindowHandle, App, AsEntityId, Context, Entity, EntityId, EventEmitter, Global,
+    GpuiBorrow, Reservation, Result, Window, WindowHandle,
     app_borrow::{BorrowApp, BorrowAppMut, UpgradeApp},
 };
 use scheduler::Task;
@@ -58,7 +58,7 @@ pub trait AppContextEntity {
         T: 'static;
 
     /// Tell GPUI that an entity has changed and observers of it should be notified.
-    fn notify(&mut self, entity_id: EntityId);
+    fn notify(&mut self, entity_id: impl AsEntityId);
 
     /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
     /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
@@ -167,7 +167,7 @@ where
         app.borrow().deref().read_entity(handle, callback)
     }
 
-    fn notify(&mut self, entity_id: EntityId) {
+    fn notify(&mut self, entity_id: impl AsEntityId) {
         let mut app = self.upgrade_mut();
         app.borrow_mut().deref_mut().notify(entity_id);
     }
