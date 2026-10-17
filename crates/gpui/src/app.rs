@@ -725,6 +725,10 @@ enum PlatformOwnedDragState {
     RestoredInSourceWindow,
 }
 
+// Records enables even when preference changes coalesce before layout or observers run.
+pub(crate) struct AnimationPreference(pub(crate) u64);
+impl Global for AnimationPreference {}
+
 /// Contains the state of the full application, and passed as a reference to a variety of callbacks.
 /// Other [Context] derefs to this type.
 /// You need a reference to an `App` to access the state of a [Entity].
@@ -1122,6 +1126,13 @@ impl App {
     pub fn set_reduce_motion(&mut self, reduce_motion: bool) {
         if self.reduce_motion != reduce_motion {
             self.reduce_motion = reduce_motion;
+            if reduce_motion {
+                let epoch = self
+                    .try_global::<crate::AnimationPreference>()
+                    .map_or(0, |preference| preference.0)
+                    .wrapping_add(1);
+                self.set_global(crate::AnimationPreference(epoch));
+            }
             self.refresh_windows();
         }
     }

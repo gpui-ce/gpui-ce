@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
+#[path = "motion_showcase/replay.rs"]
+mod replay;
 
 use gpui::{
     App, AppContext, Bounds, Context, FontWeight, Motion, MotionPass, MotionSample, Window,
@@ -90,6 +92,7 @@ enum Setting {
 
 struct MotionShowcase {
     settings: Settings,
+    event_notification: replay::NotificationDemo,
     motions: Motions,
     progress: Timeline,
     progress_from: f32,
@@ -142,6 +145,14 @@ impl Timeline {
         sample.is_active
     }
 
+    fn settle(&mut self, value: f32) {
+        if self.is_active() {
+            self.value = value;
+            self.last_tick = None;
+            self.last_sample = None;
+        }
+    }
+
     fn retime(&mut self, motion: &Motion, elapsed: Duration, now: Instant) {
         self.elapsed = elapsed;
         let sample = motion.sample(elapsed);
@@ -157,10 +168,11 @@ fn scale_elapsed(elapsed: Duration, old: Duration, new: Duration) -> Duration {
 }
 
 impl MotionShowcase {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         let settings = Settings::default();
         Self {
             settings,
+            event_notification: replay::NotificationDemo::new(cx),
             motions: Motions::new(settings),
             progress: Timeline::default(),
             progress_from: 0.,
@@ -364,13 +376,24 @@ impl Render for MotionShowcase {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let compact = f32::from(window.viewport_size().width) < 700.;
         let now = Instant::now();
-        let mut active = self.progress.advance(&self.motions.progress, now);
-        active |= self.notification.advance(&self.motions.notification, now);
-        for (index, item) in self.items.iter_mut().enumerate() {
-            active |= item.advance(&self.motions.items[index], now);
+        let mut active = false;
+        if cx.reduce_motion() {
+            self.progress.settle(1.);
+            self.notification.settle(0.);
+            self.attention.settle(0.);
+            self.pulse.settle(0.);
+            for item in &mut self.items {
+                item.settle(1.);
+            }
+        } else {
+            active |= self.progress.advance(&self.motions.progress, now);
+            active |= self.notification.advance(&self.motions.notification, now);
+            for (index, item) in self.items.iter_mut().enumerate() {
+                active |= item.advance(&self.motions.items[index], now);
+            }
+            active |= self.attention.advance(&self.motions.attention, now);
+            active |= self.pulse.advance(&self.motions.pulse, now);
         }
-        active |= self.attention.advance(&self.motions.attention, now);
-        active |= self.pulse.advance(&self.motions.pulse, now);
         if active {
             window.request_animation_frame();
         }
@@ -674,8 +697,10 @@ impl Render for MotionShowcase {
                 ),
         );
 
+        let replay_panel = self.event_notification.panel(cx);
         div()
             .id("motion-showcase")
+            .on_key_down(replay::navigate_focus)
             .size_full()
             .overflow_y_scroll()
             .p(px(24.))
@@ -690,6 +715,7 @@ impl Render for MotionShowcase {
                     .font_weight(FontWeight::BOLD)
                     .child("Motion showcase"),
             )
+            .child(replay_panel)
             .child(
                 div()
                     .flex()
@@ -722,6 +748,84 @@ impl Render for MotionShowcase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-support")]
+    #[gpui::test]
+    fn reduced_motion_settles_active_previews_without_resuming(cx: &mut gpui::TestAppContext) {
+        let window = cx.open_window(size(px(640.0), px(700.0)), |_, cx| MotionShowcase::new(cx));
+        window
+            .update(cx, |view, _, cx| {
+                let now = Instant::now();
+                view.progress.play(now);
+                view.notification.play(now);
+                view.attention.play(now);
+                view.pulse.play(now);
+                for item in &mut view.items {
+                    item.play(now);
+                }
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        window
+            .update(cx, |view, _, _| assert!(view.pulse.is_active()))
+            .unwrap();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        window
+            .update(cx, |view, _, _| {
+                assert!(!view.pulse.is_active());
+                assert!(!view.progress.is_active());
+                assert!(!view.notification.is_active());
+                assert!(!view.attention.is_active());
+                assert_eq!(
+                    view.attention.value, 0.,
+                    "attention returns to its original position"
+                );
+                assert_eq!(view.notification.value, 0.);
+                assert!(view.items.iter().all(|item| item.value == 1.));
+                assert!(view.items.iter().all(|item| !item.is_active()));
+                assert_eq!(view.pulse.value, 0.);
+                assert_eq!(view.progress.value, 1.);
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                window.simulate_next_frame(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap(),
+            0
+        );
+        cx.update(|cx| cx.set_reduce_motion(false));
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        window
+            .update(cx, |view, _, _| assert!(!view.pulse.is_active()))
+            .unwrap();
+        assert_eq!(
+            window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn changing_pass_duration_preserves_an_active_pulse_phase() {
@@ -788,14 +892,23 @@ mod tests {
     }
 }
 
+#[cfg(all(target_os = "windows", feature = "test-support"))]
+#[path = "motion_showcase/replay_native.rs"]
+mod replay_native;
+
 fn main() {
+    #[cfg(all(target_os = "windows", feature = "test-support"))]
+    if std::env::var_os("GPUI_MOTION_REPLAY_CHECK").is_some() {
+        replay_native::run();
+        return;
+    }
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(960.), px(820.)), cx);
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {
                 window.set_window_title("Motion showcase");
-                cx.new(|_| MotionShowcase::new())
+                cx.new(MotionShowcase::new)
             },
         )
         .expect("Failed to open window");

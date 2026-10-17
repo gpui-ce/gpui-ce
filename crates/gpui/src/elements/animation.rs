@@ -3,8 +3,8 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use crate::{
     AnyElement, App, AppContext, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, Motion, ParentElement, SpringAnimation, SpringConfig, SpringDescription,
-    SpringPlayback, SpringState, SpringTarget, Window,
+    IntoElement, Motion, MotionExtent, ParentElement, SpringAnimation, SpringConfig,
+    SpringDescription, SpringPlayback, SpringState, SpringTarget, Window,
 };
 
 pub use easing::*;
@@ -79,15 +79,30 @@ pub trait AnimationExt {
     where
         Self: Sized,
     {
+        let timing = AnimationSchedule::new(std::slice::from_ref(&animation));
         AnimationElement {
             id: id.into(),
             element: Some(self),
             animator: Box::new(move |this, _, value| animator(this, value)),
             animations: smallvec::smallvec![animation],
+            timing,
+            replay_key: None,
         }
     }
 
-    /// Render this component or element with a chain of animations
+    /// Runs animations sequentially. An exact handoff samples the incoming
+    /// ordinary animation at local elapsed time zero; reverse motion or custom
+    /// easing can make its presented progress nonzero. Late frames skip elapsed
+    /// animations and carry remaining elapsed time into the selected animation.
+    /// Chains with zero total duration settle in one render; empty chains leave
+    /// the element unchanged. Only the currently selected callback runs.
+    ///
+    /// Placement uses the element's mount clock. A synchronized child's value
+    /// still uses the App epoch independently of its placement, including at
+    /// handoff. Frame throttling follows the selected animation.
+    ///
+    /// An unbounded animation or overflowing duration makes later animations
+    /// unreachable.
     fn with_animations(
         self,
         id: impl Into<ElementId>,
@@ -97,13 +112,14 @@ pub trait AnimationExt {
     where
         Self: Sized,
     {
-        debug_assert!(!animations.is_empty(), "animations must not be empty");
-
+        let timing = AnimationSchedule::new(&animations);
         AnimationElement {
             id: id.into(),
             element: Some(self),
             animator: Box::new(animator),
             animations: animations.into(),
+            timing,
+            replay_key: None,
         }
     }
 
@@ -151,6 +167,8 @@ pub struct AnimationElement<E> {
     id: ElementId,
     element: Option<E>,
     animations: SmallVec<[Animation; 1]>,
+    timing: AnimationSchedule,
+    replay_key: Option<ElementId>,
     animator: Box<dyn Fn(E, usize, f32) -> E + 'static>,
 }
 
@@ -203,6 +221,25 @@ impl<E: ParentElement> ParentElement for AnimationElement<E> {
 }
 
 impl<E> AnimationElement<E> {
+    /// Restarts the animation when `event_id` changes between renders.
+    ///
+    /// Keep the animation's element ID stable and change this key for each
+    /// application event, including events with identical payloads. An unchanged
+    /// key leaves the run's elapsed clock unchanged. The first mount still
+    /// animates normally.
+    /// Replay restarts at the configured origin and delay, even during an active
+    /// run. It does not remount the element or its children.
+    ///
+    /// Reduced motion resolves a replay to its resting value and consumes the
+    /// event, even if the preference is disabled before the next layout. A new
+    /// key observed after disabling the preference can start another run.
+    /// Synchronized animations retain their App epoch;
+    /// use an ordinary [`Animation`] for an event-local phase.
+    pub fn replay_on(mut self, event_id: impl Into<ElementId>) -> Self {
+        self.replay_key = Some(event_id.into());
+        self
+    }
+
     /// Returns a new [`AnimationElement<E>`] after applying the given function
     /// to the element being animated.
     pub fn map_element(mut self, f: impl FnOnce(E) -> E) -> AnimationElement<E> {
@@ -222,9 +259,96 @@ impl<E: IntoElement + 'static> IntoElement for AnimationElement<E> {
 struct AnimationState {
     start: Instant,
     animation_ix: usize,
+    replay_key: Option<ElementId>,
+    reduced_replay: bool,
+    preference_epoch: u64,
     /// Whether a throttled re-render (see [`Animation::with_max_fps`]) is
     /// already scheduled, so overlapping renders don't stack extra timers.
     delayed_frame_pending: Rc<Cell<bool>>,
+    delayed_frame: Option<crate::Task<()>>,
+    delayed_frame_interval: Option<Duration>,
+}
+
+// Delays and every configured pass contribute to placement. An unbounded or
+// overflowing extent prevents placement of later animations.
+struct AnimationSchedule {
+    starts: SmallVec<[Duration; 1]>,
+}
+
+impl AnimationSchedule {
+    fn new(animations: &[Animation]) -> Self {
+        let mut starts = SmallVec::new();
+        let mut start = Duration::ZERO;
+        for animation in animations {
+            starts.push(start);
+            let Some(MotionExtent::Finite(duration)) = animation.motion.checked_extent() else {
+                break;
+            };
+            let Some(next) = start.checked_add(duration) else {
+                break;
+            };
+            start = next;
+        }
+        Self { starts }
+    }
+
+    fn select(&self, animations: &[Animation], elapsed: Duration) -> Option<(usize, Duration)> {
+        let index = self
+            .starts
+            .partition_point(|start| *start <= elapsed)
+            .checked_sub(1)?;
+        let local = elapsed.saturating_sub(self.starts[index]);
+        // The last reachable step holds its actual terminal sample.
+        let local = match animations[index].motion.checked_extent() {
+            Some(MotionExtent::Finite(end)) => local.min(end),
+            _ => local,
+        };
+        Some((index, local))
+    }
+}
+
+fn animation_sequence_sample(
+    animations: &[Animation],
+    timing: &AnimationSchedule,
+    elapsed: Duration,
+    epoch_elapsed: Duration,
+    reduced: bool,
+) -> Option<(usize, f32, bool)> {
+    let (index, local) = if reduced {
+        (animations.len().checked_sub(1)?, Duration::ZERO)
+    } else {
+        timing.select(animations, elapsed)?
+    };
+    let animation = &animations[index];
+    let value = if reduced {
+        animation.motion.resting_progress().get()
+    } else {
+        animation
+            .motion
+            .sample(if animation.synced {
+                epoch_elapsed
+            } else {
+                local
+            })
+            .progress
+            .get()
+    };
+    // A single synchronized animation uses epoch-based completion.
+    // A sequence uses its mount-local placement while sampling synced values at the epoch.
+    let completion_time = if animations.len() == 1 && animation.synced {
+        epoch_elapsed
+    } else {
+        local
+    };
+    let done = reduced || !animation.motion.sample(completion_time).is_active;
+    Some((index, value, done))
+}
+
+fn frame_interval(max_fps: Option<f32>) -> Option<Duration> {
+    let fps = max_fps.filter(|fps| fps.is_finite() && *fps > 0.0)?;
+    Duration::try_from_secs_f64(1.0 / f64::from(fps))
+        .ok()
+        .filter(|interval| !interval.is_zero())
 }
 
 struct SpringElementState {
@@ -391,56 +515,90 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         window.with_element_state(global_id.unwrap(), |state, window| {
             let now = cx.background_executor().now();
+            let preference_epoch = cx
+                .try_global::<crate::AnimationPreference>()
+                .map_or(0, |preference| preference.0);
             let mut state = state.unwrap_or_else(|| AnimationState {
                 start: now,
                 animation_ix: 0,
+                replay_key: self.replay_key.clone(),
+                reduced_replay: false,
+                preference_epoch,
                 delayed_frame_pending: Rc::new(Cell::new(false)),
+                delayed_frame: None,
+                delayed_frame_interval: None,
             });
-            let (animation_ix, delta, done) = if cx.reduce_motion() {
-                let animation_ix = self.animations.len() - 1;
-                let delta = self.animations[animation_ix]
-                    .motion
-                    .resting_progress()
-                    .get();
-                (animation_ix, delta, true)
-            } else {
-                let animation_ix = state.animation_ix;
-                let animation = &self.animations[animation_ix];
-                let elapsed = if animation.synced {
-                    now - cx.synced_animation_epoch
-                } else {
-                    now - state.start
-                };
-                let sample = animation.motion.sample(elapsed);
-                let mut done = !sample.is_active;
-                if done && animation_ix < self.animations.len() - 1 {
+            if state.replay_key != self.replay_key {
+                state.reduced_replay = false;
+                state.preference_epoch = preference_epoch;
+                if self.replay_key.is_some() {
                     state.start = now;
-                    state.animation_ix += 1;
-                    done = false;
+                    state.animation_ix = 0;
+                    state.delayed_frame = None;
+                    state.delayed_frame_pending = Rc::new(Cell::new(false));
                 }
-                (animation_ix, sample.progress.get(), done)
+                state.replay_key = self.replay_key.clone();
+            }
+            if self.replay_key.is_some()
+                && (cx.reduce_motion() || state.preference_epoch != preference_epoch)
+            {
+                state.reduced_replay = true;
+            }
+            state.preference_epoch = preference_epoch;
+            let selected = animation_sequence_sample(
+                &self.animations,
+                &self.timing,
+                now - state.start,
+                now - cx.synced_animation_epoch,
+                cx.reduce_motion() || state.reduced_replay,
+            );
+            let (animation_ix, delta, done) = if let Some((animation_ix, delta, done)) = selected {
+                if state.animation_ix != animation_ix {
+                    state.animation_ix = animation_ix;
+                    state.delayed_frame = None;
+                    state.delayed_frame_pending = Rc::new(Cell::new(false));
+                }
+                (Some(animation_ix), delta, done)
+            } else {
+                (None, 0.0, true)
             };
 
             debug_assert!(delta.is_finite(), "animated value should be finite");
 
             let element = self.element.take().expect("should only be called once");
-            let mut element = (self.animator)(element, animation_ix, delta).into_any_element();
+            let mut element = if let Some(animation_ix) = animation_ix {
+                (self.animator)(element, animation_ix, delta)
+            } else {
+                element
+            }
+            .into_any_element();
 
+            let interval = if done {
+                None
+            } else {
+                frame_interval(animation_ix.and_then(|ix| self.animations[ix].max_fps))
+            };
+            if state.delayed_frame_interval != interval {
+                state.delayed_frame = None;
+                state.delayed_frame_pending = Rc::new(Cell::new(false));
+                state.delayed_frame_interval = interval;
+            }
+            if done {
+                state.delayed_frame = None;
+                state.delayed_frame_pending.set(false);
+            }
             if !done {
-                match self.animations[animation_ix].max_fps {
-                    Some(max_fps) if max_fps.is_finite() && max_fps > 0.0 => {
+                match interval {
+                    Some(interval) => {
                         if !state.delayed_frame_pending.get() {
                             state.delayed_frame_pending.set(true);
                             let delayed_frame_pending = state.delayed_frame_pending.clone();
                             let view = window.current_view();
-                            let interval = Duration::from_secs_f32(1.0 / max_fps);
-                            window
-                                .spawn(cx, async move |cx| {
-                                    cx.background_executor().timer(interval).await;
-                                    delayed_frame_pending.set(false);
-                                    cx.update(move |_, cx| cx.notify(view)).ok();
-                                })
-                                .detach();
+                            state.delayed_frame = Some(window.spawn(cx, async move |cx| {
+                                cx.background_executor().timer(interval).await;
+                                delayed_frame_pending.set(false);
+                                cx.update(move |_, cx| cx.notify(view)).ok();
+                            }));
                         }
                     }
                     _ => window.request_animation_frame(),
@@ -534,6 +692,10 @@ mod easing {
 }
 
 #[cfg(test)]
+#[path = "animation/replay_tests.rs"]
+mod replay_tests;
+
+#[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -551,6 +713,249 @@ mod tests {
 
     struct AnimationSequenceTestView {
         rendered_samples: Rc<RefCell<Vec<(usize, f32)>>>,
+    }
+
+    struct TimedSequenceTestView {
+        animations: Vec<Animation>,
+        rendered_samples: Rc<RefCell<Vec<(usize, f32)>>>,
+    }
+
+    impl Render for TimedSequenceTestView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let samples = self.rendered_samples.clone();
+            div().with_animations(
+                "timed-sequence",
+                self.animations.clone(),
+                move |element, index, value| {
+                    samples.borrow_mut().push((index, value));
+                    element
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn sequence_adapter_exact_boundaries_late_frames_sync_and_throttle_selection() {
+        let animations = vec![
+            Animation::new(Duration::from_millis(100)).with_max_fps(10.0),
+            Animation::new(Duration::from_millis(100)),
+            Animation::new(Duration::from_millis(1000))
+                .repeat_synced()
+                .with_max_fps(20.0),
+        ];
+        let timing = AnimationSchedule::new(&animations);
+        assert_eq!(
+            animation_sequence_sample(
+                &animations,
+                &timing,
+                Duration::from_millis(100),
+                Duration::from_millis(500),
+                false
+            ),
+            Some((1, 0.0, false))
+        );
+        assert_eq!(
+            animation_sequence_sample(
+                &animations,
+                &timing,
+                Duration::from_millis(150),
+                Duration::from_millis(550),
+                false
+            ),
+            Some((1, 0.5, false))
+        );
+        let sample = animation_sequence_sample(
+            &animations,
+            &timing,
+            Duration::from_millis(250),
+            Duration::from_millis(650),
+            false,
+        )
+        .unwrap();
+        assert_eq!(sample, (2, 0.65, false));
+        assert_eq!(
+            frame_interval(animations[sample.0].max_fps),
+            Some(Duration::from_millis(50))
+        );
+        assert_eq!(
+            animation_sequence_sample(
+                &[],
+                &AnimationSchedule::new(&[]),
+                Duration::ZERO,
+                Duration::ZERO,
+                false
+            ),
+            None
+        );
+        for fps in [
+            0.0,
+            -1.0,
+            f32::INFINITY,
+            f32::NAN,
+            f32::from_bits(1),
+            f32::MAX,
+        ] {
+            assert_eq!(frame_interval(Some(fps)), None);
+        }
+        assert_eq!(
+            animation_sequence_sample(
+                &animations,
+                &timing,
+                Duration::from_millis(250),
+                Duration::ZERO,
+                true
+            ),
+            Some((2, 0.0, true))
+        );
+    }
+
+    #[gpui::test]
+    fn sequence_adapter_carries_late_elapsed_through_real_element(cx: &mut TestAppContext) {
+        let rendered_samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let rendered_samples = rendered_samples.clone();
+            move |_, _| TimedSequenceTestView {
+                animations: vec![
+                    Animation::new(Duration::from_millis(100)),
+                    Animation::new(Duration::from_millis(100)),
+                    Animation::new(Duration::from_millis(400)),
+                ],
+                rendered_samples,
+            }
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(300));
+        simulate_next_frame(&window, cx);
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let (index, value) = *rendered_samples.borrow().last().unwrap();
+        assert_eq!(index, 2);
+        assert!((value - 0.25).abs() < 1e-3);
+        assert!(
+            rendered_samples
+                .borrow()
+                .iter()
+                .all(|(index, _)| *index != 1)
+        );
+    }
+
+    #[gpui::test]
+    fn sequence_adapter_handoff_changes_frame_throttle(cx: &mut TestAppContext) {
+        let rendered_samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let rendered_samples = rendered_samples.clone();
+            move |_, _| TimedSequenceTestView {
+                animations: vec![
+                    Animation::new(Duration::from_millis(100)).with_max_fps(10.0),
+                    Animation::new(Duration::from_secs(1)).with_max_fps(20.0),
+                ],
+                rendered_samples,
+            }
+        });
+        cx.run_until_parked();
+        assert_eq!(simulate_next_frame(&window, cx), 0);
+        cx.executor().advance_clock(Duration::from_millis(105));
+        cx.run_until_parked();
+        assert_eq!(rendered_samples.borrow().last().unwrap().0, 1);
+        let renders = rendered_samples.borrow().len();
+        cx.executor().advance_clock(Duration::from_millis(55));
+        cx.run_until_parked();
+        assert_eq!(rendered_samples.borrow().len(), renders + 1);
+        assert!(
+            (rendered_samples.borrow().last().unwrap().1 - 0.05).abs() < 0.005,
+            "samples: {:?}",
+            rendered_samples.borrow()
+        );
+    }
+
+    #[gpui::test]
+    fn sequence_handoff_cancels_pending_throttle(cx: &mut TestAppContext) {
+        let samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let samples = samples.clone();
+            move |_, _| TimedSequenceTestView {
+                animations: vec![
+                    Animation::new(Duration::from_millis(100)).with_max_fps(0.5),
+                    Animation::new(Duration::from_millis(100)),
+                ],
+                rendered_samples: samples,
+            }
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(210));
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(samples.borrow().last().unwrap().0, 1);
+        assert_eq!(samples.borrow().last().unwrap().1, 1.0);
+        let renders = samples.borrow().len();
+        cx.executor().advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+        assert_eq!(
+            samples.borrow().len(),
+            renders,
+            "obsolete detached timer must not wake resting view"
+        );
+        assert_eq!(simulate_next_frame(&window, cx), 0);
+    }
+
+    #[gpui::test]
+    fn reduced_motion_and_empty_sequence_cancel_pending_throttle(cx: &mut TestAppContext) {
+        for reduced in [false, true] {
+            let samples = Rc::new(RefCell::new(Vec::new()));
+            let window = cx.open_window(size(px(100.0), px(100.0)), {
+                let samples = samples.clone();
+                move |_, _| TimedSequenceTestView {
+                    animations: vec![Animation::new(Duration::from_secs(1)).with_max_fps(0.5)],
+                    rendered_samples: samples,
+                }
+            });
+            cx.run_until_parked();
+            if reduced {
+                cx.update(|cx| cx.set_reduce_motion(true));
+                cx.refresh().unwrap();
+            } else {
+                window
+                    .update(cx, |v, _, cx| {
+                        v.animations.clear();
+                        cx.notify();
+                    })
+                    .unwrap();
+            }
+            cx.run_until_parked();
+            let renders = samples.borrow().len();
+            cx.executor().advance_clock(Duration::from_secs(3));
+            cx.run_until_parked();
+            assert_eq!(
+                samples.borrow().len(),
+                renders,
+                "cancelled throttle cannot redraw resting content"
+            );
+            assert_eq!(simulate_next_frame(&window, cx), 0);
+        }
+    }
+
+    #[gpui::test]
+    fn finite_synchronized_animation_mounted_after_epoch_completion_rests(cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(300));
+        let samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let samples = samples.clone();
+            move |_, _| TimedSequenceTestView {
+                animations: vec![Animation {
+                    motion: Motion::new(Duration::from_millis(100)),
+                    synced: true,
+                    max_fps: None,
+                }],
+                rendered_samples: samples,
+            }
+        });
+        cx.run_until_parked();
+        assert_eq!(*samples.borrow().last().unwrap(), (0, 1.0));
+        assert_eq!(simulate_next_frame(&window, cx), 0);
     }
 
     struct SyncedAnimationTestView {
@@ -925,9 +1330,7 @@ mod tests {
         });
         cx.run_until_parked();
 
-        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0)]);
-        assert_eq!(simulate_next_frame(&window, cx), 1);
-        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0), (1, 1.0)]);
+        assert_eq!(*rendered_samples.borrow(), vec![(1, 1.0)]);
         assert_eq!(simulate_next_frame(&window, cx), 0);
     }
 
