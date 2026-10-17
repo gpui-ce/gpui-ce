@@ -368,6 +368,7 @@ pub(crate) struct WaylandClientState {
     button_pressed: Option<MouseButton>,
     mouse_focused_window: Option<WaylandWindowStatePtr>,
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
+    activation_history: crate::linux::platform::ActivationHistory<ObjectId>,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
     cursor_style: Option<CursorStyle>,
     cursor_hidden_window: Option<WaylandWindowStatePtr>,
@@ -655,6 +656,7 @@ impl WaylandClientStatePtr {
     pub fn drop_window(&self, surface_id: &ObjectId) {
         let client = self.get_client();
         let mut state = client.borrow_mut();
+        state.activation_history.closed(surface_id);
         let closed_window = state.windows.remove(surface_id).unwrap();
         if let Some(window) = state.mouse_focused_window.take()
             && !window.ptr_eq(&closed_window)
@@ -994,6 +996,7 @@ impl WaylandClient {
             button_pressed: None,
             mouse_focused_window: None,
             keyboard_focused_window: None,
+            activation_history: Default::default(),
             loop_handle: handle.clone(),
             enter_token: None,
             cursor_style: None,
@@ -1110,6 +1113,10 @@ impl LinuxClient for WaylandClient {
         let compositor_gpu = state.compositor_gpu.take();
         let gpu_requirements = state.gpu_requirements.clone();
 
+        let activation_target = matches!(
+            &params.kind,
+            WindowKind::Normal | WindowKind::Floating | WindowKind::Dialog
+        );
         let (window, surface_id) = WaylandWindow::new(
             handle,
             state.globals.clone(),
@@ -1127,6 +1134,9 @@ impl LinuxClient for WaylandClient {
         if window.0.toplevel().is_some() {
             state.consume_startup_activation_token(&window.0.surface());
             window.0.regenerate_icons(&state.icon_sizes);
+        }
+        if activation_target {
+            state.activation_history.opened(surface_id.clone());
         }
         state.windows.insert(surface_id, window.0.clone());
 
@@ -1303,6 +1313,20 @@ impl LinuxClient for WaylandClient {
             .keyboard_focused_window
             .as_ref()
             .map(|window| window.handle())
+    }
+
+    fn activate(&self) {
+        let window = {
+            let state = self.0.borrow();
+            state
+                .activation_history
+                .target()
+                .and_then(|id| state.windows.get(id))
+                .cloned()
+        };
+        if let Some(window) = window {
+            window.activate(None);
+        }
     }
 
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
@@ -1842,6 +1866,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 this.handle_keyboard_layout_change();
             }
             wl_keyboard::Event::Enter { surface, .. } => {
+                state.activation_history.focused(&surface.id());
                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
                 state.enter_token = Some(());
 

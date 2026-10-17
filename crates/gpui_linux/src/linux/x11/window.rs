@@ -1053,6 +1053,32 @@ impl X11Window {
 }
 
 impl X11WindowStatePtr {
+    pub(crate) fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
+        if self.state.borrow().destroyed {
+            return false;
+        }
+        let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
+        let message = xproto::ClientMessageEvent::new(
+            32,
+            self.x_window,
+            self.state.borrow().atoms._NET_ACTIVE_WINDOW,
+            data,
+        );
+        self.xcb
+            .send_event(
+                false,
+                self.state.borrow().x_root_window,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                message,
+            )
+            .log_err();
+        xcb_flush(&self.xcb);
+        true
+    }
+
     pub fn should_close(&self) -> bool {
         let mut cb = self.callbacks.borrow_mut();
         if let Some(mut should_close) = cb.should_close.take() {
@@ -1524,27 +1550,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn activate(&self, token: Option<&str>) -> bool {
-        if token.is_some() {
-            return false;
-        }
-        let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
-        let message = xproto::ClientMessageEvent::new(
-            32,
-            self.0.x_window,
-            self.0.state.borrow().atoms._NET_ACTIVE_WINDOW,
-            data,
-        );
-        self.0
-            .xcb
-            .send_event(
-                false,
-                self.0.state.borrow().x_root_window,
-                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
-                message,
-            )
-            .log_err();
-        xcb_flush(&self.0.xcb);
-        true
+        self.0.activate(token)
     }
 
     fn request_attention(&self) {
