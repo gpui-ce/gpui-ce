@@ -22,7 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixes
 
-- Text selection is not cleared when editable-text looses focus [#250](https://github.com/gpui-ce/gpui-ce/issues/250)
+- [#250](https://github.com/gpui-ce/gpui-ce/issues/250) Text selection is not cleared when editable-text looses focus [#267](https://github.com/gpui-ce/gpui-ce/pull/267)
+- [#327](https://github.com/gpui-ce/gpui-ce/issues/327) `ColorExt::blend` diverged from upstream/original behavior [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
 
 ### Security Changes
 
