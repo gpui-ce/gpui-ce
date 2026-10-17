@@ -1,4 +1,4 @@
-use palette::{IntoColor, OklabHue, Oklcha, RgbHue};
+use palette::{IntoColor, OklabHue, Oklcha, RgbHue, WithAlpha};
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
@@ -165,7 +165,9 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
 
 /// Wrapper methods to make alpha operations more convenient
 pub trait ColorExt {
-    /// Performs a SrcAlpha x (1 - SrcAlpha) blend
+    /// Performs a `(1 - DstAlpha) + DstAlpha` blend, with custom considerations for DstAlpha <=0 and >=1.
+    ///
+    /// This is a nonstandard blend maintained for backwards compatibility. Its strongly recommended that users interface with the [palette crate blend ops](palette::blend) directly.
     fn blend(&self, other: &Self) -> Self
     where
         Self: Sized;
@@ -208,10 +210,46 @@ pub trait ColorExt {
 }
 impl ColorExt for Rgba {
     fn blend(&self, other: &Self) -> Self {
-        use palette::blend::{BlendWith, Equations, Parameter};
-        let blend_mode =
-            Equations::from_parameters(Parameter::OneMinusSourceAlpha, Parameter::SourceAlpha);
-        self.blend_with(*other, blend_mode)
+        use palette::blend::{BlendFunction, Equation, Equations, Parameter, Parameters, PreAlpha};
+        let src = self.with_alpha(self.alpha.clamp(0f32, 1f32));
+        let dst = other.with_alpha(other.alpha.clamp(0f32, 1f32));
+        let blend_mode = Equations {
+            color_equation: Equation::Add,
+            alpha_equation: Equation::Add,
+            // color = [src.color * (1 - dst.alpha)] + [dst.color * dst.alpha]
+            color_parameters: Parameters {
+                source: Parameter::OneMinusDestinationAlpha,
+                destination: Parameter::DestinationAlpha,
+            },
+            alpha_parameters: match dst.alpha > 0f32 && dst.alpha < 1f32 {
+                // alpha = [src.alpha * One] + [dst.alpha * Zero] => src.alpha
+                true => Parameters {
+                    source: Parameter::One,
+                    destination: Parameter::Zero,
+                },
+                // alpha = [src.alpha * (1 - dst.alpha)] + [dst.alpha * dst.alpha]
+                //		=> dst.alpha when dst.alpha == 1
+                //		=> src.alpha when dst.alpha == 0
+                false => Parameters {
+                    source: Parameter::OneMinusDestinationAlpha,
+                    destination: Parameter::DestinationAlpha,
+                },
+            },
+        };
+        // in order to match original/upstream behavior, this blend does /not/ premultiply (as palette standard is)
+        let src = PreAlpha {
+            color: src.color,
+            alpha: src.alpha,
+        };
+        let dst = PreAlpha {
+            color: dst.color,
+            alpha: dst.alpha,
+        };
+        let premul = blend_mode.apply_to(src, dst);
+        Rgba {
+            color: premul.color,
+            alpha: premul.alpha,
+        }
     }
 
     fn fade_out(&mut self, factor: f32) {
@@ -619,5 +657,58 @@ mod tests {
         let color = Rgba::new(0.2, 0.6, 1.0, 0.8);
         assert!((color.opacity(0.5).alpha - 0.4).abs() < 1e-6);
         assert_eq!(color.opacity(2.0).alpha, 0.8);
+    }
+
+    fn upstream_blend(src: Rgba, dst: Rgba) -> Rgba {
+        // per upstream logic;
+        // https://github.com/gpui-ce/gpui-ce/commit/c738623ffbcec2aeddc44a645cc6b74646d5cf97#diff-585dd80a91eb97df686c8d31dc27ebc33b0c678a4a98c2a70a3745cd36576aaaL57-L71
+        // if dst.alpha >= 1: blend with OneMinusDstAlpha (= 0) + DstAlpha (= 1)
+        // 		which reduces to be equivalent to dst itself
+        // if dst.alpha  < 0: blend with OneMinusDstAlpha (= 1) + DstAlpha (= 0)
+        // 		which reduces to be equivalent to src itself
+        // otherwise, blend color by OneMinusDstAlpha + DstAlpha, and take only the src alpha
+        let new_alpha = if dst.alpha > 0f32 && dst.alpha < 1f32 {
+            src.alpha
+        } else {
+            (src.alpha * (1f32 - dst.alpha)) + (dst.alpha * dst.alpha)
+        };
+        Rgba::new(
+            (src.red * (1f32 - dst.alpha)) + (dst.red * dst.alpha),
+            (src.green * (1f32 - dst.alpha)) + (dst.green * dst.alpha),
+            (src.blue * (1f32 - dst.alpha)) + (dst.blue * dst.alpha),
+            new_alpha,
+        )
+    }
+
+    // per original behavior, blending a dst color that is opaque should always return that destination color
+    #[test]
+    fn test_blend_dst_opaque() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
+        let blended = src.blend(&dst);
+        assert_eq!(blended, dst);
+    }
+
+    // per original behavior, blending a dst color that is transparent should always return the source color
+    #[test]
+    fn test_blend_dst_transparent() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 0f32);
+        let blended = src.blend(&dst);
+        assert_eq!(blended, src);
+    }
+
+    #[test]
+    fn test_blend_opaque_white_black() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
+        assert_eq!(src.blend(&dst), upstream_blend(src, dst));
+    }
+
+    #[test]
+    fn test_blend_translucent_on_opaquewhite() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
+        let dst = Rgba::new(0.3f32, 0.6f32, 1f32, 0.5f32);
+        assert_eq!(src.blend(&dst), upstream_blend(src, dst));
     }
 }
