@@ -391,6 +391,11 @@ pub struct Style {
     /// Opacity applied to this element and its children after compositing them as a group.
     pub opacity: Option<f32>,
 
+    /// A scale applied to painted contents around the element's center.
+    /// Layout and hit testing are unchanged.
+    #[refineable]
+    pub scale: Size<f32>,
+
     /// The grid columns of this element
     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<GridTemplate>,
@@ -964,17 +969,19 @@ impl Style {
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
         window.with_element_opacity(self.opacity, |window| {
-            if let Some(fragments) = window.current_inline_fragments.clone() {
-                for fragment in fragments.iter() {
-                    self.paint_box(*fragment, window, cx, |_, _| {});
+            window.with_scale(bounds.center(), self.scale, |window| {
+                if let Some(fragments) = window.current_inline_fragments.clone() {
+                    for fragment in fragments.iter() {
+                        self.paint_box(*fragment, window, cx, |_, _| {});
+                    }
+
+                    continuation(window, cx);
+
+                    return;
                 }
 
-                continuation(window, cx);
-
-                return;
-            }
-
-            self.paint_box(bounds, window, cx, continuation);
+                self.paint_box(bounds, window, cx, continuation);
+            });
         });
     }
 
@@ -1151,6 +1158,7 @@ impl Default for Style {
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,
+            scale: size(1.0, 1.0),
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

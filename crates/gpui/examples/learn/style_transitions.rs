@@ -59,9 +59,10 @@ impl RenderOnce for Button {
                 transitions
                     .bg(millis(200).with_easing(ease_in_out))
                     .p(spring(600.0, 22.0, 1.0))
+                    .scale(millis(200).with_easing(ease_in_out))
             })
-            .hover(|refinement| refinement.bg(hover_color).p(px(50.)))
-            .active(|refinement| refinement.bg(active_color))
+            .hover(|refinement| refinement.bg(hover_color).p(px(50.)).scale(0.97))
+            .active(|refinement| refinement.bg(active_color).scale(0.94))
     }
 }
 

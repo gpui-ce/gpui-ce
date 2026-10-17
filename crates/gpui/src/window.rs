@@ -1319,6 +1319,7 @@ pub struct Window {
     pub(crate) measurement_unicode_bidi: UnicodeBidi,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+    paint_scale_stack: Vec<PaintScale>,
     /// Bounds of the parent `Div` currently prepainting this element as one of its children.
     /// Inset transitions use these bounds to resolve `auto` from the child's rendered position.
     style_transition_containing_bounds: Option<Bounds<Pixels>>,
@@ -1384,6 +1385,12 @@ pub struct Window {
     #[cfg(feature = "profiler")]
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
     pub(crate) a11y: A11y,
+}
+
+#[derive(Clone, Copy)]
+struct PaintScale {
+    center: Point<Pixels>,
+    scale: Size<f32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2076,6 +2083,7 @@ impl Window {
             measurement_unicode_bidi: UnicodeBidi::Normal,
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
+            paint_scale_stack: Vec::new(),
             style_transition_containing_bounds: None,
             content_mask_stack: Vec::new(),
             requested_autoscroll: None,
@@ -3080,6 +3088,7 @@ impl Window {
 
     #[inline]
     fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
+        let bounds = self.transform_paint_bounds(bounds);
         let scale_factor = self.scale_factor();
         let left = round_to_device_pixel(bounds.left().0, scale_factor);
         let top = round_to_device_pixel(bounds.top().0, scale_factor);
@@ -3099,12 +3108,19 @@ impl Window {
 
     #[inline]
     fn snap_border_widths(&self, edges: Edges<Pixels>) -> Edges<ScaledPixels> {
-        edges.map(|e| self.snap_stroke(*e))
+        let scale = self.paint_scale_factor();
+        Edges {
+            top: self.snap_stroke(edges.top * scale.height),
+            right: self.snap_stroke(edges.right * scale.width),
+            bottom: self.snap_stroke(edges.bottom * scale.height),
+            left: self.snap_stroke(edges.left * scale.width),
+        }
     }
 
     /// Floors the near edge and ceils the far edge, producing a strict superset of the raw region.
     #[inline]
     fn cover_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
+        let bounds = self.transform_paint_bounds(bounds);
         let scale_factor = self.scale_factor();
         let left = floor_to_device_pixel(bounds.left().0, scale_factor);
         let top = floor_to_device_pixel(bounds.top().0, scale_factor);
@@ -3123,6 +3139,103 @@ impl Window {
             bounds: self.cover_bounds(mask.bounds),
             fade_out: mask.fade_out.scale(self.scale_factor()),
         }
+    }
+
+    /// Paints `f` with a scale centered on `center`. Layout and hit testing remain unchanged.
+    pub(crate) fn with_scale<R>(
+        &mut self,
+        center: Point<Pixels>,
+        scale: Size<f32>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let scale = size(
+            if scale.width.is_finite() {
+                scale.width.max(0.0)
+            } else {
+                1.0
+            },
+            if scale.height.is_finite() {
+                scale.height.max(0.0)
+            } else {
+                1.0
+            },
+        );
+        if scale == size(1.0, 1.0) {
+            return f(self);
+        }
+        let center = self.transform_paint_point(center);
+        self.paint_scale_stack.push(PaintScale { center, scale });
+        let result = f(self);
+        self.paint_scale_stack.pop();
+        result
+    }
+
+    fn transform_paint_point(&self, mut point: Point<Pixels>) -> Point<Pixels> {
+        for transform in &self.paint_scale_stack {
+            point = Point::new(
+                transform.center.x + (point.x - transform.center.x) * transform.scale.width,
+                transform.center.y + (point.y - transform.center.y) * transform.scale.height,
+            );
+        }
+        point
+    }
+
+    fn transform_paint_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        if self.paint_scale_stack.is_empty() {
+            return bounds;
+        }
+        let top_left = self.transform_paint_point(bounds.origin);
+        let top_right = self.transform_paint_point(point(bounds.right(), bounds.top()));
+        let bottom_left = self.transform_paint_point(point(bounds.left(), bounds.bottom()));
+        let bottom_right = self.transform_paint_point(bounds.bottom_right());
+        Bounds::from_corners(
+            point(
+                top_left
+                    .x
+                    .min(top_right.x)
+                    .min(bottom_left.x)
+                    .min(bottom_right.x),
+                top_left
+                    .y
+                    .min(top_right.y)
+                    .min(bottom_left.y)
+                    .min(bottom_right.y),
+            ),
+            point(
+                top_left
+                    .x
+                    .max(top_right.x)
+                    .max(bottom_left.x)
+                    .max(bottom_right.x),
+                top_left
+                    .y
+                    .max(top_right.y)
+                    .max(bottom_left.y)
+                    .max(bottom_right.y),
+            ),
+        )
+    }
+
+    fn paint_scale_factor(&self) -> Size<f32> {
+        self.paint_scale_stack
+            .iter()
+            .fold(size(1.0, 1.0), |scale, transform| {
+                size(
+                    scale.width * transform.scale.width,
+                    scale.height * transform.scale.height,
+                )
+            })
+    }
+
+    fn sprite_paint_transform(&self, center: Point<ScaledPixels>) -> TransformationMatrix {
+        let scale = self.paint_scale_factor();
+        if scale == size(1.0, 1.0) {
+            return TransformationMatrix::unit();
+        }
+        TransformationMatrix::unit()
+            .translate(center)
+            .scale(scale)
+            .translate(point(ScaledPixels(-center.x.0), ScaledPixels(-center.y.0)))
     }
 
     /// Call to prevent the default action of an event. Currently only used to prevent
@@ -4526,9 +4639,11 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        let paint_scale = self.paint_scale_factor();
+        let radius_scale = (paint_scale.width + paint_scale.height) / 2.0;
         let content_mask = self.snapped_content_mask();
         let element_bounds = self.cover_bounds(bounds);
-        let element_corner_radii = corner_radii.scale(scale_factor);
+        let element_corner_radii = corner_radii.scale(scale_factor * radius_scale);
         let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
 
         for shadow in shadows.iter().filter(|shadow| shadow.inset == inset) {
@@ -4549,10 +4664,10 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
-                blur_radius: shadow.blur_radius.scale(scale_factor),
+                blur_radius: shadow.blur_radius.scale(scale_factor * radius_scale),
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
-                corner_radii: shadow_radii.scale(scale_factor),
+                corner_radii: shadow_radii.scale(scale_factor * radius_scale),
                 color: shadow.color,
                 element_bounds,
                 element_corner_radii,
@@ -4582,10 +4697,12 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        let paint_scale = self.paint_scale_factor();
+        let radius_scale = (paint_scale.width + paint_scale.height) / 2.0;
         let filters: SmallVec<[ScaledFilter; 4]> = filters
             .iter()
             .filter(|filter| !filter.is_identity())
-            .map(|filter| filter.scale(scale_factor))
+            .map(|filter| filter.scale(scale_factor * radius_scale))
             .collect();
         if filters.is_empty() {
             return;
@@ -4595,7 +4712,7 @@ impl Window {
             order: 0,
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
-            corner_radii: corner_radii.scale(scale_factor),
+            corner_radii: corner_radii.scale(scale_factor * radius_scale),
             corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
@@ -4623,10 +4740,12 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        let paint_scale = self.paint_scale_factor();
+        let radius_scale = (paint_scale.width + paint_scale.height) / 2.0;
         let filters: SmallVec<[ScaledFilter; 4]> = filters
             .iter()
             .filter(|filter| !filter.is_identity())
-            .map(|filter| filter.scale(scale_factor))
+            .map(|filter| filter.scale(scale_factor * radius_scale))
             .collect();
         if filters.is_empty() {
             return f(self);
@@ -4636,7 +4755,7 @@ impl Window {
             order: 0,
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
-            corner_radii: corner_radii.scale(scale_factor),
+            corner_radii: corner_radii.scale(scale_factor * radius_scale),
             corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
@@ -4707,7 +4826,11 @@ impl Window {
             content_mask: self.snapped_content_mask(),
             background: quad.background,
             border_color: quad.border_color,
-            corner_radii: quad.corner_radii.scale(self.scale_factor()),
+            corner_radii: quad.corner_radii.scale(
+                self.scale_factor()
+                    * (self.paint_scale_factor().width + self.paint_scale_factor().height)
+                    / 2.0,
+            ),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
             border_dashed_length: quad.border_dashed_length,
@@ -4775,7 +4898,12 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
-        let content_mask = self.content_mask();
+        let mut content_mask = self.content_mask();
+        path.bounds = self.transform_paint_bounds(path.bounds);
+        content_mask.bounds = self.transform_paint_bounds(content_mask.bounds);
+        for vertex in &mut path.vertices {
+            vertex.xy_position = self.transform_paint_point(vertex.xy_position);
+        }
         path.content_mask = content_mask;
         let color: Background = color.into();
         path.color = color;
@@ -4866,9 +4994,15 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        let paint_scale = self.paint_scale_factor();
+        if paint_scale.width <= 0.0 || paint_scale.height <= 0.0 {
+            return Ok(());
+        }
+        let origin = self.transform_paint_point(origin);
         let glyph_origin = origin.scale(scale_factor);
 
         let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
+        let transformation = self.sprite_paint_transform(glyph_origin);
         let requested_mode = if self.should_use_subpixel_rendering(font_id, font_size) {
             GlyphRenderMode::Subpixel
         } else {
@@ -4886,7 +5020,7 @@ impl Window {
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, color)
+        self.paint_glyph_from_atlas(integer_origin, params, color, transformation)
     }
 
     fn paint_glyph_from_atlas(
@@ -4894,6 +5028,7 @@ impl Window {
         integer_origin: Point<ScaledPixels>,
         params: RenderGlyphParams,
         mask_color: Hsla,
+        transformation: TransformationMatrix,
     ) -> Result<()> {
         let text_system = self.text_system().clone();
         let entry = self
@@ -4904,8 +5039,10 @@ impl Window {
         };
 
         debug_assert_eq!(entry.bounds.size, tile.bounds.size.map(Into::into));
+        let paint_scale = self.paint_scale_factor();
+        let glyph_origin_offset = entry.bounds.origin.map(Into::into);
         let bounds = Bounds {
-            origin: integer_origin + entry.bounds.origin.map(Into::into),
+            origin: integer_origin + glyph_origin_offset,
             size: tile.bounds.size.map(Into::into),
         };
         let content_mask = self.snapped_content_mask();
@@ -4919,7 +5056,7 @@ impl Window {
                     content_mask,
                     color: mask_color.into(),
                     tile,
-                    transformation: TransformationMatrix::unit(),
+                    transformation,
                 });
             }
             RasterizedGlyphFormat::BgraSubpixelMask => {
@@ -4930,7 +5067,7 @@ impl Window {
                     content_mask,
                     color: mask_color.into(),
                     tile,
-                    transformation: TransformationMatrix::unit(),
+                    transformation,
                 });
             }
             RasterizedGlyphFormat::BgraColor => {
@@ -4938,7 +5075,17 @@ impl Window {
                     order: 0,
                     grayscale: false.into(),
                     corner_smoothing: 0.0,
-                    bounds,
+                    bounds: Bounds {
+                        origin: integer_origin
+                            + point(
+                                ScaledPixels(entry.bounds.origin.x.0 as f32 * paint_scale.width),
+                                ScaledPixels(entry.bounds.origin.y.0 as f32 * paint_scale.height),
+                            ),
+                        size: size(
+                            ScaledPixels(tile.bounds.size.width.0 as f32 * paint_scale.width),
+                            ScaledPixels(tile.bounds.size.height.0 as f32 * paint_scale.height),
+                        ),
+                    },
                     corner_radii: Default::default(),
                     content_mask,
                     tile,
@@ -5006,8 +5153,13 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
-        let glyph_origin = origin.scale(scale_factor);
+        let paint_scale = self.paint_scale_factor();
+        if paint_scale.width <= 0.0 || paint_scale.height <= 0.0 {
+            return Ok(());
+        }
+        let glyph_origin = self.transform_paint_point(origin).scale(scale_factor);
         let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
+        let transformation = self.sprite_paint_transform(glyph_origin);
         let raster_style = self.text_system().prepare_raster_style(
             font_id,
             glyph_id,
@@ -5023,7 +5175,7 @@ impl Window {
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, color)
+        self.paint_glyph_from_atlas(integer_origin, params, color, transformation)
     }
 
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
@@ -5180,9 +5332,11 @@ impl Window {
         };
 
         let content_mask = self.snapped_content_mask();
+        let paint_scale = self.paint_scale_factor();
+        let radius_scale = (paint_scale.width + paint_scale.height) / 2.0;
         let corner_radii = corner_radii
             .clamp_radii_for_quad_size(visible_bounds.size)
-            .scale(self.scale_factor());
+            .scale(self.scale_factor() * radius_scale);
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
@@ -8478,6 +8632,14 @@ mod tests {
         image: Arc<RenderImage>,
     }
 
+    struct ScaledPaintView;
+
+    impl Render for ScaledPaintView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size(px(100.)).scale(0.5).bg(crate::blue())
+        }
+    }
+
     fn assert_smoothing(name: &str, minimum_count: usize, values: impl IntoIterator<Item = f32>) {
         let values = values.into_iter().collect::<Vec<_>>();
         assert!(values.len() >= minimum_count, "missing {name}");
@@ -8485,6 +8647,30 @@ mod tests {
             values.iter().all(|&value| value == 1.0),
             "{name}: {values:?}"
         );
+    }
+
+    #[gpui::test]
+    fn style_scale_transforms_paint_without_changing_layout(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| ScaledPaintView);
+        window
+            .update(cx, |_, window, _| {
+                let quad = window
+                    .rendered_frame
+                    .scene
+                    .quads
+                    .first()
+                    .expect("scaled background quad");
+                let scale = window.scale_factor();
+                assert_eq!(
+                    quad.bounds.origin,
+                    point(ScaledPixels(25.0 * scale), ScaledPixels(25.0 * scale))
+                );
+                assert_eq!(
+                    quad.bounds.size,
+                    size(ScaledPixels(50.0 * scale), ScaledPixels(50.0 * scale))
+                );
+            })
+            .unwrap();
     }
 
     impl Render for CornerSmoothingSceneView {

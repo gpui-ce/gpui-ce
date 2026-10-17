@@ -442,6 +442,10 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: vec![StyleTransitionField::optional(quote! { opacity })],
         },
         StyleTransitionSpec {
+            name: "scale",
+            fields: vec![StyleTransitionField::required(quote! { scale })],
+        },
+        StyleTransitionSpec {
             name: "rounded_smoothing",
             fields: vec![StyleTransitionField::optional(quote! { corner_smoothing })],
         },
