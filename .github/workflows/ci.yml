@@ -84,6 +84,9 @@ jobs:
       - uses: hustcer/setup-nu@v3
       - uses: extractions/setup-just@v2
       - run: just clippy
+      # The workspace build leaves `profiler` off, so code behind it would
+      # otherwise never be compiled in CI.
+      - run: cargo clippy -p gpui-ce --all-targets --features profiler -- -D warnings
 
   # Spell check
   typos:
