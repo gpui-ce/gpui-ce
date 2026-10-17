@@ -4,8 +4,9 @@
 mod example_support;
 
 use gpui::{
-    App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions, canvas, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions, angular_gradient,
+    canvas, diamond_gradient, div, linear_color_stop, linear_gradient, point, prelude::*, px,
+    radial_gradient, rgb, size,
 };
 use gpui_platform::application;
 
@@ -22,12 +23,17 @@ impl GradientViewer {
 }
 
 impl Render for GradientViewer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color_space = self.color_space;
+        let from = linear_color_stop(rgb(0xffc29d), 0.0);
+        let to = linear_color_stop(rgb(0x8fa7ff), 1.0);
+        let preview_size =
+            px(((window.viewport_size().width.as_f32() - 56.0) / 3.0).clamp(1.0, 180.0));
 
-        div()
+        let content = div()
             .bg(gpui::white())
-            .size_full()
+            .w_full()
+            .h(window.viewport_size().height + preview_size)
             .p_4()
             .flex()
             .flex_col()
@@ -245,6 +251,45 @@ impl Render for GradientViewer {
                     );
                 },
             )))
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .h(preview_size + px(40.))
+                    .gap_3()
+                    .children(
+                        [
+                            ("Radial", radial_gradient(from, to)),
+                            ("Angular / Conic", angular_gradient(0.0, from, to)),
+                            ("Diamond", diamond_gradient(0.0, from, to)),
+                        ]
+                        .into_iter()
+                        .map(|(label, background)| {
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .size(preview_size)
+                                        .flex_shrink_0()
+                                        .rounded_xl()
+                                        .bg(background.color_space(color_space)),
+                                )
+                                .child(div().text_sm().text_center().child(label))
+                        }),
+                    ),
+            );
+
+        div()
+            .id("gradient-examples")
+            .bg(gpui::white())
+            .size_full()
+            .overflow_y_scroll()
+            .child(content)
     }
 }
 

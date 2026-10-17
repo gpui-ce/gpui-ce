@@ -190,6 +190,18 @@ fn shader_discriminants_match_scene_types() {
         gpui::BackgroundTag::Checkerboard as u32
     );
     assert_eq!(
+        common::BackgroundTag::RadialGradient as u32,
+        gpui::BackgroundTag::RadialGradient as u32
+    );
+    assert_eq!(
+        common::BackgroundTag::AngularGradient as u32,
+        gpui::BackgroundTag::AngularGradient as u32
+    );
+    assert_eq!(
+        common::BackgroundTag::DiamondGradient as u32,
+        gpui::BackgroundTag::DiamondGradient as u32
+    );
+    assert_eq!(
         common::ColorSpace::Srgb as u32,
         gpui::ColorSpace::Srgb as u32
     );
@@ -245,4 +257,179 @@ fn linear_gradients_preserve_native_dithering() {
     let second = paint_color(paint, vec2f(11.0, 10.0), prepared);
 
     assert_ne!(first.w, second.w);
+}
+
+fn gradient_paint(tag: common::BackgroundTag, angle: f32, stops: [f32; 2]) -> common::Paint {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    Paint::new(
+        Background {
+            tag,
+            color_space: ColorSpace::Srgb,
+            solid: Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: 0.0,
+            },
+            gradient_angle_or_pattern_height: angle,
+            colors: [
+                LinearColorStop {
+                    color: Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 0.0,
+                        a: 0.25,
+                    },
+                    percentage: stops[0],
+                },
+                LinearColorStop {
+                    color: Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 1.0,
+                        a: 0.75,
+                    },
+                    percentage: stops[1],
+                },
+            ],
+            padding: 0,
+        },
+        Bounds {
+            origin: vec2f(10.0, 20.0),
+            size: vec2f(200.0, 100.0),
+        },
+    )
+}
+
+#[test]
+fn gradient_geometries_sample_translated_non_square_bounds() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    // Expected positions come from the geometries, independently of color conversion.
+    for (tag, angle, samples) in [
+        (
+            BackgroundTag::LinearGradient,
+            90.0,
+            vec![
+                (vec2f(10.0, 70.0), 0.0),
+                (vec2f(110.0, 70.0), 0.5),
+                (vec2f(210.0, 70.0), 1.0),
+            ],
+        ),
+        (
+            BackgroundTag::RadialGradient,
+            0.0,
+            vec![
+                (vec2f(110.0, 70.0), 0.0),
+                (vec2f(160.0, 70.0), 0.5),
+                (vec2f(110.0, 95.0), 0.5),
+                (vec2f(210.0, 70.0), 1.0),
+                (vec2f(110.0, 120.0), 1.0),
+            ],
+        ),
+        (
+            BackgroundTag::AngularGradient,
+            0.0,
+            vec![
+                (vec2f(110.0, 70.0), 0.0),
+                (vec2f(110.0, 20.0), 0.0),
+                (vec2f(210.0, 70.0), 0.25),
+                (vec2f(110.0, 120.0), 0.5),
+                (vec2f(10.0, 70.0), 0.75),
+                (vec2f(150.0, 110.0), 0.375),
+            ],
+        ),
+        (
+            BackgroundTag::AngularGradient,
+            450.0,
+            vec![
+                (vec2f(210.0, 70.0), 0.0),
+                (vec2f(110.0, 120.0), 0.25),
+                (vec2f(110.0, 20.0), 0.75),
+            ],
+        ),
+        (
+            BackgroundTag::DiamondGradient,
+            90.0,
+            vec![
+                (vec2f(110.0, 70.0), 0.0),
+                (vec2f(135.0, 82.5), 0.5),
+                (vec2f(160.0, 95.0), 1.0),
+            ],
+        ),
+        (
+            BackgroundTag::DiamondGradient,
+            135.0,
+            vec![(vec2f(160.0, 70.0), std::f32::consts::FRAC_1_SQRT_2)],
+        ),
+    ] {
+        let paint = gradient_paint(tag, angle, [0.0, 1.0]);
+        for (position, expected) in samples {
+            let actual = gradient_ratio(paint, position);
+            assert!(
+                (actual - expected).abs() < 0.00001,
+                "{tag:?} at {position:?}, angle {angle}: {actual} != {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn non_linear_gradients_preserve_stops_color_space_and_alpha() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    for (tag, positions) in [
+        (
+            BackgroundTag::RadialGradient,
+            [vec2f(110.0, 70.0), vec2f(160.0, 70.0), vec2f(210.0, 70.0)],
+        ),
+        (
+            BackgroundTag::AngularGradient,
+            [vec2f(210.0, 70.0), vec2f(110.0, 120.0), vec2f(10.0, 70.0)],
+        ),
+        (
+            BackgroundTag::DiamondGradient,
+            [vec2f(110.0, 70.0), vec2f(135.0, 82.5), vec2f(160.0, 95.0)],
+        ),
+    ] {
+        for space in [ColorSpace::Srgb, ColorSpace::Oklab] {
+            let mut paint = gradient_paint(tag, 0.0, [0.25, 0.75]);
+            paint.background.color_space = space;
+            let prepared = prepare_paint(paint);
+            // Preserve the renderer's existing interpolation, including its legacy 2.2
+            // transfer curve for Oklab. Halfway between black and white differs by space.
+            let midpoint_gray = if space == ColorSpace::Srgb {
+                0.214041
+            } else {
+                0.388602
+            };
+            for (position, (expected_alpha, expected_gray)) in
+                positions
+                    .into_iter()
+                    .zip([(0.25, 0.0), (0.5, midpoint_gray), (0.75, 1.0)])
+            {
+                let color = paint_color(paint, position, prepared);
+                for channel in [color.x, color.y, color.z] {
+                    assert!(
+                        (channel - expected_gray).abs() < 0.01,
+                        "{tag:?} in {space:?} at {position:?}: {channel} != gray {expected_gray}"
+                    );
+                }
+                assert!(
+                    (color.w - expected_alpha).abs() < 0.02,
+                    "{tag:?} in {space:?} at {position:?}: alpha {} != {expected_alpha}",
+                    color.w
+                );
+            }
+        }
+    }
+
+    let paint = gradient_paint(BackgroundTag::AngularGradient, 0.0, [0.0, 1.0]);
+    // First and last colors differ, so the angular gradient deliberately keeps its seam.
+    assert!(gradient_ratio(paint, vec2f(109.9, 20.0)) > 0.99);
+    assert!(gradient_ratio(paint, vec2f(110.1, 20.0)) < 0.01);
 }

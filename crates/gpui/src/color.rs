@@ -254,6 +254,12 @@ pub enum BackgroundTag {
     PatternSlash = 2,
     /// Alternating colored and transparent squares.
     Checkerboard = 3,
+    /// A two-stop radial gradient.
+    RadialGradient = 4,
+    /// A two-stop angular (conic) gradient.
+    AngularGradient = 5,
+    /// A two-stop diamond gradient.
+    DiamondGradient = 6,
 }
 
 /// A color space for color interpolation.
@@ -280,7 +286,7 @@ impl Display for ColorSpace {
     }
 }
 
-/// A background color, which can be either a solid color or a linear gradient.
+/// A background paint, which can be a solid color, a two-stop gradient, or a pattern.
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct Background {
@@ -297,10 +303,13 @@ impl std::fmt::Debug for Background {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.tag {
             BackgroundTag::Solid => write!(f, "Solid({:?})", self.solid),
-            BackgroundTag::LinearGradient => write!(
+            BackgroundTag::LinearGradient
+            | BackgroundTag::RadialGradient
+            | BackgroundTag::AngularGradient
+            | BackgroundTag::DiamondGradient => write!(
                 f,
-                "LinearGradient({}, {:?}, {:?})",
-                self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
+                "{:?}({}, {:?}, {:?})",
+                self.tag, self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
             ),
             BackgroundTag::PatternSlash => write!(
                 f,
@@ -386,7 +395,53 @@ pub fn linear_gradient(
     }
 }
 
-/// A color stop in a linear gradient.
+/// Creates a two-stop radial gradient centered in its painted bounds.
+///
+/// The gradient follows an ellipse scaled to the bounds: `0.0` is at the center,
+/// and `1.0` is at the midpoint of each edge. Colors beyond the last stop are clamped.
+pub fn radial_gradient(
+    from: impl Into<LinearColorStop>,
+    to: impl Into<LinearColorStop>,
+) -> Background {
+    Background {
+        tag: BackgroundTag::RadialGradient,
+        ..linear_gradient(0.0, from, to)
+    }
+}
+
+/// Creates a two-stop angular (conic) gradient centered in its painted bounds.
+///
+/// The starting `angle` is in degrees, with `0.0` pointing up and increasing clockwise.
+/// Stop percentages are fractions of a full turn. Pixel angles preserve the sweep in
+/// non-square bounds. Different first and last colors produce a hard seam.
+pub fn angular_gradient(
+    angle: f32,
+    from: impl Into<LinearColorStop>,
+    to: impl Into<LinearColorStop>,
+) -> Background {
+    Background {
+        tag: BackgroundTag::AngularGradient,
+        ..linear_gradient(angle, from, to)
+    }
+}
+
+/// Creates a two-stop diamond gradient centered in its painted bounds.
+///
+/// Sampling uses Manhattan distance in axes normalized to the bounds and rotated by
+/// `angle` degrees clockwise. At `0.0`, the diamond reaches each edge's midpoint.
+/// The center is `0.0`; the diamond contour is `1.0`.
+pub fn diamond_gradient(
+    angle: f32,
+    from: impl Into<LinearColorStop>,
+    to: impl Into<LinearColorStop>,
+) -> Background {
+    Background {
+        tag: BackgroundTag::DiamondGradient,
+        ..linear_gradient(angle, from, to)
+    }
+}
+
+/// A color stop in a two-stop gradient.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient#linear-color-stop>
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -431,6 +486,25 @@ pub enum BackgroundKind {
         /// The two ends of the gradient.
         stops: [LinearColorStop; 2],
     },
+    /// An elliptical gradient centered in the painted bounds.
+    RadialGradient {
+        /// The stops, with `0.0` at the center and `1.0` at the edge midpoints.
+        stops: [LinearColorStop; 2],
+    },
+    /// A clockwise angular (conic) gradient centered in the painted bounds.
+    AngularGradient {
+        /// The starting angle in degrees, `0.0` pointing up, increasing clockwise.
+        angle: f32,
+        /// The stops, with percentages measured as fractions of a full turn.
+        stops: [LinearColorStop; 2],
+    },
+    /// A diamond gradient centered in the painted bounds.
+    DiamondGradient {
+        /// The rotation in degrees of the diamond's normalized axes.
+        angle: f32,
+        /// The stops, with `0.0` at the center and `1.0` on the rotated diamond.
+        stops: [LinearColorStop; 2],
+    },
     /// A diagonal stripe pattern.
     PatternSlash {
         /// The stripe color.
@@ -464,6 +538,15 @@ impl Background {
         match self.tag {
             BackgroundTag::Solid => BackgroundKind::Solid(self.solid.into()),
             BackgroundTag::LinearGradient => BackgroundKind::LinearGradient {
+                angle: self.gradient_angle_or_pattern_height,
+                stops: self.colors,
+            },
+            BackgroundTag::RadialGradient => BackgroundKind::RadialGradient { stops: self.colors },
+            BackgroundTag::AngularGradient => BackgroundKind::AngularGradient {
+                angle: self.gradient_angle_or_pattern_height,
+                stops: self.colors,
+            },
+            BackgroundTag::DiamondGradient => BackgroundKind::DiamondGradient {
                 angle: self.gradient_angle_or_pattern_height,
                 stops: self.colors,
             },
@@ -516,7 +599,10 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.a == 0.,
-            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.a == 0.),
+            BackgroundTag::LinearGradient
+            | BackgroundTag::RadialGradient
+            | BackgroundTag::AngularGradient
+            | BackgroundTag::DiamondGradient => self.colors.iter().all(|c| c.color.a == 0.),
             BackgroundTag::PatternSlash => self.solid.a == 0.,
             BackgroundTag::Checkerboard => self.solid.a == 0.,
         }
