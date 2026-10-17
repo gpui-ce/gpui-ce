@@ -114,15 +114,28 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Drawing example](crates/gpui/examples/learn/custom_drawing.rs)
 
-## Setup
-View the [setup guide](SETUP.md) for installation instructions.
-
 ## FAQ
+
 - Q: What is our AI Policy?
-  A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
+  A: See the [genAI/LLM Policy document](AI_POLICY.md). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
 
 - Q: What is the long-term goal of GPUI-CE?
   A: To become the go-to Rust GUI library for applications of any size. We want reusable components, native platform integration, and control over performance. We build on Zed's work and continue to bring in upstream fixes.
 
 - Q: How does the project compare to other forks in the ecosystem?
   A: Other forks often develop around the applications that use them. GPUI-CE aims to support a broad range of applications, with a focus on stability.
+
+## Contributing
+
+Read the [contributing](CONTRIBUTING.md) and [genAI/LLM Policy](AI_POLICY.md) documents, which fully outline everything you need to know about how this project is maintained and what maintainers expect from contributors and contributions.
+
+While you will need to read both documents in full to contribute, they can be summarized as:
+- use github discussions to discuss potential bugs or feature requests
+- issue tracker is all actionable work for anyone to pick up
+- there is a vouch system for new contributors to get maintainer approval for changes
+- issues and PRs from non-vouched contributors will be automatically closed
+- all commits/PRs must update the changelog if they affect functionality
+- there are commit content and description guidelines (see contributing doc)
+- do not use genAI/LLMs to create code or prose, and all other forms of usage must be disclosed
+
+Then read the [setup guide](SETUP.md) for installation instructions.
