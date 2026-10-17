@@ -203,6 +203,7 @@ Changelog established.
 - Duplicate characters during web IME composition. [#236](https://github.com/gpui-ce/gpui-ce/pull/236)
 - Element opacity now applies to all descendants as one group. [#330](https://github.com/gpui-ce/gpui-ce/pull/330)
 - Incorrect RTL glyph ordering in `EditableText`. [#267](https://github.com/gpui-ce/gpui-ce/pull/267)
+- `ColorExt::blend` diverged from upstream/original behavior [#327](https://github.com/gpui-ce/gpui-ce/issues/327), [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
 
 ### Security Changes
 
