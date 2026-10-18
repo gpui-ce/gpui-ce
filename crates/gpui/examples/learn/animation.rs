@@ -196,7 +196,7 @@ fn scale_example(colors: &Colors) -> impl IntoElement {
                             .with_easing(bounce(linear)),
                         |svg, delta| {
                             let scale = 0.8 + (delta * 0.4);
-                            svg.with_transformation(Transformation::scale(gpui_size(scale, scale)))
+                            svg.scale(scale)
                         },
                     ),
             ),
