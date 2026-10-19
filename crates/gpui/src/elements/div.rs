@@ -1025,6 +1025,12 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Apply the given style to this element when the mouse hovers over it
+    #[deprecated(note = "Use InteractiveElement::hover_style instead.")]
+    fn hover(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.hover_style(style)
+    }
+
     /// Apply the given style to this element when the mouse hovers over a group member
     fn group_hover_style(
         mut self,
@@ -1036,6 +1042,16 @@ pub trait InteractiveElement: Sized {
             style: Box::new(f(StyleRefinement::default())),
         });
         self
+    }
+
+    /// Apply the given style to this element when the mouse hovers over a group member
+    #[deprecated(note = "Use InteractiveElement::group_hover_style instead.")]
+    fn group_hover(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_hover_style(group_name, style)
     }
 
     /// Bind the given callback to the mouse down event for the given mouse button.
@@ -1445,6 +1461,16 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Apply the given style when the given data type is dragged over this element's group
+    #[deprecated(note = "Use InteractiveElement::group_drag_over_style instead.")]
+    fn group_drag_over<Drag: 'static>(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_drag_over_style::<Drag>(group_name, style)
+    }
+
     /// Bind the given callback to drop events of the given type, whether or not the drag started on this element.
     /// The fluent API equivalent to [`Interactivity::on_drop`].
     ///
@@ -1513,6 +1539,13 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Set the given styles to be applied when this element, specifically, is focused.
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::focus_style instead.")]
+    fn focus(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.focus_style(style)
+    }
+
     /// Set the given styles to be applied when this element is inside another element that is focused.
     /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
     fn in_focus_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
@@ -1521,6 +1554,13 @@ pub trait InteractiveElement: Sized {
     {
         self.interactivity().in_focus_style = Some(Box::new(f(StyleRefinement::default())));
         self
+    }
+
+    /// Set the given styles to be applied when this element is inside another element that is focused.
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::in_focus_style instead.")]
+    fn in_focus(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.in_focus_style(style)
     }
 
     /// Set the given styles to be applied when this element is focused via keyboard navigation.
@@ -1533,6 +1573,15 @@ pub trait InteractiveElement: Sized {
     {
         self.interactivity().focus_visible_style = Some(Box::new(f(StyleRefinement::default())));
         self
+    }
+
+    /// Set the given styles to be applied when this element is focused via keyboard navigation.
+    /// This is similar to CSS's `:focus-visible` pseudo-class - it only applies when the element
+    /// is focused AND the user is navigating via keyboard (not mouse clicks).
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::focus_visible_style instead.")]
+    fn focus_visible(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.focus_visible_style(style)
     }
 
     /// Resolves this element's cursor from pointer position and bounds.
@@ -1853,6 +1902,12 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set the given styles to be applied when this element is active.
+    #[deprecated(note = "Use StatefulInteractiveElement::active_style instead.")]
+    fn active(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.active_style(style)
+    }
+
     /// Set the given styles to be applied when this element's group is active.
     fn group_active_style(
         mut self,
@@ -1867,6 +1922,16 @@ pub trait StatefulInteractiveElement: InteractiveElement {
             style: Box::new(f(StyleRefinement::default())),
         });
         self
+    }
+
+    /// Set the given styles to be applied when this element's group is active.
+    #[deprecated(note = "Use StatefulInteractiveElement::group_active_style instead.")]
+    fn group_active(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_active_style(group_name, style)
     }
 
     /// Bind the given callback to click events of this element.
