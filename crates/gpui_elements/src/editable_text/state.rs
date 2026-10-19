@@ -1644,10 +1644,6 @@ mod tests {
             .unwrap_or_default()
     }
 
-    // ============================================================
-    // BASIC MOVEMENT
-    // ============================================================
-
     #[gpui::test]
     fn test_left_at_start_of_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
@@ -1799,10 +1795,6 @@ mod tests {
         });
     }
 
-    // ============================================================
-    // WORD MOVEMENT
-    // ============================================================
-
     #[gpui::test]
     fn test_word_left_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
@@ -1838,10 +1830,6 @@ mod tests {
             assert_eq!(input.caret_selection(), 5.into());
         });
     }
-
-    // ============================================================
-    // SELECTION
-    // ============================================================
 
     #[gpui::test]
     fn test_select_left_extends_selection(cx: &mut TestAppContext) {
@@ -1918,157 +1906,285 @@ mod tests {
         });
     }
 
-    // ============================================================
-    // EDITING - BACKSPACE
-    // ============================================================
-
-    #[gpui::test]
-    fn test_backspace_deletes_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(11),
-                caret: CaretPosition::attached_to_next_cluster(6),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "hello ");
-            assert_eq!(input.caret_selection(), 6.into());
-        });
+    #[derive(Clone, Copy, Debug)]
+    enum TestDeletion {
+        PreviousCluster,
+        NextCluster,
+        PreviousWord,
+        NextWord,
+        LineStart,
+        LineEnd,
     }
 
     #[gpui::test]
-    fn test_backspace_deletes_previous_grapheme(cx: &mut TestAppContext) {
-        for (caret, expected_text, expected_caret) in [
-            (5, "hell", CaretPosition::attached_to_previous_cluster(4)),
-            (1, "ello", CaretPosition::attached_to_next_cluster(0)),
+    fn deletion_commands_preserve_results_carets_and_history(cx: &mut TestAppContext) {
+        let selected_hello = CaretSelection {
+            anchor: CaretPosition::attached_to_next_cluster(5),
+            caret: CaretPosition::attached_to_next_cluster(0),
+        };
+        let selected_world = CaretSelection {
+            anchor: CaretPosition::attached_to_next_cluster(11),
+            caret: CaretPosition::attached_to_next_cluster(6),
+        };
+
+        for (command, text, selection, remaining, expected_caret) in [
+            (
+                TestDeletion::PreviousCluster,
+                "hello world",
+                selected_world,
+                "hello ",
+                Some(CaretPosition::attached_to_next_cluster(6)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "hello",
+                5.into(),
+                "hell",
+                Some(CaretPosition::attached_to_previous_cluster(4)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "hello",
+                1.into(),
+                "ello",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "hello",
+                0.into(),
+                "hello",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "Hi 👋",
+                7.into(),
+                "Hi ",
+                Some(CaretPosition::attached_to_previous_cluster(3)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "a😀b",
+                5.into(),
+                "ab",
+                Some(CaretPosition::attached_to_previous_cluster(1)),
+            ),
+            (
+                TestDeletion::PreviousCluster,
+                "a👨‍👩‍👧b",
+                (19..19).into(),
+                "ab",
+                Some(CaretPosition::attached_to_previous_cluster(1)),
+            ),
+            (
+                TestDeletion::NextCluster,
+                "hello world",
+                selected_hello,
+                " world",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::NextCluster,
+                "hello",
+                0.into(),
+                "ello",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::NextCluster,
+                "hello",
+                4.into(),
+                "hell",
+                Some(CaretPosition::attached_to_previous_cluster(4)),
+            ),
+            (
+                TestDeletion::NextCluster,
+                "hello",
+                5.into(),
+                "hello",
+                Some(CaretPosition::attached_to_next_cluster(5)),
+            ),
+            (
+                TestDeletion::NextCluster,
+                "a😀b",
+                1.into(),
+                "ab",
+                Some(CaretPosition::attached_to_next_cluster(1)),
+            ),
+            (
+                TestDeletion::PreviousWord,
+                "hello world",
+                5.into(),
+                " world",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::PreviousWord,
+                "hello world",
+                selected_hello,
+                " world",
+                None,
+            ),
+            (
+                TestDeletion::PreviousWord,
+                "hello world",
+                0.into(),
+                "hello world",
+                None,
+            ),
+            (
+                TestDeletion::NextWord,
+                "hello world",
+                0.into(),
+                " world",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::NextWord,
+                "hello world",
+                6.into(),
+                "hello ",
+                None,
+            ),
+            (
+                TestDeletion::NextWord,
+                "hello world",
+                selected_hello,
+                " world",
+                None,
+            ),
+            (
+                TestDeletion::NextWord,
+                "hello world",
+                11.into(),
+                "hello world",
+                None,
+            ),
+            (
+                TestDeletion::LineStart,
+                "hello world",
+                5.into(),
+                " world",
+                Some(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                TestDeletion::LineStart,
+                "line1\nline2\nline3",
+                8.into(),
+                "line1\nne2\nline3",
+                None,
+            ),
+            (
+                TestDeletion::LineStart,
+                "hello world",
+                0.into(),
+                "hello world",
+                None,
+            ),
+            (
+                TestDeletion::LineEnd,
+                "hello world",
+                5.into(),
+                "hello",
+                Some(CaretPosition::attached_to_previous_cluster(5)),
+            ),
+            (
+                TestDeletion::LineEnd,
+                "line1\nline2\nline3",
+                8.into(),
+                "line1\nli\nline3",
+                None,
+            ),
+            (
+                TestDeletion::LineEnd,
+                "hello world",
+                11.into(),
+                "hello world",
+                None,
+            ),
         ] {
-            let view = create_test_input(cx, "hello", caret);
+            let view = create_test_input(cx, text, selection);
+
             update_movement_input(view, cx, |input, window, cx| {
-                input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.as_str(), expected_text);
+                without_history_grouping(input);
+
+                match command {
+                    TestDeletion::PreviousCluster => input.delete_left(&DeleteLeft, window, cx),
+                    TestDeletion::NextCluster => input.delete_right(&DeleteRight, window, cx),
+                    TestDeletion::PreviousWord => {
+                        input.delete_word_left(&DeleteWordLeft, window, cx)
+                    }
+                    TestDeletion::NextWord => input.delete_word_right(&DeleteWordRight, window, cx),
+                    TestDeletion::LineStart => {
+                        input.delete_to_line_start(&DeleteToLineStart, window, cx)
+                    }
+                    TestDeletion::LineEnd => input.delete_to_line_end(&DeleteToLineEnd, window, cx),
+                }
+
                 assert_eq!(
-                    input.caret_selection(),
-                    CaretSelection::from(expected_caret)
+                    input.as_str(),
+                    remaining,
+                    "{command:?}: {text:?} at {selection:?}"
                 );
+
+                if let Some(caret) = expected_caret {
+                    assert_eq!(
+                        input.caret_selection(),
+                        caret.into(),
+                        "{command:?}: {text:?}"
+                    );
+                }
+
+                assert_history_round_trip(input, text, selection, window, cx);
             });
         }
     }
 
-    #[gpui::test]
-    fn test_backspace_at_start_does_nothing(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "hello");
-            assert_eq!(input.caret_selection(), 0.into());
-        });
+    fn assert_history_round_trip(
+        input: &mut EditableTextState,
+        original: &str,
+        selection: CaretSelection,
+        window: &mut Window,
+        cx: &mut Context<EditableTextState>,
+    ) {
+        let edited = input.as_str().to_owned();
+        input.undo(&Undo, window, cx);
+        assert_eq!(input.as_str(), original);
+        assert_eq!(input.caret_selection(), selection);
+
+        input.redo(&Redo, window, cx);
+        assert_eq!(input.as_str(), edited);
     }
 
     #[gpui::test]
-    fn test_backspace_deletes_entire_emoji(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "Hi 👋", 7);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "Hi ");
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection::from(CaretPosition::attached_to_previous_cluster(3))
-            );
-        });
-    }
-
-    // ============================================================
-    // EDITING - DELETE
-    // ============================================================
-
-    #[gpui::test]
-    fn test_delete_deletes_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(5),
-                caret: CaretPosition::attached_to_next_cluster(0),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_right(&DeleteRight, window, cx);
-            assert_eq!(input.as_str(), " world");
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_deletes_next_grapheme(cx: &mut TestAppContext) {
-        for (caret, expected_text, expected_caret) in [
-            (0, "ello", CaretPosition::attached_to_next_cluster(0)),
-            (4, "hell", CaretPosition::attached_to_previous_cluster(4)),
+    fn enter_preserves_insertion_selection_and_history(cx: &mut TestAppContext) {
+        for (selection, expected) in [
+            (CaretSelection::from(5), "hello\n world"),
+            (
+                CaretSelection {
+                    anchor: CaretPosition::attached_to_next_cluster(6),
+                    caret: CaretPosition::attached_to_next_cluster(5),
+                },
+                "hello\nworld",
+            ),
         ] {
-            let view = create_test_input(cx, "hello", caret);
+            let view = create_test_input(cx, "hello world", selection);
             update_movement_input(view, cx, |input, window, cx| {
-                input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.as_str(), expected_text);
+                without_history_grouping(input);
+                input.layout_data.supports_multiline = true;
+
+                input.insert_enter(&Enter, window, cx);
+                assert_eq!(input.as_str(), expected);
+                assert_eq!(input.caret_selection(), 6.into());
                 assert_eq!(
-                    input.caret_selection(),
-                    CaretSelection::from(expected_caret)
+                    input.caret_selection().caret.affinity,
+                    CaretAffinity::Downstream
                 );
+                assert_history_round_trip(input, "hello world", selection, window, cx);
             });
         }
     }
-
-    #[gpui::test]
-    fn test_delete_at_end_does_nothing(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_right(&DeleteRight, window, cx);
-            assert_eq!(input.as_str(), "hello");
-            assert_eq!(input.caret_selection(), 5.into());
-        });
-    }
-
-    // ============================================================
-    // EDITING - ENTER
-    // ============================================================
-
-    #[gpui::test]
-    fn test_enter_inserts_newline(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.layout_data.supports_multiline = true;
-            input.insert_enter(&Enter, window, cx);
-            assert_eq!(input.as_str(), "hello\n world");
-            assert_eq!(input.caret_selection(), 6.into());
-            assert_eq!(
-                input.caret_selection().caret.affinity,
-                CaretAffinity::Downstream
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_enter_replaces_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(6),
-                caret: CaretPosition::attached_to_next_cluster(5),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.layout_data.supports_multiline = true;
-            input.insert_enter(&Enter, window, cx);
-            assert_eq!(input.as_str(), "hello\nworld");
-            assert_eq!(input.caret_selection(), 6.into());
-        });
-    }
-
-    // ============================================================
-    // CLIPBOARD
-    // ============================================================
 
     #[gpui::test]
     fn test_copy_with_selection(cx: &mut TestAppContext) {
@@ -2090,7 +2206,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_cut_with_selection(cx: &mut TestAppContext) {
+    fn cut_preserves_selected_text_clipboard_and_history(cx: &mut TestAppContext) {
         let view = create_test_input(
             cx,
             "hello world",
@@ -2100,9 +2216,13 @@ mod tests {
             },
         );
         update_movement_input(view, cx, |input, window, cx| {
+            without_history_grouping(input);
+            let selection = input.caret_selection();
+
             input.cut(&Cut, window, cx);
             assert_eq!(input.as_str(), " world");
             assert_eq!(input.caret_selection(), 0.into());
+            assert_history_round_trip(input, "hello world", selection, window, cx);
         });
 
         let clipboard = cx.read_from_clipboard();
@@ -2110,49 +2230,66 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_paste_inserts_text(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        cx.write_to_clipboard(ClipboardItem::new_string(" there".to_string()));
-        update_movement_input(view, cx, |input, window, cx| {
-            EditableTextActionHandler::paste(input, &Paste, window, cx);
-            assert_eq!(input.as_str(), "hello there world");
-            assert_eq!(
-                input.caret_selection(),
-                CaretPosition::attached_to_previous_cluster(11).into()
-            );
-        });
-    }
+    fn paste_preserves_inserted_text_carets_and_history(cx: &mut TestAppContext) {
+        for (original, caret, inserted, expected, expected_caret) in [
+            ("hello world", 5, " there", "hello there world", 11),
+            ("hello", 5, " world", "hello world", 11),
+        ] {
+            let view = create_test_input(cx, original, caret);
+            cx.write_to_clipboard(ClipboardItem::new_string(inserted.to_string()));
 
-    // ============================================================
-    // UNICODE / GRAPHEME HANDLING
-    // ============================================================
+            update_movement_input(view, cx, |input, window, cx| {
+                without_history_grouping(input);
+                let selection = input.caret_selection();
 
-    #[gpui::test]
-    fn test_movement_with_multibyte_utf8(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "café", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 1.into());
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 2.into());
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 3.into());
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 5.into());
-        });
+                EditableTextActionHandler::paste(input, &Paste, window, cx);
+                assert_eq!(input.as_str(), expected);
+                assert_eq!(
+                    input.caret_selection(),
+                    CaretPosition::attached_to_previous_cluster(expected_caret).into()
+                );
+                assert_history_round_trip(input, original, selection, window, cx);
+            });
+        }
     }
 
     #[gpui::test]
-    fn test_movement_with_emoji(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "a👋b", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 1.into());
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 5.into());
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 6.into());
-        });
+    fn fallback_navigation_preserves_grapheme_boundaries_and_caret_affinity(
+        cx: &mut TestAppContext,
+    ) {
+        for (name, text, offsets) in [
+            ("multibyte", "café", &[0, 1, 2, 3, 5][..]),
+            ("waving emoji", "a👋b", &[0, 1, 5, 6][..]),
+            ("simple emoji", "a😀b", &[0, 1, 5, 6][..]),
+            ("skin tone", "a👋🏽b", &[0, 1, 9, 10][..]),
+            ("ZWJ family", "x👨‍👩‍👧y", &[0, 1, 19, 20][..]),
+            ("flag", "x🇯🇵y", &[0, 1, 9, 10][..]),
+            ("combining mark", "ae\u{0301}b", &[0, 1, 4, 5][..]),
+            (
+                "multiple combining marks",
+                "xe\u{0308}\u{0301}y",
+                &[0, 1, 6, 7][..],
+            ),
+            ("CJK", "a你好b", &[0, 1, 4, 7, 8][..]),
+            ("mixed scripts", "Hi你😀", &[0, 1, 2, 5, 9][..]),
+            ("variation selector", "a☺\u{FE0F}b", &[0, 1, 7, 8][..]),
+            ("keycap", "x1\u{FE0F}\u{20E3}y", &[0, 1, 8, 9][..]),
+        ] {
+            assert_eq!(offsets.last(), Some(&text.len()), "{name}");
+            let view = create_test_input(cx, text, 0);
+
+            update_movement_input(view, cx, |input, window, cx| {
+                for &expected in &offsets[1..] {
+                    input.nav_right(&NavRight, window, cx);
+                    assert_eq!(input.caret_selection(), expected.into(), "{name}");
+                }
+
+                for &expected in offsets[..offsets.len() - 1].iter().rev() {
+                    input.nav_left(&NavLeft, window, cx);
+                    assert_eq!(input.caret_selection(), expected.into(), "{name}");
+                }
+            });
+        }
     }
 
     #[gpui::test]
@@ -2186,10 +2323,6 @@ mod tests {
         });
     }
 
-    // ============================================================
-    // NEWLINE HANDLING
-    // ============================================================
-
     #[gpui::test]
     fn test_find_line_start_and_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 0);
@@ -2208,10 +2341,6 @@ mod tests {
             assert_eq!(storage.offset_from_caret(13, Forward, HardLine), 18);
         });
     }
-
-    // ============================================================
-    // EDGE CASES
-    // ============================================================
 
     #[gpui::test]
     fn test_operations_on_empty_content(cx: &mut TestAppContext) {
@@ -2336,155 +2465,6 @@ mod tests {
         });
     }
 
-    // ============================================================
-    // EMOJI & GRAPHEME CLUSTERS
-    // ============================================================
-
-    #[gpui::test]
-    fn test_simple_emoji_navigation(cx: &mut TestAppContext) {
-        // 😀 is 4 bytes in UTF-8
-        let view = create_test_input(cx, "a😀b", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            // Move right through: a -> 😀 -> b
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 1); // after 'a'
-
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 5); // after 😀 (1 + 4 bytes)
-
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 6); // after 'b'
-
-            // Move left back
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 5); // before 'b'
-
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 1); // before 😀
-        });
-    }
-
-    #[gpui::test]
-    fn test_emoji_with_skin_tone_modifier(cx: &mut TestAppContext) {
-        // 👋🏽 = 👋 (U+1F44B, 4 bytes) + 🏽 (U+1F3FD, 4 bytes) = 8 bytes total
-        let emoji = "👋🏽";
-        assert_eq!(emoji.len(), 8);
-
-        let view = create_test_input(cx, &format!("a{}b", emoji), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'a'
-            assert_eq!(input.caret_selection().caret.index, 1);
-
-            input.nav_right(&NavRight, window, cx); // past entire emoji with modifier
-            assert_eq!(input.caret_selection().caret.index, 9); // 1 + 8
-
-            input.nav_left(&NavLeft, window, cx); // back before emoji
-            assert_eq!(input.caret_selection().caret.index, 1);
-        });
-    }
-
-    #[gpui::test]
-    fn test_zwj_family_emoji(cx: &mut TestAppContext) {
-        // 👨‍👩‍👧 = man + ZWJ + woman + ZWJ + girl
-        // Each person emoji is 4 bytes, ZWJ is 3 bytes
-        // Total: 4 + 3 + 4 + 3 + 4 = 18 bytes
-        let family = "👨‍👩‍👧";
-        assert_eq!(family.len(), 18);
-
-        let view = create_test_input(cx, &format!("x{}y", family), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'x'
-            assert_eq!(input.caret_selection().caret.index, 1);
-
-            input.nav_right(&NavRight, window, cx); // past entire ZWJ sequence
-            assert_eq!(input.caret_selection().caret.index, 19); // 1 + 18
-
-            input.nav_right(&NavRight, window, cx); // past 'y'
-            assert_eq!(input.caret_selection().caret.index, 20);
-        });
-    }
-
-    #[gpui::test]
-    fn test_backspace_deletes_emoji_between_ascii(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "a😀b", 5); // cursor after emoji
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "ab");
-            assert_eq!(input.caret_selection().caret.index, 1);
-        });
-    }
-
-    #[gpui::test]
-    fn test_backspace_deletes_zwj_sequence(cx: &mut TestAppContext) {
-        let family = "👨‍👩‍👧";
-        let content = format!("a{}b", family);
-        let cursor_pos = 1 + family.len(); // after the family emoji
-
-        let view = create_test_input(cx, &content, cursor_pos..cursor_pos);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "ab");
-            assert_eq!(input.caret_selection().caret.index, 1);
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_removes_entire_emoji(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "a😀b", 1); // cursor before emoji
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_right(&DeleteRight, window, cx);
-            assert_eq!(input.as_str(), "ab");
-            assert_eq!(input.caret_selection().caret.index, 1);
-        });
-    }
-
-    #[gpui::test]
-    fn test_flag_emoji_navigation(cx: &mut TestAppContext) {
-        // 🇯🇵 = Regional Indicator J (4 bytes) + Regional Indicator P (4 bytes)
-        let flag = "🇯🇵";
-        assert_eq!(flag.len(), 8);
-
-        let view = create_test_input(cx, &format!("x{}y", flag), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'x'
-            input.nav_right(&NavRight, window, cx); // past flag (should be single grapheme)
-            assert_eq!(input.caret_selection().caret.index, 9); // 1 + 8
-        });
-    }
-
-    #[gpui::test]
-    fn test_combining_diacritical_marks(cx: &mut TestAppContext) {
-        // é as e + combining acute accent (U+0301)
-        let combining = "e\u{0301}"; // 1 + 2 = 3 bytes
-        assert_eq!(combining.len(), 3);
-
-        let view = create_test_input(cx, &format!("a{}b", combining), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'a'
-            assert_eq!(input.caret_selection().caret.index, 1);
-
-            input.nav_right(&NavRight, window, cx); // past e + combining mark (single grapheme)
-            assert_eq!(input.caret_selection().caret.index, 4); // 1 + 3
-
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 1);
-        });
-    }
-
-    #[gpui::test]
-    fn test_multiple_combining_marks(cx: &mut TestAppContext) {
-        // ë́ = e + combining diaeresis (U+0308) + combining acute (U+0301)
-        let multi_combining = "e\u{0308}\u{0301}"; // 1 + 2 + 2 = 5 bytes
-        assert_eq!(multi_combining.len(), 5);
-
-        let view = create_test_input(cx, &format!("x{}y", multi_combining), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'x'
-            input.nav_right(&NavRight, window, cx); // past entire combined character
-            assert_eq!(input.caret_selection().caret.index, 6); // 1 + 5
-        });
-    }
-
     #[gpui::test]
     fn test_select_emoji_with_shift(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a😀b", 1); // cursor before emoji
@@ -2497,79 +2477,6 @@ mod tests {
                     caret: CaretPosition::attached_to_next_cluster(5),
                 }
             ); // selected the entire emoji
-        });
-    }
-
-    #[gpui::test]
-    fn test_cjk_characters(cx: &mut TestAppContext) {
-        // 你好 - each character is 3 bytes in UTF-8
-        let view = create_test_input(cx, "a你好b", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'a'
-            assert_eq!(input.caret_selection().caret.index, 1);
-
-            input.nav_right(&NavRight, window, cx); // past 你
-            assert_eq!(input.caret_selection().caret.index, 4); // 1 + 3
-
-            input.nav_right(&NavRight, window, cx); // past 好
-            assert_eq!(input.caret_selection().caret.index, 7); // 4 + 3
-
-            input.nav_right(&NavRight, window, cx); // past 'b'
-            assert_eq!(input.caret_selection().caret.index, 8);
-        });
-    }
-
-    #[gpui::test]
-    fn test_mixed_script_text(cx: &mut TestAppContext) {
-        // Mix of ASCII, CJK, and emoji
-        let view = create_test_input(cx, "Hi你😀", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'H'
-            assert_eq!(input.caret_selection().caret.index, 1);
-
-            input.nav_right(&NavRight, window, cx); // past 'i'
-            assert_eq!(input.caret_selection().caret.index, 2);
-
-            input.nav_right(&NavRight, window, cx); // past 你 (3 bytes)
-            assert_eq!(input.caret_selection().caret.index, 5);
-
-            input.nav_right(&NavRight, window, cx); // past 😀 (4 bytes)
-            assert_eq!(input.caret_selection().caret.index, 9);
-
-            // Now go back
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 5);
-
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection().caret.index, 2);
-        });
-    }
-
-    #[gpui::test]
-    fn test_variation_selector_emoji(cx: &mut TestAppContext) {
-        // ☺️ = ☺ (U+263A, 3 bytes) + variation selector-16 (U+FE0F, 3 bytes)
-        let emoji_presentation = "☺\u{FE0F}";
-        assert_eq!(emoji_presentation.len(), 6);
-
-        let view = create_test_input(cx, &format!("a{}b", emoji_presentation), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'a'
-            input.nav_right(&NavRight, window, cx); // past emoji with variation selector
-            assert_eq!(input.caret_selection().caret.index, 7); // 1 + 6
-        });
-    }
-
-    #[gpui::test]
-    fn test_keycap_emoji(cx: &mut TestAppContext) {
-        // 1️⃣ = 1 + variation selector + combining enclosing keycap
-        let keycap = "1\u{FE0F}\u{20E3}";
-
-        let view = create_test_input(cx, &format!("x{}y", keycap), 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx); // past 'x'
-            input.nav_right(&NavRight, window, cx); // past keycap sequence
-            let expected_pos = 1 + keycap.len();
-            assert_eq!(input.caret_selection().caret.index, expected_pos);
         });
     }
 
@@ -2648,73 +2555,111 @@ mod tests {
         });
     }
 
-    // ============================================================
-    // UNDO / REDO
-    // ============================================================
-
     #[gpui::test]
-    fn test_undo_restores_content(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            // Make an edit
-            input.replace_text_in_range(None, " world", window, cx);
-            assert_eq!(input.as_str(), "hello world");
-
-            // Undo should restore original content
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello");
-        });
-    }
-
-    #[gpui::test]
-    fn test_redo_restores_undone_content(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "A😀B", 6);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.replace_text_in_range(None, "日本", window, cx);
-            assert_eq!(input.as_str(), "A😀B日本");
-            assert_eq!(
-                input.accessibility_text_metrics().character_lengths,
-                [1, 4, 1, 3, 3]
-            );
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "A😀B");
-            assert_eq!(
-                input.accessibility_text_metrics().byte_offsets,
-                [0, 1, 5, 6]
-            );
-
-            input.redo(&Redo, window, cx);
-            assert_eq!(input.as_str(), "A😀B日本");
-            assert_eq!(
-                input.accessibility_text_metrics().byte_offsets,
-                [0, 1, 5, 6, 9, 12]
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_undo_with_no_history_does_nothing(cx: &mut TestAppContext) {
+    fn history_lifecycle_preserves_content_availability_and_accessibility_metrics(
+        cx: &mut TestAppContext,
+    ) {
         let view = create_test_input(cx, "hello", 0);
         update_movement_input(view, cx, |input, window, cx| {
-            assert!(!is_history_kind_available(input, HistoryKind::Undo));
+            for kind in [HistoryKind::Undo, HistoryKind::Redo] {
+                assert!(!is_history_kind_available(input, kind));
+            }
+
             input.undo(&Undo, window, cx);
             assert_eq!(input.as_str(), "hello");
-        });
-    }
-
-    #[gpui::test]
-    fn test_redo_with_no_history_does_nothing(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            assert!(!is_history_kind_available(input, HistoryKind::Redo));
             input.redo(&Redo, window, cx);
             assert_eq!(input.as_str(), "hello");
         });
+
+        for (name, original, inserted, edited, lengths, offsets) in [
+            (
+                "ASCII content",
+                "hello",
+                " world",
+                "hello world",
+                &[1; 11][..],
+                &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11][..],
+            ),
+            (
+                "availability",
+                "hello",
+                "!",
+                "hello!",
+                &[1; 6][..],
+                &[0, 1, 2, 3, 4, 5, 6][..],
+            ),
+            (
+                "Unicode metrics",
+                "A😀B",
+                "日本",
+                "A😀B日本",
+                &[1, 4, 1, 3, 3][..],
+                &[0, 1, 5, 6, 9, 12][..],
+            ),
+        ] {
+            let view = create_test_input(cx, original, original.len());
+            update_movement_input(view, cx, |input, window, cx| {
+                without_history_grouping(input);
+                assert!(
+                    !is_history_kind_available(input, HistoryKind::Undo),
+                    "{name}"
+                );
+                assert!(
+                    !is_history_kind_available(input, HistoryKind::Redo),
+                    "{name}"
+                );
+
+                input.replace_text_in_range(None, inserted, window, cx);
+                assert_eq!(input.as_str(), edited, "{name}");
+                assert_eq!(
+                    input.accessibility_text_metrics().character_lengths,
+                    lengths,
+                    "{name}"
+                );
+                assert!(
+                    is_history_kind_available(input, HistoryKind::Undo),
+                    "{name}"
+                );
+                assert!(
+                    !is_history_kind_available(input, HistoryKind::Redo),
+                    "{name}"
+                );
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.as_str(), original, "{name}");
+                assert!(
+                    !is_history_kind_available(input, HistoryKind::Undo),
+                    "{name}"
+                );
+                assert!(
+                    is_history_kind_available(input, HistoryKind::Redo),
+                    "{name}"
+                );
+
+                if name == "Unicode metrics" {
+                    assert_eq!(
+                        input.accessibility_text_metrics().byte_offsets,
+                        [0, 1, 5, 6]
+                    );
+                }
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.as_str(), edited, "{name}");
+                assert_eq!(
+                    input.accessibility_text_metrics().byte_offsets,
+                    offsets,
+                    "{name}"
+                );
+                assert!(
+                    is_history_kind_available(input, HistoryKind::Undo),
+                    "{name}"
+                );
+                assert!(
+                    !is_history_kind_available(input, HistoryKind::Redo),
+                    "{name}"
+                );
+            });
+        }
     }
 
     #[gpui::test]
@@ -2804,78 +2749,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_can_undo_can_redo(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            assert!(!is_history_kind_available(input, HistoryKind::Undo));
-            assert!(!is_history_kind_available(input, HistoryKind::Redo));
-
-            input.replace_text_in_range(None, "!", window, cx);
-            assert!(is_history_kind_available(input, HistoryKind::Undo));
-            assert!(!is_history_kind_available(input, HistoryKind::Redo));
-
-            input.undo(&Undo, window, cx);
-            assert!(!is_history_kind_available(input, HistoryKind::Undo));
-            assert!(is_history_kind_available(input, HistoryKind::Redo));
-
-            input.redo(&Redo, window, cx);
-            assert!(is_history_kind_available(input, HistoryKind::Undo));
-            assert!(!is_history_kind_available(input, HistoryKind::Redo));
-        });
-    }
-
-    #[gpui::test]
-    fn test_backspace_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_left(&DeleteLeft, window, cx);
-            assert_eq!(input.as_str(), "hell");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_right(&DeleteRight, window, cx);
-            assert_eq!(input.as_str(), "ello");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello");
-        });
-    }
-
-    #[gpui::test]
-    fn test_cut_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(5),
-                caret: CaretPosition::attached_to_next_cluster(0),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.cut(&Cut, window, cx);
-            assert_eq!(input.as_str(), " world");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
     fn cut_without_selection_removes_complete_hard_line(cx: &mut TestAppContext) {
         for (name, text, caret, remaining, expected_clipboard, current_layout) in [
             (
@@ -2951,240 +2824,6 @@ mod tests {
                 "{name}"
             );
         }
-    }
-
-    #[gpui::test]
-    fn test_cut_line_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "line1\nline2\nline3", 8);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.cut(&Cut, window, cx);
-            assert_eq!(input.as_str(), "line1\nline3");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "line1\nline2\nline3");
-        });
-    }
-
-    #[gpui::test]
-    fn test_paste_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        cx.write_to_clipboard(ClipboardItem::new_string(" world".to_string()));
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            EditableTextActionHandler::paste(input, &Paste, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello");
-        });
-    }
-
-    #[gpui::test]
-    fn test_enter_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-            input.layout_data.supports_multiline = true;
-
-            input.insert_enter(&Enter, window, cx);
-            assert_eq!(input.as_str(), "hello\n world");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_left(cx: &mut TestAppContext) {
-        // Cursor at end of "hello" in "hello world"
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_left(&DeleteWordLeft, window, cx);
-            assert_eq!(input.as_str(), " world");
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_left_with_selection(cx: &mut TestAppContext) {
-        // Selection from 0 to 5 ("hello")
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(5),
-                caret: CaretPosition::attached_to_next_cluster(0),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_left(&DeleteWordLeft, window, cx);
-            assert_eq!(input.as_str(), " world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_left_at_start(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_left(&DeleteWordLeft, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_right(cx: &mut TestAppContext) {
-        // Cursor at start
-        let view = create_test_input(cx, "hello world", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_right(&DeleteWordRight, window, cx);
-            assert_eq!(input.as_str(), " world");
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_right_with_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello world",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(5),
-                caret: CaretPosition::attached_to_next_cluster(0),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_right(&DeleteWordRight, window, cx);
-            assert_eq!(input.as_str(), " world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_right_at_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 11);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_word_right(&DeleteWordRight, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_beginning_of_line(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_start(&DeleteToLineStart, window, cx);
-            assert_eq!(input.as_str(), " world");
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_beginning_of_line_multiline(cx: &mut TestAppContext) {
-        // Cursor at position 8 (middle of "line2")
-        let view = create_test_input(cx, "line1\nline2\nline3", 8);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_start(&DeleteToLineStart, window, cx);
-            assert_eq!(input.as_str(), "line1\nne2\nline3");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_beginning_of_line_at_start(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_start(&DeleteToLineStart, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_end_of_line(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-            assert_eq!(input.as_str(), "hello");
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection::from(CaretPosition::attached_to_previous_cluster(5))
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_end_of_line_multiline(cx: &mut TestAppContext) {
-        // Cursor at position 8 (middle of "line2")
-        let view = create_test_input(cx, "line1\nline2\nline3", 8);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-            assert_eq!(input.as_str(), "line1\nli\nline3");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_end_of_line_at_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 11);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_left_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_word_left(&DeleteWordLeft, window, cx);
-            assert_eq!(input.as_str(), " world");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_word_right_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 6);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_word_right(&DeleteWordRight, window, cx);
-            assert_eq!(input.as_str(), "hello ");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_beginning_of_line_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_to_line_start(&DeleteToLineStart, window, cx);
-            assert_eq!(input.as_str(), " world");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
-    }
-
-    #[gpui::test]
-    fn test_delete_to_end_of_line_is_undoable(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-
-            input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-            assert_eq!(input.as_str(), "hello");
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello world");
-        });
     }
 
     #[gpui::test]

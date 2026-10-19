@@ -197,7 +197,7 @@ jobs:
       - uses: hustcer/setup-nu@v3
       - uses: extractions/setup-just@v2
       - run: just build
-      - run: just test
+      - run: just test --features gpui_ce_wgpu/test-support
       - run: just test-doc
       - name: Test Parley rendering invariants
         run: GPUI_RUN_RENDERING_TESTS=1 cargo test -p gpui_ce_platform --test parley_render

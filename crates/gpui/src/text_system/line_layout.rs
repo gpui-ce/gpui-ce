@@ -1,7 +1,8 @@
 use crate::{
     Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
-    InlineTextStyle, Pixels, PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle,
-    TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
+    InlineTextMetrics, InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point,
+    SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
+    UnderlineStyle, VerticalAlign,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -36,28 +37,6 @@ pub struct LineLayout {
     pub len: usize,
     /// Backend-native interaction model.
     pub platform_layout: Arc<dyn PlatformTextLayout>,
-}
-
-/// Font metrics used to construct the vertical extents of an inline line.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct InlineTextMetrics {
-    /// Distance above the text baseline.
-    pub ascent: Pixels,
-    /// Distance below the text baseline.
-    pub descent: Pixels,
-    /// Height of a lowercase x in the inline container's font.
-    pub x_height: Pixels,
-}
-
-/// A row in an inline layout.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct InlineVisualLine {
-    /// The row origin relative to the inline layout.
-    pub origin: Point<Pixels>,
-    /// The row size before it is placed in its containing element.
-    pub size: Size<Pixels>,
-    /// The baseline relative to `origin.y`.
-    pub baseline: Pixels,
 }
 
 /// The position assigned to an element embedded in text.
@@ -432,6 +411,17 @@ pub struct PaintStyle {
     pub underline: Option<UnderlineStyle>,
     /// Optional strikethrough style.
     pub strikethrough: Option<StrikethroughStyle>,
+}
+
+impl From<&TextRun> for PaintStyle {
+    fn from(run: &TextRun) -> Self {
+        Self {
+            color: run.color,
+            background_color: run.background_color,
+            underline: run.underline,
+            strikethrough: run.strikethrough,
+        }
+    }
 }
 
 /// A positioned, style-specific glyph run painted on one visual line.

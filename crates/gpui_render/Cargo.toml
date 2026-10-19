@@ -14,6 +14,7 @@ path = "src/gpui_render.rs"
 
 [dependencies]
 gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
+smallvec.workspace = true
 wgsl-rs.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]

@@ -1,6 +1,6 @@
 use crate::{
-    App, Bounds, InlineLayout, LineLayout, PaintFragment, Pixels, Point, Result, ShapedTextLayout,
-    SharedString, TextAlign, TextSystem, VisualLine, Window, fill, point, size,
+    App, Bounds, InlineLayout, LineLayout, PaintFragment, PaintQuad, Pixels, Point, Result,
+    ShapedTextLayout, SharedString, TextAlign, TextSystem, VisualLine, Window, point, size,
 };
 use derive_more::{Deref, DerefMut};
 use std::sync::{
@@ -447,13 +447,13 @@ fn paint_fragment_decorations_at(
             );
         }
     } else if let Some(color) = fragment.style.background_color {
-        window.paint_quad(fill(
-            Bounds::new(
+        window.paint_quad(
+            PaintQuad::new(Bounds::new(
                 point(range.start, line_origin.y),
                 size(range.end - range.start, line_height),
-            ),
-            color,
-        ));
+            ))
+            .background(color),
+        );
     }
 }
 

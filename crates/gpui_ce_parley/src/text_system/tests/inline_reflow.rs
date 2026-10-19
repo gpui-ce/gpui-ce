@@ -448,102 +448,96 @@ fn assert_paragraph_fits(text: &str, layout: &InlineLayout, width: f32, max_line
     );
 }
 
-#[test]
-fn block_paragraph_paints_grapheme_safe_end_start_and_middle_ellipsis() {
-    let mut cx = headless();
-
-    for direction in [
-        gpui::TruncateFrom::End,
-        gpui::TruncateFrom::Start,
-        gpui::TruncateFrom::Middle,
-    ] {
-        let view = OverflowParagraph::new(direction);
-        let painted = view.painted.clone();
-        let window = cx
-            .open_window(size(px(360.), px(180.)), |window, cx| {
-                window.set_scale_factor(SCALE_FACTOR);
-
-                cx.new(|_cx| view)
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        let captured = painted.borrow();
-        assert_eq!(captured.len(), 1);
-        let (text, layout) = &captured[0];
-        assert_paragraph_fits(text, layout, 180., 1);
-        let (prefix, suffix) = text
-            .split_once('…')
-            .expect("paragraph must paint the marker");
-        assert!(OVERFLOW_TEXT.starts_with(prefix) && OVERFLOW_TEXT.ends_with(suffix));
-        let boundaries: Vec<_> = OVERFLOW_TEXT
-            .grapheme_indices(true)
-            .map(|(idx, _grapheme)| idx)
-            .chain([OVERFLOW_TEXT.len()])
-            .collect();
-        assert!(boundaries.contains(&prefix.len()));
-        assert!(boundaries.contains(&(OVERFLOW_TEXT.len() - suffix.len())));
-
-        match direction {
-            gpui::TruncateFrom::End => assert!(suffix.is_empty() && !prefix.is_empty()),
-            gpui::TruncateFrom::Start => assert!(prefix.is_empty() && !suffix.is_empty()),
-            gpui::TruncateFrom::Middle => assert!(!prefix.is_empty() && !suffix.is_empty()),
-        }
-
-        assert!(
-            !cx.glyph_bounds(window.into(), first_group_color())
-                .unwrap()
-                .is_empty()
-        );
-    }
-}
-
-#[test]
-fn block_paragraph_places_requested_marker_on_second_clamped_line() {
-    let mut cx = headless();
-    let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
-    view.max_lines = Some(2);
-    view.width = 140.;
+fn open_overflow_paragraph(
+    cx: &mut HeadlessAppContext,
+    view: OverflowParagraph,
+    viewport_width: f32,
+    scale: f32,
+) -> (WindowHandle<OverflowParagraph>, CapturedParagraphs) {
     let painted = view.painted.clone();
     let window = cx
-        .open_window(size(px(360.), px(180.)), |_window, cx| cx.new(|_cx| view))
-        .unwrap();
-    cx.run_until_parked();
+        .open_window(size(px(viewport_width), px(180.)), |window, cx| {
+            window.set_scale_factor(scale);
 
-    {
-        let captured = painted.borrow();
-        let (text, layout) = &captured[0];
-        assert_paragraph_fits(text, layout, 140., 2);
-        assert_eq!(layout.lines.len(), 2);
-        assert!(text.ends_with('…'));
-        assert!(
-            layout.layout.visual_lines[1]
-                .text_range
-                .contains(&(text.len() - '…'.len_utf8()))
-        );
-        let geometry = layout
-            .layout
-            .platform_layout
-            .inline_geometry_for_ranges(&[text.len() - '…'.len_utf8()..text.len()]);
-        assert!(!geometry[0].is_empty());
-        assert!(
-            geometry[0]
-                .iter()
-                .all(|geometry| geometry.visual_line_index == 1)
-        );
-    }
-
-    window
-        .update(&mut cx, |view, _window, cx| {
-            view.marker = false;
-            cx.notify();
+            cx.new(|_cx| view)
         })
         .unwrap();
     cx.run_until_parked();
 
-    let captured = painted.borrow();
-    assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
-    assert_eq!(captured[0].1.lines.len(), 2);
+    (window, painted)
+}
+
+#[test]
+fn block_overflow_preserves_graphemes_marker_rows_and_unmarked_source_text() {
+    let mut cx = headless();
+    let boundaries = OVERFLOW_TEXT
+        .grapheme_indices(true)
+        .map(|(idx, _grapheme)| idx)
+        .chain([OVERFLOW_TEXT.len()])
+        .collect::<Vec<_>>();
+
+    for (direction, max_lines, width, scale) in [
+        (gpui::TruncateFrom::End, None, 180., SCALE_FACTOR),
+        (gpui::TruncateFrom::Start, None, 180., SCALE_FACTOR),
+        (gpui::TruncateFrom::Middle, None, 180., SCALE_FACTOR),
+        (gpui::TruncateFrom::End, Some(2), 140., 1.0),
+    ] {
+        let mut view = OverflowParagraph::new(direction);
+        view.max_lines = max_lines;
+        view.width = width;
+        let (window, painted) = open_overflow_paragraph(&mut cx, view, 360., scale);
+
+        {
+            let captured = painted.borrow();
+            assert_eq!(captured.len(), 1);
+            let (text, layout) = &captured[0];
+            let expected_lines = max_lines.unwrap_or(1);
+            assert_paragraph_fits(text, layout, width, expected_lines);
+            assert_eq!(layout.lines.len(), expected_lines);
+            let (prefix, suffix) = text
+                .split_once('…')
+                .expect("paragraph must paint the marker");
+            assert!(OVERFLOW_TEXT.starts_with(prefix) && OVERFLOW_TEXT.ends_with(suffix));
+            assert!(boundaries.contains(&prefix.len()));
+            assert!(boundaries.contains(&(OVERFLOW_TEXT.len() - suffix.len())));
+
+            match direction {
+                gpui::TruncateFrom::End => assert!(suffix.is_empty() && !prefix.is_empty()),
+                gpui::TruncateFrom::Start => assert!(prefix.is_empty() && !suffix.is_empty()),
+                gpui::TruncateFrom::Middle => assert!(!prefix.is_empty() && !suffix.is_empty()),
+            }
+
+            if max_lines == Some(2) {
+                let marker = text.len() - '…'.len_utf8()..text.len();
+                assert!(
+                    layout.layout.visual_lines[1]
+                        .text_range
+                        .contains(&marker.start)
+                );
+                let geometry = layout
+                    .layout
+                    .platform_layout
+                    .inline_geometry_for_ranges(&[marker]);
+                assert!(!geometry[0].is_empty());
+                assert!(
+                    geometry[0]
+                        .iter()
+                        .all(|geometry| geometry.visual_line_index == 1)
+                );
+            }
+
+            assert!(
+                !cx.glyph_bounds(window.into(), first_group_color())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        update_view(&mut cx, window, |view| view.marker = false);
+        let captured = painted.borrow();
+        assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
+        assert_eq!(captured[0].1.lines.len(), max_lines.unwrap_or(1));
+    }
 }
 
 #[test]
@@ -577,10 +571,7 @@ fn block_line_clamp_ignores_wrapped_trailing_whitespace() {
     view.text = LINE_CLAMP_TEXT;
     view.max_lines = Some(2);
     view.width = f32::from(width);
-    let painted = view.painted.clone();
-    cx.open_window(size(px(900.), px(180.)), |_window, cx| cx.new(|_cx| view))
-        .unwrap();
-    cx.run_until_parked();
+    let (_window, painted) = open_overflow_paragraph(&mut cx, view, 900., 1.0);
 
     let captured = painted.borrow();
     let (text, layout) = &captured[0];
@@ -593,12 +584,8 @@ fn block_paragraph_remeasures_nowrap_overflow_and_restores_original_text() {
     let mut cx = headless();
     let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
     view.remeasure = true;
-    let painted = view.painted.clone();
     let measurements = view.measurements.clone();
-    let window = cx
-        .open_window(size(px(2200.), px(180.)), |_window, cx| cx.new(|_cx| view))
-        .unwrap();
-    cx.run_until_parked();
+    let (window, painted) = open_overflow_paragraph(&mut cx, view, 2200., 1.0);
 
     {
         let measured = measurements.borrow();
@@ -664,15 +651,7 @@ fn block_ellipsis_preserves_span_metrics_and_only_places_display_ranges() {
     let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
     view.styled = true;
     view.width = 260.;
-    let painted = view.painted.clone();
-    let window = cx
-        .open_window(size(px(360.), px(180.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-
-            cx.new(|_cx| view)
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let (window, painted) = open_overflow_paragraph(&mut cx, view, 360., SCALE_FACTOR);
 
     for width in [260., 100., 260.] {
         update_view(&mut cx, window, |view| view.width = width);

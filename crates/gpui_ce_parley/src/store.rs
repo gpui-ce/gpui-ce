@@ -522,8 +522,8 @@ fn verified_design_variations(
     shaping_variations: &[FontVariation],
 ) -> Result<Vec<FontVariation>> {
     let axes = font.axes();
-    let axis_records = axes.iter().collect::<Vec<_>>();
-    let mut variations = axis_records
+
+    let mut variations = axes
         .iter()
         .map(|axis| FontVariation {
             tag: axis.tag(),
@@ -531,20 +531,18 @@ fn verified_design_variations(
         })
         .collect::<Vec<_>>();
 
-    let mut apply = |tag: Tag, value: f32| {
-        let Some(axis) = axis_records.iter().find(|axis| axis.tag() == tag) else {
-            return;
+    let settings = synthesis.variation_settings().iter().copied().chain(
+        shaping_variations
+            .iter()
+            .map(|variation| (variation.tag, variation.value)),
+    );
+
+    for (tag, value) in settings {
+        let Some(axis) = axes.get_by_tag(tag) else {
+            continue;
         };
 
         variations[axis.index()].value = value.clamp(axis.min_value(), axis.max_value());
-    };
-
-    for &(tag, value) in synthesis.variation_settings() {
-        apply(tag, value);
-    }
-
-    for variation in shaping_variations {
-        apply(variation.tag, variation.value);
     }
 
     let location = axes.location(
@@ -552,6 +550,7 @@ fn verified_design_variations(
             .iter()
             .map(|variation| (variation.tag, variation.value)),
     );
+
     ensure!(
         location.coords() == normalized_coords,
         "native font coordinates differ from the shaped instance: design {variations:?}, native {:?}, shaped {normalized_coords:?}",
@@ -996,13 +995,10 @@ mod tests {
             scale_factor: 1.0,
             raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Color),
         };
-        let rendered = rasterizer.rasterize(cbdt_face, &params(emoji)).unwrap();
-        assert!(rendered.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        rasterizer.rasterize(cbdt_face, &params(emoji)).unwrap();
 
         let space = GlyphId(cbdt_font.charmap().map(' ').unwrap().to_u32());
-        let empty = rasterizer.rasterize(cbdt_face, &params(space)).unwrap();
-        assert_eq!(empty.size, Size::default());
-        assert!(empty.pixels.is_empty());
+        rasterizer.rasterize(cbdt_face, &params(space)).unwrap();
         assert_eq!(rasterizer.native.raster_calls, 0);
 
         let native_source = Blob::from(SOURCE_SERIF.data.to_vec());
@@ -1035,50 +1031,7 @@ mod tests {
         assert_eq!(rasterizer.native.raster_calls, 1);
     }
 
-    #[test]
-    fn original_design_variations_match_the_shaped_location() {
-        let font = FontRef::new(SOURCE_SERIF.data).unwrap();
-
-        let axes = font.axes();
-        let cases = [
-            Vec::new(),
-            vec![FontVariation::new(*b"wght", 340.0)],
-            vec![
-                FontVariation::new(*b"wght", 340.0),
-                FontVariation::new(*b"opsz", 48.0),
-            ],
-        ];
-
-        for settings in cases {
-            let target = axes.location(
-                settings
-                    .iter()
-                    .map(|variation| (variation.tag, variation.value)),
-            );
-            let variations =
-                verified_design_variations(&font, target.coords(), Synthesis::default(), &settings)
-                    .unwrap();
-            let actual = axes.location(
-                variations
-                    .iter()
-                    .map(|variation| (variation.tag, variation.value)),
-            );
-            assert_eq!(actual.coords(), target.coords());
-
-            for setting in settings {
-                assert_eq!(
-                    variations
-                        .iter()
-                        .find(|variation| variation.tag == setting.tag)
-                        .map(|variation| variation.value),
-                    Some(setting.value)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn steep_avar_fixture_preserves_the_original_design_coordinate() {
+    fn steep_avar_font_data() -> Vec<u8> {
         let mut data = SOURCE_SERIF.data.to_vec();
         let table_count = u16::from_be_bytes(data[4..6].try_into().unwrap()) as usize;
         let avar_offset = (0..table_count)
@@ -1095,47 +1048,78 @@ mod tests {
         );
         data[avar_offset + 16..avar_offset + 18].copy_from_slice(&(-15_565i16).to_be_bytes());
 
-        let font = FontRef::new(&data).unwrap();
-        let settings = [FontVariation::new(*b"wght", 340.0)];
-        let shaped = font.axes().location([(Tag::new(b"wght"), 340.0)]);
-        let variations =
-            verified_design_variations(&font, shaped.coords(), Synthesis::default(), &settings)
-                .unwrap();
-
-        assert_eq!(
-            variations
-                .iter()
-                .find(|variation| variation.tag == Tag::new(b"wght"))
-                .unwrap()
-                .value,
-            340.0
-        );
-        assert_eq!(
-            font.axes()
-                .location(
-                    variations
-                        .iter()
-                        .map(|variation| (variation.tag, variation.value))
-                )
-                .coords(),
-            shaped.coords()
-        );
+        data
     }
 
     #[test]
-    fn mismatched_design_variations_are_rejected() {
-        let font = FontRef::new(SOURCE_SERIF.data).unwrap();
-        let target = font.axes().location([(Tag::new(b"wght"), 340.0)]);
+    fn design_variations_preserve_original_coordinates_and_reject_mismatches() {
+        let steep_data = steep_avar_font_data();
+        let weight = [FontVariation::new(*b"wght", 340.0)];
+        let weight_and_size = [
+            FontVariation::new(*b"wght", 340.0),
+            FontVariation::new(*b"opsz", 48.0),
+        ];
+        let mismatch = [FontVariation::new(*b"wght", 341.0)];
 
-        assert!(
-            verified_design_variations(
-                &font,
-                target.coords(),
-                Synthesis::default(),
-                &[FontVariation::new(*b"wght", 341.0)],
-            )
-            .is_err()
-        );
+        for (name, data, shaped, requested, valid) in [
+            ("defaults", SOURCE_SERIF.data, &[][..], &[][..], true),
+            ("weight", SOURCE_SERIF.data, &weight[..], &weight[..], true),
+            (
+                "multiple axes",
+                SOURCE_SERIF.data,
+                &weight_and_size[..],
+                &weight_and_size[..],
+                true,
+            ),
+            (
+                "steep avar",
+                steep_data.as_slice(),
+                &weight[..],
+                &weight[..],
+                true,
+            ),
+            (
+                "mismatch",
+                SOURCE_SERIF.data,
+                &weight[..],
+                &mismatch[..],
+                false,
+            ),
+        ] {
+            let font = FontRef::new(data).unwrap();
+            let axes = font.axes();
+            let target = axes.location(
+                shaped
+                    .iter()
+                    .map(|variation| (variation.tag, variation.value)),
+            );
+            let result =
+                verified_design_variations(&font, target.coords(), Synthesis::default(), requested);
+            assert_eq!(result.is_ok(), valid, "{name}: {result:?}");
+
+            if !valid {
+                continue;
+            }
+
+            let variations = result.unwrap();
+            let actual = axes.location(
+                variations
+                    .iter()
+                    .map(|variation| (variation.tag, variation.value)),
+            );
+            assert_eq!(actual.coords(), target.coords(), "{name}");
+
+            for setting in requested {
+                assert_eq!(
+                    variations
+                        .iter()
+                        .find(|variation| variation.tag == setting.tag)
+                        .map(|variation| variation.value),
+                    Some(setting.value),
+                    "{name}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -1338,84 +1322,82 @@ mod tests {
     }
 
     #[test]
-    fn portable_rasterization_separates_blank_glyphs_from_failures() {
-        let source = Blob::from(SOURCE_SERIF.data.to_vec());
-        let font = FontRef::new(source.as_ref()).unwrap();
-        let normalized_coords = font
-            .axes()
-            .location(std::iter::empty::<(Tag, f32)>())
-            .coords()
-            .to_vec();
-        let variations =
-            verified_design_variations(&font, &normalized_coords, Synthesis::default(), &[])
-                .unwrap();
-        let face = RasterFace {
-            font_id: FontId(1),
-            source_id: source.id(),
-            source: &source,
-            face_index: 0,
-            normalized_coords: &normalized_coords,
-            variations: &variations,
-            synthesis: FontSynthesis::default(),
-            has_color_glyphs: false,
-        };
-        let params = |glyph_id| RenderGlyphParams {
-            font_id: face.font_id,
-            glyph_id,
-            font_size: px(24.0),
-            subpixel_variant: point(0, 0),
-            scale_factor: 1.0,
-            raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
-        };
-        let mut rasterizer = SwashGlyphRasterizer::default();
-        let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
-        let empty = rasterizer.rasterize(face, &params(space)).unwrap();
-        assert_eq!(empty.size, Size::default());
-        assert_eq!(empty.format, RasterizedGlyphFormat::AlphaMask);
-        assert!(empty.pixels.is_empty());
+    fn portable_rasterization_distinguishes_empty_outline_and_bitmap_glyphs_from_failures() {
+        for (name, data, mode, visible, expected_format) in [
+            (
+                "outline",
+                SOURCE_SERIF.data,
+                GlyphRenderMode::Grayscale,
+                'A',
+                RasterizedGlyphFormat::AlphaMask,
+            ),
+            (
+                "bitmap",
+                NOTO_COLOR_EMOJI.data,
+                GlyphRenderMode::Color,
+                '😀',
+                RasterizedGlyphFormat::BgraColor,
+            ),
+        ] {
+            let source = Blob::from(data.to_vec());
+            let font = FontRef::new(source.as_ref()).unwrap();
+            let normalized_coords = font
+                .axes()
+                .location(std::iter::empty::<(Tag, f32)>())
+                .coords()
+                .to_vec();
+            let variations =
+                verified_design_variations(&font, &normalized_coords, Synthesis::default(), &[])
+                    .unwrap();
+            let face = RasterFace {
+                font_id: FontId(1),
+                source_id: source.id(),
+                source: &source,
+                face_index: 0,
+                normalized_coords: &normalized_coords,
+                variations: &variations,
+                synthesis: FontSynthesis::default(),
+                has_color_glyphs: mode == GlyphRenderMode::Color,
+            };
+            let params = |glyph_id| RenderGlyphParams {
+                font_id: face.font_id,
+                glyph_id,
+                font_size: px(24.0),
+                subpixel_variant: point(0, 0),
+                scale_factor: 1.0,
+                raster_style: PreparedRasterStyle::independent(mode),
+            };
+            let mut rasterizer = SwashGlyphRasterizer::default();
+            let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
+            let empty = rasterizer.rasterize(face, &params(space)).unwrap();
+            assert_eq!(empty.size, Size::default(), "{name}");
+            assert_eq!(empty.format, expected_format, "{name}");
+            assert!(empty.pixels.is_empty(), "{name}");
 
-        let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
-        let error = rasterizer
-            .rasterize(face, &params(GlyphId(glyph_count)))
-            .unwrap_err();
-        assert!(error.to_string().contains("outside the selected face"));
+            let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
+            let error = rasterizer
+                .rasterize(face, &params(GlyphId(glyph_count)))
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("outside the selected face"),
+                "{name}: {error}"
+            );
 
-        let letter = GlyphId(font.charmap().map('A').unwrap().to_u32());
-        let recovered = rasterizer.rasterize(face, &params(letter)).unwrap();
-        assert!(recovered.pixels.iter().any(|coverage| *coverage != 0));
-    }
+            let glyph = GlyphId(font.charmap().map(visible).unwrap().to_u32());
+            let recovered = rasterizer.rasterize(face, &params(glyph)).unwrap();
 
-    #[test]
-    fn portable_bitmap_font_blanks_are_valid_empty_glyphs() {
-        let source = Blob::from(NOTO_COLOR_EMOJI.data.to_vec());
-        let font = FontRef::new(source.as_ref()).unwrap();
-        let face = RasterFace {
-            font_id: FontId(1),
-            source_id: source.id(),
-            source: &source,
-            face_index: 0,
-            normalized_coords: &[],
-            variations: &[],
-            synthesis: FontSynthesis::default(),
-            has_color_glyphs: true,
-        };
-        let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
-        let params = RenderGlyphParams {
-            font_id: face.font_id,
-            glyph_id: space,
-            font_size: px(24.0),
-            subpixel_variant: point(0, 0),
-            scale_factor: 1.0,
-            raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Color),
-        };
-
-        let empty = SwashGlyphRasterizer::default()
-            .rasterize(face, &params)
-            .unwrap();
-
-        assert_eq!(empty.size, Size::default());
-        assert_eq!(empty.format, RasterizedGlyphFormat::BgraColor);
-        assert!(empty.pixels.is_empty());
+            if mode == GlyphRenderMode::Color {
+                assert!(
+                    recovered.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                    "{name}"
+                );
+            } else {
+                assert!(
+                    recovered.pixels.iter().any(|coverage| *coverage != 0),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

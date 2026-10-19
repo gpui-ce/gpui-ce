@@ -192,7 +192,7 @@ fn native_renderer_fallbacks_and_intermediates_are_lazy() {
         directx_path.display()
     );
     assert!(
-        directx.contains("ensure_blur_resources(device, requirements.isolated_target_count)"),
+        directx.contains("ensure_blur_resources(device, requirements)"),
         "{} must allocate filter targets from the typed scene requirements",
         directx_path.display()
     );

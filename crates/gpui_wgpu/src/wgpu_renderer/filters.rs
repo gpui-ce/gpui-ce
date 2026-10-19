@@ -1,4 +1,4 @@
-use gpui::{BackdropFilter, ScaledPixels};
+use gpui::{Bounds, Corners, ScaledPixels, point, size};
 use gpui_render::shaders::interface as shader_interface;
 use gpui_render::{
     blur::{
@@ -21,17 +21,7 @@ pub(super) struct FrameUniformRequirements {
 const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 112);
 
 impl WgpuRenderer {
-    fn make_blur_bind_group(
-        &self,
-        uniforms: BlurUniforms,
-        source: &wgpu::TextureView,
-    ) -> (wgpu::BindGroup, u32) {
-        let resources = self.resources();
-        let uniform_offset = resources.filter_uniforms.write(&uniforms);
-        (resources.blur_bind_group(source), uniform_offset)
-    }
-
-    fn run_blur_pass(
+    fn draw_filter_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         label: &str,
@@ -39,16 +29,13 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         source: &wgpu::TextureView,
         uniforms: BlurUniforms,
-        scissor: ScissorRectangle,
+        load: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<ScissorRectangle>,
     ) {
-        let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, source);
         let resources = self.resources();
-        let mut pass = begin_color_render_pass(
-            encoder,
-            label,
-            target,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        );
+        let uniform_offset = resources.filter_uniforms.write(&uniforms);
+        let bind_group = resources.blur_bind_group(source);
+        let mut pass = begin_color_render_pass(encoder, label, target, load);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(
             shader_interface::GLOBAL_BIND_GROUP,
@@ -60,7 +47,11 @@ impl WgpuRenderer {
             &bind_group,
             &[uniform_offset],
         );
-        pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+
+        if let Some(scissor) = scissor {
+            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+        }
+
         pass.draw(0..pipeline.fixed_vertex_count(), 0..1);
     }
 
@@ -71,7 +62,17 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         parameters: FilterCompositeParameters,
     ) {
+        if parameters.blur_radius <= 0.0
+            && matches!(parameters.clip, FilterCompositeClip::RoundedBounds)
+        {
+            return;
+        }
+
+        let full_size = [self.target.width() as f32, self.target.height() as f32];
+
         let Some(kernel) = BlurKernel::for_radius(parameters.blur_radius) else {
+            self.composite_texture(encoder, source, target, parameters, full_size);
+
             return;
         };
         let full_width = self.target.width();
@@ -102,39 +103,55 @@ impl WgpuRenderer {
             }
         };
 
-        self.run_blur_pass(
+        self.draw_filter_pass(
             encoder,
             "blur_downsample",
             &self.resources().pipelines.blur_downsample,
             &horizontal_target,
             source,
             BlurUniforms::downsample([full_width as f32, full_height as f32], blur_size),
-            scissor,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            Some(scissor),
         );
-        self.run_blur_pass(
+        self.draw_filter_pass(
             encoder,
             "blur_horizontal",
             &self.resources().pipelines.blur,
             &vertical_target,
             &horizontal_target,
             BlurUniforms::gaussian(BlurAxis::Horizontal, blur_size, kernel),
-            scissor,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            Some(scissor),
         );
-        self.run_blur_pass(
+        self.draw_filter_pass(
             encoder,
             "blur_vertical",
             &self.resources().pipelines.blur,
             &horizontal_target,
             &vertical_target,
             BlurUniforms::gaussian(BlurAxis::Vertical, blur_size, kernel),
-            scissor,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            Some(scissor),
         );
 
+        self.composite_texture(encoder, &horizontal_target, target, parameters, blur_size);
+    }
+
+    fn composite_texture(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        parameters: FilterCompositeParameters,
+        source_size: [f32; 2],
+    ) {
         let clips_to_bounds = matches!(parameters.clip, FilterCompositeClip::RoundedBounds);
         let composite_bounds = if clips_to_bounds {
             parameters.bounds
         } else {
-            parameters.bounds.dilate(ScaledPixels(dilation))
+            parameters.bounds.dilate(ScaledPixels(
+                GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * parameters.blur_radius,
+            ))
         };
         let uniforms = BlurUniforms::composite(
             composite_bounds,
@@ -143,52 +160,70 @@ impl WgpuRenderer {
             parameters.corner_smoothing,
             parameters.opacity,
             parameters.clip,
-            blur_size,
-            [full_width as f32, full_height as f32],
+            source_size,
+            [self.target.width() as f32, self.target.height() as f32],
         );
-        let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, &horizontal_target);
         let resources = self.resources();
         let pipeline = if uniforms.corner_smoothing > 0.0 {
             &resources.pipelines.smoothed_blur_composite
         } else {
             &resources.pipelines.blur_composite
         };
-        let mut pass =
-            begin_color_render_pass(encoder, "blur_composite", target, wgpu::LoadOp::Load);
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(
-            shader_interface::GLOBAL_BIND_GROUP,
-            &resources.globals_bind_group,
-            &[],
+
+        self.draw_filter_pass(
+            encoder,
+            "blur_composite",
+            pipeline,
+            target,
+            source,
+            uniforms,
+            wgpu::LoadOp::Load,
+            None,
         );
-        pass.set_bind_group(
-            shader_interface::DATA_BIND_GROUP,
-            &bind_group,
-            &[uniform_offset],
-        );
-        pass.draw(0..pipeline.fixed_vertex_count(), 0..1);
     }
 
-    pub(super) fn draw_backdrop_filter(
+    pub(super) fn snapshot_backdrop<'a>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        filter: &BackdropFilter,
-        scene_color_view: &wgpu::TextureView,
-    ) {
-        self.blur_and_composite(
-            encoder,
-            scene_color_view,
-            scene_color_view,
-            FilterCompositeParameters {
-                bounds: filter.bounds,
-                content_mask: filter.content_mask.bounds,
-                corner_radii: filter.corner_radii,
-                corner_smoothing: filter.corner_smoothing,
-                blur_radius: filter.max_blur_radius(),
-                opacity: filter.opacity,
-                clip: FilterCompositeClip::RoundedBounds,
-            },
+        sources: impl Iterator<Item = &'a wgpu::TextureView>,
+    ) -> wgpu::TextureView {
+        let target = self
+            .resources()
+            .backdrop_snapshot_view
+            .as_ref()
+            .expect("backdrop snapshot was prepared")
+            .clone();
+        let full_size = [self.target.width() as f32, self.target.height() as f32];
+        let bounds = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(full_size[0]), ScaledPixels(full_size[1])),
         );
+        drop(begin_color_render_pass(
+            encoder,
+            "clear_backdrop_snapshot",
+            &target,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        ));
+
+        for source in sources {
+            self.composite_texture(
+                encoder,
+                source,
+                &target,
+                FilterCompositeParameters {
+                    bounds,
+                    content_mask: bounds,
+                    corner_radii: Corners::default(),
+                    corner_smoothing: 0.0,
+                    blur_radius: 0.0,
+                    opacity: 1.0,
+                    clip: FilterCompositeClip::ContentShape,
+                },
+                full_size,
+            );
+        }
+
+        target
     }
 
     pub(super) fn blit_to_frame(
@@ -198,29 +233,16 @@ impl WgpuRenderer {
         frame_view: &wgpu::TextureView,
     ) {
         let size = [self.target.width() as f32, self.target.height() as f32];
-        let (bind_group, uniform_offset) =
-            self.make_blur_bind_group(BlurUniforms::copy(size), source);
-        let resources = self.resources();
-        let mut pass = begin_color_render_pass(
+
+        self.draw_filter_pass(
             encoder,
             "scene_blit",
+            &self.resources().pipelines.blur_downsample,
             frame_view,
+            source,
+            BlurUniforms::copy(size),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        );
-        pass.set_pipeline(&resources.pipelines.blur_downsample);
-        pass.set_bind_group(
-            shader_interface::GLOBAL_BIND_GROUP,
-            &resources.globals_bind_group,
-            &[],
-        );
-        pass.set_bind_group(
-            shader_interface::DATA_BIND_GROUP,
-            &bind_group,
-            &[uniform_offset],
-        );
-        pass.draw(
-            0..resources.pipelines.blur_downsample.fixed_vertex_count(),
-            0..1,
+            None,
         );
     }
 }

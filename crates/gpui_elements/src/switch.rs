@@ -16,18 +16,29 @@ type StateRenderer = Box<dyn FnOnce(Stateful<Div>, bool, bool) -> Stateful<Div>>
 /// `BaseSwitch` owns pointer, drag, keyboard, focus, and accessibility
 /// behavior. Callers own its layout and appearance through GPUI styles and
 /// [`with_state`](Self::with_state).
-#[derive(IntoElement, Styled, ParentElement, StatefulInteractiveElement)]
+#[derive(
+    IntoElement, Styled, ParentElement, StatefulInteractiveElement, derive_setters::Setters,
+)]
+#[setters(generate = false)]
 pub struct BaseSwitch {
     element_id: ElementId,
     base: Stateful<Div>,
     #[style]
     style: StyleRefinement,
+    /// Sets the application-controlled checked value.
+    #[setters(generate)]
     checked: bool,
+    /// Sets whether the switch ignores user interaction.
+    #[setters(generate)]
     disabled: bool,
+    /// Sets the horizontal distance required to select a value while dragging.
+    #[setters(generate)]
     drag_threshold: Pixels,
     #[children]
     children: Vec<AnyElement>,
     on_change: Option<OnChange>,
+    /// Sets the name exposed to accessibility clients.
+    #[setters(generate, strip_option, into)]
     aria_label: Option<SharedString>,
     state_renderer: Option<StateRenderer>,
 }
@@ -52,37 +63,9 @@ impl BaseSwitch {
         }
     }
 
-    /// Sets the application-controlled checked value.
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.checked = checked;
-
-        self
-    }
-
-    /// Sets whether the switch ignores user interaction.
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-
-        self
-    }
-
-    /// Sets the horizontal distance required to select a value while dragging.
-    pub fn drag_threshold(mut self, threshold: Pixels) -> Self {
-        self.drag_threshold = threshold;
-
-        self
-    }
-
     /// Handles activation with the next checked value.
     pub fn on_change(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
-
-        self
-    }
-
-    /// Sets the name exposed to accessibility clients.
-    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.aria_label = Some(label.into());
 
         self
     }

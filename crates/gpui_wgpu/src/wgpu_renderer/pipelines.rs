@@ -465,7 +465,7 @@ impl WgpuPipelines {
                 1,
                 &shader_module,
             ),
-            surfaces: create(shader::SURFACES, &scene_target, 1, &shader_module),
+            surfaces: create(shader::SURFACES, &composite_target, 1, &shader_module),
             blur_downsample: create(
                 shader::BLUR_DOWNSAMPLE,
                 &overwrite_target,
@@ -641,11 +641,6 @@ fn premultiplied_composite_blend_state() -> wgpu::BlendState {
 }
 
 fn source_over_blend_state(source_color_factor: wgpu::BlendFactor) -> wgpu::BlendState {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    let destination_alpha_factor = wgpu::BlendFactor::One;
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let destination_alpha_factor = wgpu::BlendFactor::OneMinusSrcAlpha;
-
     wgpu::BlendState {
         color: wgpu::BlendComponent {
             src_factor: source_color_factor,
@@ -654,25 +649,14 @@ fn source_over_blend_state(source_color_factor: wgpu::BlendFactor) -> wgpu::Blen
         },
         alpha: wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
-            dst_factor: destination_alpha_factor,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
             operation: wgpu::BlendOperation::Add,
         },
     }
 }
 
 fn path_blend_state() -> wgpu::BlendState {
-    wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-            operation: wgpu::BlendOperation::Add,
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation: wgpu::BlendOperation::Add,
-        },
-    }
+    source_over_blend_state(wgpu::BlendFactor::One)
 }
 
 fn subpixel_blend_state() -> wgpu::BlendState {

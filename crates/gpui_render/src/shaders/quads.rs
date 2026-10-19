@@ -207,11 +207,25 @@ pub mod quad {
             straight_side_dash_lengths(quad.bounds, quad.corner_radii, side_velocities);
         let corner_velocities = corner_dash_velocities(side_velocities);
         let corner_lengths = corner_dash_lengths(quad.corner_radii, corner_velocities);
-        let right_start = side_lengths.top + corner_lengths.top_right;
+
+        perimeter_dash_layout(
+            side_velocities,
+            side_lengths,
+            corner_velocities,
+            corner_values(corner_lengths),
+        )
+    }
+
+    pub fn perimeter_dash_layout(
+        side_velocities: Edges,
+        side_lengths: Edges,
+        corner_velocities: Corners,
+        corner_lengths: Vec4f,
+    ) -> RoundedDashLayout {
+        let right_start = side_lengths.top + corner_lengths.y;
         let bottom_right_start = right_start + side_lengths.right;
-        let bottom_left_start =
-            bottom_right_start + corner_lengths.bottom_right + side_lengths.bottom;
-        let left_start = bottom_left_start + corner_lengths.bottom_left;
+        let bottom_left_start = bottom_right_start + corner_lengths.z + side_lengths.bottom;
+        let left_start = bottom_left_start + corner_lengths.w;
         let top_left_start = left_start + side_lengths.left;
 
         RoundedDashLayout {
@@ -222,7 +236,7 @@ pub mod quad {
             bottom_left_start,
             left_start,
             top_left_start,
-            perimeter: top_left_start + corner_lengths.top_left,
+            perimeter: top_left_start + corner_lengths.x,
         }
     }
 
@@ -282,26 +296,13 @@ pub mod quad {
                 * side_velocities.left,
         };
         let corner_velocities = corner_dash_velocities(side_velocities);
-        let top_left_length = corner_lengths.x * corner_velocities.top_left;
-        let top_right_length = corner_lengths.y * corner_velocities.top_right;
-        let bottom_right_length = corner_lengths.z * corner_velocities.bottom_right;
-        let bottom_left_length = corner_lengths.w * corner_velocities.bottom_left;
-        let right_start = side_lengths.top + top_right_length;
-        let bottom_right_start = right_start + side_lengths.right;
-        let bottom_left_start = bottom_right_start + bottom_right_length + side_lengths.bottom;
-        let left_start = bottom_left_start + bottom_left_length;
-        let top_left_start = left_start + side_lengths.left;
 
-        RoundedDashLayout {
+        perimeter_dash_layout(
             side_velocities,
+            side_lengths,
             corner_velocities,
-            right_start,
-            bottom_right_start,
-            bottom_left_start,
-            left_start,
-            top_left_start,
-            perimeter: top_left_start + top_left_length,
-        }
+            corner_lengths * corner_values(corner_velocities),
+        )
     }
 
     pub fn smoothed_dashed_border_alpha(
@@ -326,44 +327,19 @@ pub mod quad {
         if rectangle_sample.corner != FIGMA_NO_CORNER
             && rectangle_sample.signed_distance.segment != FIGMA_SEGMENT_STRAIGHT
         {
-            let corner = rectangle_sample.corner;
-            let mut radius = quad.corner_radii.top_left;
-            let mut horizontal_reach = prepared.horizontal_reaches.x;
-            let mut vertical_reach = prepared.vertical_reaches.x;
-            let mut corner_length = corner_lengths.x;
-
-            match corner {
-                1u32 => {
-                    radius = quad.corner_radii.top_right;
-                    horizontal_reach = prepared.horizontal_reaches.y;
-                    vertical_reach = prepared.vertical_reaches.y;
-                    corner_length = corner_lengths.y;
-                }
-                2u32 => {
-                    radius = quad.corner_radii.bottom_right;
-                    horizontal_reach = prepared.horizontal_reaches.z;
-                    vertical_reach = prepared.vertical_reaches.z;
-                    corner_length = corner_lengths.z;
-                }
-                3u32 => {
-                    radius = quad.corner_radii.bottom_left;
-                    horizontal_reach = prepared.horizontal_reaches.w;
-                    vertical_reach = prepared.vertical_reaches.w;
-                    corner_length = corner_lengths.w;
-                }
-                _ => {}
-            }
-
+            let corner_idx = rectangle_sample.corner;
+            let radii = corner_values(quad.corner_radii);
+            let corner_length = corner_lengths[corner_idx];
             let params = figma_corner_params(
-                radius,
-                horizontal_reach,
-                vertical_reach,
+                radii[corner_idx],
+                prepared.horizontal_reaches[corner_idx],
+                prepared.vertical_reaches[corner_idx],
                 prepared.smoothing_factors,
             );
             let progress =
                 figma_corner_progress(params, rectangle_sample.signed_distance, corner_length);
 
-            match corner {
+            match corner_idx {
                 0u32 => {
                     dash_velocity = dash_layout.corner_velocities.top_left;
                     dash_position =

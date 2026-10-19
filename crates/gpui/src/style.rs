@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, Pixels,
-    Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
-    Window, black, phi, point, px, quad, rems, size, transparent_black,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, PaintQuad,
+    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
+    TextRun, Window, black, phi, point, px, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -205,18 +205,14 @@ impl RingStyle {
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
         current_color: Hsla,
-    ) -> Option<crate::PaintQuad> {
+    ) -> Option<PaintQuad> {
         (self.width > Pixels::ZERO).then(|| {
             // Quad borders are painted inward, so expanding the quad by the ring width leaves
             // its transparent interior aligned with the element's original bounds.
-            quad(
-                bounds.dilate(self.width),
-                corner_radii.map(|radius| *radius + self.width),
-                transparent_black(),
-                Edges::all(self.width),
-                self.color.resolve(current_color),
-                BorderStyle::Solid,
-            )
+            PaintQuad::new(bounds.dilate(self.width))
+                .corner_radii(corner_radii.map(|radius| *radius + self.width))
+                .border_widths(Edges::all(self.width))
+                .border_color(self.color.resolve(current_color))
         })
     }
 
@@ -392,7 +388,7 @@ pub struct Style {
     /// The mouse cursor style shown when the mouse pointer is over an element.
     pub mouse_cursor: Option<CursorStyle>,
 
-    /// The opacity of this element
+    /// Opacity applied to this element and its children after compositing them as a group.
     pub opacity: Option<f32>,
 
     /// The grid columns of this element
@@ -500,17 +496,21 @@ pub enum UnicodeBidi {
 }
 
 /// The possible values of the box-shadow property
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct BoxShadow {
     /// The shadow color or gradient.
     pub color: Background,
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
     /// How much should the shadow be blurred?
+    #[setters(generate)]
     pub blur_radius: Pixels,
     /// How much should the shadow spread?
+    #[setters(generate)]
     pub spread_radius: Pixels,
     /// Whether this is an inset shadow (drawn inside the element's bounds).
+    #[setters(generate, bool)]
     pub inset: bool,
 }
 
@@ -526,24 +526,6 @@ impl BoxShadow {
             spread_radius: px(0.),
             inset: false,
         }
-    }
-
-    /// Sets the shadow blur radius.
-    pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
-        self.blur_radius = blur_radius;
-        self
-    }
-
-    /// Sets the shadow spread radius.
-    pub fn spread_radius(mut self, spread_radius: Pixels) -> Self {
-        self.spread_radius = spread_radius;
-        self
-    }
-
-    /// Marks the shadow as inset (drawn inside the element's bounds).
-    pub fn inset(mut self) -> Self {
-        self.inset = true;
-        self
     }
 }
 
@@ -981,17 +963,19 @@ impl Style {
         cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
-        if let Some(fragments) = window.current_inline_fragments.clone() {
-            for fragment in fragments.iter() {
-                self.paint_box(*fragment, window, cx, |_, _| {});
+        window.with_element_opacity(self.opacity, |window| {
+            if let Some(fragments) = window.current_inline_fragments.clone() {
+                for fragment in fragments.iter() {
+                    self.paint_box(*fragment, window, cx, |_, _| {});
+                }
+
+                continuation(window, cx);
+
+                return;
             }
 
-            continuation(window, cx);
-
-            return;
-        }
-
-        self.paint_box(bounds, window, cx, continuation);
+            self.paint_box(bounds, window, cx, continuation);
+        });
     }
 
     fn paint_box(
@@ -1008,7 +992,11 @@ impl Style {
 
         #[cfg(debug_assertions)]
         if self.debug || cx.has_global::<DebugBelow>() {
-            window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
+            window.paint_quad(
+                PaintQuad::new(bounds)
+                    .border_widths(px(1.))
+                    .border_color(crate::red()),
+            );
         }
 
         let rem_size = window.rem_size();
@@ -1020,20 +1008,16 @@ impl Style {
 
         let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
 
-        window.paint_drop_shadows_with_corner_smoothing(
-            bounds,
-            corner_radii,
-            corner_smoothing,
-            &self.box_shadow,
-        );
+        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
+
         if let Some(ring) = self.ring.outer_quad(bounds, corner_radii, current_color) {
-            window.paint_quad_with_corner_smoothing(ring, corner_smoothing);
+            window.paint_quad(ring.corner_smoothing(corner_smoothing));
         }
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
         if !self.backdrop_filter.is_empty() {
-            window.paint_backdrop_filter_with_corner_smoothing(
+            window.paint_backdrop_filter(
                 bounds,
                 corner_radii,
                 corner_smoothing,
@@ -1048,51 +1032,41 @@ impl Style {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
-                window.paint_quad_with_corner_smoothing(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        background_color,
-                        Edges::default(),
-                        background_color.opacity(0.),
-                        self.border_style,
-                    ),
-                    corner_smoothing,
+                window.paint_quad(
+                    PaintQuad::new(bounds)
+                        .corner_radii(corner_radii)
+                        .background(background_color)
+                        .border_color(background_color.opacity(0.))
+                        .border_style(self.border_style)
+                        .corner_smoothing(corner_smoothing),
                 );
             }
 
             if let Some(ring) = self.inset_ring.inset_shadow(current_color) {
-                window.paint_inset_shadows_with_corner_smoothing(
+                window.paint_inset_shadows(
                     bounds,
                     corner_radii,
                     corner_smoothing,
                     std::slice::from_ref(&ring),
                 );
             }
-            window.paint_inset_shadows_with_corner_smoothing(
-                bounds,
-                corner_radii,
-                corner_smoothing,
-                &self.box_shadow,
-            );
+            window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
             continuation(window, cx);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let border_color = self.border_color.unwrap_or_default();
-                window.paint_quad_with_corner_smoothing(
-                    quad(
-                        bounds,
-                        corner_radii,
-                        border_color.opacity(0.),
-                        border_widths,
-                        border_color,
-                        self.border_style,
-                    )
-                    .border_dashed_length(self.border_dashed_length)
-                    .border_dashed_gap(self.border_dashed_gap),
-                    corner_smoothing,
+                window.paint_quad(
+                    PaintQuad::new(bounds)
+                        .corner_radii(corner_radii)
+                        .background(border_color.opacity(0.))
+                        .border_widths(border_widths)
+                        .border_color(border_color)
+                        .border_style(self.border_style)
+                        .corner_smoothing(corner_smoothing)
+                        .border_dashed_length(self.border_dashed_length)
+                        .border_dashed_gap(self.border_dashed_gap),
                 );
             }
         };
@@ -1100,7 +1074,7 @@ impl Style {
         if self.filter.is_empty() {
             paint_box(window, cx);
         } else {
-            window.with_filter_layer_with_corner_smoothing(
+            window.with_filter_layer(
                 bounds,
                 corner_radii,
                 corner_smoothing,

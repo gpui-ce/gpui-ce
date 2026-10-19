@@ -13,10 +13,19 @@ use crate::{
 use gpui_util::ResultExt;
 
 /// An SVG element.
+#[derive(derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct Svg {
     interactivity: Interactivity,
+    /// Transform the SVG element with the given transformation.
+    /// This affects rendering only, without changing the hitbox or layout of the element.
+    #[setters(generate, rename = "with_transformation", strip_option)]
     transformation: Option<Transformation>,
+    /// Set the path to the SVG file for this element.
+    #[setters(generate, strip_option, into)]
     path: Option<SharedString>,
+    /// Set the path to the SVG file for this element.
+    #[setters(generate, strip_option, into)]
     external_path: Option<SharedString>,
     data: Option<Arc<[u8]>>,
     data_path: Option<SharedString>,
@@ -36,18 +45,6 @@ pub fn svg() -> Svg {
 }
 
 impl Svg {
-    /// Set the path to the SVG file for this element.
-    pub fn path(mut self, path: impl Into<SharedString>) -> Self {
-        self.path = Some(path.into());
-        self
-    }
-
-    /// Set the path to the SVG file for this element.
-    pub fn external_path(mut self, path: impl Into<SharedString>) -> Self {
-        self.external_path = Some(path.into());
-        self
-    }
-
     /// Set the raw SVG data for this element.
     /// The SVG will be rendered directly from the provided bytes.
     pub fn data(mut self, data: &[u8]) -> Self {
@@ -58,13 +55,6 @@ impl Svg {
         let path = SharedString::from(format!("__binary_svg__{}", hash));
         self.data = Some(Arc::from(data));
         self.data_path = Some(path);
-        self
-    }
-
-    /// Transform the SVG element with the given transformation.
-    /// Note that this won't effect the hitbox or layout of the element, only the rendering.
-    pub fn with_transformation(mut self, transformation: Transformation) -> Self {
-        self.transformation = Some(transformation);
         self
     }
 }
@@ -210,10 +200,17 @@ impl InteractiveElement for Svg {
 }
 
 /// A transformation to apply to an SVG element.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct Transformation {
+    /// Update the scaling factor of this transformation.
+    #[setters(generate, rename = "with_scaling")]
     scale: Size<f32>,
+    /// Update the translation value of this transformation.
+    #[setters(generate, rename = "with_translation")]
     translate: Point<Pixels>,
+    /// Update the rotation angle of this transformation.
+    #[setters(generate, rename = "with_rotation", into)]
     rotate: Radians,
 }
 
@@ -254,24 +251,6 @@ impl Transformation {
             translate: point(px(0.0), px(0.0)),
             rotate,
         }
-    }
-
-    /// Update the scaling factor of this transformation.
-    pub fn with_scaling(mut self, scale: Size<f32>) -> Self {
-        self.scale = scale;
-        self
-    }
-
-    /// Update the translation value of this transformation.
-    pub fn with_translation(mut self, translate: Point<Pixels>) -> Self {
-        self.translate = translate;
-        self
-    }
-
-    /// Update the rotation angle of this transformation.
-    pub fn with_rotation(mut self, rotate: impl Into<Radians>) -> Self {
-        self.rotate = rotate.into();
-        self
     }
 
     fn into_matrix(self, center: Point<Pixels>, scale_factor: f32) -> TransformationMatrix {

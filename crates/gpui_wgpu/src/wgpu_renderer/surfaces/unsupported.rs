@@ -13,7 +13,6 @@ pub(super) fn retain_surface_cache(_renderer: &WgpuRenderer, _surfaces: &[PaintS
 pub(super) fn draw_surfaces(
     _renderer: &WgpuRenderer,
     surfaces: &[PaintSurface],
-    _opacities: &[f32],
     _pass: &mut wgpu::RenderPass<'_>,
 ) -> frame::DrawResult {
     if surfaces.is_empty() {

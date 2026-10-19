@@ -15,6 +15,9 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+#[cfg(debug_assertions)]
+use crate::{PaintQuad, TextAlign};
+
 #[cfg(test)]
 use crate::{
     AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, StyledText, TestAppContext,
@@ -3255,116 +3258,95 @@ impl Interactivity {
                     return ((), element_state);
                 }
 
-                let mut tab_group = None;
-                if self.tab_group {
-                    tab_group = self.tab_index;
-                }
+                let tab_group = self.tab_group.then_some(self.tab_index).flatten();
 
-                window.with_element_opacity(style.opacity, |window| {
-                    style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
-                        window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
-                                style.overflow_mask(bounds, window.rem_size()),
-                                |window| {
-                                    window.with_tab_group(tab_group, |window| {
-                                        // Register the container's own focus handle *inside* its
-                                        // tab group, so that focusing the container and then
-                                        // calling `focus_next` descends into this group's first
-                                        // item. Inserting it before `with_tab_group` would give the
-                                        // container a shallower tab path than its children; with
-                                        // sibling groups every container would then sort ahead of
-                                        // every item, and `focus_next` from a container would jump
-                                        // to the first item in the whole window instead of its own.
-                                        if let Some(focus_handle) = &self.tracked_focus_handle {
-                                            window.next_frame.tab_stops.insert(focus_handle);
-                                        }
-                                        if let Some(hitbox) = hitbox {
-                                            #[cfg(debug_assertions)]
-                                            self.paint_debug_info(
-                                                global_id, hitbox, &style, window, cx,
-                                            );
+                let paint_content = |window: &mut Window, cx: &mut App| {
+                    // Register the container inside its tab group so `focus_next` enters
+                    // its own children. Outside the group, it would sort ahead of the
+                    // items in every sibling group and enter the first group instead.
+                    if let Some(focus_handle) = &self.tracked_focus_handle {
+                        window.next_frame.tab_stops.insert(focus_handle);
+                    }
 
-                                            if let Some(drag) = cx.active_drag.as_ref() {
-                                                if let Some(mouse_cursor) = drag.cursor_style {
-                                                    window.set_window_cursor_style(mouse_cursor);
-                                                }
-                                            } else {
-                                                if let Some(mouse_cursor) = style.mouse_cursor {
-                                                    window.set_cursor_style(mouse_cursor, hitbox);
-                                                }
-                                                if let Some(resolve_cursor) =
-                                                    self.cursor_style_resolver.clone()
-                                                {
-                                                    window.set_cursor_style_with(
-                                                        hitbox,
-                                                        move |position| {
-                                                            resolve_cursor(position, bounds)
-                                                        },
-                                                    );
-                                                }
-                                            }
+                    if let Some(hitbox) = hitbox {
+                        #[cfg(debug_assertions)]
+                        self.paint_debug_info(global_id, hitbox, &style, window, cx);
 
-                                            if let Some(group) = self.group.clone() {
-                                                GroupHitboxes::push(group, hitbox.id, cx);
-                                            }
+                        if let Some(drag) = cx.active_drag.as_ref() {
+                            if let Some(mouse_cursor) = drag.cursor_style {
+                                window.set_window_cursor_style(mouse_cursor);
+                            }
+                        } else {
+                            if let Some(mouse_cursor) = style.mouse_cursor {
+                                window.set_cursor_style(mouse_cursor, hitbox);
+                            }
 
-                                            if let Some(area) = self.window_control {
-                                                window.insert_window_control_hitbox(
-                                                    area,
-                                                    hitbox.clone(),
-                                                );
-                                            }
+                            if let Some(resolve_cursor) = self.cursor_style_resolver.clone() {
+                                window.set_cursor_style_with(hitbox, move |position| {
+                                    resolve_cursor(position, bounds)
+                                });
+                            }
+                        }
 
-                                            self.paint_mouse_listeners(
-                                                hitbox,
-                                                element_state.as_mut(),
-                                                window,
-                                                cx,
-                                            );
-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
-                                        }
+                        if let Some(group) = self.group.clone() {
+                            GroupHitboxes::push(group, hitbox.id, cx);
+                        }
 
-                                        self.paint_keyboard_listeners(window, cx);
+                        if let Some(area) = self.window_control {
+                            window.insert_window_control_hitbox(area, hitbox.clone());
+                        }
 
-                                        if window.a11y.is_active() {
-                                            if let Some(global_id) = global_id {
-                                                if !self.a11y_action_listeners.is_empty() {
-                                                    let node_id = global_id.accesskit_node_id();
-                                                    for (action, listener) in
-                                                        self.a11y_action_listeners.drain(..)
-                                                    {
-                                                        if self.disabled {
-                                                            continue;
-                                                        }
+                        self.paint_mouse_listeners(hitbox, element_state.as_mut(), window, cx);
+                        self.paint_scroll_listener(hitbox, &style, window, cx);
+                    }
 
-                                                        window.on_a11y_action(
-                                                            node_id, action, listener,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
+                    self.paint_keyboard_listeners(window, cx);
 
-                                        f(&style, window, cx);
+                    if window.a11y.is_active()
+                        && let Some(global_id) = global_id
+                        && !self.a11y_action_listeners.is_empty()
+                    {
+                        let node_id = global_id.accesskit_node_id();
 
-                                        if let Some(_hitbox) = hitbox {
-                                            #[cfg(any(feature = "inspector", debug_assertions))]
-                                            window.insert_inspector_hitbox(
-                                                _hitbox.id,
-                                                _inspector_id,
-                                                cx,
-                                            );
+                        for (action, listener) in self.a11y_action_listeners.drain(..) {
+                            if self.disabled {
+                                continue;
+                            }
 
-                                            if let Some(group) = self.group.as_ref() {
-                                                GroupHitboxes::pop(group, cx);
-                                            }
-                                        }
-                                    })
-                                },
-                            );
-                        });
+                            window.on_a11y_action(node_id, action, listener);
+                        }
+                    }
+
+                    f(&style, window, cx);
+
+                    if let Some(_hitbox) = hitbox {
+                        #[cfg(any(feature = "inspector", debug_assertions))]
+                        window.insert_inspector_hitbox(_hitbox.id, _inspector_id, cx);
+
+                        if let Some(group) = self.group.as_ref() {
+                            GroupHitboxes::pop(group, cx);
+                        }
+                    }
+                };
+
+                let paint_tab_group = |window: &mut Window, cx: &mut App| {
+                    window.with_tab_group(tab_group, |window| paint_content(window, cx));
+                };
+
+                let paint_content_mask = |window: &mut Window, cx: &mut App| {
+                    window.with_content_mask(
+                        style.overflow_mask(bounds, window.rem_size()),
+                        |window| paint_tab_group(window, cx),
+                    );
+                };
+
+                let paint_text_style = |window: &mut Window, cx: &mut App| {
+                    window.with_text_style(style.text_style().cloned(), |window| {
+                        paint_content_mask(window, cx);
                     });
-                });
+                };
+
+                style.paint(bounds, window, cx, paint_text_style);
 
                 ((), element_state)
             },
@@ -3380,8 +3362,6 @@ impl Interactivity {
         window: &mut Window,
         cx: &mut App,
     ) {
-        use crate::{BorderStyle, TextAlign};
-
         if let Some(global_id) = global_id
             && (style.debug || style.debug_below || cx.has_global::<crate::DebugBelow>())
             && hitbox.is_hovered(window)
@@ -3459,18 +3439,18 @@ impl Interactivity {
                                 }
                             }
                         });
-                        window.paint_quad(crate::outline(
-                            crate::Bounds {
+                        window.paint_quad(
+                            PaintQuad::new(crate::Bounds {
                                 origin: hitbox.origin
                                     + crate::point(crate::px(0.), FONT_SIZE - px(2.)),
                                 size: crate::Size {
                                     width: text_bounds.size.width,
                                     height: crate::px(1.),
                                 },
-                            },
-                            crate::red(),
-                            BorderStyle::default(),
-                        ))
+                            })
+                            .border_widths(px(1.))
+                            .border_color(crate::red()),
+                        )
                     }
                 }
             };
@@ -6381,11 +6361,14 @@ mod tests {
         disabled: bool,
         aria_disabled: bool,
         callbacks: [usize; 4],
+        a11y_callbacks: usize,
         prepaints: usize,
     }
 
     impl Render for DisabledCallbackProbe {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let probe = cx.weak_entity();
+
             div()
                 .id("disabled-callback-probe")
                 .role(accesskit::Role::Button)
@@ -6401,6 +6384,11 @@ mod tests {
                 .on_click(cx.listener(|view, _event, _window, _cx| view.callbacks[1] += 1))
                 .on_hover(cx.listener(|view, _hovered, _window, _cx| view.callbacks[2] += 1))
                 .on_key_down(cx.listener(|view, _event, _window, _cx| view.callbacks[3] += 1))
+                .on_a11y_action(accesskit::Action::Increment, move |_data, _window, cx| {
+                    probe
+                        .update(cx, |probe, _cx| probe.a11y_callbacks += 1)
+                        .unwrap();
+                })
                 .on_prepaint(cx.listener(|view, _info, _window, _cx| view.prepaints += 1))
         }
     }
@@ -6414,6 +6402,7 @@ mod tests {
                 disabled,
                 aria_disabled,
                 callbacks: [0; 4],
+                a11y_callbacks: 0,
                 prepaints: 0,
             });
 
@@ -6436,17 +6425,26 @@ mod tests {
                 );
                 assert!(probe.prepaints > 0);
 
-                let node = &window
+                let (_node_id, node) = window
                     .a11y_tree()
                     .unwrap()
                     .nodes
                     .iter()
                     .find(|(_id, node)| node.label() == Some("Disabled callback probe"))
-                    .unwrap()
-                    .1;
+                    .unwrap();
 
                 assert_eq!(node.is_disabled(), aria_disabled);
                 assert_eq!(node.supports_action(accesskit::Action::Click), !disabled);
+                assert_eq!(
+                    node.supports_action(accesskit::Action::Increment),
+                    !disabled
+                );
+
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    window.perform_a11y_action(*_node_id, accesskit::Action::Increment, None, cx);
+                    assert_eq!(view.read(cx).a11y_callbacks, usize::from(!disabled));
+                }
             });
         }
     }

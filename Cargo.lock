@@ -2553,6 +2553,7 @@ dependencies = [
 name = "gpui_ce_elements"
 version = "0.1.0"
 dependencies = [
+ "derive_setters",
  "gpui-ce",
  "gpui-ce-fonts",
  "gpui_ce_parley",
@@ -2742,6 +2743,7 @@ dependencies = [
  "gpui-ce",
  "naga 24.0.0",
  "naga 29.0.4",
+ "smallvec",
  "wgsl-rs",
  "windows 0.62.2",
 ]
