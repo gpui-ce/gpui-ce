@@ -888,15 +888,49 @@ impl Style {
             _ => {
                 let mut min = bounds.origin;
                 let mut max = bounds.bottom_right();
+                let mut corner_radii = self
+                    .corner_radii
+                    .to_pixels(rem_size)
+                    .clamp_radii_for_quad_size(bounds.size);
 
                 if self
                     .border_color
                     .is_some_and(|background| !background.is_transparent())
                 {
-                    min.x += self.border_widths.left.to_pixels(rem_size);
-                    max.x -= self.border_widths.right.to_pixels(rem_size);
-                    min.y += self.border_widths.top.to_pixels(rem_size);
-                    max.y -= self.border_widths.bottom.to_pixels(rem_size);
+                    let border_widths = self.border_widths.to_pixels(rem_size);
+                    min.x += border_widths.left;
+                    max.x -= border_widths.right;
+                    min.y += border_widths.top;
+                    max.y -= border_widths.bottom;
+
+                    // The padding box's corners follow the border's inner curve. Shrinking
+                    // each radius by the thinner adjacent border keeps the circular clip
+                    // inside that curve when the borders differ.
+                    let inner_radius = |radius: Pixels, horizontal: Pixels, vertical: Pixels| {
+                        (radius - horizontal.min(vertical)).max(Pixels::ZERO)
+                    };
+                    corner_radii = Corners {
+                        top_left: inner_radius(
+                            corner_radii.top_left,
+                            border_widths.left,
+                            border_widths.top,
+                        ),
+                        top_right: inner_radius(
+                            corner_radii.top_right,
+                            border_widths.right,
+                            border_widths.top,
+                        ),
+                        bottom_right: inner_radius(
+                            corner_radii.bottom_right,
+                            border_widths.right,
+                            border_widths.bottom,
+                        ),
+                        bottom_left: inner_radius(
+                            corner_radii.bottom_left,
+                            border_widths.left,
+                            border_widths.bottom,
+                        ),
+                    };
                 }
 
                 let bounds = match (
@@ -929,7 +963,18 @@ impl Style {
                     fade_out.bottom = Pixels::ZERO;
                 }
 
-                Some(ContentMask { bounds, fade_out })
+                // Like CSS, clipping both axes also clips to the rounded corners.
+                // Smoothed corners are approximated by circular ones.
+                if self.overflow.x == Overflow::Visible || self.overflow.y == Overflow::Visible {
+                    corner_radii = Corners::default();
+                }
+
+                Some(ContentMask {
+                    bounds,
+                    fade_out,
+                    corner_radii,
+                    ..Default::default()
+                })
             }
         }
     }
@@ -947,6 +992,7 @@ impl Style {
             },
             border_color: self.border_color,
             border_widths: self.border_widths,
+            corner_radii: self.corner_radii,
             overflow_fade: self.overflow_fade,
             ..Style::default()
         };
@@ -1697,6 +1743,58 @@ mod tests {
             linear_color_stop(red(), 0.),
             linear_color_stop(blue(), 1.),
         )
+    }
+
+    #[test]
+    fn hidden_overflow_clips_to_the_rounded_padding_box() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(40.)));
+        let mut style = Style::default();
+        style.refine(
+            &StyleRefinement::default()
+                .overflow_hidden()
+                .rounded(px(30.))
+                .rounded_tl(px(8.))
+                .border_2()
+                .border_l(px(4.))
+                .border_color(red()),
+        );
+
+        let mask = style.overflow_mask(bounds, px(16.)).unwrap();
+        assert_eq!(
+            mask.bounds,
+            Bounds::from_corners(point(px(4.), px(2.)), point(px(98.), px(38.)))
+        );
+        // Radii clamp to the border box like the background does, then shrink by the
+        // thinner adjacent border.
+        assert_eq!(
+            mask.corner_radii,
+            Corners {
+                top_left: px(6.),
+                top_right: px(18.),
+                bottom_right: px(18.),
+                bottom_left: px(18.),
+            }
+        );
+        assert_eq!(style.scroll_mask(bounds, px(16.)), mask);
+
+        // Without a visible border the clip follows the outer corners.
+        style.refine(&StyleRefinement::default().border_color(crate::transparent_black()));
+        assert_eq!(
+            style.overflow_mask(bounds, px(16.)).unwrap().corner_radii,
+            Corners {
+                top_left: px(8.),
+                top_right: px(20.),
+                bottom_right: px(20.),
+                bottom_left: px(20.),
+            }
+        );
+
+        // Clipping only one axis leaves the mask rectangular.
+        style.overflow.x = Overflow::Visible;
+        assert_eq!(
+            style.overflow_mask(bounds, px(16.)).unwrap().corner_radii,
+            Corners::default()
+        );
     }
 
     #[test]

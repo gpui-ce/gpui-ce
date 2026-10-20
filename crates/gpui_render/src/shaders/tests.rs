@@ -103,12 +103,12 @@ fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
 #[test]
 fn scene_instance_storage_sizes_are_bounded() {
     for (name, actual, maximum) in [
-        ("Quad", std::mem::size_of::<gpui::Quad>(), 248),
-        ("Shadow", std::mem::size_of::<gpui::Shadow>(), 184),
+        ("Quad", std::mem::size_of::<gpui::Quad>(), 296),
+        ("Shadow", std::mem::size_of::<gpui::Shadow>(), 232),
         (
             "PolychromeSprite",
             std::mem::size_of::<gpui::PolychromeSprite>(),
-            112,
+            160,
         ),
     ] {
         assert!(

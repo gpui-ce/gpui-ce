@@ -99,6 +99,13 @@ fn quantize_color_glyph_origin(origin: Point<ScaledPixels>) -> (Point<ScaledPixe
     )
 }
 
+/// Compositing effects for [`Window::paint_glyph_transformed`].
+#[derive(Clone, Copy)]
+struct GlyphEffect {
+    transformation: TransformationMatrix,
+    blur_radius: ScaledPixels,
+}
+
 /// Default window size used when no explicit size is provided.
 pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
 
@@ -1138,6 +1145,11 @@ pub(crate) struct Frame {
     pointer_observers: Rc<Vec<PointerObserver>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
+    /// Index of the first scene operation that composites above native child surfaces.
+    overlay_scene_start: usize,
+    /// Whether the overlay content is interactive and should receive pointer input.
+    overlay_captures_input: bool,
+    presentation_callbacks: Vec<Rc<dyn Fn()>>,
     pub(crate) hitboxes: Vec<Hitbox>,
     pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
     pub(crate) deferred_draws: Vec<DeferredDraw>,
@@ -1166,6 +1178,7 @@ pub(crate) struct PrepaintStateIndex {
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
     scene_index: usize,
+    presentation_callbacks_index: usize,
     mouse_listeners_index: usize,
     pointer_observers_index: usize,
     input_handlers_index: usize,
@@ -1186,6 +1199,9 @@ impl Frame {
             pointer_observers: Rc::default(),
             dispatch_tree,
             scene: Scene::default(),
+            overlay_scene_start: 0,
+            overlay_captures_input: false,
+            presentation_callbacks: Vec::new(),
             hitboxes: Vec::new(),
             window_control_hitboxes: Vec::new(),
             deferred_draws: Vec::new(),
@@ -1212,6 +1228,9 @@ impl Frame {
         Rc::make_mut(&mut self.pointer_observers).clear();
         self.dispatch_tree.clear();
         self.scene.clear();
+        self.overlay_scene_start = 0;
+        self.overlay_captures_input = false;
+        self.presentation_callbacks.clear();
         self.input_handlers.clear();
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
@@ -1880,6 +1899,12 @@ impl Window {
                             || !window.next_frame_callbacks.borrow().is_empty()
                         {
                             window.platform_window.schedule_frame();
+                        } else if !window.needs_present.get()
+                            && !window.input_rate_tracker.borrow().is_high_rate()
+                        {
+                            // Nothing will change until new demand wakes the
+                            // platform, so let it stop ticking.
+                            window.platform_window.pause_frame_requests();
                         }
                     })
                     .log_err();
@@ -2158,9 +2183,9 @@ pub struct DispatchEventResult {
 }
 
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
-/// rendered. Currently, only rectangular content masks are supported, but we give the mask its own type
-/// to leave room to support more complex shapes in the future. Edge fades are evaluated in
-/// window space against these axis-aligned bounds and are not transform-aware.
+/// rendered. The mask is an axis-aligned rectangle with optional rounded corners and edge
+/// fades. Corners and fades are evaluated per pixel in window space and are not
+/// transform-aware.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
@@ -2168,6 +2193,66 @@ pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     pub bounds: Bounds<P>,
     /// Edge fade distances. A zero distance leaves that edge fully opaque.
     pub fade_out: Edges<P>,
+    /// How far outside `bounds` each edge's fade ramp starts. Zero starts the ramp at the
+    /// clip edge. Intersecting masks sets this when a fade belongs to an outer mask whose
+    /// edge lies beyond the intersected bounds, so content clipped by a nested mask keeps
+    /// the outer ramp instead of losing it. Device-pixel snapping of `bounds` can make a
+    /// scaled outset slightly negative, which keeps the ramp at its unsnapped position.
+    pub fade_outset: Edges<P>,
+    /// Corner radii of a rounded clip. Content outside the rounded rectangle is clipped
+    /// per pixel with an antialiased edge. All zero leaves the mask rectangular.
+    ///
+    /// Hit testing, backdrop filters and filter layers only use the rectangular `bounds`.
+    pub corner_radii: Corners<P>,
+    /// How far outside `bounds` the edges of the rectangle rounded by `corner_radii` lie.
+    /// Zero rounds `bounds` itself. Intersecting masks sets this when the rounded rectangle
+    /// belongs to an outer mask that extends beyond the intersected bounds.
+    pub corner_outset: Edges<P>,
+}
+
+/// One edge's fade ramp in inward-facing coordinates: opacity rises from 0 at `start` to
+/// 1 at `end`.
+#[derive(Clone, Copy)]
+struct FadeRamp {
+    start: f32,
+    end: f32,
+}
+
+impl FadeRamp {
+    fn new(clip_edge: f32, fade: f32, outset: f32) -> Option<Self> {
+        (fade > 0.).then(|| {
+            let start = clip_edge - outset;
+            Self {
+                start,
+                end: start + fade,
+            }
+        })
+    }
+
+    /// Combine the ramps of two nested masks at a shared edge whose clip lies at
+    /// `clip_edge`. A ramp that is fully opaque by the clip edge no longer affects anything
+    /// and is dropped. When both still matter, the exact result would be their product,
+    /// which is not a single ramp; the combined ramp starts where the later one starts, so
+    /// it is still transparent at the clip, and ends where the later one ends, so it is
+    /// opaque only where both are. Ramps sharing a start therefore keep the stronger fade.
+    fn intersect(a: Option<Self>, b: Option<Self>, clip_edge: f32) -> Option<Self> {
+        let a = a.filter(|ramp| ramp.end > clip_edge);
+        let b = b.filter(|ramp| ramp.end > clip_edge);
+        match (a, b) {
+            (Some(a), Some(b)) => Some(Self {
+                start: a.start.max(b.start),
+                end: a.end.max(b.end),
+            }),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Returns the `(fade_out, fade_outset)` pair for this ramp at `clip_edge`.
+    fn distances(ramp: Option<Self>, clip_edge: f32) -> (f32, f32) {
+        ramp.map_or((0., 0.), |ramp| {
+            (ramp.end - ramp.start, clip_edge - ramp.start)
+        })
+    }
 }
 
 impl ContentMask<Pixels> {
@@ -2176,65 +2261,142 @@ impl ContentMask<Pixels> {
         ContentMask {
             bounds: self.bounds.scale(factor),
             fade_out: self.fade_out.scale(factor),
-        }
-    }
-
-    /// Intersect the content mask with the given content mask.
-    ///
-    /// For each edge, the mask that actually clips at that edge contributes its
-    /// fade; when both masks clip at the same coordinate, the stronger fade wins.
-    pub fn intersect(&self, other: &Self) -> Self {
-        fn edge_fade(
-            a: Pixels,
-            b: Pixels,
-            a_fade: Pixels,
-            b_fade: Pixels,
-            a_clips_closer: impl Fn(Pixels, Pixels) -> bool,
-        ) -> Pixels {
-            if a_clips_closer(a, b) {
-                a_fade
-            } else if a_clips_closer(b, a) {
-                b_fade
-            } else {
-                a_fade.max(b_fade)
-            }
-        }
-
-        ContentMask {
-            bounds: self.bounds.intersect(&other.bounds),
-            fade_out: Edges {
-                top: edge_fade(
-                    self.bounds.top(),
-                    other.bounds.top(),
-                    self.fade_out.top,
-                    other.fade_out.top,
-                    |a, b| a > b,
-                ),
-                right: edge_fade(
-                    self.bounds.right(),
-                    other.bounds.right(),
-                    self.fade_out.right,
-                    other.fade_out.right,
-                    |a, b| a < b,
-                ),
-                bottom: edge_fade(
-                    self.bounds.bottom(),
-                    other.bounds.bottom(),
-                    self.fade_out.bottom,
-                    other.fade_out.bottom,
-                    |a, b| a < b,
-                ),
-                left: edge_fade(
-                    self.bounds.left(),
-                    other.bounds.left(),
-                    self.fade_out.left,
-                    other.fade_out.left,
-                    |a, b| a > b,
-                ),
-            },
+            fade_outset: self.fade_outset.scale(factor),
+            corner_radii: self.corner_radii.scale(factor),
+            corner_outset: self.corner_outset.scale(factor),
         }
     }
 }
+
+macro_rules! impl_content_mask_intersect {
+    ($unit:ident) => {
+        impl ContentMask<$unit> {
+            /// Intersect the content mask with the given content mask.
+            ///
+            /// Each mask's edge fades keep their position in window space, so content inside
+            /// an outer mask's fade band stays faded when a nested mask clips it. When both
+            /// masks fade the same edge, the result is transparent at the clip edge and opaque
+            /// only past both ramps; ramps that share a start keep the stronger fade.
+            ///
+            /// A mask holds a single rounded rectangle. Rounded corners that cannot reach
+            /// the intersected bounds are dropped; if both masks still have reachable rounded
+            /// corners, `self`'s are kept and `other` only clips to its rectangle.
+            pub fn intersect(&self, other: &Self) -> Self {
+                // Clip edges measured inward, in `Edges` order: top, right, bottom, left.
+                fn clip_edges(bounds: &Bounds<$unit>) -> [f32; 4] {
+                    [
+                        bounds.top().0,
+                        -bounds.right().0,
+                        -bounds.bottom().0,
+                        bounds.left().0,
+                    ]
+                }
+                fn edge_values(edges: &Edges<$unit>) -> [f32; 4] {
+                    [edges.top.0, edges.right.0, edges.bottom.0, edges.left.0]
+                }
+                fn ramps(mask: &ContentMask<$unit>) -> [Option<FadeRamp>; 4] {
+                    let clips = clip_edges(&mask.bounds);
+                    let fades = edge_values(&mask.fade_out);
+                    let outsets = edge_values(&mask.fade_outset);
+                    std::array::from_fn(|edge| {
+                        FadeRamp::new(clips[edge], fades[edge], outsets[edge])
+                    })
+                }
+
+                // Zeroes every corner whose rounding cannot reach `bounds`: a corner's
+                // rounding stays inside the square its radius spans at that corner.
+                fn reachable_corner_radii(
+                    rounded: &Bounds<$unit>,
+                    radii: &Corners<$unit>,
+                    bounds: &Bounds<$unit>,
+                ) -> Corners<$unit> {
+                    let reachable = |radius: $unit, left: $unit, top: $unit| {
+                        if radius > $unit(0.)
+                            && Bounds::new(point(left, top), size(radius, radius))
+                                .intersects(bounds)
+                        {
+                            radius
+                        } else {
+                            $unit(0.)
+                        }
+                    };
+                    let (left, top) = (rounded.left(), rounded.top());
+                    let (right, bottom) = (rounded.right(), rounded.bottom());
+                    Corners {
+                        top_left: reachable(radii.top_left, left, top),
+                        top_right: reachable(radii.top_right, right - radii.top_right, top),
+                        bottom_right: reachable(
+                            radii.bottom_right,
+                            right - radii.bottom_right,
+                            bottom - radii.bottom_right,
+                        ),
+                        bottom_left: reachable(radii.bottom_left, left, bottom - radii.bottom_left),
+                    }
+                }
+                fn rounded_bounds(mask: &ContentMask<$unit>) -> Bounds<$unit> {
+                    let outset = &mask.corner_outset;
+                    Bounds::from_corners(
+                        point(
+                            mask.bounds.left() - outset.left,
+                            mask.bounds.top() - outset.top,
+                        ),
+                        point(
+                            mask.bounds.right() + outset.right,
+                            mask.bounds.bottom() + outset.bottom,
+                        ),
+                    )
+                }
+
+                let bounds = self.bounds.intersect(&other.bounds);
+                let (corner_radii, corner_outset) = [self, other]
+                    .into_iter()
+                    .find_map(|mask| {
+                        let rounded = rounded_bounds(mask);
+                        let radii = reachable_corner_radii(&rounded, &mask.corner_radii, &bounds);
+                        (radii != Corners::default()).then(|| {
+                            let outset = Edges {
+                                top: bounds.top() - rounded.top(),
+                                right: rounded.right() - bounds.right(),
+                                bottom: rounded.bottom() - bounds.bottom(),
+                                left: bounds.left() - rounded.left(),
+                            };
+                            (radii, outset)
+                        })
+                    })
+                    .unwrap_or_default();
+
+                let clips = clip_edges(&bounds);
+                let (self_ramps, other_ramps) = (ramps(self), ramps(other));
+                let [top, right, bottom, left] = std::array::from_fn(|edge| {
+                    let ramp =
+                        FadeRamp::intersect(self_ramps[edge], other_ramps[edge], clips[edge]);
+                    FadeRamp::distances(ramp, clips[edge])
+                });
+
+                ContentMask {
+                    bounds,
+                    fade_out: Edges {
+                        top: $unit(top.0),
+                        right: $unit(right.0),
+                        bottom: $unit(bottom.0),
+                        left: $unit(left.0),
+                    },
+                    fade_outset: Edges {
+                        top: $unit(top.1),
+                        right: $unit(right.1),
+                        bottom: $unit(bottom.1),
+                        left: $unit(left.1),
+                    },
+                    corner_radii,
+                    corner_outset,
+                }
+            }
+        }
+    };
+}
+
+impl_content_mask_intersect!(Pixels);
+impl_content_mask_intersect!(ScaledPixels);
 
 #[cfg(test)]
 mod content_mask_tests {
@@ -2247,17 +2409,142 @@ mod content_mask_tests {
                 left: px(fade_left),
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 
     #[test]
-    fn intersect_keeps_only_the_fade_at_the_visible_edge() {
+    fn intersect_drops_fades_that_end_before_the_clip() {
         let outer = mask(0., 100., 20.);
         let inner = mask(30., 40., 0.);
-        assert_eq!(outer.intersect(&inner).fade_out.left, px(0.));
+        let intersection = outer.intersect(&inner);
+        assert_eq!(intersection.fade_out, Edges::default());
+        assert_eq!(intersection.fade_outset, Edges::default());
 
         let child = mask(0., 40., 0.);
         assert_eq!(outer.intersect(&child).fade_out.left, px(20.));
+        assert_eq!(outer.intersect(&child).fade_outset.left, px(0.));
+    }
+
+    #[test]
+    fn nested_clip_inside_a_fade_band_keeps_the_outer_ramp() {
+        let outer = mask(0., 100., 20.);
+        let inner = mask(10., 50., 0.);
+        for intersection in [outer.intersect(&inner), inner.intersect(&outer)] {
+            assert_eq!(intersection.bounds.left(), px(10.));
+            // The ramp still runs from x = 0 to x = 20.
+            assert_eq!(intersection.fade_out.left, px(20.));
+            assert_eq!(intersection.fade_outset.left, px(10.));
+        }
+
+        // Nesting again keeps the original ramp.
+        let innermost = mask(15., 10., 0.);
+        let nested = outer.intersect(&inner).intersect(&innermost);
+        assert_eq!(nested.fade_out.left, px(20.));
+        assert_eq!(nested.fade_outset.left, px(15.));
+    }
+
+    #[test]
+    fn inner_fade_survives_a_closer_outer_clip() {
+        let outer = mask(10., 100., 0.);
+        let inner = mask(0., 50., 20.);
+        let intersection = inner.intersect(&outer);
+        assert_eq!(intersection.bounds.left(), px(10.));
+        assert_eq!(intersection.fade_out.left, px(20.));
+        assert_eq!(intersection.fade_outset.left, px(10.));
+    }
+
+    #[test]
+    fn overlapping_fades_combine_into_one_ramp() {
+        // Shared edges keep the stronger fade.
+        let a = mask(0., 100., 20.);
+        let b = mask(0., 100., 8.);
+        assert_eq!(a.intersect(&b).fade_out.left, px(20.));
+        assert_eq!(b.intersect(&a).fade_out.left, px(20.));
+
+        // Staggered ramps run from the later start to the later end.
+        let outer = mask(0., 100., 20.);
+        let inner = mask(10., 100., 5.);
+        let intersection = outer.intersect(&inner);
+        assert_eq!(intersection.fade_out.left, px(10.));
+        assert_eq!(intersection.fade_outset.left, px(0.));
+    }
+
+    fn rounded(left: f32, top: f32, width: f32, height: f32, radius: f32) -> ContentMask<Pixels> {
+        ContentMask {
+            bounds: Bounds::new(point(px(left), px(top)), size(px(width), px(height))),
+            corner_radii: Corners::all(px(radius)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn nested_clip_keeps_reachable_rounded_corners() {
+        let card = rounded(0., 0., 100., 100., 10.);
+        // A full-width row 5px from the card's top still meets both top corners.
+        let row = rounded(0., 5., 100., 20., 0.);
+        for intersection in [row.intersect(&card), card.intersect(&row)] {
+            assert_eq!(
+                intersection.corner_radii,
+                Corners {
+                    top_left: px(10.),
+                    top_right: px(10.),
+                    ..Default::default()
+                }
+            );
+            assert_eq!(
+                intersection.corner_outset,
+                Edges {
+                    top: px(5.),
+                    bottom: px(75.),
+                    ..Default::default()
+                }
+            );
+        }
+
+        // A row away from the corners drops the rounding entirely.
+        let middle_row = rounded(0., 40., 100., 20., 0.);
+        let intersection = middle_row.intersect(&card);
+        assert_eq!(intersection.corner_radii, Corners::default());
+        assert_eq!(intersection.corner_outset, Edges::default());
+    }
+
+    #[test]
+    fn inner_rounded_mask_wins_when_both_reach() {
+        let card = rounded(0., 0., 100., 100., 10.);
+        let avatar = rounded(0., 0., 40., 40., 20.);
+        let intersection = avatar.intersect(&card);
+        assert_eq!(intersection.bounds, avatar.bounds);
+        assert_eq!(intersection.corner_radii, Corners::all(px(20.)));
+        assert_eq!(intersection.corner_outset, Edges::default());
+
+        // The outer rounding is used when the inner mask's corners are out of reach.
+        let wide = rounded(-50., -50., 200., 200., 20.);
+        let intersection = wide.intersect(&card);
+        assert_eq!(intersection.corner_radii, Corners::all(px(10.)));
+    }
+
+    #[test]
+    fn far_edges_are_measured_inward() {
+        let outer = ContentMask {
+            bounds: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+            fade_out: Edges {
+                right: px(20.),
+                bottom: px(20.),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let inner = ContentMask {
+            bounds: Bounds::new(point(px(0.), px(0.)), size(px(90.), px(70.))),
+            ..Default::default()
+        };
+        let intersection = outer.intersect(&inner);
+        assert_eq!(intersection.fade_out.right, px(20.));
+        assert_eq!(intersection.fade_outset.right, px(10.));
+        // The bottom ramp ends at y = 80, past the inner clip at y = 70.
+        assert_eq!(intersection.fade_out.bottom, Pixels::ZERO);
+        assert_eq!(intersection.fade_outset.bottom, Pixels::ZERO);
     }
 }
 
@@ -3119,9 +3406,84 @@ impl Window {
     #[inline]
     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
         let mask = self.content_mask();
+        let scale_factor = self.scale_factor();
+        let bounds = self.cover_bounds(mask.bounds);
+        // Snapping only widens the hard clip; fade ramps keep their layout position so
+        // nested masks continue each other's ramps exactly. `outward` is the direction
+        // pointing out of the mask along the edge's axis.
+        let outset = |fade: Pixels, snapped_edge: ScaledPixels, ramp_start: Pixels, outward| {
+            if fade > Pixels::ZERO {
+                ScaledPixels((ramp_start.0 * scale_factor - snapped_edge.0) * outward)
+            } else {
+                ScaledPixels(0.)
+            }
+        };
+        let fade = mask.fade_out;
+        let fade_outset = mask.fade_outset;
         ContentMask {
-            bounds: self.cover_bounds(mask.bounds),
-            fade_out: mask.fade_out.scale(self.scale_factor()),
+            bounds,
+            fade_out: fade.scale(scale_factor),
+            fade_outset: Edges {
+                top: outset(
+                    fade.top,
+                    bounds.top(),
+                    mask.bounds.top() - fade_outset.top,
+                    -1.,
+                ),
+                right: outset(
+                    fade.right,
+                    bounds.right(),
+                    mask.bounds.right() + fade_outset.right,
+                    1.,
+                ),
+                bottom: outset(
+                    fade.bottom,
+                    bounds.bottom(),
+                    mask.bounds.bottom() + fade_outset.bottom,
+                    1.,
+                ),
+                left: outset(
+                    fade.left,
+                    bounds.left(),
+                    mask.bounds.left() - fade_outset.left,
+                    -1.,
+                ),
+            },
+            ..self.snapped_corners(&mask, bounds)
+        }
+    }
+
+    /// The rounded corners of `mask`, relative to its snapped `bounds`. The rounded
+    /// rectangle snaps like painted quads do, so a rounded clip matching an element's
+    /// background follows the same contour.
+    fn snapped_corners(
+        &self,
+        mask: &ContentMask<Pixels>,
+        bounds: Bounds<ScaledPixels>,
+    ) -> ContentMask<ScaledPixels> {
+        if mask.corner_radii == Corners::default() {
+            return ContentMask::default();
+        }
+        let outset = &mask.corner_outset;
+        let rounded = self.snap_bounds(Bounds::from_corners(
+            point(
+                mask.bounds.left() - outset.left,
+                mask.bounds.top() - outset.top,
+            ),
+            point(
+                mask.bounds.right() + outset.right,
+                mask.bounds.bottom() + outset.bottom,
+            ),
+        ));
+        ContentMask {
+            corner_radii: mask.corner_radii.scale(self.scale_factor()),
+            corner_outset: Edges {
+                top: bounds.top() - rounded.top(),
+                right: rounded.right() - bounds.right(),
+                bottom: rounded.bottom() - bounds.bottom(),
+                left: bounds.left() - rounded.left(),
+            },
+            ..ContentMask::default()
         }
     }
 
@@ -3391,13 +3753,65 @@ impl Window {
         self.invalidator.replace_views(views);
     }
 
+    /// Lets native child surfaces composite between GPUI's content and its overlays.
+    ///
+    /// Once enabled, the window is drawn as two planes. The base plane holds the root view's
+    /// paint. The overlay plane holds everything painted above it: deferred draws (menus and
+    /// popovers), prompts, drag previews, tooltips and the inspector. Native children mounted
+    /// through [`Self::native_composition`] sit between the two, so GPUI menus can open over an
+    /// embedded web view. While deferred draws, a prompt or a drag preview are visible, the
+    /// platform routes pointer input to GPUI instead of the native children; passive tooltips do
+    /// not take input away from them.
+    ///
+    /// Supported on macOS with the Metal renderer and on Windows with DirectComposition; other
+    /// configurations return an error. Calling this again once it has succeeded is a no-op.
+    pub fn enable_scene_overlay(&self) -> anyhow::Result<()> {
+        self.platform_window.enable_scene_overlay()
+    }
+
+    /// Where native child surfaces mount, beneath GPUI's overlay plane, once
+    /// [`Self::enable_scene_overlay`] has succeeded.
+    pub fn native_composition(&self) -> Option<crate::NativeComposition> {
+        self.platform_window.native_composition()
+    }
+
+    /// Registers a callback that runs when the frame being painted is presented,
+    /// immediately before its scene is handed to the platform for drawing.
+    ///
+    /// Use this to keep state outside of GPUI's scene — such as the frame of a
+    /// native child view positioned by an element — in step with the pixels on
+    /// screen. Painting alone is not a reliable signal: a frame can be painted
+    /// and then superseded before it is ever shown, and cached views reuse
+    /// their previous paint without running it again. Callbacks registered here
+    /// are dropped with a superseded frame and carried over when a view's
+    /// paint is reused, exactly like its drawing primitives.
+    ///
+    /// The same frame can be presented more than once (for example, to keep
+    /// the display clocked up during rapid input), so callbacks should apply
+    /// state idempotently rather than accumulate it.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn on_present(&mut self, callback: impl Fn() + 'static) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame
+            .presentation_callbacks
+            .push(Rc::new(callback));
+    }
+
     #[profiling::function]
     fn present(&mut self) {
         #[cfg(feature = "profiler")]
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
-        self.platform_window.draw(&self.rendered_frame.scene);
+        for callback in &self.rendered_frame.presentation_callbacks {
+            callback();
+        }
+        self.platform_window.draw_layered(
+            &self.rendered_frame.scene,
+            self.rendered_frame.overlay_scene_start,
+            self.rendered_frame.overlay_captures_input,
+        );
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
             present_start,
@@ -3533,6 +3947,20 @@ impl Window {
         // Now actually paint the elements.
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
+
+        // Everything painted from here on (inspector, deferred draws, prompt, drag preview,
+        // tooltip) composites above native child surfaces when the platform supports a scene
+        // overlay. This plane split is adapted from the Apache-2.0 GPUI fork at
+        // https://github.com/egoist/zed (57bd4fe). Interactive overlay content takes pointer
+        // input from those surfaces; a passive tooltip must not, merely because it is visible.
+        debug_assert!(
+            !self.next_frame.scene.is_in_filter_group(),
+            "root paint left a filter group open"
+        );
+        self.next_frame.overlay_scene_start = self.next_frame.scene.len();
+        self.next_frame.overlay_captures_input = !self.next_frame.deferred_draws.is_empty()
+            || prompt_element.is_some()
+            || active_drag_element.is_some();
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector(inspector_element, cx);
@@ -3844,6 +4272,7 @@ impl Window {
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
+            presentation_callbacks_index: self.next_frame.presentation_callbacks.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             pointer_observers_index: self.next_frame.pointer_observers.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
@@ -3855,6 +4284,12 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        self.next_frame.presentation_callbacks.extend(
+            self.rendered_frame.presentation_callbacks
+                [range.start.presentation_callbacks_index..range.end.presentation_callbacks_index]
+                .iter()
+                .cloned(),
+        );
         Rc::make_mut(&mut self.next_frame.pointer_observers).extend(
             self.rendered_frame.pointer_observers
                 [range.start.pointer_observers_index..range.end.pointer_observers_index]
@@ -4002,6 +4437,33 @@ impl Window {
         }
     }
 
+    /// Invoke the given function with painting clipped to `bounds` with rounded corners,
+    /// intersected with the current content mask. This method should only be called during
+    /// element drawing.
+    ///
+    /// Every primitive that applies the content mask per pixel (quads, shadows, text,
+    /// underlines, images, SVGs, paths and surfaces) is clipped to the rounded rectangle
+    /// with an antialiased edge, so content scrolling inside a rounded container never
+    /// shows past its corners. Hit testing, backdrop filters and filter layers only clip to
+    /// the rectangular bounds. A content mask holds one rounded rectangle: when this clip
+    /// and an enclosing rounded clip both reach the painted region, this one is kept and
+    /// the enclosing one clips to its rectangle only.
+    pub fn with_rounded_clip<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: impl Into<Corners<Pixels>>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_content_mask(
+            Some(ContentMask {
+                bounds,
+                corner_radii: corner_radii.into(),
+                ..Default::default()
+            }),
+            f,
+        )
+    }
+
     /// Updates the global element offset relative to the current offset. This is used to implement
     /// scrolling. This method should only be called during the prepaint phase of element drawing.
     pub fn with_element_offset<R>(
@@ -4070,7 +4532,7 @@ impl Window {
             bounds,
             content_mask: ContentMask {
                 bounds,
-                fade_out: Edges::default(),
+                ..Default::default()
             },
             corner_radii: Corners::default(),
             corner_smoothing: 0.0,
@@ -4755,13 +5217,14 @@ impl Window {
         ];
 
         for strip in strips {
-            let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
-            if !content_mask_bounds.is_empty() {
+            // Narrowing the mask to the strip keeps its edge fades in place.
+            let content_mask = quad.content_mask.intersect(&ContentMask {
+                bounds: strip,
+                ..Default::default()
+            });
+            if !content_mask.bounds.is_empty() {
                 self.next_frame.scene.insert_primitive(Quad {
-                    content_mask: ContentMask {
-                        bounds: content_mask_bounds,
-                        ..Default::default()
-                    },
+                    content_mask,
                     ..quad
                 });
             }
@@ -4886,7 +5349,53 @@ impl Window {
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, color)
+        self.paint_glyph_from_atlas(integer_origin, params, color, None)
+    }
+
+    /// Paints a monochrome glyph like [`Self::paint_glyph`], transformed by `transformation`
+    /// when composited and blurred by a gaussian whose standard deviation is `blur_radius`.
+    ///
+    /// The transformation applies to the glyph's quad in device pixels, so it can scale or
+    /// rotate the glyph about any point without rasterizing it again: animating it never
+    /// adds atlas entries. The blur applies before the transformation. The glyph always
+    /// renders as a grayscale mask, since subpixel masks cannot be transformed or blurred.
+    /// Color glyphs, such as emoji, are painted without the transformation or blur.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_glyph_transformed(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+        transformation: TransformationMatrix,
+        blur_radius: Pixels,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let scale_factor = self.scale_factor();
+        let (integer_origin, subpixel_variant) = quantize_glyph_origin(origin.scale(scale_factor));
+        let raster_style = self.text_system().prepare_raster_style(
+            font_id,
+            glyph_id,
+            color,
+            GlyphRenderMode::Grayscale,
+        );
+        let params = RenderGlyphParams {
+            font_id,
+            glyph_id,
+            font_size,
+            subpixel_variant,
+            scale_factor,
+            raster_style,
+        };
+        let effect = GlyphEffect {
+            transformation,
+            blur_radius: blur_radius.scale(scale_factor).max(ScaledPixels(0.)),
+        };
+
+        self.paint_glyph_from_atlas(integer_origin, params, color, Some(effect))
     }
 
     fn paint_glyph_from_atlas(
@@ -4894,6 +5403,7 @@ impl Window {
         integer_origin: Point<ScaledPixels>,
         params: RenderGlyphParams,
         mask_color: Hsla,
+        effect: Option<GlyphEffect>,
     ) -> Result<()> {
         let text_system = self.text_system().clone();
         let entry = self
@@ -4910,11 +5420,11 @@ impl Window {
         };
         let content_mask = self.snapped_content_mask();
 
-        match entry.format {
-            RasterizedGlyphFormat::AlphaMask => {
+        match (entry.format, effect) {
+            (RasterizedGlyphFormat::AlphaMask, None) => {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
-                    padding: 0,
+                    blur_radius: ScaledPixels(0.),
                     bounds,
                     content_mask,
                     color: mask_color.into(),
@@ -4922,7 +5432,24 @@ impl Window {
                     transformation: TransformationMatrix::unit(),
                 });
             }
-            RasterizedGlyphFormat::BgraSubpixelMask => {
+            // The monochrome pipeline reads one channel of a subpixel mask, should a
+            // rasterizer return one despite the grayscale request.
+            (
+                RasterizedGlyphFormat::AlphaMask | RasterizedGlyphFormat::BgraSubpixelMask,
+                Some(effect),
+            ) => {
+                let margin = MonochromeSprite::blur_margin(effect.blur_radius);
+                self.next_frame.scene.insert_primitive(MonochromeSprite {
+                    order: 0,
+                    blur_radius: effect.blur_radius,
+                    bounds: bounds.dilate(margin),
+                    content_mask,
+                    color: mask_color.into(),
+                    tile,
+                    transformation: effect.transformation,
+                });
+            }
+            (RasterizedGlyphFormat::BgraSubpixelMask, None) => {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,
                     padding: 0,
@@ -4933,7 +5460,7 @@ impl Window {
                     transformation: TransformationMatrix::unit(),
                 });
             }
-            RasterizedGlyphFormat::BgraColor => {
+            (RasterizedGlyphFormat::BgraColor, _) => {
                 self.next_frame.scene.insert_primitive(PolychromeSprite {
                     order: 0,
                     grayscale: false.into(),
@@ -5023,7 +5550,7 @@ impl Window {
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, color)
+        self.paint_glyph_from_atlas(integer_origin, params, color, None)
     }
 
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
@@ -5079,7 +5606,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            padding: 0,
+            blur_radius: ScaledPixels(0.),
             bounds: final_bounds,
             content_mask,
             color: color.into(),
@@ -8399,6 +8926,87 @@ mod tests {
         );
     }
 
+    struct TransformedGlyphView;
+
+    fn glyph_rotation() -> TransformationMatrix {
+        TransformationMatrix::unit().rotate(crate::radians(0.5))
+    }
+
+    impl Render for TransformedGlyphView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    let origin = point(px(20.), px(20.));
+                    let color = hsla(0.6, 0.7, 0.4, 1.);
+                    window
+                        .paint_glyph(origin, FontId(7), GlyphId(1), px(16.), color)
+                        .unwrap();
+                    window
+                        .paint_glyph_transformed(
+                            origin,
+                            FontId(7),
+                            GlyphId(1),
+                            px(16.),
+                            color,
+                            glyph_rotation(),
+                            px(2.),
+                        )
+                        .unwrap();
+                    // Color glyphs ignore the effect.
+                    window
+                        .paint_glyph_transformed(
+                            origin,
+                            FontId(7),
+                            GlyphId(3),
+                            px(16.),
+                            color,
+                            glyph_rotation(),
+                            px(2.),
+                        )
+                        .unwrap();
+                },
+            )
+            .size_full()
+        }
+    }
+
+    #[test]
+    fn transformed_glyphs_carry_their_transformation_and_blur() {
+        let text_system = Arc::new(RasterFormatTextSystem::default());
+        let mut app = TestApp::with_text_system(text_system.clone());
+        let mut test_window = app.open_window(|_, _| TransformedGlyphView);
+        test_window.draw();
+
+        test_window.update(|_, window, _| {
+            let scale = window.scale_factor();
+            let scene = &window.rendered_frame.scene;
+            assert_eq!(scene.monochrome_sprites.len(), 2);
+            let [plain, transformed] = [&scene.monochrome_sprites[0], &scene.monochrome_sprites[1]];
+
+            assert_eq!(plain.blur_radius, ScaledPixels(0.));
+            assert_eq!(plain.transformation, TransformationMatrix::unit());
+            assert_eq!(transformed.blur_radius, ScaledPixels(2. * scale));
+            assert_eq!(transformed.transformation, glyph_rotation());
+            assert_eq!(
+                transformed.bounds,
+                plain.bounds.dilate(ScaledPixels(6. * scale)),
+                "the quad leaves room for three standard deviations of blur"
+            );
+            assert_eq!(transformed.tile.bounds.size, plain.tile.bounds.size);
+
+            assert_eq!(scene.polychrome_sprites.len(), 1);
+        });
+
+        let rasterized = text_system.rasterized.lock().unwrap();
+        assert!(
+            rasterized
+                .iter()
+                .filter(|params| params.glyph_id == GlyphId(1))
+                .any(|params| params.raster_style.mode == GlyphRenderMode::Grayscale)
+        );
+    }
+
     struct FragmentFailureView;
 
     impl Render for FragmentFailureView {
@@ -8623,6 +9231,179 @@ mod tests {
             .unwrap();
     }
 
+    fn left_and_top_fade_mask() -> ContentMask<Pixels> {
+        ContentMask {
+            bounds: Bounds::new(point(px(0.), px(0.)), size(px(200.), px(200.))),
+            fade_out: Edges {
+                top: px(20.),
+                left: px(20.),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    struct FadedOutlineView;
+
+    impl Render for FadedOutlineView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            canvas(
+                |_, _, _| {},
+                |_, _, window, _| {
+                    window.with_content_mask(Some(left_and_top_fade_mask()), |window| {
+                        window.paint_quad(
+                            PaintQuad::new(Bounds::new(
+                                point(px(10.), px(10.)),
+                                size(px(100.), px(100.)),
+                            ))
+                            .border_widths(2.)
+                            .border_color(crate::white()),
+                        );
+                    });
+                },
+            )
+            .size_full()
+        }
+    }
+
+    #[gpui::test]
+    fn border_only_quads_keep_their_edge_fades(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| FadedOutlineView);
+        window
+            .update(cx, |_, window, _| {
+                let scale = window.scale_factor();
+                let quads = &window.rendered_frame.scene.quads;
+                assert_eq!(quads.len(), 4, "the outline should be split into strips");
+
+                let expected_mask = left_and_top_fade_mask().scale(scale);
+                for quad in quads {
+                    let expected = expected_mask.intersect(&ContentMask {
+                        bounds: quad.content_mask.bounds,
+                        ..Default::default()
+                    });
+                    assert_eq!(quad.content_mask, expected);
+                }
+
+                // The strips along the faded edges keep the full 20px ramps, anchored at
+                // the window edge rather than at the strip.
+                let left_strip = quads
+                    .iter()
+                    .find(|quad| {
+                        quad.content_mask.bounds.left() == quad.bounds.left()
+                            && quad.content_mask.bounds.size.width < quad.bounds.size.width
+                    })
+                    .expect("left strip");
+                assert_eq!(
+                    left_strip.content_mask.fade_out.left,
+                    ScaledPixels(20. * scale)
+                );
+                assert_eq!(
+                    left_strip.content_mask.fade_outset.left,
+                    ScaledPixels(10. * scale)
+                );
+                let top_strip = quads
+                    .iter()
+                    .find(|quad| quad.content_mask.bounds.top() == quad.bounds.top())
+                    .expect("top strip");
+                assert_eq!(
+                    top_strip.content_mask.fade_out.top,
+                    ScaledPixels(20. * scale)
+                );
+                assert_eq!(
+                    top_strip.content_mask.fade_out.left,
+                    ScaledPixels(20. * scale)
+                );
+            })
+            .unwrap();
+    }
+
+    struct RoundedClipView;
+
+    impl Render for RoundedClipView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            canvas(
+                |_, _, _| {},
+                |_, _, window, _| {
+                    let card = Bounds::new(point(px(10.3), px(10.)), size(px(100.), px(80.)));
+                    window.with_rounded_clip(card, px(12.), |window| {
+                        // A hard clip in the card's top-left corner keeps that corner.
+                        let row = Bounds::new(point(px(0.), px(14.)), size(px(60.), px(20.)));
+                        window.with_content_mask(
+                            Some(ContentMask {
+                                bounds: row,
+                                ..Default::default()
+                            }),
+                            |window| {
+                                window.paint_quad(PaintQuad::new(row).background(crate::white()))
+                            },
+                        );
+                    });
+                },
+            )
+            .size_full()
+        }
+    }
+
+    #[gpui::test]
+    fn rounded_clips_reach_painted_primitives(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedClipView);
+        window
+            .update(cx, |_, window, _| {
+                let scale = window.scale_factor();
+                let quads = &window.rendered_frame.scene.quads;
+                assert_eq!(quads.len(), 1);
+                let mask = quads[0].content_mask;
+                assert_eq!(
+                    mask.corner_radii,
+                    Corners {
+                        top_left: ScaledPixels(12. * scale),
+                        ..Default::default()
+                    }
+                );
+                // The rounded rectangle is the card, snapped like a painted quad.
+                let card = window.snap_bounds(Bounds::new(
+                    point(px(10.3), px(10.)),
+                    size(px(100.), px(80.)),
+                ));
+                assert_eq!(mask.bounds.left() - mask.corner_outset.left, card.left());
+                assert_eq!(mask.bounds.top() - mask.corner_outset.top, card.top());
+                assert_eq!(mask.bounds.right() + mask.corner_outset.right, card.right());
+                assert_eq!(
+                    mask.bounds.bottom() + mask.corner_outset.bottom,
+                    card.bottom()
+                );
+            })
+            .unwrap();
+    }
+
+    struct RoundedOverflowView;
+
+    impl Render for RoundedOverflowView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size(px(80.))
+                .rounded(px(16.))
+                .overflow_hidden()
+                .child(div().size_full().bg(crate::blue()))
+        }
+    }
+
+    #[gpui::test]
+    fn hidden_overflow_clips_children_to_rounded_corners(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedOverflowView);
+        window
+            .update(cx, |_, window, _| {
+                let scale = window.scale_factor();
+                let quads = &window.rendered_frame.scene.quads;
+                assert_eq!(quads.len(), 1);
+                assert_eq!(
+                    quads[0].content_mask.corner_radii,
+                    Corners::all(ScaledPixels(16. * scale))
+                );
+            })
+            .unwrap();
+    }
+
     struct OpensWindowOnPaint {
         opened: Rc<Cell<bool>>,
     }
@@ -8765,6 +9546,61 @@ mod tests {
             test_window.frame_wake_count() > baseline || callback_ran.get(),
             "a frame request with pending next-frame callbacks must either run them or re-arm the frame source"
         );
+    }
+
+    /// Platforms with a continuously ticking display clock stop delivering
+    /// frames once a window pauses frame requests, so every source of frame
+    /// demand must resume them and an idle window must pause again.
+    #[gpui::test]
+    fn test_idle_window_pauses_and_resumes_frame_requests(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let mut test_window = cx.test_window(window.into());
+        // Keep the inactive-window frame-rate throttle out of the way.
+        window
+            .update(cx, |_, window, _| window.active.set(true))
+            .unwrap();
+
+        assert!(test_window.simulate_display_tick());
+        assert!(
+            !test_window.simulate_display_tick(),
+            "a clean window must pause frame requests"
+        );
+
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        assert!(
+            test_window.simulate_display_tick(),
+            "notifying a view must resume frame requests"
+        );
+        assert!(!test_window.simulate_display_tick());
+
+        fn animate(window: &Window, remaining: u32, frames: Rc<Cell<u32>>) {
+            window.on_next_frame(move |window, _| {
+                frames.set(frames.get() + 1);
+                window.refresh();
+                if remaining > 1 {
+                    animate(window, remaining - 1, frames);
+                }
+            });
+        }
+        let frames = Rc::new(Cell::new(0));
+        window
+            .update(cx, |_, window, _| animate(window, 3, frames.clone()))
+            .unwrap();
+        for _ in 0..3 {
+            assert!(test_window.simulate_display_tick());
+        }
+        assert_eq!(frames.get(), 3, "every animation frame must be delivered");
+        assert!(
+            !test_window.simulate_display_tick(),
+            "a finished animation must pause frame requests"
+        );
+
+        test_window.simulate_resize(size(px(720.), px(480.)));
+        assert!(
+            test_window.simulate_display_tick(),
+            "resizing must resume frame requests"
+        );
+        assert!(!test_window.simulate_display_tick());
     }
 
     #[gpui::test]
@@ -9677,5 +10513,165 @@ mod tests {
             assert_eq!(renders.get(), initial_renders);
             assert_eq!(paints.get(), initial_paints);
         }
+    }
+
+    struct PresentProbe {
+        desired: Rc<Cell<u32>>,
+        displayed: Rc<Cell<u32>>,
+        calls: Rc<Cell<u32>>,
+        paints: Rc<Cell<u32>>,
+    }
+
+    impl Render for PresentProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let desired = self.desired.get();
+            let displayed = self.displayed.clone();
+            let calls = self.calls.clone();
+            let paints = self.paints.clone();
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    paints.set(paints.get() + 1);
+                    window.on_present(move || {
+                        displayed.set(desired);
+                        calls.set(calls.get() + 1);
+                    });
+                },
+            )
+            .size_full()
+        }
+    }
+
+    #[test]
+    fn native_updates_wait_for_the_presented_frame() {
+        let mut cx = TestAppContext::single();
+        let desired = Rc::new(Cell::new(1));
+        let displayed = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let handle = cx.add_window(|_, _| PresentProbe {
+            desired: desired.clone(),
+            displayed: displayed.clone(),
+            calls: calls.clone(),
+            paints: Rc::default(),
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                displayed.get(),
+                0,
+                "painting a frame must not apply its presentation callbacks"
+            );
+            desired.set(2);
+            window.refresh();
+            window.draw(cx).clear(cx);
+            assert_eq!(displayed.get(), 0);
+            window.present();
+            assert_eq!(
+                displayed.get(),
+                2,
+                "presentation must apply the latest painted frame"
+            );
+            assert_eq!(
+                calls.get(),
+                1,
+                "callbacks from a superseded frame must be discarded"
+            );
+        })
+        .unwrap();
+    }
+
+    struct OverlaySplitView {
+        menu_open: bool,
+    }
+
+    impl Render for OverlaySplitView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .bg(crate::red())
+                .child(div().size(px(10.)).bg(crate::green()))
+                .when(self.menu_open, |root| {
+                    root.child(crate::deferred(
+                        div().size(px(20.)).bg(crate::blue()).opacity(0.5),
+                    ))
+                })
+        }
+    }
+
+    #[test]
+    fn deferred_draws_start_an_input_capturing_overlay() {
+        let mut app = TestApp::new();
+        let mut test_window = app.open_window(|_, _| OverlaySplitView { menu_open: false });
+        test_window.draw();
+        test_window.update(|_, window, _| {
+            let frame = &window.rendered_frame;
+            assert_eq!(frame.overlay_scene_start, frame.scene.len());
+            assert!(!frame.overlay_captures_input);
+        });
+
+        test_window.update(|view, _, cx| {
+            view.menu_open = true;
+            cx.notify();
+        });
+        test_window.draw();
+        test_window.update(|_, window, _| {
+            let frame = &window.rendered_frame;
+            assert!(frame.overlay_scene_start < frame.scene.len());
+            assert!(frame.overlay_captures_input);
+
+            let (base, overlay) = frame.scene.split_at(frame.overlay_scene_start);
+            assert_eq!(base.quads.len(), 2, "root content stays in the base plane");
+            assert_eq!(
+                overlay.quads.len(),
+                1,
+                "deferred content moves to the overlay"
+            );
+            assert_eq!(overlay.filter_boundaries.len(), 2);
+        });
+    }
+
+    struct CachedPresentParent {
+        child: Entity<PresentProbe>,
+    }
+
+    impl Render for CachedPresentParent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size(px(40.)).child(
+                self.child
+                    .clone()
+                    .cached(crate::StyleRefinement::default().size(px(20.))),
+            )
+        }
+    }
+
+    #[test]
+    fn presentation_callbacks_follow_cached_paint_reuse() {
+        let desired = Rc::new(Cell::new(1));
+        let displayed = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
+        let mut app = TestApp::new();
+        let mut test_window = app.open_window(|_, cx| CachedPresentParent {
+            child: cx.new(|_| PresentProbe {
+                desired: desired.clone(),
+                displayed: displayed.clone(),
+                calls: calls.clone(),
+                paints: paints.clone(),
+            }),
+        });
+        test_window.draw();
+        test_window.update(|_, window, _| window.present());
+        assert_eq!((displayed.get(), calls.get()), (1, 1));
+
+        // Redraw only the parent; the cached child replays its previous paint.
+        test_window.update(|_, _, cx| cx.notify());
+        test_window.draw();
+        assert_eq!(paints.get(), 1, "the child's paint should have been reused");
+        test_window.update(|_, window, _| window.present());
+        assert_eq!(
+            (displayed.get(), calls.get()),
+            (1, 2),
+            "a reused paint must keep its presentation callbacks"
+        );
     }
 }

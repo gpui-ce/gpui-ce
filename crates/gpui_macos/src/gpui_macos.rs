@@ -10,6 +10,8 @@ mod display_link;
 mod events;
 mod haptic_feedback;
 mod keyboard;
+#[cfg(not(feature = "wgpu"))]
+mod native_backdrop;
 mod pasteboard;
 mod system_notifications;
 mod text_system;

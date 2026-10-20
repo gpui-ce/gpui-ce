@@ -347,7 +347,13 @@ impl Element for Img {
 
                             let image_size = data.render_size(frame_index);
 
-                            if style.aspect_ratio.is_none() {
+                            // Like CSS, the intrinsic ratio only applies when a dimension is
+                            // auto. Applied over explicit dimensions, it lets layout size the
+                            // image past them.
+                            if style.aspect_ratio.is_none()
+                                && (style.size.width == Length::Auto
+                                    || style.size.height == Length::Auto)
+                            {
                                 style.aspect_ratio = Some(image_size.width / image_size.height);
                             }
 
@@ -582,6 +588,32 @@ impl ImageSource {
             }
             ImageSource::Custom(_) | ImageSource::Render(_) => {}
             ImageSource::Image(data) => cx.remove_asset::<AssetLogger<ImageDecoder>>(data),
+        }
+    }
+
+    /// Remove this image source from the asset system and free the decoded
+    /// image's sprite atlas tiles in every window.
+    ///
+    /// [`Self::remove_asset`] alone leaves the tiles of `Resource` and `Image`
+    /// sources in the atlas: the decoded [`RenderImage`] lives inside the asset
+    /// cache, so callers can't reach [`App::drop_image`] themselves. Pass the
+    /// window currently being updated, if any, since it is absent from the
+    /// app's window list during its own update and would otherwise keep its
+    /// tiles.
+    pub fn evict(&self, window: Option<&mut Window>, cx: &mut App) {
+        let render_image = match self {
+            ImageSource::Resource(resource) => cx
+                .peek_asset::<ImgResourceLoader>(resource)
+                .and_then(Result::ok),
+            ImageSource::Image(data) => cx
+                .peek_asset::<AssetLogger<ImageDecoder>>(data)
+                .and_then(Result::ok),
+            ImageSource::Render(data) => Some(data.clone()),
+            ImageSource::Custom(_) => None,
+        };
+        self.remove_asset(cx);
+        if let Some(image) = render_image {
+            cx.drop_image(image, window);
         }
     }
 
@@ -831,6 +863,96 @@ mod tests {
                 });
             },
         )
+    }
+
+    #[gpui::test]
+    fn evict_frees_cached_image_from_the_atlas(cx: &mut TestAppContext) {
+        let mut png = Vec::new();
+        ImageBuffer::from_pixel(4, 4, Rgba([255u8, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let source = ImageSource::Image(Arc::new(crate::Image::from_bytes(
+            crate::ImageFormat::Png,
+            png,
+        )));
+        let ImageSource::Image(data) = &source else {
+            unreachable!()
+        };
+        let data = data.clone();
+
+        let window = cx.add_empty_window();
+        let _ = window.update(|_, cx| cx.fetch_asset::<AssetLogger<ImageDecoder>>(&data));
+        window.run_until_parked();
+        window.draw(point(px(0.), px(0.)), size(px(10.), px(10.)), |_, _| {
+            img(source.clone()).size(px(4.)).into_any_element()
+        });
+
+        let render_image = window
+            .update(|_, cx| cx.peek_asset::<AssetLogger<ImageDecoder>>(&data))
+            .expect("decoded image should be cached")
+            .expect("image should decode");
+        assert!(window.update(|window, _| window.has_image_atlas_entry(&render_image)));
+
+        window.update(|window, cx| source.evict(Some(window), cx));
+
+        assert!(!window.update(|window, _| window.has_image_atlas_entry(&render_image)));
+        assert!(!window.update(|_, cx| source.is_asset_cached(cx)));
+        assert!(
+            window
+                .update(|_, cx| cx.peek_asset::<AssetLogger<ImageDecoder>>(&data))
+                .is_none()
+        );
+    }
+
+    #[gpui::test]
+    fn intrinsic_aspect_ratio_does_not_override_explicit_dimensions(cx: &mut TestAppContext) {
+        let window = cx.add_empty_window();
+        let layouts: [(&str, fn() -> AnyElement); 2] = [
+            ("full width, fixed height", || {
+                div()
+                    .w(px(100.))
+                    .child(
+                        img(ImageSource::Render(test_image_with_size(100, 400)))
+                            .w_full()
+                            .h(px(60.))
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .into_any_element()
+            }),
+            ("full size in a stretched flex item", || {
+                div()
+                    .flex()
+                    .h(px(60.))
+                    .child(
+                        div().w(px(100.)).child(
+                            img(ImageSource::Render(test_image_with_size(100, 400)))
+                                .size_full()
+                                .object_fit(ObjectFit::Cover),
+                        ),
+                    )
+                    .into_any_element()
+            }),
+        ];
+
+        for (layout, build) in layouts {
+            window.draw(point(px(0.), px(0.)), size(px(300.), px(300.)), |_, _| {
+                build()
+            });
+            let (rendered_size, scale_factor) = window.update(|window, _| {
+                let sprite = window
+                    .rendered_frame
+                    .scene
+                    .polychrome_sprites
+                    .last()
+                    .expect("image should paint a sprite");
+                (sprite.bounds.size, window.scale_factor())
+            });
+            assert_eq!(
+                rendered_size,
+                size(px(100.).scale(scale_factor), px(60.).scale(scale_factor)),
+                "{layout}"
+            );
+        }
     }
 
     #[gpui::test]

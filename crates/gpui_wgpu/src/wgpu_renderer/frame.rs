@@ -10,6 +10,7 @@ use gpui::{
 };
 use gpui_render::TargetStack;
 use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
+use gpui_render::filter_targets::FilterTargets;
 use gpui_render::shaders::{
     common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool},
     interface as shader_interface,
@@ -91,6 +92,13 @@ impl PreparedTargets {
         if !renderer.ensure_uniform_capacity(requirements.uniforms) {
             return None;
         }
+
+        let idle_filter_targets = renderer
+            .filter_target_retention
+            .record_frame(FilterTargets::required_by(&requirements.planned));
+        renderer
+            .resources_mut()
+            .release_filter_textures(idle_filter_targets);
 
         if requirements.planned.uses_path_target {
             renderer.ensure_path_textures();

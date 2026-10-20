@@ -261,6 +261,11 @@ impl WindowFrameSource {
         Ok(())
     }
 
+    /// Whether this source is subscribed to a display's link.
+    pub fn is_running(&self) -> bool {
+        self.registration.is_some()
+    }
+
     pub fn stop(&mut self) {
         if let Some((display_id, subscriber_id)) = self.registration.take() {
             unsubscribe(display_id, subscriber_id);
@@ -402,6 +407,7 @@ mod sys {
             callback: CVDisplayLinkOutputCallback,
             user_info: *mut c_void,
         ) -> i32;
+        pub fn CVDisplayLinkIsRunning(display_link: &DisplayLinkRef) -> u8;
         pub fn CVDisplayLinkStart(display_link: &mut DisplayLinkRef) -> i32;
         pub fn CVDisplayLinkStop(display_link: &mut DisplayLinkRef) -> i32;
         pub fn CVDisplayLinkRelease(display_link: *mut CVDisplayLink);
@@ -443,7 +449,14 @@ mod sys {
         pub unsafe fn start(&mut self) -> Result<()> {
             unsafe {
                 let code = CVDisplayLinkStart(self);
-                anyhow::ensure!(code == 0, "could not start display link, code: {}", code);
+                // Stopping only flags the io thread to exit, so a link stopped and
+                // restarted in quick succession can still report itself running.
+                // That is the state we asked for.
+                anyhow::ensure!(
+                    code == 0 || CVDisplayLinkIsRunning(self) != 0,
+                    "could not start display link, code: {}",
+                    code
+                );
                 Ok(())
             }
         }
@@ -452,7 +465,12 @@ mod sys {
         pub unsafe fn stop(&mut self) -> Result<()> {
             unsafe {
                 let code = CVDisplayLinkStop(self);
-                anyhow::ensure!(code == 0, "could not stop display link, code: {}", code);
+                // The system can stop links on its own, e.g. across display sleep.
+                anyhow::ensure!(
+                    code == 0 || CVDisplayLinkIsRunning(self) == 0,
+                    "could not stop display link, code: {}",
+                    code
+                );
                 Ok(())
             }
         }

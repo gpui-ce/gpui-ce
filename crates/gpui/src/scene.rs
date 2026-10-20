@@ -144,7 +144,7 @@ impl Scene {
         {
             primitive = Primitive::MonochromeSprite(MonochromeSprite {
                 order: sprite.order,
-                padding: sprite.padding,
+                blur_radius: ScaledPixels(0.),
                 bounds: sprite.bounds,
                 content_mask: sprite.content_mask,
                 color: sprite.color,
@@ -247,6 +247,43 @@ impl Scene {
                 PaintOperation::EndLayer => self.pop_layer(),
             }
         }
+    }
+
+    /// Whether any primitive was painted, ignoring layer markers.
+    pub fn has_primitives(&self) -> bool {
+        self.paint_operations
+            .iter()
+            .any(|operation| matches!(operation, PaintOperation::Primitive(_)))
+    }
+
+    /// Splits the paint operations at `index` into two finished scenes: everything painted
+    /// before it, and everything painted from it onwards. Platforms that composite native views
+    /// between GPUI planes draw the halves into separate surfaces.
+    ///
+    /// The split must not fall inside a content-filter group, whose start and end markers would
+    /// otherwise land in different scenes.
+    pub fn split_at(&self, index: usize) -> (Scene, Scene) {
+        let index = index.min(self.len());
+        debug_assert!(
+            self.paint_operations[..index]
+                .iter()
+                .filter_map(|operation| match operation {
+                    PaintOperation::Primitive(Primitive::FilterBoundary(boundary)) => {
+                        Some(if boundary.is_start { 1isize } else { -1 })
+                    }
+                    _ => None,
+                })
+                .sum::<isize>()
+                == 0,
+            "a scene split must not fall inside a filter group"
+        );
+        let mut lower = Scene::default();
+        lower.replay(0..index, self);
+        lower.finish();
+        let mut upper = Scene::default();
+        upper.replay(index..self.len(), self);
+        upper.finish();
+        (lower, upper)
     }
 
     pub fn finish(&mut self) {
@@ -1055,13 +1092,27 @@ impl Default for TransformationMatrix {
 #[expect(missing_docs)]
 pub struct MonochromeSprite {
     pub order: DrawOrder,
-    pub padding: u32,
+    /// Standard deviation of a gaussian blur applied to the sprite's coverage, in device
+    /// pixels, before `transformation`. Zero samples the tile directly. A blurred sprite's
+    /// `bounds` include a margin of three standard deviations on every side around the
+    /// tile; see [`MonochromeSprite::blur_margin`].
+    pub blur_radius: ScaledPixels,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: SceneHsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }
+
+impl MonochromeSprite {
+    /// The margin a sprite blurred by `blur_radius` needs around its tile on every side.
+    pub fn blur_margin(blur_radius: ScaledPixels) -> ScaledPixels {
+        ScaledPixels(GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * blur_radius.0.max(0.))
+    }
+}
+
+/// Gaussian blurs are truncated this many standard deviations from their center.
+const GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS: f32 = 3.0;
 
 impl From<MonochromeSprite> for Primitive {
     fn from(sprite: MonochromeSprite) -> Self {
@@ -1467,6 +1518,60 @@ mod tests {
             content_mask: mask(),
             source: SurfaceSource::Unsupported(Size::default()),
         }
+    }
+
+    #[test]
+    fn split_at_divides_paint_operations_into_finished_scenes() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(false));
+        let split = scene.len();
+        scene.push_layer(full_bounds());
+        scene.insert_primitive(quad());
+        scene.insert_primitive(backdrop());
+        scene.pop_layer();
+        scene.finish();
+
+        let (lower, upper) = scene.split_at(split);
+        assert_eq!(lower.len(), split);
+        assert_eq!(upper.len(), scene.len() - split);
+        assert_eq!(lower.quads.len(), 2);
+        assert_eq!(lower.filter_boundaries.len(), 2);
+        assert!(lower.backdrop_filters.is_empty());
+        assert_eq!(upper.quads.len(), 1);
+        assert_eq!(upper.backdrop_filters.len(), 1);
+        assert!(upper.filter_boundaries.is_empty());
+        // Both halves are finished and plan-consistent.
+        assert!(!lower.render_commands().is_empty());
+        assert!(!upper.render_commands().is_empty());
+
+        let (everything, nothing) = scene.split_at(usize::MAX);
+        assert_eq!(everything.len(), scene.len());
+        assert!(!nothing.has_primitives());
+    }
+
+    #[test]
+    fn layer_markers_alone_are_not_primitives() {
+        let mut scene = Scene::default();
+        scene.push_layer(full_bounds());
+        scene.pop_layer();
+        assert!(!scene.has_primitives());
+        scene.insert_primitive(quad());
+        assert!(scene.has_primitives());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "inside a filter group")]
+    fn split_at_rejects_a_split_inside_a_filter_group() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(false));
+        scene.finish();
+        let _ = scene.split_at(1);
     }
 
     #[test]

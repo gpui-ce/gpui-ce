@@ -73,6 +73,8 @@ struct StateInner {
     measuring_behavior: ListMeasuringBehavior,
     pending_scroll: Option<PendingScroll>,
     follow_state: FollowState,
+    tail_reservation: Option<(usize, Pixels)>,
+    tail_extra: Pixels,
 }
 
 /// Deferred scroll adjustment applied after the scroll-top item has been remeasured.
@@ -325,9 +327,90 @@ impl ListState {
             measuring_behavior: ListMeasuringBehavior::default(),
             pending_scroll: None,
             follow_state: FollowState::default(),
+            tail_reservation: None,
+            tail_extra: Pixels::ZERO,
         })));
         this.splice(0..0, item_count);
         this
+    }
+
+    /// Reserve space after the last item so that the items from `start` through the end span
+    /// at least the viewport height less `inset`, given as `Some((start, inset))`. Pass `None`
+    /// to remove the reservation.
+    ///
+    /// This lets item `start` be scrolled to `inset` below the top of the viewport even while
+    /// it and the items after it are shorter than the viewport, for example to keep a newly
+    /// appended item near the top while content below it grows. The reserved space becomes
+    /// trailing space in the last item's box. It is recomputed from the items' measured heights
+    /// during each layout, before the scroll position is clamped and before painting, so items
+    /// that grow or are appended consume it in the same frame and the scroll position never
+    /// jumps or exposes a temporary gap.
+    ///
+    /// The reservation is recomputed by layouts that reach the last item, i.e. while the end of
+    /// the list is within the viewport or its overdraw; those layouts always remeasure the last
+    /// item. No other off-screen items are rendered for it, and items whose height is unknown
+    /// are never assumed to fill the reservation.
+    pub fn set_tail_reservation(&self, reservation: Option<(usize, Pixels)>) {
+        if self.0.borrow().tail_reservation == reservation {
+            return;
+        }
+        self.clear_tail_extra();
+        self.0.borrow_mut().tail_reservation = reservation;
+    }
+
+    fn clear_tail_extra(&self) {
+        let state = &mut *self.0.borrow_mut();
+        if state.tail_extra == Pixels::ZERO || state.items.is_empty() {
+            return;
+        }
+        let last = state.items.summary().count - 1;
+        let mut cursor = state.items.cursor::<Count>(());
+        let mut items = cursor.slice(&Count(last), Bias::Right);
+        if let Some(item) = cursor.item() {
+            let size_hint = item.size_hint().map(|mut size| {
+                size.height = (size.height - state.tail_extra).max(Pixels::ZERO);
+                size
+            });
+            items.push(
+                ListItem::Unmeasured {
+                    size_hint,
+                    focus_handle: item.focus_handle(),
+                },
+                (),
+            );
+        }
+        drop(cursor);
+        state.items = items;
+        state.tail_extra = Pixels::ZERO;
+    }
+
+    /// Distance from the top of the list's content to the top of item `ix`, summing the
+    /// measured heights (or retained size hints) of the items before it. Items whose height is
+    /// unknown contribute nothing. Passing the item count yields the total content height.
+    pub fn offset_for_item(&self, ix: usize) -> Pixels {
+        let state = self.0.borrow();
+        let mut cursor = state.items.cursor::<ListItemSummary>(());
+        cursor
+            .summary::<_, ListItemSummary>(&Count(ix), Bias::Right)
+            .height
+    }
+
+    /// Whether the items covered by the tail reservation (see [`Self::set_tail_reservation`])
+    /// now span the reserved height on their own, without any reserved space. Returns `false`
+    /// when there is no reservation. Items whose height is unknown count as empty, and retained
+    /// size hints are used as estimates.
+    pub fn tail_reservation_filled(&self) -> bool {
+        let state = self.0.borrow();
+        let Some((start, inset)) = state.tail_reservation else {
+            return false;
+        };
+        let minimum =
+            (state.last_layout_bounds.unwrap_or_default().size.height - inset).max(Pixels::ZERO);
+        let mut cursor = state.items.cursor::<ListItemSummary>(());
+        let prefix = cursor
+            .summary::<_, ListItemSummary>(&Count(start), Bias::Right)
+            .height;
+        state.items.summary().height - state.tail_extra - prefix >= minimum
     }
 
     /// Set the list to measure all items in the list in the first layout phase.
@@ -513,6 +596,7 @@ impl ListState {
         old_range: Range<usize>,
         focus_handles: impl IntoIterator<Item = Option<FocusHandle>>,
     ) {
+        self.clear_tail_extra();
         let state = &mut *self.0.borrow_mut();
 
         let mut old_items = state.items.cursor::<Count>(());
@@ -579,7 +663,10 @@ impl ListState {
 
         let start_pixel_offset = cursor.start().height + current_offset.offset_in_item;
         let new_pixel_offset = (start_pixel_offset + distance).max(px(0.));
-        if new_pixel_offset > start_pixel_offset {
+        // `scroll_to` can anchor an item below the viewport top with a negative
+        // `offset_in_item`, so even a positive distance may land before the
+        // cursor's position. Compare against the cursor before seeking forward.
+        if new_pixel_offset >= cursor.start().height {
             cursor.seek_forward(&Height(new_pixel_offset), Bias::Right);
         } else {
             cursor.seek(&Height(new_pixel_offset), Bias::Right);
@@ -1024,6 +1111,60 @@ impl StateInner {
         self.items = SumTree::from_iter(measured_items, ());
     }
 
+    /// Applies the tail reservation to a layout whose measured items reach the last item, by
+    /// growing the last item until the reserved items span the reserved height. `applied` is the
+    /// space this layout has already added and is updated in place; the return value is the
+    /// change in the measured items' total height.
+    fn reserve_tail(
+        &mut self,
+        old_items: &SumTree<ListItem>,
+        measured_start: usize,
+        measured: &mut VecDeque<ListItem>,
+        layouts: &mut VecDeque<ItemLayout>,
+        applied: &mut Pixels,
+        viewport_height: Pixels,
+    ) -> Pixels {
+        let Some((start, inset)) = self.tail_reservation else {
+            return Pixels::ZERO;
+        };
+        let minimum = (viewport_height - inset).max(Pixels::ZERO);
+        let count = old_items.summary().count;
+        if measured.is_empty() || measured_start + measured.len() != count || start >= count {
+            return Pixels::ZERO;
+        }
+        let mut cursor = old_items.cursor::<ListItemSummary>(());
+        cursor.seek(&Count(start), Bias::Right);
+        let earlier: ListItemSummary =
+            cursor.summary(&Count(measured_start.max(start)), Bias::Right);
+        // If a direct jump skipped unknown rows, let layout walk backward
+        // naturally first. Guessing zero for them would manufacture a gap.
+        if earlier.has_unknown_height {
+            self.tail_extra = Pixels::ZERO;
+            return Pixels::ZERO;
+        }
+        let mut natural = earlier.height;
+        for (ix, item) in measured.iter().enumerate() {
+            if measured_start + ix >= start {
+                natural += item.size().unwrap().height;
+            }
+        }
+        natural -= *applied;
+        let extra = (minimum - natural).max(Pixels::ZERO);
+        let delta = extra - *applied;
+        if let Some(ListItem::Measured { size, .. }) = measured.back_mut() {
+            size.height += delta;
+        }
+        if let Some(layout) = layouts
+            .back_mut()
+            .filter(|layout| layout.index + 1 == count)
+        {
+            layout.size.height += delta;
+        }
+        *applied = extra;
+        self.tail_extra = extra;
+        delta
+    }
+
     fn layout_items(
         &mut self,
         available_width: Option<Pixels>,
@@ -1071,7 +1212,11 @@ impl StateInner {
             let mut size = item.size();
 
             // If we're within the visible area or the height wasn't cached, render and measure the item's element
-            if visible_height < available_height || size.is_none() {
+            if visible_height < available_height
+                || size.is_none()
+                || (self.tail_reservation.is_some()
+                    && scroll_top.item_ix + ix + 1 == old_items.summary().count)
+            {
                 let item_index = scroll_top.item_ix + ix;
                 let mut element = render_item(item_index, window, cx);
                 let element_size = element.layout_as_root(available_item_space, window, cx);
@@ -1122,6 +1267,15 @@ impl StateInner {
                 focus_handle: item.focus_handle(),
             });
         }
+        let mut applied_tail_extra = Pixels::ZERO;
+        rendered_height += self.reserve_tail(
+            &old_items,
+            scroll_top.item_ix,
+            &mut measured_items,
+            &mut item_layouts,
+            &mut applied_tail_extra,
+            available_height,
+        );
         rendered_height += padding.bottom;
 
         // Prepare to start walking upward from the item at the scroll top.
@@ -1154,6 +1308,15 @@ impl StateInner {
                     break;
                 }
             }
+
+            rendered_height += self.reserve_tail(
+                &old_items,
+                cursor.start().0,
+                &mut measured_items,
+                &mut item_layouts,
+                &mut applied_tail_extra,
+                available_height,
+            );
 
             scroll_top = ListOffset {
                 item_ix: cursor.start().0,
@@ -1749,13 +1912,13 @@ impl sum_tree::SeekTarget<'_, ListItemSummary, ListItemSummary> for Height {
 mod test {
 
     use gpui::{ScrollDelta, ScrollWheelEvent};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use crate::{
-        self as gpui, AppContext, Bounds, Context, Element, FollowMode, InteractiveElement,
-        IntoElement, ListState, Render, Styled, TestAppContext, Window, canvas, div, list, point,
-        px, size,
+        self as gpui, AppContext, Bounds, Context, Element, Entity, FollowMode, InteractiveElement,
+        IntoElement, ListState, Pixels, Render, Styled, TestAppContext, VisualTestContext, Window,
+        canvas, div, list, point, px, size,
     };
 
     #[gpui::test]
@@ -1951,6 +2114,37 @@ mod test {
         let offset = state.logical_scroll_top();
         assert_eq!(offset.item_ix, 0);
         assert_eq!(offset.offset_in_item, px(0.));
+    }
+
+    #[gpui::test]
+    fn test_scroll_by_from_negative_item_offset(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, cx| {
+            cx.new(|_| TestListView(state.clone())).into_any_element()
+        });
+
+        // Anchor item 2 ten pixels below the viewport top. Small positive
+        // distances then still land before item 2's start.
+        for (distance, item_ix, offset) in [
+            (1., 1, 11.),
+            (9., 1, 19.),
+            (10., 2, 0.),
+            (11., 2, 1.),
+            (-1., 1, 9.),
+        ] {
+            state.scroll_to(gpui::ListOffset {
+                item_ix: 2,
+                offset_in_item: px(-10.),
+            });
+            state.scroll_by(px(distance));
+            let actual = state.logical_scroll_top();
+            assert_eq!(
+                (actual.item_ix, actual.offset_in_item),
+                (item_ix, px(offset)),
+                "scroll_by({distance})"
+            );
+        }
     }
 
     struct TestListView(ListState);
@@ -2998,5 +3192,153 @@ mod test {
              the bottom of its track, even when content has grown during the drag \
              (so frozen_bottom < live_bottom)"
         );
+    }
+
+    /// A list of 100px-wide items whose heights the test controls.
+    struct SizedItems {
+        state: ListState,
+        heights: Rc<RefCell<Vec<f32>>>,
+    }
+
+    impl Render for SizedItems {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let heights = self.heights.clone();
+            list(self.state.clone(), move |index, _, _| {
+                div().h(px(heights.borrow()[index])).w_full().into_any()
+            })
+            .w_full()
+            .h_full()
+        }
+    }
+
+    fn sized_items(
+        cx: &mut VisualTestContext,
+        heights: Vec<f32>,
+    ) -> (ListState, Rc<RefCell<Vec<f32>>>, Entity<SizedItems>) {
+        let state = ListState::new(heights.len(), crate::ListAlignment::Top, px(0.));
+        let heights = Rc::new(RefCell::new(heights));
+        let view = cx.update(|_, cx| {
+            cx.new(|_| SizedItems {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        (state, heights, view)
+    }
+
+    fn draw_sized_items(cx: &mut VisualTestContext, view: &Entity<SizedItems>, height: f32) {
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(height)), |_, _| {
+            view.clone().into_any_element()
+        });
+    }
+
+    fn item_top(state: &ListState, ix: usize) -> Pixels {
+        state.bounds_for_item(ix).unwrap().top()
+    }
+
+    #[gpui::test]
+    fn test_tail_reservation_lets_an_item_scroll_to_the_inset(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        // 150px of content in a 200px viewport cannot scroll at all on its own.
+        let (state, _, view) = sized_items(cx, vec![30.; 5]);
+        state.set_tail_reservation(Some((3, px(20.))));
+        state.scroll_to_end();
+        draw_sized_items(cx, &view, 200.);
+
+        // Items 3 and 4 (60px) are extended to span 200 - 20 = 180px, so item 3 can be
+        // scrolled up to 20px below the top of the viewport, and no further.
+        assert_eq!(item_top(&state, 3), px(20.));
+        assert_eq!(state.bounds_for_item(4).unwrap().size.height, px(150.));
+        assert_eq!(state.offset_for_item(5), px(270.));
+        assert_eq!(state.max_offset_for_scrollbar().y, px(70.));
+        assert!(!state.tail_reservation_filled());
+
+        state.set_tail_reservation(None);
+        draw_sized_items(cx, &view, 200.);
+        assert_eq!(state.offset_for_item(5), px(150.));
+        assert_eq!(state.bounds_for_item(4).unwrap().size.height, px(30.));
+        assert_eq!(state.max_offset_for_scrollbar().y, px(0.));
+        assert_eq!(item_top(&state, 3), px(90.));
+    }
+
+    #[gpui::test]
+    fn test_growing_and_appended_items_consume_the_tail_reservation(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let (state, heights, view) = sized_items(cx, vec![30.; 5]);
+        state.set_tail_reservation(Some((3, px(20.))));
+        state.scroll_to_end();
+        draw_sized_items(cx, &view, 200.);
+        assert_eq!(item_top(&state, 3), px(20.));
+
+        // The last item grows: the reserved space shrinks in the same layout, so the anchored
+        // item stays put and the total height is unchanged.
+        heights.borrow_mut()[4] = 70.;
+        state.remeasure_items(4..5);
+        draw_sized_items(cx, &view, 200.);
+        assert_eq!(item_top(&state, 3), px(20.));
+        assert_eq!(state.offset_for_item(5), px(270.));
+        assert_eq!(state.bounds_for_item(4).unwrap().size.height, px(150.));
+
+        // The last item shrinks again: the reservation absorbs that too.
+        heights.borrow_mut()[4] = 10.;
+        state.remeasure_items(4..5);
+        draw_sized_items(cx, &view, 200.);
+        assert_eq!(item_top(&state, 3), px(20.));
+        assert_eq!(state.offset_for_item(5), px(270.));
+
+        // Appended items take their space from the reservation as well.
+        heights.borrow_mut().extend([40., 40.]);
+        state.splice(5..5, 2);
+        draw_sized_items(cx, &view, 200.);
+        assert_eq!(item_top(&state, 3), px(20.));
+        assert_eq!(state.offset_for_item(7), px(270.));
+        assert_eq!(state.bounds_for_item(6).unwrap().size.height, px(100.));
+        assert!(!state.tail_reservation_filled());
+
+        // Once the items fill the reserved height themselves, nothing is added.
+        heights.borrow_mut()[6] = 200.;
+        state.remeasure_items(6..7);
+        draw_sized_items(cx, &view, 200.);
+        assert!(state.tail_reservation_filled());
+        assert_eq!(state.bounds_for_item(6).unwrap().size.height, px(200.));
+        assert_eq!(state.offset_for_item(7), px(370.));
+    }
+
+    #[gpui::test]
+    fn test_tail_reservation_follows_viewport_resizes(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let (state, _, view) = sized_items(cx, vec![30.; 5]);
+        state.set_tail_reservation(Some((3, px(20.))));
+        state.scroll_to_end();
+        for height in [200., 300., 120., 250.] {
+            draw_sized_items(cx, &view, height);
+            // Each layout sizes the reservation for its own viewport: the content never ends
+            // short of the viewport, and it never leaves extra room to scroll into.
+            assert_eq!(state.viewport_bounds().size.height, px(height));
+            assert_eq!(state.max_offset_for_scrollbar().y, px(70.));
+            assert_eq!(item_top(&state, 3), px(20.));
+        }
+    }
+
+    #[gpui::test]
+    fn test_tail_reservation_ignores_items_of_unknown_height(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let (state, _, view) = sized_items(cx, vec![30.; 100]);
+        state.set_tail_reservation(Some((0, px(0.))));
+        state.reset(100);
+        state.scroll_to(gpui::ListOffset {
+            item_ix: 99,
+            offset_in_item: px(0.),
+        });
+        draw_sized_items(cx, &view, 200.);
+
+        // Jumping straight to the end leaves most earlier items unmeasured. Treating them as
+        // empty would extend the last item by nearly a viewport.
+        assert_eq!(
+            state.offset_for_item(100) - state.offset_for_item(99),
+            px(30.)
+        );
+        // The items measured to fill the viewport already span the reserved height.
+        assert!(state.tail_reservation_filled());
     }
 }

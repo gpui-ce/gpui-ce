@@ -219,18 +219,18 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         content_mask,
         corner_radii,
         direction,
-        standard_deviation,
         opacity,
-        sample_count,
-        sample_step,
+        corner_smoothing,
+        source_size,
+        sample_extent,
+        texel_scale,
         composite_clip,
         downsample_mode,
-        source_size,
-        target_size,
-        corner_smoothing,
-        padding0,
-        padding1,
-        padding2
+        box_taps_per_axis,
+        tap_pair_count,
+        center_weight,
+        padding,
+        taps
     ),
     render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),
     render_layout!(
@@ -239,6 +239,6 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         xy_position,
         curve_position,
         color,
-        bounds
+        content_mask
     ),
 ];

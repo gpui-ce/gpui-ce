@@ -11,8 +11,8 @@ use gpui_render::{
     TargetStack,
     artifacts::{NATIVE_SHADERS, NativeShader},
     blur::{
-        BlurAxis, BlurKernel, BlurUniforms, GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS, ScissorRectangle,
-        downsampled_dimension,
+        BlurPlan, BlurUniforms, FilterSource, GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS,
+        ScissorRectangle, downsampled_dimension, visible_composite_region,
     },
     path_types::{self, PathRasterizationVertex},
     shaders::{
@@ -53,6 +53,11 @@ const SIZES_SLOT: u64 = 3;
 const PRIMARY_TEXTURE_SLOT: u64 = 0;
 const SECONDARY_TEXTURE_SLOT: u64 = 1;
 const SAMPLER_SLOT: u64 = 0;
+
+/// Consecutive frames that must go by without needing an intermediate render target
+/// before it is released. Long enough that a target needed every few frames, or
+/// again shortly after, is not reallocated each time.
+const INTERMEDIATE_RELEASE_AFTER_FRAMES: u32 = 60;
 
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
 pub type Renderer = MetalRenderer;
@@ -168,16 +173,28 @@ pub fn new_renderer(
     Ok(MetalRenderer::new(context, transparent))
 }
 
+/// Size of each pooled instance buffer until a frame needs more.
+const DEFAULT_INSTANCE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+/// Consecutive frames that must fit in half the pooled buffer size before the pool
+/// shrinks its buffers.
+const INSTANCE_BUFFER_SHRINK_AFTER_FRAMES: u32 = 120;
+
 pub struct InstanceBufferPool {
     buffer_size: usize,
     buffers: Vec<metal::Buffer>,
+    /// Consecutive frames that needed at most half of `buffer_size`.
+    frames_below_half: u32,
+    /// Largest size needed by any of those frames.
+    peak_below_half: usize,
 }
 
 impl Default for InstanceBufferPool {
     fn default() -> Self {
         Self {
-            buffer_size: 2 * 1024 * 1024,
+            buffer_size: DEFAULT_INSTANCE_BUFFER_SIZE,
             buffers: Vec::new(),
+            frames_below_half: 0,
+            peak_below_half: 0,
         }
     }
 }
@@ -191,6 +208,38 @@ impl InstanceBufferPool {
     pub(crate) fn reset(&mut self, buffer_size: usize) {
         self.buffer_size = buffer_size;
         self.buffers.clear();
+        self.frames_below_half = 0;
+        self.peak_below_half = 0;
+    }
+
+    /// Sizes the pooled buffers for a frame that needs `minimum_size` bytes. Buffers
+    /// grow to fit a larger frame right away, and shrink back once a run of frames
+    /// fit in half their size, so one complex frame doesn't pin its buffer size for
+    /// the life of the process. Buffers of the old size still in flight are dropped
+    /// when they are released.
+    fn fit_buffer_size(&mut self, minimum_size: usize) {
+        if minimum_size > self.buffer_size {
+            self.reset(
+                minimum_size
+                    .checked_next_power_of_two()
+                    .unwrap_or(minimum_size),
+            );
+        } else if self.buffer_size > DEFAULT_INSTANCE_BUFFER_SIZE
+            && minimum_size <= self.buffer_size / 2
+        {
+            self.peak_below_half = self.peak_below_half.max(minimum_size);
+            self.frames_below_half += 1;
+            if self.frames_below_half >= INSTANCE_BUFFER_SHRINK_AFTER_FRAMES {
+                let buffer_size = self
+                    .peak_below_half
+                    .next_power_of_two()
+                    .max(DEFAULT_INSTANCE_BUFFER_SIZE);
+                self.reset(buffer_size);
+            }
+        } else {
+            self.frames_below_half = 0;
+            self.peak_below_half = 0;
+        }
     }
 
     pub(crate) fn acquire(
@@ -199,13 +248,7 @@ impl InstanceBufferPool {
         unified_memory: bool,
         minimum_size: usize,
     ) -> InstanceBuffer {
-        if minimum_size > self.buffer_size {
-            self.reset(
-                minimum_size
-                    .checked_next_power_of_two()
-                    .unwrap_or(minimum_size),
-            );
-        }
+        self.fit_buffer_size(minimum_size);
         let buffer = self.buffers.pop().unwrap_or_else(|| {
             let options = if unified_memory {
                 MTLResourceOptions::StorageModeShared
@@ -228,6 +271,56 @@ impl InstanceBufferPool {
         if buffer.size == self.buffer_size {
             self.buffers.push(buffer.metal_buffer)
         }
+    }
+}
+
+/// Recent demand for each kind of intermediate render target.
+#[derive(Default)]
+struct IntermediateUsage {
+    path: TargetUsage,
+    scene_color: TargetUsage,
+    blur: TargetUsage,
+    backdrop_snapshot: TargetUsage,
+    groups: TargetUsage,
+}
+
+/// Tracks how many targets of one kind recent frames needed, so that targets frames
+/// stopped needing can be released without reallocating ones needed intermittently.
+#[derive(Default)]
+struct TargetUsage {
+    /// Targets needed by the most recent frame.
+    last_needed: usize,
+    /// Most targets needed by a frame since demand dropped below the held count.
+    peak_needed: usize,
+    /// Consecutive frames that needed fewer targets than were held.
+    frames_below_held: u32,
+}
+
+impl TargetUsage {
+    /// Records a frame that needs `needed` targets while `held` are allocated, and
+    /// returns how many of the held targets to keep.
+    fn note_frame(&mut self, needed: usize, held: usize) -> usize {
+        self.last_needed = needed;
+        if needed >= held {
+            self.peak_needed = 0;
+            self.frames_below_held = 0;
+            return held;
+        }
+        self.peak_needed = self.peak_needed.max(needed);
+        self.frames_below_held += 1;
+        if self.frames_below_held < INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            return held;
+        }
+        self.frames_below_held = 0;
+        mem::take(&mut self.peak_needed)
+    }
+
+    /// Returns how many targets to keep when no further frames are expected for a
+    /// while: those the most recent frame needed.
+    fn release_idle(&mut self) -> usize {
+        self.peak_needed = 0;
+        self.frames_below_held = 0;
+        self.last_needed
     }
 }
 
@@ -275,6 +368,7 @@ pub struct MetalRenderer {
     /// being filtered and composited back. Targets are pooled by active nesting depth.
     group_textures: Vec<metal::Texture>,
     intermediate_texture_size: Option<Size<DevicePixels>>,
+    intermediate_usage: IntermediateUsage,
     path_sample_count: u32,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
@@ -285,8 +379,34 @@ pub struct MetalRenderer {
 impl MetalRenderer {
     /// Creates a new MetalRenderer with a CAMetalLayer for window-based rendering.
     pub fn new(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>, transparent: bool) -> Self {
-        let device = Self::create_device();
+        Self::new_for_window(
+            Self::create_device(),
+            instance_buffer_pool,
+            transparent,
+            None,
+        )
+    }
 
+    /// Creates a transparent renderer for a second layer in the same window, such as a plane
+    /// composited above native child views.
+    ///
+    /// The new renderer shares this renderer's device, instance buffers and sprite atlas, so
+    /// both can draw scenes produced against the window's single [`gpui::PlatformAtlas`].
+    pub fn new_overlay(&self) -> Self {
+        Self::new_for_window(
+            self.device.clone(),
+            self.instance_buffer_pool.clone(),
+            true,
+            Some(self.sprite_atlas.clone()),
+        )
+    }
+
+    fn new_for_window(
+        device: metal::Device,
+        instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
+        transparent: bool,
+        sprite_atlas: Option<Arc<MetalAtlas>>,
+    ) -> Self {
         let layer = new_window_layer(transparent);
         layer.set_device(&device);
         layer.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
@@ -295,7 +415,13 @@ impl MetalRenderer {
         #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
         layer.set_framebuffer_only(false);
 
-        Self::new_internal(device, Some(layer), !transparent, instance_buffer_pool)
+        Self::new_internal(
+            device,
+            Some(layer),
+            !transparent,
+            instance_buffer_pool,
+            sprite_atlas,
+        )
     }
 
     /// Creates a new headless MetalRenderer for offscreen rendering without a window.
@@ -305,7 +431,7 @@ impl MetalRenderer {
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
     pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Self {
         let device = Self::create_device();
-        Self::new_internal(device, None, true, instance_buffer_pool)
+        Self::new_internal(device, None, true, instance_buffer_pool, None)
     }
 
     fn create_device() -> metal::Device {
@@ -335,6 +461,7 @@ impl MetalRenderer {
         layer: Option<metal::MetalLayer>,
         opaque: bool,
         instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
+        sprite_atlas: Option<Arc<MetalAtlas>>,
     ) -> Self {
         // Shared memory can be used only if CPU and GPU share the same memory space.
         // https://developer.apple.com/documentation/metal/setting-resource-storage-modes
@@ -485,7 +612,8 @@ impl MetalRenderer {
         let sampler = device.new_sampler(&sampler_descriptor);
 
         let command_queue = device.new_command_queue();
-        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
+        let sprite_atlas =
+            sprite_atlas.unwrap_or_else(|| Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu)));
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
 
@@ -524,6 +652,7 @@ impl MetalRenderer {
             blur_pong_texture: None,
             group_textures: Vec::new(),
             intermediate_texture_size: None,
+            intermediate_usage: IntermediateUsage::default(),
             path_sample_count: PATH_SAMPLE_COUNT,
             #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
             headless_render_target: None,
@@ -582,6 +711,47 @@ impl MetalRenderer {
         let full_w = size.width.0 as u64;
         let full_h = size.height.0 as u64;
 
+        // Release targets that recent frames stopped needing. Command buffers still
+        // in flight retain the textures they reference.
+        let usage = &mut self.intermediate_usage;
+        if usage.path.note_frame(
+            usize::from(requirements.uses_path_target),
+            usize::from(self.path_intermediate_texture.is_some()),
+        ) == 0
+        {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+        }
+        if usage.scene_color.note_frame(
+            usize::from(requirements.uses_offscreen_target),
+            usize::from(self.scene_color_texture.is_some()),
+        ) == 0
+        {
+            self.scene_color_texture = None;
+        }
+        if usage.blur.note_frame(
+            usize::from(requirements.uses_blur_target),
+            usize::from(self.blur_ping_texture.is_some()),
+        ) == 0
+        {
+            self.blur_ping_texture = None;
+            self.blur_pong_texture = None;
+        }
+        let uses_backdrop_snapshot =
+            requirements.backdrop_filter_count > 0 && requirements.isolated_target_count > 0;
+        if usage.backdrop_snapshot.note_frame(
+            usize::from(uses_backdrop_snapshot),
+            usize::from(self.backdrop_snapshot_texture.is_some()),
+        ) == 0
+        {
+            self.backdrop_snapshot_texture = None;
+        }
+        let groups_to_keep = usage.groups.note_frame(
+            requirements.isolated_target_count,
+            self.group_textures.len(),
+        );
+        self.group_textures.truncate(groups_to_keep);
+
         let make_color_texture = |width: u64, height: u64| {
             let descriptor = metal::TextureDescriptor::new();
             descriptor.set_width(width.max(1));
@@ -637,7 +807,7 @@ impl MetalRenderer {
                 .get_or_insert_with(|| make_color_texture(blur_width, blur_height));
         }
 
-        if requirements.backdrop_filter_count > 0 && requirements.isolated_target_count > 0 {
+        if uses_backdrop_snapshot {
             self.backdrop_snapshot_texture
                 .get_or_insert_with(|| make_color_texture(full_w, full_h));
         }
@@ -645,6 +815,29 @@ impl MetalRenderer {
         while self.group_textures.len() < requirements.isolated_target_count {
             self.group_textures.push(make_color_texture(full_w, full_h));
         }
+    }
+
+    /// Releases the intermediate render targets that the most recent frame did not
+    /// use. Unused targets are otherwise only released after a run of frames that
+    /// don't need them, so call this when the window stops rendering frames.
+    pub fn release_idle_resources(&mut self) {
+        let usage = &mut self.intermediate_usage;
+        if usage.path.release_idle() == 0 {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+        }
+        if usage.scene_color.release_idle() == 0 {
+            self.scene_color_texture = None;
+        }
+        if usage.blur.release_idle() == 0 {
+            self.blur_ping_texture = None;
+            self.blur_pong_texture = None;
+        }
+        if usage.backdrop_snapshot.release_idle() == 0 {
+            self.backdrop_snapshot_texture = None;
+        }
+        let groups_to_keep = usage.groups.release_idle();
+        self.group_textures.truncate(groups_to_keep);
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
@@ -659,6 +852,15 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        // `nextDrawable` and command encoders are autoreleased. Frames are driven by
+        // display-link callbacks on the main queue, and several of them (one per
+        // window) can run before the run loop drains its pool, so scope each frame to
+        // its own pool to hand drawables back to the layer promptly. In-flight command
+        // buffers retain the resources they reference.
+        objc2::rc::autoreleasepool(|_| self.draw_frame(scene));
+    }
+
+    fn draw_frame(&mut self, scene: &Scene) {
         let layer = match &self.layer {
             Some(l) => l.clone(),
             None => {
@@ -1292,77 +1494,69 @@ impl MetalRenderer {
 
         let full_width = i32::from(viewport_size.width).max(0) as u32;
         let full_height = i32::from(viewport_size.height).max(0) as u32;
-        let blur_size = [
-            downsampled_dimension(full_width) as f32,
-            downsampled_dimension(full_height) as f32,
-        ];
-        let blur_viewport_size = Size {
-            width: DevicePixels(blur_size[0] as i32),
-            height: DevicePixels(blur_size[1] as i32),
+        let target_size = [full_width, full_height];
+        // Content blur bleeds ~3·radius past the box; composite over a dilated rect.
+        let composite_bounds = if clip_rounded {
+            bounds
+        } else {
+            bounds.dilate(ScaledPixels(
+                GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * blur_radius,
+            ))
         };
-        let dilation = GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * blur_radius;
-        let scissor =
-            ScissorRectangle::for_blurred_bounds(bounds, dilation, full_width, full_height);
-        if scissor.is_empty() {
+        let Some(region) = visible_composite_region(composite_bounds, content_mask, target_size)
+        else {
             return;
-        }
+        };
         let clip = if clip_rounded {
             gpui_render::blur::FilterCompositeClip::RoundedBounds
         } else {
             gpui_render::blur::FilterCompositeClip::ContentShape
         };
 
-        let full_size = [full_width as f32, full_height as f32];
-        let (composite_source, source_size) =
-            if let Some(kernel) = BlurKernel::for_radius(blur_radius) {
+        let (composite_source, filter_source) =
+            if let Some(plan) = BlurPlan::new(blur_radius, region, target_size) {
                 let (Some(ping), Some(pong)) = (ping, pong) else {
                     return;
                 };
+                let blur_viewport_size = Size {
+                    width: DevicePixels(plan.result.texture_size[0] as i32),
+                    height: DevicePixels(plan.result.texture_size[1] as i32),
+                };
                 // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
-                self.run_metal_blur_pass(
-                    command_buffer,
-                    &self.blur_downsample_pipeline_state,
-                    ping,
-                    source,
-                    blur_viewport_size,
-                    scene_uniforms,
-                    BlurUniforms::downsample([full_width as f32, full_height as f32], blur_size),
-                    scissor,
-                    metal::MTLPrimitiveType::Triangle,
-                    3,
-                    false,
-                );
-
-                for (axis, source, target) in [
-                    (BlurAxis::Horizontal, ping, pong),
-                    (BlurAxis::Vertical, pong, ping),
+                for (pipeline, pass, source, target) in [
+                    (
+                        &self.blur_downsample_pipeline_state,
+                        plan.downsample,
+                        source,
+                        ping,
+                    ),
+                    (&self.blur_pipeline_state, plan.horizontal, ping, pong),
+                    (&self.blur_pipeline_state, plan.vertical, pong, ping),
                 ] {
                     self.run_metal_blur_pass(
                         command_buffer,
-                        &self.blur_pipeline_state,
+                        pipeline,
                         target,
                         source,
                         blur_viewport_size,
                         scene_uniforms,
-                        BlurUniforms::gaussian(axis, blur_size, kernel),
-                        scissor,
+                        pass.uniforms,
+                        pass.scissor,
                         metal::MTLPrimitiveType::Triangle,
                         3,
                         false,
                     );
                 }
 
-                (ping, blur_size)
+                (ping, plan.result)
             } else {
-                (source, full_size)
+                (
+                    source,
+                    FilterSource::full_resolution(full_width, full_height),
+                )
             };
 
         // Composite the blurred result into the target (preserving its contents).
-        let composite_bounds = if clip_rounded {
-            bounds
-        } else {
-            bounds.dilate(ScaledPixels(dilation))
-        };
         let composite_uniforms = BlurUniforms::composite(
             composite_bounds,
             content_mask,
@@ -1370,8 +1564,7 @@ impl MetalRenderer {
             corner_smoothing,
             opacity,
             clip,
-            source_size,
-            full_size,
+            filter_source,
         );
         let encoder = new_command_encoder_for_texture(
             command_buffer,
@@ -2237,6 +2430,145 @@ mod tests {
         assert!(renderer.blur_ping_texture.is_some());
         assert!(renderer.blur_pong_texture.is_some());
         assert!(renderer.group_textures.is_empty());
+
+        // Targets survive a run of frames that don't need them, up to a limit.
+        for _ in 1..INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            renderer.prepare_intermediate_textures(&empty_scene, target_size);
+        }
+        assert!(renderer.scene_color_texture.is_some());
+        assert!(renderer.blur_ping_texture.is_some());
+        renderer.prepare_intermediate_textures(&empty_scene, target_size);
+        assert!(renderer.scene_color_texture.is_none());
+        assert!(renderer.blur_ping_texture.is_none());
+        assert!(renderer.blur_pong_texture.is_none());
+
+        // Once a window stops rendering, it keeps only what its last frame used.
+        renderer.prepare_intermediate_textures(&filtered_scene, target_size);
+        renderer.release_idle_resources();
+        assert!(renderer.scene_color_texture.is_some());
+        assert!(renderer.blur_ping_texture.is_some());
+        renderer.prepare_intermediate_textures(&empty_scene, target_size);
+        renderer.release_idle_resources();
+        assert!(renderer.scene_color_texture.is_none());
+        assert!(renderer.blur_ping_texture.is_none());
+        assert!(renderer.blur_pong_texture.is_none());
+    }
+
+    #[test]
+    fn instance_buffer_pool_shrinks_after_a_run_of_smaller_frames() {
+        const MIB: usize = 1024 * 1024;
+        let mut pool = InstanceBufferPool::default();
+        pool.fit_buffer_size(MIB);
+        assert_eq!(pool.buffer_size, DEFAULT_INSTANCE_BUFFER_SIZE);
+
+        pool.fit_buffer_size(20 * MIB);
+        assert_eq!(pool.buffer_size, 32 * MIB, "grows to fit a large frame");
+
+        // A frame needing more than half the buffer size restarts the run.
+        for _ in 1..INSTANCE_BUFFER_SHRINK_AFTER_FRAMES {
+            pool.fit_buffer_size(MIB);
+        }
+        pool.fit_buffer_size(17 * MIB);
+        for _ in 1..INSTANCE_BUFFER_SHRINK_AFTER_FRAMES {
+            pool.fit_buffer_size(MIB);
+        }
+        assert_eq!(pool.buffer_size, 32 * MIB);
+
+        // Shrinks to fit the largest frame of the run.
+        pool.fit_buffer_size(5 * MIB);
+        assert_eq!(pool.buffer_size, 8 * MIB);
+        for _ in 0..INSTANCE_BUFFER_SHRINK_AFTER_FRAMES {
+            pool.fit_buffer_size(MIB);
+        }
+        assert_eq!(pool.buffer_size, DEFAULT_INSTANCE_BUFFER_SIZE);
+
+        // Never below the default size.
+        for _ in 0..INSTANCE_BUFFER_SHRINK_AFTER_FRAMES {
+            pool.fit_buffer_size(0);
+        }
+        assert_eq!(pool.buffer_size, DEFAULT_INSTANCE_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn target_usage_releases_targets_after_a_run_of_frames_not_needing_them() {
+        let mut usage = TargetUsage::default();
+        assert_eq!(usage.note_frame(3, 0), 0, "nothing is held yet");
+        assert_eq!(usage.note_frame(3, 3), 3);
+
+        // Demand drops to one target, with a brief spike to two.
+        for frame in 1..INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            let needed = if frame == 10 { 2 } else { 1 };
+            assert_eq!(usage.note_frame(needed, 3), 3);
+        }
+        assert_eq!(
+            usage.note_frame(1, 3),
+            2,
+            "keeps as many targets as any frame in the run needed"
+        );
+
+        // A frame that needs every held target restarts the run.
+        for _ in 1..INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            assert_eq!(usage.note_frame(0, 2), 2);
+        }
+        assert_eq!(usage.note_frame(2, 2), 2);
+        for _ in 1..INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            assert_eq!(usage.note_frame(0, 2), 2);
+        }
+        assert_eq!(usage.note_frame(0, 2), 0);
+    }
+
+    #[test]
+    fn target_usage_keeps_what_the_last_frame_needed_when_idle() {
+        let mut usage = TargetUsage::default();
+        usage.note_frame(2, 2);
+        assert_eq!(usage.release_idle(), 2);
+        usage.note_frame(1, 2);
+        assert_eq!(usage.release_idle(), 1);
+        // Releasing restarts the run of frames counted toward a release.
+        for _ in 1..INTERMEDIATE_RELEASE_AFTER_FRAMES {
+            assert_eq!(usage.note_frame(0, 1), 1);
+        }
+        assert_eq!(usage.note_frame(0, 1), 0);
+    }
+
+    #[test]
+    fn overlay_renderers_share_resources_and_clear_transparent() {
+        let pool = Arc::new(Mutex::new(InstanceBufferPool::default()));
+        let base = MetalRenderer::new(pool, false);
+        let mut overlay = base.new_overlay();
+        assert!(Arc::ptr_eq(base.sprite_atlas(), overlay.sprite_atlas()));
+        assert!(Arc::ptr_eq(
+            &base.instance_buffer_pool,
+            &overlay.instance_buffer_pool
+        ));
+        assert_eq!(base.device.registry_id(), overlay.device.registry_id());
+        assert!(base.layer().unwrap().is_opaque());
+        assert!(!overlay.layer().unwrap().is_opaque());
+
+        overlay.update_drawable_size(size(DevicePixels(4), DevicePixels(4)));
+        let bounds = Bounds {
+            origin: gpui::point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(2.0), ScaledPixels(2.0)),
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(Quad {
+            bounds,
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            background: solid_background(white()),
+            ..Default::default()
+        });
+        scene.finish();
+
+        let image = overlay.render_to_image(&scene).unwrap();
+        assert_eq!(pixel(&image, 0, 0), [255, 255, 255, 255]);
+        assert_eq!(
+            pixel(&image, 3, 3)[3],
+            0,
+            "an overlay must not cover native content outside its primitives"
+        );
     }
 
     #[test]
@@ -2268,7 +2600,7 @@ mod tests {
         let mut scene = Scene::default();
         scene.insert_primitive(MonochromeSprite {
             order: 0,
-            padding: 0,
+            blur_radius: ScaledPixels(0.0),
             bounds,
             content_mask: ContentMask {
                 bounds,

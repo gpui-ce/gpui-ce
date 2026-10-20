@@ -307,6 +307,17 @@ impl X11ClientStatePtr {
 pub(crate) struct X11Client(pub(crate) Rc<RefCell<X11ClientState>>);
 
 impl X11Client {
+    /// Clones the client's window pointers, so callers can release the client
+    /// borrow before invoking window callbacks.
+    fn window_ptrs(&self) -> Vec<X11WindowStatePtr> {
+        self.0
+            .borrow()
+            .windows
+            .values()
+            .map(|window| window.window.clone())
+            .collect()
+    }
+
     pub(crate) fn new() -> anyhow::Result<Self> {
         let event_loop = EventLoop::try_new()?;
 
@@ -491,8 +502,10 @@ impl X11Client {
                 move |event, _, client| match event {
                     XDPEvent::WindowAppearance(appearance) => {
                         client.with_common(|common| common.appearance = appearance);
-                        for window in client.0.borrow_mut().windows.values_mut() {
-                            window.window.set_appearance(appearance);
+                        // Window callbacks can synchronously render and query
+                        // the client again. Release its borrow before calling them.
+                        for mut window in client.window_ptrs() {
+                            window.set_appearance(appearance);
                         }
                     }
                     XDPEvent::ButtonLayout(layout_str) => {
@@ -500,8 +513,8 @@ impl X11Client {
                             .log_err()
                             .unwrap_or_else(WindowButtonLayout::linux_default);
                         client.with_common(|common| common.button_layout = layout);
-                        for window in client.0.borrow_mut().windows.values_mut() {
-                            window.window.set_button_layout();
+                        for window in client.window_ptrs() {
+                            window.set_button_layout();
                         }
                     }
                     XDPEvent::CursorTheme(_) | XDPEvent::CursorSize(_) => {

@@ -48,6 +48,12 @@ impl<Target> TargetStack<Target> {
             .chain(std::iter::once(&self.current))
     }
 
+    /// Returns whether [`Self::backdrop_layers`] starts at the root target, so a backdrop filter
+    /// sees whatever the root composites over (for example, a plane beneath the window's own).
+    pub fn backdrop_reaches_root(&self) -> bool {
+        self.parents.iter().all(|(_, inherits)| *inherits)
+    }
+
     /// Leaves the current group and returns its target and restored parent.
     pub fn exit(&mut self) -> (Target, &Target) {
         let (parent, _) = self
@@ -75,8 +81,10 @@ mod tests {
     #[test]
     fn nested_groups_inherit_backdrops_until_a_content_filter_and_restore_parents() {
         let mut targets = TargetStack::new("root");
+        assert!(targets.backdrop_reaches_root());
         targets.enter("opacity", true);
         assert!(targets.inherits_backdrop());
+        assert!(targets.backdrop_reaches_root());
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["root", "opacity"]
@@ -84,6 +92,7 @@ mod tests {
 
         targets.enter("content", false);
         assert!(!targets.inherits_backdrop());
+        assert!(!targets.backdrop_reaches_root());
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["content"]
@@ -91,6 +100,7 @@ mod tests {
 
         targets.enter("nested", true);
         assert!(targets.inherits_backdrop());
+        assert!(!targets.backdrop_reaches_root());
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["content", "nested"]

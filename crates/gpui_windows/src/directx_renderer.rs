@@ -9,10 +9,12 @@ use gpui_render::{
     InstanceRange, TargetStack,
     artifacts::{Dx11DrawConstants, Dx11DrawConstantsBinding},
     blur::{
-        BlurAxis, BlurKernel, BlurUniforms, FilterCompositeClip,
-        GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS, downsampled_dimension,
+        BlurPlan, BlurUniforms, FilterCompositeClip, FilterSource,
+        GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS, ScissorRectangle, downsampled_dimension,
+        visible_composite_region,
     },
-    path_types::{PathRasterizationVertex, PathSprite},
+    filter_targets::{FilterTargetRetention, FilterTargets},
+    path_types::{self, PathRasterizationVertex, PathSprite},
     shaders::{
         common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool, SurfaceColorFormat},
         interface as shader_interface,
@@ -72,6 +74,16 @@ pub(crate) struct DirectXRenderer {
     globals: DirectXGlobalElements,
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
+    /// The plane above native child visuals, once [`Self::enable_overlay`] has succeeded.
+    overlay: Option<OverlayPlane>,
+    /// Set once [`Self::enable_overlay`] succeeds. Device-lost recovery restores the overlay
+    /// from this rather than from `overlay`, which an earlier failed attempt may have dropped.
+    overlay_requested: bool,
+    /// Incremented whenever the overlay (and so the native layer) is created.
+    overlay_generation: u64,
+    /// While rendering the overlay: the base plane's frame, which overlay backdrop filters
+    /// composite beneath the overlay's own content so they frost the UI below them.
+    backdrop_underlay: Option<ID3D11ShaderResourceView>,
     font_info: &'static FontInfo,
 
     width: u32,
@@ -90,6 +102,7 @@ pub(crate) struct DirectXRenderer {
     active_render_target: Option<ID3D11RenderTargetView>,
     path_rasterization_vertices: Vec<PathRasterizationVertex>,
     path_sprites: Vec<PathSprite>,
+    filter_target_retention: FilterTargetRetention,
 }
 
 /// Direct3D objects
@@ -151,7 +164,6 @@ impl PathResources {
 }
 
 struct ColorTarget {
-    #[expect(dead_code)]
     texture: ID3D11Texture2D,
     target: Option<ID3D11RenderTargetView>,
     source: Option<ID3D11ShaderResourceView>,
@@ -241,6 +253,64 @@ struct DirectComposition {
     comp_visual: IDCompositionVisual,
 }
 
+/// The base swap chain's visual hosts two children: `layer`, where applications mount native
+/// visuals (such as WebView2), and above it `visual`, showing a second swap chain that holds
+/// the part of each scene painted after the root view. An empty overlay detaches its swap chain
+/// and draws nothing, so frames without overlay content cost what they did before.
+struct OverlayPlane {
+    resources: DirectXResources,
+    layer: IDCompositionVisual,
+    visual: IDCompositionVisual,
+    attached: bool,
+    /// A copy of the base plane's frame, sampled by overlay backdrop filters. Allocated when
+    /// an overlay first contains one.
+    underlay: Option<ColorTarget>,
+}
+
+impl OverlayPlane {
+    fn new(
+        devices: &DirectXRendererDevices,
+        composition: &DirectComposition,
+        width: u32,
+        height: u32,
+        hwnd: HWND,
+    ) -> Result<Self> {
+        let resources = DirectXResources::new(devices, width, height, hwnd, false)
+            .context("Creating overlay resources")?;
+        unsafe {
+            let layer = composition.comp_device.CreateVisual()?;
+            let visual = composition.comp_device.CreateVisual()?;
+            visual.SetContent(&resources.swap_chain)?;
+            composition
+                .comp_visual
+                .AddVisual(&layer, false, None::<&IDCompositionVisual>)?;
+            composition.comp_visual.AddVisual(&visual, true, &layer)?;
+            composition.comp_device.Commit()?;
+            Ok(Self {
+                resources,
+                layer,
+                visual,
+                attached: true,
+                underlay: None,
+            })
+        }
+    }
+
+    fn set_attached(&mut self, attached: bool) -> Result<()> {
+        if self.attached != attached {
+            unsafe {
+                if attached {
+                    self.visual.SetContent(&self.resources.swap_chain)?;
+                } else {
+                    self.visual.SetContent(None::<&windows::core::IUnknown>)?;
+                }
+            }
+            self.attached = attached;
+        }
+        Ok(())
+    }
+}
+
 impl DirectXRendererDevices {
     pub(crate) fn new(
         directx_devices: &DirectXDevices,
@@ -310,6 +380,10 @@ impl DirectXRenderer {
             globals,
             pipelines,
             direct_composition,
+            overlay: None,
+            overlay_requested: false,
+            overlay_generation: 0,
+            backdrop_underlay: None,
             font_info: Self::get_font_info(),
             width: 1,
             height: 1,
@@ -317,6 +391,7 @@ impl DirectXRenderer {
             active_render_target: None,
             path_rasterization_vertices: Vec::new(),
             path_sprites: Vec::new(),
+            filter_target_retention: FilterTargetRetention::default(),
         })
     }
 
@@ -404,6 +479,8 @@ impl DirectXRenderer {
             }
 
             self.resources.take();
+            self.overlay.take();
+            self.backdrop_underlay.take();
             if let Some(devices) = &self.devices {
                 devices.device_context.OMSetRenderTargets(None, None);
                 devices.device_context.ClearState();
@@ -456,7 +533,133 @@ impl DirectXRenderer {
         self.pipelines = pipelines;
         self.direct_composition = direct_composition;
         self.skip_draws = true;
+        if self.overlay_requested {
+            // Native visuals were mounted on the lost device. The new generation tells their
+            // owners to mount them again.
+            self.enable_overlay()
+                .context("Re-enabling the scene overlay")?;
+        }
         Ok(())
+    }
+
+    /// Creates the native layer and the overlay plane above it. Calling this again once it has
+    /// succeeded is a no-op.
+    pub(crate) fn enable_overlay(&mut self) -> Result<()> {
+        if self.overlay.is_some() {
+            return Ok(());
+        }
+        let composition = self
+            .direct_composition
+            .as_ref()
+            .context("native scene overlays require DirectComposition")?;
+        let devices = self.devices.as_ref().context("devices missing")?;
+        self.overlay = Some(OverlayPlane::new(
+            devices,
+            composition,
+            self.width,
+            self.height,
+            self.hwnd,
+        )?);
+        self.overlay_requested = true;
+        self.overlay_generation += 1;
+        Ok(())
+    }
+
+    pub(crate) fn native_composition(&self) -> Option<NativeComposition> {
+        let composition = self.direct_composition.as_ref()?;
+        let overlay = self.overlay.as_ref()?;
+        Some(NativeComposition::DirectComposition {
+            device: std::ptr::NonNull::new(composition.comp_device.as_raw())?,
+            visual: std::ptr::NonNull::new(overlay.layer.as_raw())?,
+            generation: self.overlay_generation,
+        })
+    }
+
+    /// Draws `scene[..overlay_start]` beneath native children and the rest above them, then
+    /// commits the composition so native geometry changed by presentation callbacks lands in
+    /// the same frame. Without overlay content the scene is drawn as-is and the overlay stays
+    /// detached. Returns whether the overlay is showing content.
+    pub(crate) fn draw_layered(
+        &mut self,
+        scene: &Scene,
+        overlay_start: usize,
+        background_appearance: WindowBackgroundAppearance,
+    ) -> Result<bool> {
+        if self.overlay.is_none() {
+            self.draw(scene, background_appearance)?;
+            return Ok(false);
+        }
+        if self.skip_draws {
+            return Ok(false);
+        }
+
+        let split = (overlay_start < scene.len()).then(|| scene.split_at(overlay_start));
+        let (base, overlay_scene) = match &split {
+            Some((base, overlay)) => (
+                base,
+                Some(overlay).filter(|overlay| overlay.has_primitives()),
+            ),
+            None => (scene, None),
+        };
+
+        self.render(base, background_appearance)?;
+        if let Some(overlay_scene) = overlay_scene {
+            if !overlay_scene.backdrop_filters.is_empty() {
+                self.capture_backdrop_underlay()?;
+            }
+            // The overlay shares devices, pipelines and the atlas; only its swap chain and
+            // render targets differ.
+            self.swap_overlay_resources();
+            let drawn = self
+                .render(overlay_scene, WindowBackgroundAppearance::Transparent)
+                .and_then(|_| self.present());
+            self.swap_overlay_resources();
+            self.backdrop_underlay = None;
+            drawn?;
+        }
+        self.present()?;
+        self.overlay
+            .as_mut()
+            .context("overlay missing")?
+            .set_attached(overlay_scene.is_some())?;
+        if let Some(composition) = &self.direct_composition {
+            unsafe { composition.comp_device.Commit()? };
+        }
+        Ok(overlay_scene.is_some())
+    }
+
+    /// Copies the base plane's just-rendered frame for the overlay's backdrop filters.
+    fn capture_backdrop_underlay(&mut self) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let overlay = self.overlay.as_mut().context("overlay missing")?;
+        if overlay.underlay.is_none() {
+            overlay.underlay = Some(create_color_target(
+                &devices.device,
+                self.width,
+                self.height,
+            )?);
+        }
+        let underlay = overlay.underlay.as_ref().expect("allocated above");
+        unsafe {
+            devices.device_context.CopyResource(
+                &underlay.texture,
+                resources
+                    .render_target
+                    .as_ref()
+                    .context("render target missing")?,
+            );
+        }
+        self.backdrop_underlay = underlay.source.clone();
+        Ok(())
+    }
+
+    fn swap_overlay_resources(&mut self) {
+        let overlay = self.overlay.as_mut().expect("overlay missing");
+        std::mem::swap(
+            self.resources.as_mut().expect("resources missing"),
+            &mut overlay.resources,
+        );
     }
 
     pub(crate) fn draw(
@@ -492,6 +695,10 @@ impl DirectXRenderer {
         let device = &self.devices.as_ref().context("devices missing")?.device;
         let resources = self.resources.as_mut().context("resources missing")?;
         resources.retain_surface_views(&scene.surfaces);
+        resources.release_filter_targets(
+            self.filter_target_retention
+                .record_frame(FilterTargets::required_by(requirements)),
+        );
 
         if requirements.uses_path_target {
             resources.ensure_path_resources(device)?;
@@ -499,6 +706,10 @@ impl DirectXRenderer {
 
         if use_offscreen {
             resources.ensure_blur_resources(device, requirements)?;
+            if self.backdrop_underlay.is_some() && requirements.backdrop_filter_count > 0 {
+                // Backdrops composite the underlay beneath the scene in the snapshot target.
+                resources.ensure_backdrop_snapshot(device)?;
+            }
         }
 
         // Clone the views we need (AddRef) so the loop can rebind render targets without holding a
@@ -606,7 +817,19 @@ impl DirectXRenderer {
                     let (current_rtv, current_srv) = targets.current();
                     let result = (|| {
                         for filter in &scene.backdrop_filters[range.clone()] {
-                            let source = if targets.inherits_backdrop() {
+                            let underlay = self
+                                .backdrop_underlay
+                                .clone()
+                                .filter(|_| targets.backdrop_reaches_root());
+                            let source = if underlay.is_some() {
+                                // An overlay backdrop sees the base plane beneath everything
+                                // the overlay has painted so far.
+                                self.dx_snapshot_backdrop(
+                                    std::iter::once(&underlay).chain(
+                                        targets.backdrop_layers().map(|(_, source)| source),
+                                    ),
+                                )?
+                            } else if targets.inherits_backdrop() {
                                 self.dx_snapshot_backdrop(
                                     targets.backdrop_layers().map(|(_, source)| source),
                                 )?
@@ -805,7 +1028,28 @@ impl DirectXRenderer {
         // Clear the render target before resizing
         let devices = self.devices.as_ref().context("devices missing")?;
         unsafe { devices.device_context.OMSetRenderTargets(None, None) };
+        if let Some(overlay) = self.overlay.as_mut() {
+            overlay.underlay = None;
+            Self::resize_resources(devices, &mut overlay.resources, width, height)?;
+        }
         let resources = self.resources.as_mut().context("resources missing")?;
+        Self::resize_resources(devices, resources, width, height)?;
+
+        unsafe {
+            devices
+                .device_context
+                .OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
+        }
+
+        Ok(())
+    }
+
+    fn resize_resources(
+        devices: &DirectXRendererDevices,
+        resources: &mut DirectXResources,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
         resources.render_target.take();
         resources.render_target_view.take();
 
@@ -826,15 +1070,7 @@ impl DirectXRenderer {
                 .context("Failed to resize swap chain")?;
         }
 
-        resources.recreate_resources(devices, width, height)?;
-
-        unsafe {
-            devices
-                .device_context
-                .OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
-        }
-
-        Ok(())
+        resources.recreate_resources(devices, width, height)
     }
 
     fn upload_scene_buffers(&mut self, scene: &Scene) -> Result<()> {
@@ -939,12 +1175,13 @@ impl DirectXRenderer {
         self.path_rasterization_vertices
             .reserve(rasterization_vertex_count);
         for path in paths {
+            let content_mask = path_types::rasterization_content_mask(path);
             self.path_rasterization_vertices
                 .extend(path.vertices.iter().map(|vertex| PathRasterizationVertex {
                     xy_position: vertex.xy_position,
                     curve_position: vertex.st_position,
                     color: path.color,
-                    bounds: path.clipped_bounds(),
+                    content_mask,
                 }));
         }
         debug_assert_eq!(
@@ -1250,72 +1487,7 @@ impl DirectXRenderer {
             return Ok(());
         }
 
-        let full_width = self.width;
-        let full_height = self.height;
-        let blur_size = [
-            downsampled_dimension(full_width) as f32,
-            downsampled_dimension(full_height) as f32,
-        ];
-        let clip = if clip_rounded {
-            FilterCompositeClip::RoundedBounds
-        } else {
-            FilterCompositeClip::ContentShape
-        };
-        let half_vp = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: blur_size[0],
-            Height: blur_size[1],
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        };
-        let resources = self.resources.as_ref().context("resources missing")?;
-
-        let full_size = [full_width as f32, full_height as f32];
-        let (composite_source, source_size) =
-            if let Some(kernel) = BlurKernel::for_radius(blur_radius) {
-                let [ping, pong] = resources
-                    .blur
-                    .as_ref()
-                    .and_then(|blur| blur.scratch.as_ref())
-                    .context("blur resources were not prepared")?;
-                // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
-                self.dx_blur_pass(
-                    &self.pipelines.blur_downsample_vertex,
-                    &self.pipelines.blur_downsample_fragment,
-                    &self.pipelines.blur_blend_replace,
-                    &ping.target,
-                    source_srv,
-                    BlurUniforms::downsample([full_width as f32, full_height as f32], blur_size),
-                    &half_vp,
-                    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-                    3,
-                    true,
-                )?;
-
-                for (axis, source, target) in [
-                    (BlurAxis::Horizontal, &ping.source, &pong.target),
-                    (BlurAxis::Vertical, &pong.source, &ping.target),
-                ] {
-                    self.dx_blur_pass(
-                        &self.pipelines.blur_vertex,
-                        &self.pipelines.blur_fragment,
-                        &self.pipelines.blur_blend_replace,
-                        target,
-                        source,
-                        BlurUniforms::gaussian(axis, blur_size, kernel),
-                        &half_vp,
-                        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-                        3,
-                        true,
-                    )?;
-                }
-
-                (&ping.source, blur_size)
-            } else {
-                (source_srv, full_size)
-            };
-
+        let target_size = [self.width, self.height];
         // Content blur bleeds ~3·radius past the box; composite over a dilated rect.
         let composite_bounds = if clip_rounded {
             bounds
@@ -1324,6 +1496,70 @@ impl DirectXRenderer {
                 GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * blur_radius,
             ))
         };
+        let Some(region) = visible_composite_region(composite_bounds, content_mask, target_size)
+        else {
+            return Ok(());
+        };
+        let clip = if clip_rounded {
+            FilterCompositeClip::RoundedBounds
+        } else {
+            FilterCompositeClip::ContentShape
+        };
+        let resources = self.resources.as_ref().context("resources missing")?;
+
+        let (composite_source, filter_source) =
+            if let Some(plan) = BlurPlan::new(blur_radius, region, target_size) {
+                let [ping, pong] = resources
+                    .blur
+                    .as_ref()
+                    .and_then(|blur| blur.scratch.as_ref())
+                    .context("blur resources were not prepared")?;
+                // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
+                for (vertex, fragment, pass, source, target) in [
+                    (
+                        &self.pipelines.blur_downsample_vertex,
+                        &self.pipelines.blur_downsample_fragment,
+                        plan.downsample,
+                        source_srv,
+                        &ping.target,
+                    ),
+                    (
+                        &self.pipelines.blur_vertex,
+                        &self.pipelines.blur_fragment,
+                        plan.horizontal,
+                        &ping.source,
+                        &pong.target,
+                    ),
+                    (
+                        &self.pipelines.blur_vertex,
+                        &self.pipelines.blur_fragment,
+                        plan.vertical,
+                        &pong.source,
+                        &ping.target,
+                    ),
+                ] {
+                    self.dx_blur_pass(
+                        vertex,
+                        fragment,
+                        &self.pipelines.blur_blend_replace,
+                        target,
+                        source,
+                        pass.uniforms,
+                        &scissor_viewport(pass.scissor),
+                        D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                        3,
+                        true,
+                    )?;
+                }
+
+                (&ping.source, plan.result)
+            } else {
+                (
+                    source_srv,
+                    FilterSource::full_resolution(target_size[0], target_size[1]),
+                )
+            };
+
         let composite_uniforms = BlurUniforms::composite(
             composite_bounds,
             content_mask,
@@ -1331,8 +1567,7 @@ impl DirectXRenderer {
             corner_smoothing,
             opacity,
             clip,
-            source_size,
-            full_size,
+            filter_source,
         );
         let (composite_vertex, composite_fragment) = if composite_uniforms.corner_smoothing > 0.0 {
             (
@@ -1535,6 +1770,23 @@ impl DirectXResources {
         Ok(())
     }
 
+    /// Drops the filter targets in `targets`; they are recreated on demand.
+    fn release_filter_targets(&mut self, targets: FilterTargets) {
+        if targets.offscreen {
+            self.blur = None;
+        } else if let Some(blur) = self.blur.as_mut() {
+            if targets.blur {
+                blur.scratch = None;
+            }
+            if targets.backdrop_snapshot {
+                blur.snapshot = None;
+            }
+            if targets.isolated_groups {
+                blur.groups.clear();
+            }
+        }
+    }
+
     fn ensure_blur_resources(
         &mut self,
         device: &ID3D11Device,
@@ -1578,6 +1830,20 @@ impl DirectXResources {
                 .push(create_color_target(device, width, height)?);
         }
 
+        Ok(())
+    }
+
+    /// Allocates the full-resolution backdrop snapshot target. Requires blur resources.
+    fn ensure_backdrop_snapshot(&mut self, device: &ID3D11Device) -> Result<()> {
+        let width = self.viewport.Width as u32;
+        let height = self.viewport.Height as u32;
+        let blur = self
+            .blur
+            .as_mut()
+            .context("blur resources were not prepared")?;
+        if blur.snapshot.is_none() {
+            blur.snapshot = Some(create_color_target(device, width, height)?);
+        }
         Ok(())
     }
 
@@ -2260,6 +2526,21 @@ fn set_viewport(device_context: &ID3D11DeviceContext, width: f32, height: f32) -
     viewport[0]
 }
 
+/// Restricts a fullscreen blur pass to `scissor`. The blur shaders address texels by their
+/// render-target position rather than by interpolated coordinates, so a viewport covering just
+/// the scissor rectangle produces the same fragments as scissoring, without a second rasterizer
+/// state.
+fn scissor_viewport(scissor: ScissorRectangle) -> D3D11_VIEWPORT {
+    D3D11_VIEWPORT {
+        TopLeftX: scissor.x as f32,
+        TopLeftY: scissor.y as f32,
+        Width: scissor.width as f32,
+        Height: scissor.height as f32,
+        MinDepth: 0.0,
+        MaxDepth: 1.0,
+    }
+}
+
 #[inline]
 fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
     let desc = D3D11_RASTERIZER_DESC {
@@ -2808,6 +3089,7 @@ mod tests {
         ScaledFilter, ScaledPixels, Scene, ShaderBool, Size, WindowBackgroundAppearance, hsla, rgb,
         rgb_to_hsla, solid_background, white,
     };
+    use gpui_render::filter_targets::FILTER_TARGET_IDLE_FRAMES;
     use smallvec::{SmallVec, smallvec};
     use std::borrow::Cow;
     use windows::Win32::Foundation::HWND;
@@ -3018,7 +3300,7 @@ mod tests {
         });
         scene.insert_primitive(MonochromeSprite {
             order: 0,
-            padding: 0,
+            blur_radius: ScaledPixels(0.0),
             bounds: scaled(10.0, 60.0, 30.0, 30.0),
             content_mask: full_mask(),
             color: green.into(),
@@ -3073,7 +3355,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_targets_are_allocated_on_demand_and_reset_on_resize() -> Result<()> {
+    fn filter_targets_are_allocated_on_demand_and_released_when_unused() -> Result<()> {
         let window = HiddenWindow::new()?;
         let devices = DirectXDevices::new()?;
         let mut renderer = DirectXRenderer::new(window.0, &devices, true)?;
@@ -3146,6 +3428,21 @@ mod tests {
 
         renderer.render(&ordinary, WindowBackgroundAppearance::Opaque)?;
         assert_eq!(allocations(&renderer), None);
+
+        // Targets that frames stop using are released after a grace period.
+        renderer.render(&filtered, WindowBackgroundAppearance::Opaque)?;
+        renderer.render(&nested, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), Some((3, true, true)));
+        for _ in 1..FILTER_TARGET_IDLE_FRAMES {
+            renderer.render(&nested, WindowBackgroundAppearance::Opaque)?;
+        }
+        assert_eq!(allocations(&renderer), Some((3, false, false)));
+        for _ in 0..FILTER_TARGET_IDLE_FRAMES {
+            renderer.render(&ordinary, WindowBackgroundAppearance::Opaque)?;
+        }
+        assert_eq!(allocations(&renderer), None);
+        renderer.render(&filtered, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), Some((1, true, true)));
 
         Ok(())
     }

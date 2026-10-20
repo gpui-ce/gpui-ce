@@ -169,7 +169,7 @@ fn every_primitive_kind_renders() {
     let mono_bounds = bounds(10.0, 60.0, 30.0, 30.0);
     scene.insert_primitive(MonochromeSprite {
         order: 0,
-        padding: 0,
+        blur_radius: ScaledPixels(0.0),
         bounds: mono_bounds,
         content_mask: full_mask(),
         color: green.into(),
@@ -553,6 +553,7 @@ fn content_mask_fades_quad_edges() {
                 bottom: ScaledPixels(0.0),
                 left: ScaledPixels(20.0),
             },
+            ..Default::default()
         },
         background: solid_background(red),
         ..Default::default()
@@ -579,4 +580,236 @@ fn content_mask_fades_quad_edges() {
     close(60, 2, 64);
     // The unfaded right edge still clips hard at the mask boundary.
     assert_eq!(pixel(101, 50)[0], 0);
+}
+
+#[test]
+fn nested_clip_keeps_the_outer_edge_fade() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let pixel_mask = |x: f32, width: f32, fade_left: f32| ContentMask {
+        bounds: gpui::Bounds::new(
+            gpui::point(gpui::px(x), gpui::px(0.0)),
+            gpui::size(gpui::px(width), gpui::px(100.0)),
+        ),
+        fade_out: Edges {
+            left: gpui::px(fade_left),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // An overflow-hidden child that starts 10px into its parent's 20px fade band.
+    let parent = pixel_mask(0.0, 100.0, 20.0);
+    let child = pixel_mask(10.0, 50.0, 0.0);
+    let content_mask = child.intersect(&parent).scale(1.0);
+
+    let mut scene = Scene::default();
+    let red: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xff0000));
+    scene.insert_primitive(Quad {
+        bounds: bounds(0.0, 0.0, 310.0, 100.0),
+        content_mask,
+        background: solid_background(red),
+        ..Default::default()
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    let red_at = |x: u32| image.get_pixel(x, 50).0[0];
+
+    // Clipped hard by the child.
+    assert_eq!(red_at(9), 0);
+    // The parent's ramp continues: 10.5px into the 20px band is 52.5% coverage.
+    assert!(red_at(10).abs_diff(134) <= 3, "got {}", red_at(10));
+    assert!(red_at(15).abs_diff(198) <= 3, "got {}", red_at(15));
+    assert_eq!(red_at(30), 255);
+    assert_eq!(red_at(60), 0);
+}
+
+#[test]
+fn paths_fade_with_their_content_mask() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut builder = gpui::PathBuilder::fill();
+    builder.move_to(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    builder.line_to(gpui::point(gpui::px(200.0), gpui::px(0.0)));
+    builder.line_to(gpui::point(gpui::px(200.0), gpui::px(100.0)));
+    builder.line_to(gpui::point(gpui::px(0.0), gpui::px(100.0)));
+    builder.close();
+    let mut path = builder.build().expect("rectangle").scale(1.0);
+    // The path starts 10px into the mask's 20px left fade.
+    path.content_mask = ContentMask {
+        bounds: bounds(-10.0, 0.0, 160.0, 100.0),
+        fade_out: Edges {
+            left: ScaledPixels(20.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    path.color = solid_background(gpui::white());
+
+    let mut scene = Scene::default();
+    scene.insert_primitive(path);
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    let red_at = |x: u32| image.get_pixel(x, 50).0[0];
+
+    // 10.5px of the 20px ramp lies left of pixel 0's center: 52.5% coverage.
+    assert!(red_at(0).abs_diff(134) <= 3, "got {}", red_at(0));
+    assert!(red_at(5).abs_diff(198) <= 3, "got {}", red_at(5));
+    assert_eq!(red_at(40), 255);
+    // The mask's unfaded right edge still clips hard.
+    assert_eq!(red_at(149), 255);
+    assert_eq!(red_at(151), 0);
+}
+
+#[test]
+fn rounded_content_masks_clip_corners_per_pixel() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let pixel_bounds = |x: f32, y: f32, w: f32, h: f32| {
+        gpui::Bounds::new(
+            gpui::point(gpui::px(x), gpui::px(y)),
+            gpui::size(gpui::px(w), gpui::px(h)),
+        )
+    };
+    let card = ContentMask {
+        bounds: pixel_bounds(10.0, 10.0, 100.0, 80.0),
+        corner_radii: Corners::all(gpui::px(20.0)),
+        ..Default::default()
+    };
+    // A nested hard clip over the card's left half, starting 4px below its top edge.
+    let row = ContentMask {
+        bounds: pixel_bounds(0.0, 14.0, 60.0, 90.0),
+        ..Default::default()
+    };
+    let content_mask = row.intersect(&card).scale(1.0);
+    let red: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xff0000));
+
+    let mut scene = Scene::default();
+    scene.insert_primitive(Quad {
+        bounds: bounds(0.0, 0.0, 310.0, 100.0),
+        content_mask,
+        background: solid_background(red),
+        ..Default::default()
+    });
+    // A path under the card's right half is clipped by the same rounded corners.
+    let mut builder = gpui::PathBuilder::fill();
+    builder.move_to(gpui::point(gpui::px(60.0), gpui::px(0.0)));
+    builder.line_to(gpui::point(gpui::px(200.0), gpui::px(0.0)));
+    builder.line_to(gpui::point(gpui::px(200.0), gpui::px(100.0)));
+    builder.line_to(gpui::point(gpui::px(60.0), gpui::px(100.0)));
+    builder.close();
+    let mut path = builder.build().expect("rectangle").scale(1.0);
+    path.content_mask = card.scale(1.0);
+    path.color = solid_background(gpui::white());
+    scene.insert_primitive(path);
+    scene.finish();
+
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    let pixel = |x: u32, y: u32| image.get_pixel(x, y).0;
+
+    // The quad: cut by the card's top-left and bottom-left corners, clipped hard by the
+    // row's top edge, and solid elsewhere.
+    assert_eq!(pixel(11, 15)[0], 0, "top-left corner");
+    assert_eq!(pixel(11, 88)[0], 0, "bottom-left corner");
+    assert_eq!(pixel(30, 15)[0], 255, "top edge past the corner");
+    assert_eq!(pixel(30, 12)[0], 0, "row clip");
+    assert_eq!(pixel(11, 50)[0], 255, "straight left edge");
+    assert_eq!(pixel(9, 50)[0], 0, "outside the card");
+    // The path: cut by the card's right corners.
+    assert_eq!(pixel(108, 11)[0], 0, "top-right corner");
+    assert_eq!(pixel(108, 88)[0], 0, "bottom-right corner");
+    assert_eq!(pixel(108, 50), [255, 255, 255, 255], "straight right edge");
+    assert_eq!(pixel(111, 50)[0], 0, "outside the card");
+    // The arc is antialiased.
+    let partial = (10..30)
+        .flat_map(|y| (10..30).map(move |x| (x, y)))
+        .filter(|&(x, y)| (1..255).contains(&pixel(x, y)[0]))
+        .count();
+    assert!(partial >= 10, "only {partial} antialiased arc pixels");
+}
+
+#[test]
+fn monochrome_sprites_blur_and_transform() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mono = tile(
+        &renderer,
+        AtlasKey::Svg(RenderSvgParams {
+            path: "test-blur".into(),
+            size: Size {
+                width: DevicePixels(8),
+                height: DevicePixels(8),
+            },
+        }),
+        vec![255; 64],
+    );
+    let white: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xffffff));
+    let sprite = |bounds, blur_radius: f32, transformation| MonochromeSprite {
+        order: 0,
+        blur_radius: ScaledPixels(blur_radius),
+        bounds,
+        content_mask: full_mask(),
+        color: white.into(),
+        tile: mono,
+        transformation,
+    };
+
+    let mut scene = Scene::default();
+    // A crisp and a blurred 20px square, the blurred one inflated by its 3σ margin.
+    scene.insert_primitive(sprite(
+        bounds(10.0, 20.0, 20.0, 20.0),
+        0.0,
+        Default::default(),
+    ));
+    let blurred = bounds(60.0, 20.0, 20.0, 20.0);
+    scene.insert_primitive(sprite(
+        blurred.dilate(MonochromeSprite::blur_margin(ScaledPixels(2.0))),
+        2.0,
+        Default::default(),
+    ));
+    // A crisp square scaled 2x about its center.
+    let center = gpui::point(ScaledPixels(130.0), ScaledPixels(30.0));
+    let scale_about_center = gpui::TransformationMatrix::unit()
+        .translate(center)
+        .scale(gpui::size(2.0, 2.0))
+        .translate(gpui::point(
+            ScaledPixels(-center.x.0),
+            ScaledPixels(-center.y.0),
+        ));
+    scene.insert_primitive(sprite(
+        bounds(120.0, 20.0, 20.0, 20.0),
+        0.0,
+        scale_about_center,
+    ));
+    scene.finish();
+
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    let value = |x: u32, y: u32| image.get_pixel(x, y).0[0];
+
+    // Crisp edges stay crisp.
+    assert_eq!(value(20, 30), 255);
+    assert_eq!(value(8, 30), 0);
+    // The blurred square keeps a solid center, ramps across its edge, and spills a halo
+    // outside its unblurred bounds.
+    assert!(value(70, 30) >= 250, "center {}", value(70, 30));
+    let profile: Vec<u8> = (52..72).map(|x| value(x, 30)).collect();
+    assert!(
+        profile
+            .windows(2)
+            .all(|pair| pair[0] < pair[1] || (pair[0] == pair[1] && matches!(pair[0], 0 | 255))),
+        "the blurred edge must ramp smoothly: {profile:?}"
+    );
+    let edge = value(60, 30);
+    let halo = value(57, 30);
+    assert!((60..250).contains(&edge), "edge {edge}");
+    assert!((1..edge).contains(&halo), "halo {halo}");
+    assert!(value(53, 30) < halo, "the halo fades out");
+    assert_eq!(value(52, 30), 0, "nothing beyond the margin");
+    // The scaled square covers 110..150 × 10..50.
+    assert_eq!(value(116, 16), 255);
+    assert_eq!(value(144, 44), 255);
+    assert_eq!(value(108, 30), 0);
 }

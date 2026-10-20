@@ -74,10 +74,11 @@ use std::io::Cursor;
 use std::ops;
 use std::time::Duration;
 use std::{
-    ffi::OsString,
+    ffi::{OsString, c_void},
     fmt::{self, Debug},
     ops::Range,
     path::{Path, PathBuf},
+    ptr::NonNull,
     rc::Rc,
     sync::Arc,
 };
@@ -887,6 +888,38 @@ pub enum TextInputStateChange {
     ContentChanged,
 }
 
+/// Where an application mounts native child surfaces (web views, video, platform controls) so
+/// that they composite above GPUI's base content and beneath its overlay plane.
+///
+/// Returned by [`crate::Window::native_composition`] once
+/// [`crate::Window::enable_scene_overlay`] has succeeded. The pointers are borrowed from the
+/// window: never release them, and retain anything kept beyond the current call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NativeComposition {
+    /// macOS. `view` is an `NSView *` that hosts native child views. It fills the window's
+    /// content view, ignores mouse events that miss its children, and stays below the overlay
+    /// view drawing deferred GPUI content. Add children with `-[NSView addSubview:]`.
+    AppKit {
+        /// The `NSView *` to add native child views to.
+        view: NonNull<c_void>,
+    },
+    /// Windows, when the window renders through DirectComposition. `visual` is an
+    /// `IDCompositionVisual *` between GPUI's base and overlay swap chains; add children with
+    /// `IDCompositionVisual::AddVisual` and commit them on `device`.
+    ///
+    /// GPU device-lost recovery releases both objects and creates new ones, so they are valid
+    /// only while `generation` is unchanged. When it changes, mount children again.
+    DirectComposition {
+        /// The `IDCompositionDevice *` that owns `visual`.
+        device: NonNull<c_void>,
+        /// The `IDCompositionVisual *` to add native child visuals to.
+        visual: NonNull<c_void>,
+        /// Incremented whenever `device` and `visual` are recreated.
+        generation: u64,
+    },
+}
+
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
@@ -936,6 +969,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         None
     }
+    /// Called after a frame that left the window with no pending work: it is not
+    /// dirty, has no next-frame callbacks, and is not sustaining presentation for
+    /// high-rate input. Platforms whose frame source ticks continuously may stop
+    /// delivering `on_request_frame` callbacks until the closure returned by
+    /// [`Self::frame_waker`] is next invoked.
+    fn pause_frame_requests(&self) {}
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
@@ -948,6 +987,25 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
+    /// Draws a frame whose operations from `overlay_start` onwards (deferred draws, prompts,
+    /// tooltips and drag previews) belong above native child surfaces, once
+    /// [`Self::enable_scene_overlay`] has succeeded. `overlay_captures_input` reports whether
+    /// that content is interactive, so the platform should route pointer input to GPUI rather
+    /// than to the native children beneath it.
+    ///
+    /// Platforms without a scene overlay draw the whole scene as one plane.
+    fn draw_layered(&self, scene: &Scene, _overlay_start: usize, _overlay_captures_input: bool) {
+        self.draw(scene);
+    }
+    /// Creates the transparent plane that [`Self::draw_layered`] draws overlay content into,
+    /// with a host for native children beneath it. Calling this again is a no-op.
+    fn enable_scene_overlay(&self) -> Result<()> {
+        anyhow::bail!("native scene overlays are not supported on this platform")
+    }
+    /// Where native children mount, once [`Self::enable_scene_overlay`] has succeeded.
+    fn native_composition(&self) -> Option<NativeComposition> {
+        None
+    }
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
     fn is_subpixel_rendering_supported(&self) -> bool;

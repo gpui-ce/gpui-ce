@@ -62,6 +62,9 @@ pub struct WindowsWindowState {
     pub direct_manipulation: DirectManipulationHandler,
 
     pub renderer: RefCell<DirectXRenderer>,
+    /// Whether interactive overlay content (menus, prompts, drag previews) was showing above
+    /// native children in the last frame.
+    pub overlay_captures_input: Cell<bool>,
     /// Set when the next `draw_window` call must be treated as a forced
     /// render. Used after a GPU device-lost recovery, where the next frame
     /// must both re-enable drawing (via `mark_drawable`) and bypass the GPUI
@@ -171,6 +174,7 @@ impl WindowsWindowState {
             last_reported_capslock: Cell::new(last_reported_capslock),
             hovered: Cell::new(hovered),
             renderer: RefCell::new(renderer),
+            overlay_captures_input: Cell::new(false),
             force_render_pending: Cell::new(false),
             click_state,
             current_cursor: Cell::new(current_cursor),
@@ -1102,6 +1106,30 @@ impl PlatformWindow for WindowsWindow {
             .log_err();
     }
 
+    fn draw_layered(&self, scene: &Scene, overlay_start: usize, overlay_captures_input: bool) {
+        let overlay_visible = self
+            .state
+            .renderer
+            .borrow_mut()
+            .draw_layered(scene, overlay_start, self.state.background_appearance.get())
+            .log_err()
+            .unwrap_or(false);
+        // A menu or prompt opening over a focused native child takes the keyboard back, so
+        // keyboard navigation reaches GPUI. Passive overlays such as tooltips leave it alone.
+        let captures_input = overlay_visible && overlay_captures_input;
+        if !self.state.overlay_captures_input.replace(captures_input) && captures_input {
+            reclaim_focus_from_native_child(self.0.hwnd);
+        }
+    }
+
+    fn enable_scene_overlay(&self) -> anyhow::Result<()> {
+        self.state.renderer.borrow_mut().enable_overlay()
+    }
+
+    fn native_composition(&self) -> Option<NativeComposition> {
+        self.state.renderer.borrow().native_composition()
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
         self.state
@@ -1870,5 +1898,16 @@ mod tests {
             state.update(MouseButton::Right, point(DevicePixels(10), DevicePixels(0))),
             1
         );
+    }
+}
+
+/// Moves keyboard focus back to a GPUI window from one of its native child windows (such as an
+/// embedded WebView2), if one holds it.
+pub(crate) fn reclaim_focus_from_native_child(hwnd: HWND) {
+    unsafe {
+        let focus = GetFocus();
+        if !focus.is_invalid() && focus != hwnd && IsChild(hwnd, focus).as_bool() {
+            SetFocus(Some(hwnd)).log_err();
+        }
     }
 }

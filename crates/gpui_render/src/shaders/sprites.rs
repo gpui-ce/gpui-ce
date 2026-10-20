@@ -88,7 +88,7 @@ pub mod monochrome_sprite {
     #[derive(Clone, Copy, Wgsl)]
     pub struct MonochromeSprite {
         pub order: u32,
-        pub padding: u32,
+        pub blur_radius: f32,
         pub bounds: Bounds,
         pub content_mask: ContentMask,
         pub color: Hsla,
@@ -115,6 +115,93 @@ pub mod monochrome_sprite {
         pub clip_distances: Vec4f,
     }
 
+    /// Blur taps on each side of the center, per axis, at most.
+    pub const MAX_BLUR_TAPS_PER_SIDE: f32 = 6.0;
+
+    pub fn blur_margin(sprite: MonochromeSprite) -> f32 {
+        GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * sprite.blur_radius
+    }
+
+    /// Device pixels per tile texel are not always 1: SVG tiles are oversampled.
+    pub fn tile_texels_per_pixel(sprite: MonochromeSprite) -> Vec2f {
+        let margin = blur_margin(sprite);
+        let tile_size = vec2f(
+            sprite.tile.bounds.size.x as f32,
+            sprite.tile.bounds.size.y as f32,
+        );
+        let unpadded_size = max(
+            sprite.bounds.size - vec2f(2.0 * margin, 2.0 * margin),
+            vec2f(MIN_NORMALIZED_WEIGHT, MIN_NORMALIZED_WEIGHT),
+        );
+        tile_size / unpadded_size
+    }
+
+    /// Gaussian-filtered tile coverage. Taps clamp half a texel inside the tile so
+    /// filtering never reads a neighboring tile, and fade out beyond it as if the tile
+    /// were surrounded by transparent texels.
+    pub fn blurred_coverage(sprite: MonochromeSprite, tile_position: Vec2f) -> f32 {
+        let dimensions = texture_dimensions(MONOCHROME_TEXTURE);
+        let atlas_size = vec2f(dimensions.x as f32, dimensions.y as f32);
+        let texel = vec2f(1.0, 1.0) / atlas_size;
+        let tile_min = vec2f(
+            sprite.tile.bounds.origin.x as f32,
+            sprite.tile.bounds.origin.y as f32,
+        ) / atlas_size;
+        let tile_max = tile_min
+            + vec2f(
+                sprite.tile.bounds.size.x as f32,
+                sprite.tile.bounds.size.y as f32,
+            ) / atlas_size;
+        let tile_center = (tile_min + tile_max) * 0.5;
+        let inset_min = min(tile_min + texel * 0.5, tile_center);
+        let inset_max = max(tile_max - texel * 0.5, tile_center);
+
+        let deviation_texels = sprite.blur_radius * tile_texels_per_pixel(sprite);
+        let taps_per_side = clamp(
+            ceil(GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * max(deviation_texels.x, deviation_texels.y)),
+            1.0,
+            MAX_BLUR_TAPS_PER_SIDE,
+        );
+        // Taps span three standard deviations each way, at most one texel apart for
+        // small blurs and half a standard deviation apart for large ones.
+        let deviations_per_tap = GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS / taps_per_side;
+        let tap_step = deviation_texels * texel * deviations_per_tap;
+        let last_tap = taps_per_side as i32;
+
+        let mut coverage = 0.0;
+        let mut total_weight = 0.0;
+        let mut y = -last_tap;
+        while y <= last_tap {
+            let mut x = -last_tap;
+            while x <= last_tap {
+                let offset = vec2f(x as f32, y as f32);
+                let deviations = offset * deviations_per_tap;
+                let weight = exp(-0.5 * dot(deviations, deviations));
+                let position = tile_position + offset * tap_step;
+                // Filter as if the tile were surrounded by transparent texels.
+                let outside = max(
+                    max(inset_min - position, position - inset_max),
+                    vec2f(0.0, 0.0),
+                );
+                let border = saturate(vec2f(1.0, 1.0) - outside / texel);
+                coverage += weight
+                    * border.x
+                    * border.y
+                    * texture_sample_level(
+                        MONOCHROME_TEXTURE,
+                        MONOCHROME_SAMPLER,
+                        clamp(position, inset_min, inset_max),
+                        0.0,
+                    )
+                    .x;
+                total_weight += weight;
+                x += 1;
+            }
+            y += 1;
+        }
+        coverage / total_weight
+    }
+
     #[vertex]
     pub fn vertex_monochrome_sprite(
         #[builtin(vertex_index)] vertex_id: u32,
@@ -122,10 +209,22 @@ pub mod monochrome_sprite {
     ) -> MonochromeSpriteVarying {
         let sprite = get!(MONOCHROME_SPRITES)[instance_id as usize];
         let vertex = transformed_rectangle_vertex(vertex_id, sprite.bounds, sprite.transformation);
+        let mut tile_unit_position = vertex.unit_position;
+        if sprite.blur_radius > 0.0 {
+            // The blur margin maps past the tile, keeping the tile's content at its size.
+            let margin = blur_margin(sprite);
+            let tile_size = sprite.bounds.size - vec2f(2.0 * margin, 2.0 * margin);
+            tile_unit_position = (vertex.unit_position * sprite.bounds.size
+                - vec2f(margin, margin))
+                / max(
+                    tile_size,
+                    vec2f(MIN_NORMALIZED_WEIGHT, MIN_NORMALIZED_WEIGHT),
+                );
+        }
         MonochromeSpriteVarying {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
-                vertex.unit_position,
+                tile_unit_position,
                 sprite.tile,
                 texture_dimensions(MONOCHROME_TEXTURE),
             ),
@@ -141,13 +240,18 @@ pub mod monochrome_sprite {
             return transparent();
         }
         let sprite = get!(MONOCHROME_SPRITES)[input.sprite_id as usize];
-        let sample = texture_sample_level(
-            MONOCHROME_TEXTURE,
-            MONOCHROME_SAMPLER,
-            input.tile_position,
-            0.0,
-        )
-        .x;
+        let mut sample = 0.0;
+        if sprite.blur_radius > 0.0 {
+            sample = blurred_coverage(sprite, input.tile_position);
+        } else {
+            sample = texture_sample_level(
+                MONOCHROME_TEXTURE,
+                MONOCHROME_SAMPLER,
+                input.tile_position,
+                0.0,
+            )
+            .x;
+        }
         let corrected = apply_contrast_and_gamma_correction(
             sample,
             input.color.rgb(),

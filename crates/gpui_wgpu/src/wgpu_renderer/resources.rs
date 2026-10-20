@@ -9,6 +9,7 @@ use gpui::ScenePlanRequirements;
 
 use crate::WgpuContext;
 use gpui_render::blur::downsampled_dimension;
+use gpui_render::filter_targets::FilterTargets;
 use gpui_render::shaders::{
     blur::BlurUniforms,
     common::{FontRasterizationUniforms, GlobalUniforms},
@@ -225,6 +226,33 @@ impl WgpuResources {
         self.blur_pong_view = None;
         self.filter_group_textures.clear();
         self.filter_group_views.clear();
+    }
+
+    /// Drops the filter targets in `targets`; they are recreated on demand.
+    pub(super) fn release_filter_textures(&mut self, targets: FilterTargets) {
+        if targets.is_empty() {
+            return;
+        }
+        // Cached bind groups keep their texture views, and with them the textures, alive.
+        self.blur_bind_groups.get_mut().groups.clear();
+        if targets.offscreen {
+            self.scene_color_texture = None;
+            self.scene_color_view = None;
+        }
+        if targets.blur {
+            self.blur_ping_texture = None;
+            self.blur_ping_view = None;
+            self.blur_pong_texture = None;
+            self.blur_pong_view = None;
+        }
+        if targets.backdrop_snapshot {
+            self.backdrop_snapshot_texture = None;
+            self.backdrop_snapshot_view = None;
+        }
+        if targets.isolated_groups {
+            self.filter_group_textures.clear();
+            self.filter_group_views.clear();
+        }
     }
 
     pub(super) fn finish_frame_uploads(&self) {

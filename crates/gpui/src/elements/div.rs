@@ -65,6 +65,15 @@ type StackSafe<T> = stacksafe::StackSafe<T>;
 #[cfg(not(feature = "stacker"))]
 type StackSafe<T> = T;
 
+/// Pointer travel (px) that promotes a mouse-down into a drag. Zed's
+/// original 2px is tuned for precise macOS trackpads; on Windows, ordinary
+/// mouse jitter routinely crosses it mid-click, promoting plain clicks into
+/// accidental drags. Windows uses its system drag rectangle instead
+/// (`SM_CXDRAG`/`SM_CYDRAG`, 4px by default) — the same click-vs-drag
+/// disambiguation native Windows apps apply.
+#[cfg(target_os = "windows")]
+const DRAG_THRESHOLD: f64 = 4.;
+#[cfg(not(target_os = "windows"))]
 const DRAG_THRESHOLD: f64 = 2.;
 const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);

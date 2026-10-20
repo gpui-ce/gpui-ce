@@ -40,6 +40,7 @@ pub(crate) struct TestWindowState {
     appearance_change_callback: Option<Box<dyn FnMut()>>,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     frame_wake_count: Rc<Cell<usize>>,
+    frame_requests_paused: Rc<Cell<bool>>,
     frame_scheduled: bool,
     frame_callback_pending: bool,
     input_handler: Option<PlatformInputHandler>,
@@ -105,6 +106,7 @@ impl TestWindow {
             appearance_change_callback: None,
             request_frame_callback: None,
             frame_wake_count: Rc::new(Cell::new(0)),
+            frame_requests_paused: Rc::new(Cell::new(false)),
             frame_scheduled: false,
             frame_callback_pending: false,
             input_handler: None,
@@ -203,6 +205,17 @@ impl TestWindow {
         drop(lock);
         callback(options);
         self.0.lock().request_frame_callback = Some(callback);
+    }
+
+    /// Delivers a frame request the way a continuously ticking display clock
+    /// would: only while the window has not paused frame requests. Returns
+    /// whether a frame request was delivered.
+    pub fn simulate_display_tick(&self) -> bool {
+        if self.0.lock().frame_requests_paused.get() {
+            return false;
+        }
+        self.simulate_frame_request(RequestFrameOptions::default());
+        true
     }
 
     pub fn simulate_input(&mut self, event: PlatformInput) -> bool {
@@ -378,10 +391,21 @@ impl PlatformWindow for TestWindow {
         // Recording invocations (rather than delivering a frame) lets tests
         // assert the wake protocol without coupling to frame timing; tests
         // deliver frames explicitly via `simulate_frame_request`.
-        let frame_wake_count = self.0.lock().frame_wake_count.clone();
+        let (frame_wake_count, frame_requests_paused) = {
+            let state = self.0.lock();
+            (
+                state.frame_wake_count.clone(),
+                state.frame_requests_paused.clone(),
+            )
+        };
         Some(Rc::new(move || {
             frame_wake_count.set(frame_wake_count.get() + 1);
+            frame_requests_paused.set(false);
         }))
+    }
+
+    fn pause_frame_requests(&self) {
+        self.0.lock().frame_requests_paused.set(true);
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {

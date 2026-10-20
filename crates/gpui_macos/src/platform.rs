@@ -172,6 +172,10 @@ define_class!(
         fn system_wake(&self, _: &NSNotification) {
             on_system_wake(self);
         }
+        #[unsafe(method(onDisplaysWake:))]
+        fn displays_wake(&self, _: &NSNotification) {
+            on_displays_wake();
+        }
     }
 
     unsafe impl NSObjectProtocol for GPUIApplicationDelegate {}
@@ -1319,6 +1323,8 @@ fn did_finish_launching(this: &GPUIApplicationDelegate) {
             Some(&process_info),
         );
     }
+    register_displays_wake_observer(this);
+
     let platform = get_mac_platform(this);
     let callback = {
         let mut state = platform.0.lock();
@@ -1348,6 +1354,27 @@ fn register_system_wake_observer(observer: &GPUIApplicationDelegate) {
             Some(&wake_name),
             None,
         );
+    }
+}
+
+/// Observes events after which CoreVideo may have stopped display links without
+/// AppKit reporting a screen or occlusion change for the windows using them.
+fn register_displays_wake_observer(observer: &GPUIApplicationDelegate) {
+    let workspace_center = NSWorkspace::sharedWorkspace().notificationCenter();
+    for name in [
+        "NSWorkspaceDidWakeNotification",
+        "NSWorkspaceScreensDidWakeNotification",
+        "NSWorkspaceSessionDidBecomeActiveNotification",
+    ] {
+        let name = ns_string(name);
+        unsafe {
+            workspace_center.addObserver_selector_name_object(
+                as_any_object(observer),
+                objc2::sel!(onDisplaysWake:),
+                Some(&name),
+                None,
+            );
+        }
     }
 }
 
@@ -1433,6 +1460,18 @@ fn on_system_wake(this: &GPUIApplicationDelegate) {
             callback();
             platform.0.lock().on_system_wake.get_or_insert(callback);
         }
+    }
+}
+
+fn on_displays_wake() {
+    // Observers run synchronously inside whatever posted the notification. Restart
+    // from a fresh main-queue turn so this never runs inside a window callback.
+    unsafe {
+        DispatchQueue::main().exec_async_f(null_mut(), restart_frame_sources);
+    }
+
+    extern "C" fn restart_frame_sources(_: *mut c_void) {
+        MacWindow::restart_frame_sources();
     }
 }
 

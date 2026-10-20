@@ -83,3 +83,7 @@ url.workspace = true
 gpui = { workspace = true, features = ["test-support"], default-features = false }
 gpui_apple = { workspace = true, features = ["test-support"] }
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+
+[[test]]
+name = "frame_source_recovery"
+harness = false

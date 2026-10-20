@@ -8,7 +8,7 @@ pub mod path_rasterization {
         pub xy_position: Vec2f,
         pub curve_position: Vec2f,
         pub color: Background,
-        pub bounds: Bounds,
+        pub content_mask: ContentMask,
     }
     storage!(group(1), binding(0), PATH_VERTICES: RuntimeArray<PathRasterizationVertex>);
 
@@ -48,7 +48,7 @@ pub mod path_rasterization {
             position: viewport_to_clip_position(vertex.xy_position),
             curve_position: vertex.curve_position,
             vertex_id,
-            clip_distances: clip_distances(vertex.xy_position, vertex.bounds),
+            clip_distances: clip_distances(vertex.xy_position, vertex.content_mask.bounds),
         }
     }
 
@@ -59,9 +59,12 @@ pub mod path_rasterization {
             return transparent();
         }
         let vertex = get!(PATH_VERTICES)[input.vertex_id as usize];
-        let paint = Paint::new(vertex.color, vertex.bounds);
+        let paint = Paint::new(vertex.color, vertex.content_mask.bounds);
         let color = paint_color(paint, input.position.xy(), prepare_paint(paint));
-        premultiply(color, coverage)
+        premultiply(
+            color,
+            coverage * ContentMask::alpha(vertex.content_mask, input.position.xy()),
+        )
     }
 }
 

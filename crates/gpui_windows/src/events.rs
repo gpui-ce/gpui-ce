@@ -493,6 +493,9 @@ impl WindowsWindowInner {
         lparam: LPARAM,
     ) -> Option<isize> {
         unsafe { SetCapture(handle) };
+        // Pressing GPUI content takes the keyboard from an embedded native child window; an
+        // application that forwards the press to that child refocuses it.
+        reclaim_focus_from_native_child(handle);
 
         let Some(mut func) = self.state.callbacks.input.take() else {
             return Some(1);

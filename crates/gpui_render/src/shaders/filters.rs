@@ -96,19 +96,26 @@ pub mod blur {
         pub bounds: Bounds,
         pub content_mask: Bounds,
         pub corner_radii: Corners,
+        /// Gaussian passes: the axis to blur along, in texels.
         pub direction: Vec2f,
-        pub standard_deviation: f32,
         pub opacity: f32,
-        pub sample_count: u32,
-        pub sample_step: f32,
+        pub corner_smoothing: f32,
+        /// Allocated size of the sampled texture, in texels.
+        pub source_size: Vec2f,
+        /// Texels of the sampled texture holding valid content; samples clamp to them.
+        pub sample_extent: Vec2f,
+        /// Sampled texels per target pixel.
+        pub texel_scale: Vec2f,
         pub composite_clip: BlurCompositeClip,
         pub downsample_mode: DownsampleMode,
-        pub source_size: Vec2f,
-        pub target_size: Vec2f,
-        pub corner_smoothing: f32,
-        pub padding0: u32,
-        pub padding1: u32,
-        pub padding2: u32,
+        /// Box downsampling: bilinear taps per axis, each averaging a 2x2 block.
+        pub box_taps_per_axis: u32,
+        /// Gaussian passes: symmetric `(offset, weight)` pairs in `taps`, beside the center.
+        pub tap_pair_count: u32,
+        pub center_weight: f32,
+        pub padding: u32,
+        /// Two `(offset, weight)` pairs per vector; see `gpui_render::blur::BlurKernel`.
+        pub taps: [Vec4f; 12],
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -134,12 +141,7 @@ pub mod blur {
     }
 
     pub fn blur_composite_color(position: Vec2f, coverage: f32) -> Vec4f {
-        let blurred = texture_sample_level(
-            BLUR_TEXTURE,
-            BLUR_SAMPLER,
-            position / get!(BLUR_LOCALS).target_size,
-            0.0,
-        );
+        let blurred = sample_blur_texels(position * get!(BLUR_LOCALS).texel_scale);
         let factor = coverage * get!(BLUR_LOCALS).opacity;
         vec4f(
             blurred.x * factor,
@@ -169,46 +171,69 @@ pub mod blur {
         }
     }
 
+    /// Samples the blur texture at a position in texels, clamped to the valid extent so a
+    /// partially used texture behaves like clamp-to-edge sampling of just that extent.
+    pub fn sample_blur_texels(position: Vec2f) -> Vec4f {
+        let clamped = clamp(
+            position,
+            vec2f(0.5, 0.5),
+            get!(BLUR_LOCALS).sample_extent - 0.5,
+        );
+        texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            clamped / get!(BLUR_LOCALS).source_size,
+            0.0,
+        )
+    }
+
     #[fragment]
     pub fn fragment_blur_downsample(input: BlurVarying) -> Vec4f {
-        if get!(BLUR_LOCALS).downsample_mode == DownsampleMode::HalfResolution {
-            let destination = floor(input.position.xy());
-            let source_coordinates = min(
-                (destination + 0.5) / get!(BLUR_LOCALS).target_size,
-                (get!(BLUR_LOCALS).source_size - 0.5) / get!(BLUR_LOCALS).source_size,
-            );
-            return texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, source_coordinates, 0.0);
+        if get!(BLUR_LOCALS).downsample_mode == DownsampleMode::Box {
+            // Average the block of source texels under this texel. Each bilinear tap lands on
+            // the shared corner of a 2x2 block, so a factor-wide block takes (factor / 2)^2.
+            let taps = get!(BLUR_LOCALS).box_taps_per_axis;
+            let block = get!(BLUR_LOCALS).texel_scale;
+            let spacing = block / taps as f32;
+            let first = floor(input.position.xy()) * block + spacing * 0.5;
+            let mut color = vec4f(0.0, 0.0, 0.0, 0.0);
+            let mut row = 0u32;
+            while row < taps {
+                let mut column = 0u32;
+                while column < taps {
+                    color = color
+                        + sample_blur_texels(first + vec2f(column as f32, row as f32) * spacing);
+                    column += 1u32;
+                }
+                row += 1u32;
+            }
+            return color / (taps * taps) as f32;
         }
         texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, input.texture_coordinates, 0.0)
     }
 
-    pub fn sample_blur_texture(texture_coordinates: Vec2f) -> Vec4f {
-        texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, texture_coordinates, 0.0)
-    }
-
-    pub fn gaussian_blur(texture_coordinates: Vec2f) -> Vec4f {
-        let uniforms = get!(BLUR_LOCALS);
-        let center_weight = gaussian(0.0, uniforms.standard_deviation);
-        let mut weighted_color = sample_blur_texture(texture_coordinates) * center_weight;
-        let mut weight_sum = center_weight;
-        let mut sample_index = 1u32;
-
-        while sample_index <= uniforms.sample_count {
-            let distance = sample_index as f32 * uniforms.sample_step;
-            let weight = gaussian(distance, uniforms.standard_deviation);
-            let coordinate_offset = uniforms.direction * distance;
-            let symmetric_pair = sample_blur_texture(texture_coordinates - coordinate_offset)
-                + sample_blur_texture(texture_coordinates + coordinate_offset);
-            weighted_color = weighted_color + symmetric_pair * weight;
-            weight_sum += 2.0 * weight;
-            sample_index += 1u32;
+    /// One pass of a separable Gaussian, with weights and merged tap offsets prepared on the
+    /// CPU. Reads and writes share a resolution, so `position` is also the source position.
+    pub fn gaussian_blur(position: Vec2f) -> Vec4f {
+        let direction = get!(BLUR_LOCALS).direction;
+        let mut color = sample_blur_texels(position) * get!(BLUR_LOCALS).center_weight;
+        let mut pair = 0u32;
+        while pair < get!(BLUR_LOCALS).tap_pair_count {
+            let taps = get!(BLUR_LOCALS).taps[(pair / 2u32) as usize];
+            let second = (pair % 2u32) == 1u32;
+            let offset = direction * select(taps.x, taps.z, second);
+            let weight = select(taps.y, taps.w, second);
+            color = color
+                + (sample_blur_texels(position - offset) + sample_blur_texels(position + offset))
+                    * weight;
+            pair += 1u32;
         }
-        weighted_color / max(weight_sum, MIN_NORMALIZED_WEIGHT)
+        color
     }
 
     #[fragment]
     pub fn fragment_blur(input: BlurVarying) -> Vec4f {
-        gaussian_blur(input.texture_coordinates)
+        gaussian_blur(input.position.xy())
     }
 
     #[vertex]

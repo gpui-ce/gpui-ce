@@ -4,7 +4,7 @@
 //! Naga layout checks in `build.rs` enforce that.
 
 use crate::shaders::interface::{BufferData, StorageAbi, storage_abi};
-use gpui::{Background, Bounds, Path, ScaledPixels};
+use gpui::{Background, Bounds, ContentMask, Path, ScaledPixels};
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -18,7 +18,9 @@ pub struct PathRasterizationVertex {
     pub xy_position: gpui::Point<ScaledPixels>,
     pub curve_position: gpui::Point<f32>,
     pub color: Background,
-    pub bounds: Bounds<ScaledPixels>,
+    /// The path's content mask narrowed to the path's bounds. Its bounds clip the
+    /// rasterization and anchor gradient paints; its edge fades apply per pixel.
+    pub content_mask: ContentMask<ScaledPixels>,
 }
 
 unsafe impl BufferData for PathSprite {
@@ -37,18 +39,27 @@ pub fn rasterization_vertex_count(paths: &[Path<ScaledPixels>]) -> usize {
     paths.iter().map(|path| path.vertices.len()).sum()
 }
 
+/// The content mask a path rasterizes with: the path's mask narrowed to its bounds, so
+/// the mask's bounds equal [`Path::clipped_bounds`] while the edge fades stay in place.
+pub fn rasterization_content_mask(path: &Path<ScaledPixels>) -> ContentMask<ScaledPixels> {
+    path.content_mask.intersect(&ContentMask {
+        bounds: path.bounds,
+        ..Default::default()
+    })
+}
+
 pub fn rasterization_vertices(
     paths: &[Path<ScaledPixels>],
 ) -> impl Iterator<Item = PathRasterizationVertex> + '_ {
     paths.iter().flat_map(|path| {
-        let bounds = path.clipped_bounds();
+        let content_mask = rasterization_content_mask(path);
         path.vertices
             .iter()
             .map(move |vertex| PathRasterizationVertex {
                 xy_position: vertex.xy_position,
                 curve_position: vertex.st_position,
                 color: path.color,
-                bounds,
+                content_mask,
             })
     })
 }
@@ -103,5 +114,5 @@ pub fn sprite_count(paths: &[Path<ScaledPixels>]) -> usize {
 
 const _: () = {
     assert!(std::mem::size_of::<PathSprite>() == 16);
-    assert!(std::mem::size_of::<PathRasterizationVertex>() == 104);
+    assert!(std::mem::size_of::<PathRasterizationVertex>() == 168);
 };
