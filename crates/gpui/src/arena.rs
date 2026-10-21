@@ -117,12 +117,10 @@ impl Arena {
         self.scope_depth += 1;
     }
 
-    /// Ends the innermost scope started with `begin_scope`.
+    /// Ends the innermost `begin_scope` scope.
     ///
-    /// Panics if no scope is active: an unbalanced `end_scope` would let `clear`
-    /// run while an enclosing scope still references arena memory, which is
-    /// exactly the use-after-free this bookkeeping exists to prevent, so failing
-    /// loudly here is preferable.
+    /// Panics if none is active. An unbalanced call could allow `clear` while an outer
+    /// scope still references arena memory, causing a use-after-free.
     pub fn end_scope(&mut self) {
         self.scope_depth = self
             .scope_depth
@@ -130,12 +128,11 @@ impl Arena {
             .expect("Arena::end_scope called without a matching begin_scope");
     }
 
-    /// Drops all allocations and resets the arena, unless a scope is still active.
+    /// Drops allocations and resets the arena unless a scope remains active.
     ///
-    /// When a draw triggers a nested draw (e.g. re-entrant window procedure
-    /// invocations on Windows, or opening a window from within a draw), the nested
-    /// draw's clear must not free memory the outer draw still references, so it is
-    /// deferred: the outer draw's own clear will drop both draws' allocations.
+    /// A nested draw must not free memory the outer draw still references. This can
+    /// happen with reentrant Windows procedures or opening a window during a draw.
+    /// Defer clearing until the outer draw clears both sets of allocations.
     pub fn clear(&mut self) {
         if self.scope_depth == 0 {
             self.force_clear();

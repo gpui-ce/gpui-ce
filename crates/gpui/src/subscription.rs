@@ -39,10 +39,9 @@ where
         })))
     }
 
-    /// Inserts a new [`Subscription`] for the given `emitter_key`. By default, subscriptions
-    /// are inert, meaning that they won't be listed when calling `[SubscriberSet::remove]` or `[SubscriberSet::retain]`.
-    /// This method returns a tuple of a [`Subscription`] and an `impl FnOnce`, and you can use the latter
-    /// to activate the [`Subscription`].
+    /// Inserts an inert [`Subscription`] for `emitter_key` and returns a closure to activate it.
+    ///
+    /// Until activation, `[SubscriberSet::remove]` and `[SubscriberSet::retain]` omit it.
     pub fn insert(
         &self,
         emitter_key: EmitterKey,
@@ -249,7 +248,7 @@ mod tests {
         assert_eq!(observer_a_count.get(), 1);
         assert_eq!(observer_b_count.get(), 1);
 
-        // Neither should fire again — both dropped their subscriptions.
+        // Neither fires again because both dropped their subscriptions.
         app.update(|cx| cx.set_global(TestGlobal));
         assert_eq!(observer_a_count.get(), 1);
         assert_eq!(observer_b_count.get(), 1, "orphaned subscriber fired again");
@@ -277,7 +276,7 @@ mod tests {
             }
         });
 
-        // Observer B fires second — but A already dropped it.
+        // Register B after A. A must drop B's subscription before B can fire.
         *sub_b.borrow_mut() = Some(app.update({
             let count = observer_b_count.clone();
             move |cx| {

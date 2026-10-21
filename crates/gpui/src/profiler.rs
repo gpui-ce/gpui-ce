@@ -25,8 +25,8 @@ pub use actions::{ActionStatistics, ActionTiming, take_action_stats};
 
 /// Hints that the calling branch is unlikely to be taken.
 ///
-/// Stands in for `std::hint::cold_path`, which is still unstable on our MSRV
-/// (rust-lang/rust#136873); calling a `#[cold]` function is the equivalent hint.
+/// Uses a `#[cold]` function because `std::hint::cold_path` is unstable on our
+/// MSRV. See rust-lang/rust#136873.
 #[cold]
 #[inline(always)]
 pub(super) fn cold_path() {}
@@ -377,7 +377,7 @@ impl ProfilingCollector {
             let buffer_start = thread.total_pushed.saturating_sub(buffer_len);
 
             let mut slice = if prev_cursor < buffer_start {
-                // Cursor fell behind the buffer — some entries were evicted.
+                // Some entries were evicted before the cursor caught up.
                 // Return everything still in the buffer.
                 thread.timings.as_slice()
             } else {
@@ -410,8 +410,7 @@ impl ProfilingCollector {
 }
 
 // Allow 16MiB of task timing entries.
-// VecDeque grows by doubling its capacity when full, so keep this a power of 2 to avoid wasting
-// memory.
+// Keep capacity a power of two to match VecDeque's growth and avoid wasted memory.
 #[cfg(feature = "profiler")]
 const MAX_TASK_TIMINGS: usize = (16 * 1024 * 1024) / core::mem::size_of::<TaskTiming>();
 
@@ -463,8 +462,7 @@ impl std::fmt::Display for TaskStatistics {
 impl Default for TaskStatistics {
     fn default() -> Self {
         Self {
-            // Do not track polls that are not problematic
-            // this keeps more calls on the fast path
+            // Skip short polls to keep them on the fast path.
             poll_time_to_beat: Duration::from_micros(100),
             runtime_to_beat: Duration::from_micros(100),
             longest_poll_times: [TaskTiming::placeholder(); 5],
@@ -524,12 +522,11 @@ pub static GLOBAL_THREAD_TIMINGS: spin::Mutex<Vec<GlobalThreadTimings>> =
 /// Upgrades all live per-thread timing handles, holding the global registry
 /// lock only for the duration of the upgrades.
 ///
-/// The upgraded `Arc`s must never be dropped while `GLOBAL_THREAD_TIMINGS` is
-/// locked: dropping the last strong reference runs [`ThreadTimings::drop`],
-/// which locks `GLOBAL_THREAD_TIMINGS` again and would deadlock the
-/// non-reentrant spinlock. A thread exiting concurrently can hand off its last
-/// reference to us at any time, so callers of this function process (lock,
-/// read, drop) the returned handles only after the global lock is released.
+/// Lock, read, and drop the returned `Arc`s only after releasing `GLOBAL_THREAD_TIMINGS`.
+///
+/// A concurrently exiting thread can leave us with the last strong reference.
+/// Dropping it calls [`ThreadTimings::drop`], which would deadlock by taking
+/// the same non-reentrant spinlock.
 fn upgraded_thread_timings() -> Vec<(ThreadId, Arc<GuardedTaskTimings>)> {
     let global_thread_timings = GLOBAL_THREAD_TIMINGS.lock();
     global_thread_timings

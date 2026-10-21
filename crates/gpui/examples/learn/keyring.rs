@@ -1,10 +1,5 @@
-//! Keyring Example
-//!
-//! This example demonstrates the platform credentials API:
-//!
-//! 1. `cx.write_credentials` - store a username/password in the system keyring
-//! 2. `cx.read_credentials` - read them back
-//! 3. `cx.delete_credentials` - remove them
+//! Store usernames and passwords in the system keyring with `cx.write_credentials`.
+//! Read them with `cx.read_credentials` and remove them with `cx.delete_credentials`.
 //!
 //! On Linux/FreeBSD, every stored item is tagged with a keyring *label*. It
 //! defaults to `"gpui-ce"`, but consumers can override it with

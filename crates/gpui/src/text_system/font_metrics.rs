@@ -1,7 +1,6 @@
 use crate::{Bounds, Pixels};
 
-/// A struct for storing font metrics.
-/// It is used to define the measurements of a typeface.
+/// Measurements of a typeface.
 #[derive(Clone, Copy, Debug)]
 pub struct FontMetrics {
     /// The number of font units that make up the "em square",

@@ -1,7 +1,4 @@
-//! Transition Example
-//!
-//! This example uses a keyed transition to bounce a button upward.
-//! Each click resets the transition before starting the same bounce again.
+//! Bounce a button upward with a keyed transition. Each click resets the bounce.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

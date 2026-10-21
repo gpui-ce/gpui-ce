@@ -1,29 +1,17 @@
 use crate::{App, BorrowAppContext};
 
-/// A marker trait for types that can be stored in GPUI's global state.
+/// A marker trait for types stored in GPUI global state.
 ///
-/// This trait exists to provide type-safe access to globals by ensuring only
-/// types that implement [`Global`] can be used with the accessor methods. For
-/// example, trying to access a global with a type that does not implement
-/// [`Global`] will result in a compile-time error.
+/// Implement this on types you want to store as globals. Accessors reject types
+/// that do not implement [`Global`] at compile time.
 ///
-/// Implement this on types you want to store in the context as a global.
+/// ## Restricting access to globals
 ///
-/// ## Restricting Access to Globals
-///
-/// In some situations you may need to store some global state, but want to
-/// restrict access to reading it or writing to it.
-///
-/// In these cases, Rust's visibility system can be used to restrict access to
-/// a global value. For example, you can create a private struct that implements
-/// [`Global`] and holds the global state. Then create a newtype struct that wraps
-/// the global type and create custom accessor methods to expose the desired subset
-/// of operations.
+/// To limit reads or writes, store state in a private struct implementing [`Global`].
+/// Expose a newtype wrapper with accessor methods for only the permitted operations.
 pub trait Global: 'static {
-    // This trait is intentionally left empty, by virtue of being a marker trait.
-    //
-    // Use additional traits with blanket implementations to attach functionality
-    // to types that implement `Global`.
+    // Attach functionality through additional traits with blanket implementations
+    // for types implementing `Global`.
 }
 
 /// A trait for reading a global value from the context.
@@ -42,9 +30,8 @@ impl<T: Global> ReadGlobal for T {
 
 /// A trait for updating a global value in the context.
 pub trait UpdateGlobal {
-    /// Updates the global instance of the implementing type using the provided closure.
-    ///
-    /// This method provides the closure with mutable access to the context and the global simultaneously.
+    /// Updates the global value through a closure with mutable access to both
+    /// the global and the context.
     fn update_global<C, F, R>(cx: &mut C, update: F) -> R
     where
         C: BorrowAppContext,

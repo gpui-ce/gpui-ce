@@ -67,14 +67,11 @@ pub async fn extract_zip<R: AsyncRead + Unpin>(destination: &Path, reader: R) ->
 
 #[cfg(unix)]
 pub async fn extract_zip<R: AsyncRead + Unpin>(destination: &Path, reader: R) -> Result<()> {
-    // Unix needs file permissions copied when extracting.
-    // This is only possible to do when a reader impls `AsyncSeek` and `seek::ZipFileReader` is used.
-    // `stream::ZipFileReader` also has the `unix_permissions` method, but it will always return `Some(0)`.
+    // Copying Unix permissions requires `AsyncSeek` and `seek::ZipFileReader`.
+    // `stream::ZipFileReader::unix_permissions` always returns `Some(0)`.
     //
-    // A typical `reader` comes from a streaming network response, so cannot be sought right away,
-    // and reading the entire archive into the memory seems wasteful.
-    //
-    // So, save the stream into a temporary file first and then get it read with a seeking reader.
+    // Network response readers usually cannot seek. Save the stream to a temporary
+    // file for seeking without buffering the whole archive in memory.
     let mut file = async_fs::File::from(tempfile::tempfile().context("creating a temporary file")?);
     futures::io::copy(&mut BufReader::new(reader), &mut file)
         .await
@@ -253,24 +250,20 @@ mod tests {
             let test_dir = tempfile::tempdir().unwrap();
             let executable_path = test_dir.path().join("my_script");
 
-            // Create an executable file
             std::fs::write(&executable_path, "#!/bin/bash\necho 'Hello'").unwrap();
             let mut perms = std::fs::metadata(&executable_path).unwrap().permissions();
             perms.set_mode(0o755); // rwxr-xr-x
             std::fs::set_permissions(&executable_path, perms).unwrap();
 
-            // Create zip
             let zip_file = test_dir.path().join("test.zip");
             compress_zip(test_dir.path(), &zip_file, true)
                 .await
                 .unwrap();
 
-            // Extract to new location
             let extract_dir = tempfile::tempdir().unwrap();
             let reader = read_archive(&zip_file).await;
             extract_zip(extract_dir.path(), reader).await.unwrap();
 
-            // Check permissions are preserved
             let extracted_path = extract_dir.path().join("my_script");
             assert!(extracted_path.exists());
             let extracted_perms = std::fs::metadata(&extracted_path).unwrap().permissions();
@@ -291,20 +284,16 @@ mod tests {
             // The permissions will be shaped by the umask in the test environment
             let original_perms = std::fs::metadata(&file_path).unwrap().permissions();
 
-            // Create zip
             let zip_file = test_dir.path().join("test.zip");
             compress_zip(test_dir.path(), &zip_file, false)
                 .await
                 .unwrap();
 
-            // Extract to new location
             let extract_dir = tempfile::tempdir().unwrap();
             let reader = read_archive(&zip_file).await;
             extract_zip(extract_dir.path(), reader).await.unwrap();
 
-            // Permissions were not stored, so will be whatever the umask generates
-            // by default for new files. This should match what we saw when we previously wrote
-            // the file.
+            // Without stored permissions, the umask should match the original file's defaults.
             let extracted_path = extract_dir.path().join("my_script");
             assert!(extracted_path.exists());
             let extracted_perms = std::fs::metadata(&extracted_path).unwrap().permissions();

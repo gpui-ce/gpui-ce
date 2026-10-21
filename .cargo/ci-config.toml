@@ -1,16 +1,21 @@
-# This config is different from config.toml in this directory, as the latter is recognized by Cargo.
-# This file is placed in ./../.cargo/config.toml on CI runs. Cargo then merges Zeds .cargo/config.toml with ./../.cargo/config.toml
-# with preference for settings from Zeds config.toml.
-# TL;DR: If a value is set in both ci-config.toml and config.toml, config.toml value takes precedence.
-# Arrays are merged together though. See: https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure
-# The intent for this file is to configure CI build process with a divergance from Zed developers experience; for example, in this config file
-# we use `-D warnings` for rustflags (which makes compilation fail in presence of warnings during build process). Placing that in developers `config.toml`
-# would be inconvenient.
-# The reason for not using the RUSTFLAGS environment variable is that doing so would override all the settings in the config.toml file, even if the contents of the latter are completely nonsensical. See: https://github.com/rust-lang/cargo/issues/5376
-# Here, we opted to use `[target.'cfg(all())']` instead of `[build]` because `[target.'**']` is guaranteed to be cumulative.
+# Cargo automatically reads config.toml, not ci-config.toml. CI copies this file
+# to ../.cargo/config.toml so Cargo merges it with the repository's .cargo/config.toml.
+# The repository's config takes precedence for scalar values set in both files.
+# Arrays merge rather than replace one another.
+# See https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure
+#
+# Keep CI-only settings here. For example, -D warnings makes warnings fail CI builds
+# without requiring developers to use that stricter setting in local builds.
+#
+# Use Cargo config instead of RUSTFLAGS, which overrides configured rustflags and
+# can hide invalid settings in config.toml.
+# See https://github.com/rust-lang/cargo/issues/5376
+#
+# Use [target.'cfg(all())'] to accumulate flags from matching target configurations.
+# [build] does not provide the same cumulative behavior.
 [target.'cfg(all())']
 rustflags = ["-D", "warnings"]
 
-# We don't need fullest debug information for dev stuff (tests etc.) in CI.
+# Limit debug information for CI tests and dev builds.
 [profile.dev]
 debug = "limited"

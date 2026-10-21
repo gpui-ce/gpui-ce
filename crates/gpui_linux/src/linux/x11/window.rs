@@ -617,9 +617,8 @@ impl X11WindowState {
 
             if params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog {
                 if let Some(parent_window) = parent_window.as_ref().map(|w| w.x_window) {
-                    // WM_TRANSIENT_FOR hint indicating the main application window. For floating windows, we set
-                    // a parent window (WM_TRANSIENT_FOR) such that the window manager knows where to
-                    // place the floating window in relation to the main window.
+                    // Set WM_TRANSIENT_FOR so the window manager can place floating windows
+                    // relative to their parent.
                     // https://specifications.freedesktop.org/wm-spec/1.4/ar01s05.html
                     check_reply(
                         || "X11 ChangeProperty32 setting WM_TRANSIENT_FOR for floating window failed.",
@@ -658,9 +657,7 @@ impl X11WindowState {
                     ),
                 )?;
 
-                // We set the modal state for dialog windows, so that the window manager
-                // can handle it appropriately (e.g., prevent interaction with the parent window
-                // while the dialog is open).
+                // Mark dialogs modal so the window manager can block interaction with their parent.
                 check_reply(
                     || "X11 ChangeProperty32 setting modal state for dialog window failed.",
                     xcb.change_property32(
@@ -755,13 +752,10 @@ impl X11WindowState {
                     visual_id: visual.id,
                 };
                 let config = WgpuSurfaceConfig {
-                    // Note: this has to be done after the GPU init, or otherwise
-                    // the sizes are immediately invalidated.
+                    // Query sizes after GPU initialization, which invalidates earlier sizes.
                     size: query_render_extent(xcb, x_window)?,
-                    // We set it to transparent by default, even if we have client-side
-                    // decorations, since those seem to work on X11 even without `true` here.
-                    // If the window appearance changes, then the renderer will get updated
-                    // too
+                    // Default to transparent, which also appears to work for X11 client-side decorations.
+                    // Appearance changes update the renderer.
                     transparent: false,
                     preferred_present_mode: None,
                 };
@@ -776,8 +770,7 @@ impl X11WindowState {
 
             renderer.set_subpixel_layout(is_bgr);
 
-            // Set max window size hints based on the GPU's maximum texture dimension.
-            // This prevents the window from being resized larger than what the GPU can render.
+            // Limit window size hints to the GPU's maximum texture dimension.
             let max_texture_size = renderer.max_texture_size();
             let mut size_hints = WmSizeHints::new();
             if let Some(size) = params.window_min_size {
@@ -2005,8 +1998,8 @@ impl PlatformWindow for X11Window {
     }
 
     fn gpu_device_lost(&self) -> Option<bool> {
-        // Only loads an atomic flag — safe even mid-recovery, when
-        // `gpu_context` would panic on the torn-down resources.
+        // Reads only an atomic flag, safe during recovery when `gpu_context`
+        // would panic on torn-down resources.
         Some(self.0.state.borrow().renderer.device_lost())
     }
 

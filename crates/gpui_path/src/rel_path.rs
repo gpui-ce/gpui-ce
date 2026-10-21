@@ -13,25 +13,15 @@ use crate::{
     is_absolute,
 };
 
-/// A file system path that is guaranteed to be relative and normalized.
+/// A relative, normalized Unicode path for Windows or POSIX filesystems on any host platform.
 ///
-/// This type can be used to represent paths in a uniform way, regardless of
-/// whether they refer to Windows or POSIX file systems, and regardless of
-/// the host platform.
-///
-/// Internally, paths are stored in POSIX ('/'-delimited) format, but they can
-/// be displayed in either POSIX or Windows format.
-///
-/// Relative paths are also guaranteed to be valid unicode.
+/// Stores POSIX `/` separators and supports display in POSIX or Windows format.
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RelPath(str);
 
-/// An owned representation of a file system path that is guaranteed to be
-/// relative and normalized.
-///
-/// This type is to [`RelPath`] as [`std::path::PathBuf`] is to [`std::path::Path`]
+/// An owned [`RelPath`], like [`std::path::PathBuf`] is to [`std::path::Path`].
 #[derive(PartialEq, Eq, Clone, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RelPathBuf(String);
@@ -172,11 +162,9 @@ impl RelPath {
         self.strip_prefix(other).is_ok()
     }
 
-    /// Returns true if this path is a strict descendant of `ancestor`.
+    /// Returns whether this path is a strict descendant of `ancestor`.
     ///
-    /// Unlike `starts_with`, this returns false when `self == ancestor`
-    /// and false when `ancestor` is empty (since every path trivially
-    /// starts with the empty prefix).
+    /// Unlike `starts_with`, returns false for an empty ancestor or when `self == ancestor`.
     pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
         if ancestor.is_empty() || self == ancestor {
             return false;
@@ -249,10 +237,7 @@ impl RelPath {
         Arc::from(self)
     }
 
-    /// Convert the path into a string with the given path style.
-    ///
-    /// Whenever a path is presented to the user, it should be converted to
-    /// a string via this method.
+    /// Converts the path to the given style. Use this for display to users.
     pub fn display(&self, style: PathStyle) -> Cow<'_, str> {
         match style {
             PathStyle::Unix => Cow::Borrowed(&self.0),
@@ -261,19 +246,15 @@ impl RelPath {
         }
     }
 
-    /// Get the internal unix-style representation of the path.
-    ///
-    /// This should not be shown to the user.
+    /// Returns the internal Unix-style path. Use the styled conversion for display.
     pub fn as_unix_str(&self) -> &str {
         &self.0
     }
 
-    /// Interprets the path as a [`std::path::Path`], suitable for file system calls.
+    /// Returns a [`std::path::Path`] for filesystem calls. Valid on all host platforms
+    /// because Windows accepts `/` separators.
     ///
-    /// This is guaranteed to be a valid path regardless of the host platform, because
-    /// the `/` is accepted as a path separator on windows.
-    ///
-    /// This should not be shown to the user.
+    /// Use the styled conversion for display.
     pub fn as_std_path(&self) -> &Path {
         Path::new(&self.0)
     }

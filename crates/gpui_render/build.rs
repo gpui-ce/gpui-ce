@@ -91,7 +91,6 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set"));
 
-    // --- WebGpu dialect (modern targets) ------------------------------------------------
     let base = ShaderArtifact::modern(
         "gpui_base.wgsl",
         shader_source("gpui_base.wgsl", &shaders::base::WGSL_SOURCE),
@@ -105,7 +104,7 @@ fn main() {
     base.validate_and_write(&out_dir);
     subpixel_dual_source.validate_and_write(&out_dir);
 
-    // --- Downlevel dialect (WebGL2 / GLES): storage arrays become data-texture loads ----
+    // WebGL2 and GLES replace storage arrays with data-texture loads.
     let downlevel = ShaderArtifact::downlevel(
         "gpui_base_downlevel.wgsl",
         downlevel_dialect("gpui_base_downlevel.wgsl", &base.source),
@@ -429,10 +428,9 @@ fn emit_type_decoder(
     if let naga::TypeInner::Struct { members: list, .. } = &ty.inner {
         for member in list {
             let member_layout = layouter[member.ty];
-            // Use Naga's validated member offset rather than reconstructing it
-            // from sizes. In particular, array members have a size that covers
-            // all elements while their stride is the distance between elements;
-            // rebuilding offsets here is easy to get wrong as layouts evolve.
+            // Use Naga's validated offsets. Array member sizes cover all elements,
+            // while strides measure the distance between elements. Reconstructing
+            // offsets from sizes can break as layouts change.
             let offset = member.offset;
             assert_eq!(offset % 4, 0, "struct member is not word aligned");
             if let naga::TypeInner::Struct { .. } = &module.types[member.ty].inner {
@@ -582,8 +580,6 @@ fn native_dialect(source: &str) -> String {
         .replace("@location(0) @blend_src(0)", "@location(0)")
         .replace("@location(0) @blend_src(1)", "@location(1)")
 }
-
-// --- Generated interface tables ------------------------------------------------------
 
 fn write_interface(
     out_dir: &std::path::Path,
@@ -765,8 +761,7 @@ fn binding_kind(
     }
 }
 
-// --- Native artifacts: HLSL via floor Naga, GLSL/MSL via current Naga -----------------
-
+// HLSL uses the minimum supported Naga version. GLSL and MSL use the current version.
 fn write_native_shaders(out_dir: &std::path::Path) {
     use shaders::interface::*;
 
@@ -1182,12 +1177,11 @@ fn write_glsl(
     writer.write().unwrap_or_else(|error| {
         panic!("failed to generate {version} GLSL for {label} ({entry_point}): {error}")
     });
-    // Naga's GLSL frontend intentionally does not accept all dialects its
-    // backend emits (notably GLSL 330 resource-layout extensions), so a
-    // parse-and-revalidate round trip would reject valid backend output. The
-    // input IR has already passed Naga validation and `Writer::new` checks the
-    // target's feature floor; retain cheap invariants that catch truncated or
-    // incorrectly targeted output without pretending the frontend is a GL compiler.
+    // Naga's GLSL frontend rejects some valid backend output, including GLSL 330
+    // resource-layout extensions, so a parse-and-revalidate round trip would fail.
+    //
+    // The input IR passed Naga validation, and `Writer::new` checks the target's
+    // feature floor. Check for truncated or incorrectly targeted output here.
     let expected_version = match version {
         naga::back::glsl::Version::Desktop(version) => format!("#version {version} core"),
         naga::back::glsl::Version::Embedded { version, .. } => format!("#version {version} es"),

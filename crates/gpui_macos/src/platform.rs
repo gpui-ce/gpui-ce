@@ -344,8 +344,7 @@ impl MacPlatform {
                 checked,
                 disabled,
             } => {
-                // Note that this is intentionally using earlier bindings, whereas typically
-                // later ones take display precedence. See the discussion on
+                // Earlier bindings take precedence here, unlike normal display order. See
                 // https://github.com/zed-industries/zed/issues/23621
                 let keystrokes = keymap
                     .bindings_for_action(action.as_ref())
@@ -541,12 +540,8 @@ impl Platform for MacPlatform {
     }
 
     fn quit(&self) {
-        // Quitting the app causes us to close windows, which invokes `Window::on_close` callbacks
-        // synchronously before this method terminates. If we call `Platform::quit` while holding a
-        // borrow of the app state (which most of the time we will do), we will end up
-        // double-borrowing the app state in the `on_close` callbacks for our open windows. To solve
-        // this, we make quitting the application asynchronous so that we aren't holding borrows to
-        // the app state on the stack when we actually terminate the app.
+        // Quitting closes windows and synchronously invokes `Window::on_close`.
+        // Defer it until app-state borrows are released so callbacks cannot double borrow.
 
         unsafe {
             DispatchQueue::main().exec_async_f(ptr::null_mut(), quit);
@@ -890,12 +885,9 @@ impl Platform for MacPlatform {
                                         .collect::<Vec<_>>();
 
                                     // https://github.com/zed-industries/zed/issues/16969
-                                    // Workaround a bug in macOS Sequoia that adds an extra file-extension
-                                    // sometimes. e.g. `a.sql` becomes `a.sql.s` or `a.txtx` becomes `a.txtx.txt`
-                                    //
-                                    // This is conditional on OS version because I'd like to get rid of it, so that
-                                    // you can manually create a file called `a.sql.s`. That said it seems better
-                                    // to break that use-case than breaking `a.sql`.
+                                    // Sequoia sometimes appends an extra extension, such as `a.sql.s` for `a.sql`
+                                    // or `a.txtx.txt` for `a.txtx`. Restrict this to affected OS versions because
+                                    // it prevents deliberately creating names such as `a.sql.s`.
                                     if chunks.len() == 3
                                         && chunks[1].starts_with(chunks[2])
                                         && Self::os_version() >= Version::new(15, 0, 0)
@@ -1391,9 +1383,8 @@ fn on_keyboard_layout_change(this: &GPUIApplicationDelegate) {
 }
 
 fn on_thermal_state_change(this: &GPUIApplicationDelegate) {
-    // Defer to the next run loop iteration to avoid re-entrant borrows of the App RefCell,
-    // as NSNotificationCenter delivers this notification synchronously and it may fire while
-    // the App is already borrowed (same pattern as quit() above).
+    // NSNotificationCenter delivers synchronously, possibly while App is borrowed.
+    // Defer to the next run loop iteration to avoid re-entrant RefCell borrows.
     let platform = get_mac_platform(this);
     let platform_ptr = platform as *const MacPlatform as *mut c_void;
     unsafe {

@@ -77,10 +77,8 @@ pub(crate) struct DirectXRenderer {
     width: u32,
     height: u32,
 
-    /// Whether we want to skip drawing due to device lost events.
-    ///
-    /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
-    /// meaning we lost all the allocated gpu textures and scene resources.
+    /// Skips the first frame after a device reset invalidates its GPU textures
+    /// and scene resources mid-frame.
     skip_draws: bool,
 
     /// The render target currently bound for the main scene this frame (the offscreen
@@ -809,10 +807,11 @@ impl DirectXRenderer {
         resources.render_target.take();
         resources.render_target_view.take();
 
-        // Resizing the swap chain requires a call to the underlying DXGI adapter, which can return the device removed error.
-        // The app might have moved to a monitor that's attached to a different graphics device.
-        // When a graphics device is removed or reset, the desktop resolution often changes, resulting in a window size change.
-        // But here we just return the error, because we are handling device lost scenarios elsewhere.
+        // Resizing the swapchain calls the DXGI adapter, which can report device removal.
+        // The window may have moved to a monitor attached to another GPU. A removed
+        // or reset device can also change the desktop resolution and resize the window.
+        //
+        // Return the error because device loss is handled elsewhere.
         unsafe {
             resources
                 .swap_chain
@@ -1014,13 +1013,12 @@ impl DirectXRenderer {
             return Ok(());
         };
 
-        // When copying paths from the intermediate texture to the drawable,
-        // each pixel must only be copied once, in case of transparent paths.
+        // Copy each pixel from the intermediate texture to the drawable only once
+        // to preserve transparent paths.
         //
-        // If all paths have the same draw order, then their bounds are all
-        // disjoint, so we can copy each path's bounds individually. If this
-        // batch combines different draw orders, we perform a single copy
-        // for a minimal spanning rect.
+        // Paths with the same draw order have disjoint bounds and can be copied
+        // individually. Mixed draw orders require one copy of their minimal
+        // spanning rectangle.
         self.path_sprites.clear();
         self.path_sprites.reserve(sprite_count);
         if paths.last().unwrap().order == first_path.order {
@@ -1686,8 +1684,8 @@ impl DirectXRenderPipelines {
         let blur_params_buffer =
             create_constant_buffer(device, std::mem::size_of::<BlurUniforms>())?;
         let blur_blend_replace = create_blend_state_no_blend(device)?;
-        // Premultiplied (One / InvSrcAlpha) — the composite outputs a premultiplied blurred sample;
-        // straight-alpha blending would darken the faded edges.
+        // The composite outputs premultiplied blurred samples. Blend with One /
+        // InvSrcAlpha to avoid darkening faded edges.
         let blur_blend_composite = create_premultiplied_blend_state(device)?;
 
         let surface = ShaderModule::Surface.bytecode()?;
@@ -2361,8 +2359,7 @@ pub(crate) fn create_constant_buffer(
     Ok(buffer.unwrap())
 }
 
-/// A blend state that overwrites the target (no blending) — used for the blur downsample and
-/// gaussian passes.
+/// Overwrites the target without blending for blur downsample and Gaussian passes.
 #[inline]
 fn create_blend_state_no_blend(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     let mut desc = D3D11_BLEND_DESC::default();
@@ -2690,7 +2687,7 @@ mod amd {
     const AGS_CURRENT_VERSION: i32 = (6 << 22) | (3 << 12);
 
     // https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/blob/5d8812d703d0335741b6f7ffc37838eeb8b967f7/ags_lib/inc/amd_ags.h#L204
-    // This is an opaque type, using struct to represent it properly for FFI
+    // Opaque FFI type.
     #[repr(C)]
     struct AGSContext {
         _private: [u8; 0],

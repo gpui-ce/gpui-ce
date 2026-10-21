@@ -23,30 +23,24 @@ pub type DedicatedFn = Box<
         + 'static,
 >;
 
-/// A `!Send` executor pinned to a single session. Tasks spawned on it run in
-/// order on whichever thread drains the dispatch destination supplied at
-/// construction time — typically the main thread for the default session, or
-/// a dedicated OS thread for sessions created by `spawn_dedicated_thread`.
+/// A `!Send` executor pinned to one session. Tasks run in order on the thread
+/// draining its dispatch queue, usually the main thread or one created by
+/// `spawn_dedicated_thread`.
 #[derive(Clone)]
 pub struct LocalExecutor {
     session_id: SessionId,
     scheduler: Arc<dyn Scheduler>,
-    // Spawned tasks' schedule callbacks each hold an `Arc` clone of this
-    // closure, so the destination it captures stays alive as long as work
-    // could still land on it.
+    // Task callbacks retain this closure in an Arc, keeping the destination alive for scheduling.
     dispatch: Arc<dyn Fn(Runnable<RunnableMeta>) + Send + Sync>,
     not_send: PhantomData<Rc<()>>,
 }
 
 impl LocalExecutor {
-    /// Constructs a local executor that runs spawned tasks by sending their
-    /// runnables through `dispatch`. The `scheduler` is retained for access to
-    /// clocks, timers, and other scheduler-level services.
+    /// Sends spawned runnables through `dispatch` and retains `scheduler` for clocks,
+    /// timers, and other services.
     ///
-    /// For the common case of routing runnables through
-    /// `Scheduler::schedule_local`, callers pass a closure that does exactly
-    /// that. `spawn_dedicated_thread` instead passes a closure that sends to
-    /// the dedicated thread's channel.
+    /// Usually dispatch calls `Scheduler::schedule_local`.
+    /// `spawn_dedicated_thread` instead sends to the dedicated thread's channel.
     pub fn new(
         session_id: SessionId,
         scheduler: Arc<dyn Scheduler>,
@@ -174,10 +168,8 @@ impl LocalExecutor {
     /// The closure runs on a new OS thread under `PlatformScheduler`, or on
     /// the test scheduler's loop under `TestScheduler`.
     ///
-    /// The returned `Task` represents the dedicated work: dropping it cancels
-    /// the dedicated closure, `.await`ing it yields the closure's return
-    /// value, `.detach()`ing it lets the dedicated work run independently of
-    /// the caller.
+    /// Dropping the task cancels the closure. Awaiting it yields the return value,
+    /// and detaching it lets the work run independently.
     #[track_caller]
     pub fn spawn_dedicated<F, Fut>(&self, f: F) -> Task<Fut::Output>
     where
@@ -299,10 +291,8 @@ impl BackgroundExecutor {
     /// The closure runs on a new OS thread under `PlatformScheduler`, or on
     /// the test scheduler's loop under `TestScheduler`.
     ///
-    /// The returned `Task` represents the dedicated work: dropping it cancels
-    /// the dedicated closure, `.await`ing it yields the closure's return
-    /// value, `.detach()`ing it lets the dedicated work run independently of
-    /// the caller.
+    /// Dropping the task cancels the closure. Awaiting it yields the return value,
+    /// and detaching it lets the work run independently.
     #[track_caller]
     pub fn spawn_dedicated<F, Fut>(&self, f: F) -> Task<Fut::Output>
     where
@@ -317,25 +307,20 @@ impl BackgroundExecutor {
     }
 }
 
-/// A long-lived handle to one dedicated session: every future spawned on it
-/// runs on that session's single thread, never on the background pool.
+/// Spawns futures on one dedicated thread, outside the background pool.
 ///
-/// Use this when tasks rely on thread-local state being coherent across
-/// spawns, or when the per-thread setup cost of the work is high enough that
-/// it should be paid once. Creating the session costs a thread (on the web, a
-/// worker — expensive); each spawn afterwards is just a channel send.
+/// Reuse the session for thread-local state or expensive thread setup.
+/// Creating it starts a thread or web worker. Each spawn then sends on a channel.
 ///
-/// Dropping the handle cancels the session: queued and future spawns resolve
-/// to cancelled tasks.
+/// Dropping the handle cancels the session, including queued and future spawns.
 pub struct DedicatedExecutor {
     sender: flume::Sender<Runnable<RunnableMeta>>,
     _session: Task<()>,
 }
 
 impl DedicatedExecutor {
-    /// Starts a dedicated session on `executor` and returns a handle that
-    /// spawns futures onto it. Under `TestScheduler` the session runs on the
-    /// deterministic test loop; no real thread is created.
+    /// Starts a dedicated session on `executor`. Under `TestScheduler`, it runs
+    /// on the deterministic test loop without creating a thread.
     #[track_caller]
     pub fn new(executor: &BackgroundExecutor) -> Self {
         let (sender, receiver) = flume::unbounded::<Runnable<RunnableMeta>>();
@@ -352,9 +337,8 @@ impl DedicatedExecutor {
 
     /// Spawns a future onto the dedicated session's thread.
     ///
-    /// The returned task has the usual semantics: dropping it cancels the
-    /// future, `.await`ing it yields the output, `.detach()`ing it lets it
-    /// run to completion on its own.
+    /// Dropping the task cancels the future. Awaiting it yields the output,
+    /// and detaching it lets the future run independently.
     #[track_caller]
     pub fn spawn<F>(&self, future: F) -> Task<F::Output>
     where
@@ -375,12 +359,10 @@ impl DedicatedExecutor {
     }
 }
 
-/// Task is a primitive that allows work to happen in the background.
+/// Background work that implements [`Future`] so it can be awaited.
 ///
-/// It implements [`Future`] so you can `.await` on it.
-///
-/// If you drop a task it will be cancelled immediately. Calling [`Task::detach`] allows
-/// the task to continue running, but with no way to return a value.
+/// Dropping a task cancels it immediately. [`Task::detach`] lets it continue
+/// without returning a value.
 #[must_use]
 pub struct Task<T>(TaskState<T>);
 
@@ -391,9 +373,8 @@ enum TaskState<T> {
     /// A task that is currently running.
     Spawned(async_task::Task<T, RunnableMeta>),
 
-    /// A typed view of a [`Task<Box<dyn Any + Send + Sync>>`] obtained via
-    /// [`Task::downcast`]. The inner task drives the actual work; the
-    /// downcast layer just unwraps the `Box<dyn Any + Send + Sync>` on poll.
+    /// A typed view of [`Task<Box<dyn Any + Send + Sync>>`] from [`Task::downcast`].
+    /// The inner task runs the work. Polling unwraps its boxed output.
     Downcast {
         inner: Box<Task<Box<dyn Any + Send + Sync>>>,
         marker: PhantomData<fn() -> T>,
@@ -581,9 +562,8 @@ impl Task<Box<dyn Any + Send + Sync>> {
     /// [`BackgroundExecutor::spawn_dedicated`] to recover the user closure's
     /// `Fut::Output` from the dyn-safe [`Scheduler::spawn_dedicated`].
     ///
-    /// Panics on poll if the inner output is not in fact a `T` -- a logic
-    /// error in whatever produced the inner task, since the downcast type is
-    /// chosen by the caller of `downcast`.
+    /// Panics on poll if the output is not `T`, indicating a mismatch between
+    /// the producer and the caller's chosen downcast type.
     pub fn downcast<T: Send + Sync + 'static>(self) -> Task<T> {
         Task(TaskState::Downcast {
             inner: Box::new(self),

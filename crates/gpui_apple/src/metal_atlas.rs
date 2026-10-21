@@ -370,11 +370,10 @@ mod tests {
         // Remove C: texture becomes unreferenced and is deleted.
         atlas.remove(&key_c);
 
-        // Re-inserting A must allocate a fresh tile on a new texture,
-        // NOT return a stale tile referencing the deleted texture.
+        // Re-inserting A must allocate a fresh tile on a new texture.
         let tile_a2 = insert_tile(&atlas, &key_a, small);
 
-        // The texture must actually exist — this would panic before the fix.
+        // This panicked when the tile referenced a deleted texture.
         let _texture = atlas.metal_texture(tile_a2.texture_id);
     }
 

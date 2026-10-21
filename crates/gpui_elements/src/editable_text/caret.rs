@@ -14,8 +14,8 @@ pub enum CaretNotify {
     PauseBlinking,
 }
 
-/// Controls caret visibility and blinking; text layout owns position and geometry.
-/// Blinking is disabled by default.
+/// Controls caret visibility and blinking. Blinking is disabled by default.
+/// Text layout owns the caret's position and geometry.
 #[derive(Default)]
 pub struct Caret {
     /// The frequency at which the caret blinks
@@ -23,8 +23,7 @@ pub struct Caret {
     generation: usize,
     /// Whether the caret is presently visible in this frame
     visible: bool,
-    /// Whether the caret's EditableText element is currently focused.
-    /// Caret is only eligible to be blinking if currently focused.
+    /// Whether the input is focused. Blinking requires focus.
     has_focus: bool,
     #[allow(dead_code)]
     subscriptions: SmallVec<[Subscription; 2]>,
@@ -47,8 +46,7 @@ impl Caret {
         self
     }
 
-    /// Sets the blinking interval of the caret to the global "default".
-    /// The true default of the caret is "do not blink".
+    /// Sets the blink interval to the global default. New carets do not blink.
     pub fn with_blink_interval_500ms(self) -> Self {
         self.with_blink_interval(BLINK_INTERVAL_500MS)
     }

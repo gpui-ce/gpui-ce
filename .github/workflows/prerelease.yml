@@ -9,8 +9,7 @@ on:
     types: [completed]
 
 concurrency:
-  # crates.io versions are IMMUTABLE, so alpha numbers must be allocated in
-  # order even when main receives several commits in quick succession!
+  # crates.io versions are immutable, so allocate alpha numbers in commit order.
   group: gpui-ce-registry-publish
   cancel-in-progress: false
 

@@ -3,8 +3,7 @@ use std::borrow::Cow;
 use crate::shell::get_system_shell;
 use crate::shell::{Shell, ShellKind};
 
-/// ShellBuilder is used to turn a user-requested task into a
-/// program that can be executed by the shell.
+/// Turns a user-requested task into a shell program.
 pub struct ShellBuilder {
     /// The shell to run
     program: String,
@@ -100,11 +99,8 @@ impl ShellBuilder {
             if self.redirect_stdin {
                 match self.kind {
                     ShellKind::Posix => {
-                        // Perform the STDIN redirection prior to the actual
-                        // command on a separate line, so that it is already
-                        // active if the command contains a syntax error.
-                        // Otherwise, with -i, dash will fall back to an
-                        // interactive shell in this case.
+                        // Redirect stdin on a separate line before the command.
+                        // Otherwise a syntax error makes dash -i fall back to an interactive shell.
                         combined_command.insert_str(0, "exec </dev/null\n");
                     }
                     ShellKind::Fish => {
@@ -137,7 +133,7 @@ impl ShellBuilder {
         (self.program, self.args)
     }
 
-    // This should not exist, but our task infra is broken beyond repair right now
+    // This should not exist. It works around the current broken task infrastructure.
     #[doc(hidden)]
     pub fn build_no_quote(
         mut self,
@@ -187,8 +183,7 @@ impl ShellBuilder {
 
     /// Builds a `smol::process::Command` with the given task command and arguments.
     ///
-    /// Prefer this over manually constructing a command with the output of `Self::build`,
-    /// as this method handles `cmd` weirdness on windows correctly.
+    /// Prefer this to `Self::build` to handle Windows `cmd` quoting correctly.
     pub fn build_smol_command(
         self,
         task_command: Option<String>,
@@ -199,8 +194,7 @@ impl ShellBuilder {
 
     /// Builds a `std::process::Command` with the given task command and arguments.
     ///
-    /// Prefer this over manually constructing a command with the output of `Self::build`,
-    /// as this method handles `cmd` weirdness on windows correctly.
+    /// Prefer this to `Self::build` to handle Windows `cmd` quoting correctly.
     pub fn build_std_command(
         self,
         mut task_command: Option<String>,

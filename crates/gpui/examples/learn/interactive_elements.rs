@@ -1,11 +1,6 @@
-//! Interactive Elements Example
+//! Handle single and double clicks, click counts, hover styling, and `on_hover`.
 //!
-//! This example demonstrates interactive patterns in GPUI:
-//!
-//! 1. Click events - single click, double click, click count
-//! 2. Hover states - hover styling and on_hover callbacks
-//! 3. Mouse events - mouse down, mouse up, mouse move
-//! 4. Drag and drop - draggable elements and drop targets
+//! Track mouse presses, releases, and movement, and connect drag sources to drop targets.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
@@ -19,9 +14,7 @@ use gpui::{
 };
 use palette::IntoColor;
 
-// ============================================================================
 // Click Events Demo
-// ============================================================================
 //
 // Demonstrates different click interactions:
 // - Single click
@@ -113,9 +106,7 @@ impl Render for ClickDemo {
     }
 }
 
-// ============================================================================
 // Hover Demo
-// ============================================================================
 //
 // Demonstrates hover interactions:
 // - hover() style modifier for CSS-like hover states
@@ -208,9 +199,7 @@ impl Render for HoverDemo {
     }
 }
 
-// ============================================================================
 // Mouse Events Demo
-// ============================================================================
 //
 // Demonstrates low-level mouse events:
 // - on_mouse_down - fires when mouse button is pressed
@@ -329,9 +318,7 @@ impl Render for MouseEventsDemo {
     }
 }
 
-// ============================================================================
 // Drag and Drop Demo
-// ============================================================================
 //
 // Demonstrates drag and drop:
 // - on_drag - makes an element draggable, provides drag data
@@ -481,9 +468,7 @@ impl Render for DragDropDemo {
     }
 }
 
-// ============================================================================
 // Main Application
-// ============================================================================
 
 struct InteractiveElementsExample {
     click_demo: Entity<ClickDemo>,

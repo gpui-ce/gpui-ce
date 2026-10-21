@@ -1,10 +1,6 @@
-//! Layout Patterns Example
+//! Flexbox rows and columns with alignment, and two-dimensional grids with spans.
 //!
-//! This example demonstrates different layout approaches in GPUI:
-//!
-//! 1. Flexbox - Row and column layouts with alignment
-//! 2. Grid - Two-dimensional layouts with spans
-//! 3. Common patterns - Sidebar, header/footer, centering
+//! Includes sidebars, headers, footers, and centering.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

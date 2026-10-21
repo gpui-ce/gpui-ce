@@ -1,11 +1,6 @@
-//! Animation Example
+//! Animate with `with_animation`, using ease_in_out, bounce, and linear easing.
 //!
-//! This example demonstrates animation capabilities in GPUI:
-//!
-//! 1. Basic animations with `with_animation`
-//! 2. Easing functions - ease_in_out, bounce, linear
-//! 3. Transformations - rotate, scale, translate
-//! 4. Repeating and duration controls
+//! Rotate, scale, and translate elements, with repeat and duration controls.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

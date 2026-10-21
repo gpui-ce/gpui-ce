@@ -2,9 +2,8 @@
 fn main() {
     use std::{env, path::PathBuf, process::Command};
 
-    // A build script compiles for the host, so `cfg!(target_os)` here would
-    // describe the machine running cargo. The platform being compiled for is
-    // only visible through the environment cargo sets for build scripts.
+    // Build scripts compile for the host, so `cfg!(target_os)` describes the machine
+    // running Cargo. Read Cargo's environment for the platform being compiled for.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

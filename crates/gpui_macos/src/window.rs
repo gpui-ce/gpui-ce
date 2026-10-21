@@ -1366,9 +1366,8 @@ impl MacWindow {
                 // `AnchoredPopup` is rejected in `MacPlatform::open_window`, grouped here only
                 // for exhaustiveness.
                 WindowKind::PopUp | WindowKind::AnchoredPopup(_) => {
-                    // Use a tracking area to allow receiving MouseMoved events even when
-                    // the window or application aren't active, which is often the case
-                    // e.g. for notification windows.
+                    // Use a tracking area to receive MouseMoved events even while the
+                    // window or application is inactive, as with notification windows.
                     let tracking_area: ObjcId = msg_send![class!(NSTrackingArea), alloc];
                     let _: () = msg_send![
                         tracking_area,
@@ -1430,8 +1429,8 @@ impl MacWindow {
                     {
                         let _: () = msg_send![main_window, addTabbedWindow: native_window, ordered: NSWindowOrderingMode::Above];
 
-                        // Ensure the window is visible immediately after adding the tab, since the tab bar is updated with a new entry at this point.
-                        // Note: Calling orderFront here can break fullscreen mode (makes fullscreen windows exit fullscreen), so only do this if the main window is not fullscreen.
+                        // Show the window immediately because its tab bar entry is already visible.
+                        // Avoid orderFront in fullscreen, where it can make the window exit fullscreen.
                         if !main_window_is_fullscreen {
                             let _: () = msg_send![native_window, orderFront: NIL];
                         }
@@ -1445,10 +1444,8 @@ impl MacWindow {
                 native_window.orderFront_(NIL);
             }
 
-            // Set the initial position of the window to the specified origin.
-            // Although we already specified the position using `initWithContentRect_styleMask_backing_defer_screen_`,
-            // the window position might be incorrect if the main screen (the screen that contains the window that has focus)
-            //  is different from the primary screen.
+            // Reapply the origin because `initWithContentRect_styleMask_backing_defer_screen_`
+            // can position incorrectly when the focused screen differs from the primary screen.
             let _: () = msg_send![native_window, setFrameTopLeftPoint: window_rect.origin];
             {
                 let mut window_state = window.0.lock();
@@ -1549,11 +1546,10 @@ impl Drop for MacWindow {
     }
 }
 
-/// Calls `f` if the window is not closed.
+/// Calls `f` if the window is open.
 ///
-/// This should be used when spawning foreground tasks interacting with the
-/// window, as some messages will end hard faulting if dispatched to no longer
-/// valid window handles.
+/// Use for foreground tasks that interact with the window. Messages sent to
+/// invalid window handles can hard fault.
 fn if_window_not_closed(closed: Arc<AtomicBool>, f: impl FnOnce()) {
     if !closed.load(Ordering::Acquire) {
         f();
@@ -2501,12 +2497,10 @@ fn get_scale_factor(native_window: ObjcId) -> f32 {
         factor as f32
     };
 
-    // We are not certain what triggers this, but it seems that sometimes
-    // this method would return 0 (https://github.com/zed-industries/zed/issues/6412)
-    // It seems most likely that this would happen if the window has no screen
-    // (if it is off-screen), though we'd expect to see viewDidChangeBackingProperties before
-    // it was rendered for real.
-    // Regardless, attempt to avoid the issue here.
+    // The scale sometimes comes back as 0. The cause is unclear, but a window
+    // without a screen seems most likely, perhaps because it is off-screen.
+    // We would expect viewDidChangeBackingProperties before rendering. Guard anyway.
+    // https://github.com/zed-industries/zed/issues/6412
     if factor == 0.0 { 2. } else { factor }
 }
 
@@ -2808,10 +2802,9 @@ unsafe extern "C" fn handle_key_event(
 
     match event {
         PlatformInput::KeyDown(key_down_event) => {
-            // For certain keystrokes, macOS will first dispatch a "key equivalent" event.
-            // If that event isn't handled, it will then dispatch a "key down" event. GPUI
-            // makes no distinction between these two types of events, so we need to ignore
-            // the "key down" event if we've already just processed its "key equivalent" version.
+            // For some keystrokes, macOS sends an unhandled "key equivalent" again
+            // as "key down". GPUI treats both alike, so ignore "key down" if its
+            // "key equivalent" was already processed.
             if key_equivalent {
                 lock.last_key_equivalent = Some(key_down_event.clone());
             } else if lock.last_key_equivalent.take().as_ref() == Some(&key_down_event) {
@@ -3210,15 +3203,13 @@ unsafe extern "C" fn window_did_change_key_status(this: &Objc2Object, selector: 
     // AppKit also unhides the cursor on activation changes, so mirror that here.
     lock.cursor_visible.store(true, Ordering::Relaxed);
 
-    // When opening a pop-up while the application isn't active, Cocoa sends a spurious
-    // `windowDidBecomeKey` message to the previous key window even though that window
-    // isn't actually key. This causes a bug if the application is later activated while
-    // the pop-up is still open, making it impossible to activate the previous key window
-    // even if the pop-up gets closed. The only way to activate it again is to de-activate
-    // the app and re-activate it, which is a pretty bad UX.
-    // The following code detects the spurious event and invokes `resignKeyWindow`:
-    // in theory, we're not supposed to invoke this method manually but it balances out
-    // the spurious `becomeKeyWindow` event and helps us work around that bug.
+    // Opening a popup while inactive can send a spurious `windowDidBecomeKey` to
+    // the previous key window even though it is not key. Activating the app while
+    // the popup stays open leaves that window unactivatable even after the popup
+    // closes, until the app is deactivated and reactivated.
+    //
+    // Detect the spurious event and balance it with `resignKeyWindow`, despite
+    // AppKit normally managing that call.
     if selector == sel!(windowDidBecomeKey:) && !is_active {
         let native_window = lock.native_window;
         drop(lock);
@@ -3241,12 +3232,10 @@ unsafe extern "C" fn window_did_change_key_status(this: &Objc2Object, selector: 
         events.raise();
     }
 
-    // When a window becomes active, trigger an immediate synchronous frame request to prevent
-    // tab flicker when switching between windows in native tabs mode.
+    // Request a synchronous frame on activation to prevent native-tab flicker.
     //
-    // This is only done on subsequent activations (not the first) to ensure the initial focus
-    // path is properly established. Without this guard, the focus state would remain unset until
-    // the first mouse click, causing keybindings to be non-functional.
+    // Skip the first activation so initial focus is established. Otherwise focus
+    // and keybindings remain unset until the first click.
     if selector == sel!(windowDidBecomeKey:) && is_active {
         let window_state = unsafe { get_window_state(this) };
         let mut lock = window_state.lock();

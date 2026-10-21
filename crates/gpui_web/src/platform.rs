@@ -23,7 +23,7 @@ use std::{
 };
 use wasm_bindgen::prelude::*;
 
-/// Provides the GPUI platform implementation for web browsers.
+/// GPUI platform implementation for web browsers.
 ///
 /// The platform starts with an empty font database. Applications must add fonts
 /// through [`gpui::App::text_system`] before opening a window.

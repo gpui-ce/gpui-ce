@@ -22,15 +22,12 @@ use std::{
 
 /// Task priority for background tasks.
 ///
-/// Higher priority tasks are more likely to be scheduled before lower priority tasks,
-/// but this is not a strict guarantee - the scheduler may interleave tasks of different
-/// priorities to prevent starvation.
+/// Higher-priority tasks are more likely to run before lower-priority tasks.
+/// The scheduler may interleave priorities to prevent starvation, so ordering is not guaranteed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Priority {
-    /// Realtime priority
-    ///
-    /// Spawning a task with this priority will spin it off on a separate thread dedicated just to that task. Only use for audio.
+    /// Runs on a dedicated thread. Use only for audio.
     RealtimeAudio,
     /// High priority - use for tasks critical to user experience/responsiveness.
     High,
@@ -42,8 +39,7 @@ pub enum Priority {
 }
 
 impl Priority {
-    /// Returns the relative probability weight for this priority level.
-    /// Used by schedulers to determine task selection probability.
+    /// Returns the relative probability weight used to select tasks.
     pub const fn weight(self) -> u32 {
         match self {
             Priority::High => 60,
@@ -91,10 +87,8 @@ pub trait Scheduler: Send + Sync {
         timeout: Option<Duration>,
     ) -> bool;
 
-    /// Schedule a runnable on the local (session-pinned) queue for `session_id`.
-    /// Runnables scheduled here run in order on whichever thread drains the
-    /// session — the main thread for ordinary sessions, or a dedicated OS
-    /// thread for sessions created via `spawn_dedicated_thread`.
+    /// Queues a runnable for `session_id`. Runnables execute in order on the session's
+    /// thread, usually the main thread or one created by `spawn_dedicated_thread`.
     fn schedule_local(&self, session_id: SessionId, runnable: Runnable<RunnableMeta>);
 
     /// Schedule a background task with the given priority.
@@ -118,17 +112,12 @@ pub trait Scheduler: Send + Sync {
 
     /// Spawn a closure on a fresh session pinned to its own [`LocalExecutor`].
     ///
-    /// `PlatformScheduler` runs the closure on a new OS thread (see
-    /// [`spawn_dedicated_thread`]). `TestScheduler` runs it on the test
-    /// scheduler's loop alongside everything else so determinism under
-    /// `TestScheduler::many` is preserved.
+    /// `PlatformScheduler` uses a new OS thread via [`spawn_dedicated_thread`].
+    /// `TestScheduler` uses its test loop to preserve determinism under `TestScheduler::many`.
     ///
-    /// This is the dyn-safe entry point: the closure's output is type-erased
-    /// as `Box<dyn Any + Send + Sync>` so the trait stays object-safe.
-    /// Callers typically reach for the type-safe wrappers on
-    /// [`LocalExecutor::spawn_dedicated`] and
-    /// [`BackgroundExecutor::spawn_dedicated`], which compose this method
-    /// with [`Task::downcast`] to recover the closure's concrete return type.
+    /// Erases the output as `Box<dyn Any + Send + Sync>` to keep this trait object-safe.
+    /// Prefer [`LocalExecutor::spawn_dedicated`] or [`BackgroundExecutor::spawn_dedicated`],
+    /// which use [`Task::downcast`] to recover the concrete return type.
     fn spawn_dedicated(self: Arc<Self>, f: DedicatedFn) -> Task<Box<dyn Any + Send + Sync>>;
 
     fn as_test(&self) -> Option<&TestScheduler> {
@@ -146,16 +135,15 @@ pub trait Scheduler: Send + Sync {
 /// detached children keep running until they finish. The thread shuts down
 /// once the executor and every task on it are gone.
 ///
-/// This function never blocks: the returned task starts as an asynchronous
-/// rendezvous that resolves to the root task's handle once the dedicated
-/// thread has spawned it, and behaves like that handle from then on. That
-/// makes it safe to call from threads that must not block, such as the web
-/// main thread. On wasm targets the thread is a web worker and requires the
-/// `wasm-threads` cargo feature (and a shared-memory build); without it this
-/// panics. Spawning a worker is far more expensive than an OS thread —
-/// module instantiation plus a fresh function table — so on the web treat a
-/// dedicated session as a long-lived place to send work, not a per-job
-/// convenience.
+/// Never blocks, so it can run on the web main thread. The returned task waits
+/// asynchronously for the dedicated thread to deliver the root task's handle,
+/// then behaves like that handle.
+///
+/// Wasm uses a web worker and requires the `wasm-threads` feature and a shared-memory
+/// build, otherwise this panics.
+///
+/// Reuse web sessions across jobs because worker creation instantiates a module
+/// and a fresh function table, costing more than an OS thread.
 ///
 /// The caller is responsible for supplying a `session_id` that's distinct from
 /// every other live session on `scheduler`. Concrete schedulers typically wrap
@@ -181,9 +169,8 @@ where
         // If the caller already dropped or detached the rendezvous task,
         // delivery applies that disposition to the root task here.
         delivery.deliver(root_task);
-        // After this drop, every strong reference to the runnable sender
-        // lives inside a spawned task or a user-held executor clone. The
-        // recv loop exits once all of those are gone.
+        // Only spawned tasks and user-held executors retain the sender after this drop.
+        // The receive loop exits when they are gone.
         drop(executor);
 
         while let Ok(runnable) = runnable_receiver.recv() {

@@ -66,7 +66,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Create trait bound that each wrapped type must implement Clone
+    // Require each wrapped type to implement Clone.
     let type_param_bounds: Vec<_> = wrapped_types
         .iter()
         .map(|ty| {
@@ -89,7 +89,6 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Append to where_clause or create a new one if it doesn't exist
     let where_clause = match where_clause.cloned() {
         Some(mut where_clause) => {
             where_clause.predicates.extend(type_param_bounds);
@@ -389,7 +388,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
     }
 
     let r#gen = quote! {
-        /// A refinable version of [`#ident`], see that documentation for details.
+        /// A refinable version of [`#ident`].
         #[derive(Clone)]
         #derive_stream
         pub struct #refinement_ident #impl_generics {

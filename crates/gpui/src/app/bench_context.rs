@@ -23,11 +23,11 @@ use crate::{
 
 /// Returns a benchmark platform backed by this thread's shared dispatcher.
 ///
-/// The platform uses this thread's shared multithreaded [`ThreadedDispatcher`], so
-/// background work runs with production concurrency in real time. The dispatcher
-/// is cached per thread and reused across benchmark invocations so worker and
-/// timer threads persist for the whole process instead of being recreated for
-/// every Criterion calibration pass.
+/// The shared [`ThreadedDispatcher`] runs background work with production
+/// concurrency in real time.
+///
+/// Cached per thread, it reuses worker and timer threads across benchmark
+/// invocations and Criterion calibration passes instead of recreating them.
 ///
 /// Text is shaped with the provided platform text system. Benchmarks generated
 /// by `#[gpui::bench]` use the current platform's text system, so text-heavy
@@ -372,10 +372,9 @@ fn format_duration(duration: Duration) -> String {
 /// doesn't leave tracing enabled for unrelated code such as a later benchmark
 /// in the same process.
 ///
-/// The foreground journal collector is created at the same point, so
-/// foreground work recorded before the scope starts (e.g. per-iteration
-/// setup) is excluded from what [`Self::finish`] returns: a collector only
-/// observes entries recorded after its creation.
+/// The foreground journal collector starts with the scope and only observes
+/// entries recorded after its creation. [`Self::finish`] therefore excludes
+/// earlier work such as per-iteration setup.
 struct TraceScope {
     collector: FrameTimingCollector,
     journal_collector: ForegroundJournalCollector,
@@ -582,16 +581,13 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
             .run_until_idle();
     }
 
-    /// Alternates draining queued work with GPUI update cycles until neither
-    /// makes progress, so state dropped by benchmark code is fully released.
+    /// Alternates draining queued work with GPUI updates until neither makes
+    /// progress, fully releasing state dropped by benchmark code.
     ///
-    /// Dropped entities are released only inside an update's effect flush, and
-    /// releases cascade: one flush drops the entities whose handles are gone,
-    /// their drops release further handles and can queue foreground work, and
-    /// a later flush collects those. Executor pumping alone never runs a
-    /// flush, so without this dropped state would linger in the entity map
-    /// until some woken task happened to run an update. Production gets this
-    /// cadence for free from frames and input events.
+    /// Entity releases happen only during effect flushes. Their drops can release
+    /// further handles or queue foreground work, requiring another flush.
+    /// Pumping the executor alone leaves dropped state in the entity map until
+    /// an update runs. Production frames and input events provide these cycles.
     pub fn settle(&mut self) {
         let dispatcher = self.background_executor.dispatcher().clone();
         let dispatcher = dispatcher
@@ -694,10 +690,9 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
         bencher.iter_batched_ref(
             || {
-                // The previous iteration's input and output were just
-                // dropped; settling here releases their entities before the
-                // next setup, so per-iteration state cannot accumulate
-                // across a measurement.
+                // The previous iteration's input and output have just dropped.
+                // Release their entities before the next setup so state cannot
+                // accumulate across a measurement.
                 setup_context.settle();
                 MeasuredTaskInput {
                     input: setup(&mut setup_context),

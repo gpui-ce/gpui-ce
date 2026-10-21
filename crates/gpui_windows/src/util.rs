@@ -128,7 +128,7 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
     )
 }
 
-/// This function is used to configure the dark mode for the window built-in title bar.
+/// Configures dark mode for the built-in window title bar.
 pub(crate) fn configure_dwm_dark_mode(hwnd: HWND, appearance: WindowAppearance) {
     let dark_mode_enabled: BOOL = match appearance {
         WindowAppearance::Dark | WindowAppearance::VibrantDark => true.into(),
@@ -158,8 +158,7 @@ pub(crate) fn logical_point(x: f32, y: f32, scale_factor: f32) -> Point<Pixels> 
 pub(crate) fn system_appearance() -> Result<WindowAppearance> {
     let ui_settings = UISettings::new()?;
     let foreground_color = ui_settings.GetColorValue(UIColorType::Foreground)?;
-    // If the foreground is light, then is_color_light will evaluate to true,
-    // meaning Dark mode is enabled.
+    // A light foreground indicates dark mode.
     if is_color_light(&foreground_color) {
         Ok(WindowAppearance::Dark)
     } else {

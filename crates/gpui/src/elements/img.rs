@@ -31,10 +31,8 @@ use super::{Stateful, StatefulInteractiveElement};
 /// The delay before showing the loading state.
 pub const LOADING_DELAY: Duration = Duration::from_millis(200);
 
-/// A type alias to the resource loader that the `img()` element uses.
-///
-/// Note: that this is only for Resources, like URLs or file paths.
-/// Custom loaders, or external images will not use this asset loader
+/// The resource loader for `img()` URLs and file paths.
+/// Custom loaders and external images bypass it.
 pub type ImgResourceLoader = AssetLogger<ImageAssetLoader>;
 
 /// A source of image content.
@@ -217,15 +215,10 @@ impl Img {
         ]
     }
 
-    /// Sets the image cache for the current node.
+    /// Sets the image cache for this node.
     ///
-    /// If the `image_cache` is not explicitly provided, the function will determine the image cache by:
-    ///
-    /// 1. Checking if any ancestor node of the current node contains an `ImageCacheElement`, If such a node exists, the image cache specified by that ancestor will be used.
-    /// 2. If no ancestor node contains an `ImageCacheElement`, the global image cache will be used as a fallback.
-    ///
-    /// This mechanism provides a flexible way to manage image caching, allowing precise control when needed,
-    /// while ensuring a default behavior when no cache is explicitly specified.
+    /// Without an explicit cache, uses the nearest ancestor `ImageCacheElement` cache,
+    /// falling back to the global cache if no ancestor provides one.
     #[inline]
     pub fn image_cache<I: ImageCache>(self, image_cache: &Entity<I>) -> Self {
         Self {

@@ -1,11 +1,5 @@
-//! Custom Drawing Example
-//!
-//! This example demonstrates custom drawing in GPUI using:
-//!
-//! 1. `canvas` element - For direct painting control
-//! 2. `PathBuilder` - Creating custom vector shapes
-//! 3. `window.paint_*` methods - Drawing quads, paths, and more
-//! 4. Interactive drawing - Responding to mouse events
+//! Draw with `canvas`, build vector shapes with `PathBuilder`, and paint
+//! quads and paths with `window.paint_*`. Includes mouse-driven drawing.
 
 use gpui::colors::Colors;
 use gpui::{

@@ -59,18 +59,19 @@ def _env(name: str, default: str) -> str:
 ZED_REMOTE_NAME: str = _env("SYNC_ZED_REMOTE_NAME", "zed")
 ZED_REMOTE_URL: str = _env("SYNC_ZED_REMOTE_URL", "https://github.com/zed-industries/zed.git")
 
-# Fork crate DIR (under crates/) -> upstream crate path (under crates/). Keys are directory
-# names, not package names. The in-tree gpui* dirs map to themselves; the rest were vendored
-# from the Zed monorepo by PR #91 ("removed all of the git sources") and are tracked via
-# path remapping. Packaging is orthogonal to directories: every fork package is now `gpui_ce_*`
-# — except the main crate, which is `gpui-ce` (hyphen) — each with `[lib] name` preserving the
-# upstream crate name so `use` sites are unchanged, plus a `[workspace.dependencies]` alias
-# mapping the upstream name back (e.g. `collections = { package = "gpui_ce_collections" }`,
-# `gpui = { package = "gpui-ce" }`). Their gpui-ce adaptations (package rename + lib-name
-# override, path deps, ztracing->tracing, zlog removal, etc.) are preserved through the 3-way
-# merge's conflict resolution — never re-applied by hand.
-# Left untouched: gpui_elements (fork-only, package gpui_ce_elements), tooling/perf (fork-only).
-# util_macros is no longer used by the fork.
+# Maps fork crate directories to upstream paths under crates/. Keys are directories,
+# not package names. In-tree gpui* directories map to themselves. PR #91 vendored the
+# others from Zed, so they need remapping.
+#
+# Packages use gpui_ce_* names except gpui-ce.
+# [lib] names preserve upstream imports. Workspace aliases map upstream names to packages,
+# such as collections to gpui_ce_collections and gpui to gpui-ce.
+#
+# Three-way conflict resolution preserves package/lib renames, path dependencies,
+# ztracing-to-tracing changes, and zlog removal. Do not reapply them by hand.
+#
+# Fork-only gpui_elements, packaged as gpui_ce_elements, and tooling/perf stay untouched.
+# The fork no longer uses util_macros.
 TRACKED_CRATES: dict[str, str] = {
     # in-tree gpui crates (identity mapping)
     "gpui": "gpui",
@@ -92,17 +93,16 @@ TRACKED_CRATES: dict[str, str] = {
     "gpui_media": "media",
     "gpui_zed_util": "util",
     "gpui_ce_util": "gpui_util",
-    # Created mid-range by upstream's "Split out `RelPath` into a separate crate" (#61029),
-    # which MOVED crates/util/src/rel_path.rs into it. Tracked so the split arrives through the
-    # merge (see MOVE detection below) instead of leaving a stale duplicate in gpui_zed_util.
+    # Upstream #61029 moved crates/util/src/rel_path.rs here. Track the split so
+    # move detection removes the old gpui_zed_util copy during the merge.
     "gpui_path": "path",
 }
 
 VENDOR_BRANCH: str = _env("SYNC_VENDOR_BRANCH", "vendor/zed-gpui")
 
 CLAUDE_BIN: str = _env("SYNC_CLAUDE_BIN", "claude")
-# Per-invocation wall-clock cap (seconds); 0 disables. The real safety bound — hitting it
-# is non-fatal (the loop re-checks progress and retries).
+# Per-invocation wall-clock safety limit in seconds, 0 disables it.
+# A timeout is nonfatal. Check progress and retry.
 CLAUDE_TIMEOUT: int = int(_env("SYNC_CLAUDE_TIMEOUT", "1800"))
 # Optional cap on claude's agentic turns per invocation (0 = no cap, the default).
 CLAUDE_MAX_TURNS: int = int(_env("SYNC_CLAUDE_MAX_TURNS", "0"))
@@ -312,11 +312,9 @@ def build_vendor_history(parent: str, frm: str, to: str) -> str:
 
 
 # cross-crate file moves
-# Upstream regularly relocates code between crates (e.g. #61029 split crates/util/src/rel_path.rs
-# out into the new crates/path). Because BOTH sides of a vendor-history diff are already remapped
-# to this fork's paths, git's rename detection reports such a move in fork terms
-# (crates/gpui_zed_util/src/rel_path.rs -> crates/gpui_path/src/rel_path.rs) — which is exactly
-# what's needed to settle the resulting delete/modify conflict correctly.
+# Both sides of vendor-history diffs use fork paths, so git detects cross-crate moves
+# such as gpui_zed_util/src/rel_path.rs to gpui_path/src/rel_path.rs from upstream #61029.
+# Use those moves to resolve delete/modify conflicts.
 MOVE_SIMILARITY: str = _env("SYNC_MOVE_SIMILARITY", "40%")
 
 
@@ -463,17 +461,16 @@ def resolve_conflicts_loop(branch: str, moves: dict[str, str] | None = None) -> 
         for path in files:
             print(f"    {_D}conflict:{_Z} {path}")
         run_claude(render_prompt("resolve", files, moves=moves))
-        # Stage only tracked updates (resolves the conflicted files). NOT `-A`: conflict
-        # resolution edits existing files, so any new untracked file is claude's scratch
-        # (e.g. saved base/upstream copies for diffing) and must not be swept into the commit.
+        # Stage tracked updates only. Untracked files may be Claude's scratch copies
+        # for diffing and must stay out of the commit.
         run_git("add", "-u")
         after = len(conflicted_files())
         if after > 0 and after >= before:
             warn(f"no progress this pass ({before} → {after} files) — claude may be stuck")
 
 
-# dependency bump (legacy no-op: PR #91 removed all zed git deps, so there is currently
-# nothing to bump; kept in case a git dep ever returns)
+# Legacy dependency bump, a no-op since PR #91 removed Zed git dependencies.
+# Keep it in case a git dependency returns.
 def bump_zed_deps(target: str) -> None:
     path = REPO_ROOT / "Cargo.toml"
     lines = path.read_text().splitlines(keepends=True)
@@ -680,8 +677,7 @@ def cmd_sync(ref: str | None) -> None:
     if vnew == vendor_tip:
         warn("no gpui-touching upstream commits in range — only deps will be updated")
 
-    # Both sides are already remapped to fork paths, so this reports upstream's cross-crate
-    # relocations in gpui-ce terms — used to settle delete/modify conflicts as moves.
+    # Detect moves in fork paths to resolve delete/modify conflicts.
     moves = detect_moves(vendor_tip, vnew)
 
     branch = f"sync/zed-{datetime.now(timezone.utc):%Y%m%d}-{target[:7]}"
@@ -724,12 +720,12 @@ def cmd_sync(ref: str | None) -> None:
         # Settle deterministic add/delete conflicts (kept out of the LLM step).
         auto_resolve_add_delete(moves)
         nconf = len(conflicted_files())
-        # Commit 1: the RAW merge — auto-merges applied, conflict markers committed in.
+        # Commit the raw merge, including unresolved conflict markers.
         run_git("add", "-A")
         run_git("commit", "--no-edit", "-m", merge_raw_msg)
         ok(f"committed raw merge with conflict markers ({nconf} file(s) to resolve)")
         if nconf > 0:
-            # Commit 2: claude's resolution of the markers — reviewable as an isolated diff.
+            # Commit Claude's conflict resolution as a separate reviewable diff.
             warn("resolving conflict markers with claude…")
             resolve_conflicts_loop(branch, moves)
             run_git("commit", "-m", resolution_msg)

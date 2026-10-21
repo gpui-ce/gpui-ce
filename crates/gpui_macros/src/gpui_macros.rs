@@ -22,9 +22,7 @@ pub fn derive_action(input: TokenStream) -> TokenStream {
     derive_action::derive_action(input)
 }
 
-/// This can be used to register an action with the GPUI runtime when you want to manually implement
-/// the `Action` trait. Typically you should use the `Action` derive macro or `actions!` macro
-/// instead.
+/// Registers a manually implemented `Action` with GPUI. Prefer deriving `Action` or using `actions!`.
 #[proc_macro]
 pub fn register_action(ident: TokenStream) -> TokenStream {
     register_action::register_action(ident)
@@ -67,8 +65,7 @@ pub fn derive_render(input: TokenStream) -> TokenStream {
     derive_render::derive_render(input)
 }
 
-/// #[derive(AppContext)] is used to create a context out of anything that holds a `&mut App`
-/// Note that a `#[app]` attribute is required to identify the variable holding the &mut App.
+/// Derives `AppContext` for a type holding `&mut App`. Mark that field with `#[app]`.
 ///
 /// Failure to add the attribute causes a compile error:
 ///
@@ -85,10 +82,8 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     derive_app_context::derive_app_context(input)
 }
 
-/// #[derive(VisualContext)] is used to create a visual context out of anything that holds a `&mut Window` and
-/// implements `AppContext`
-/// Note that a `#[app]` and a `#[window]` attribute are required to identify the variables holding the &mut App,
-/// and &mut Window respectively.
+/// Derives `VisualContext` for a type holding `&mut Window` and implementing `AppContext`.
+/// Mark the `&mut App` and `&mut Window` fields with `#[app]` and `#[window]`, respectively.
 ///
 /// Failure to add both attributes causes a compile error:
 ///

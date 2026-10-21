@@ -12,9 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{iter, mem, ops::Range};
 
-/// Use this struct for interfacing with the 'debug_below' styling from your own elements.
-/// If a parent element has this style set on it, then this struct will be set as a global in
-/// GPUI.
+/// A global set when a parent has `debug_below` styling, for use by custom elements.
 #[cfg(debug_assertions)]
 pub struct DebugBelow;
 
@@ -336,9 +334,9 @@ pub struct Style {
     pub flex_wrap: FlexWrap,
     /// Sets the initial main axis size of the item
     pub flex_basis: Length,
-    /// The relative rate at which this item grows when it is expanding to fill space, 0.0 is the default value, and this value must be positive.
+    /// Relative growth rate when filling space. Defaults to 0.0 and must be positive.
     pub flex_grow: f32,
-    /// The relative rate at which this item shrinks when it is contracting to fit into space, 1.0 is the default value, and this value must be positive.
+    /// Relative shrink rate when fitting space. Defaults to 1.0 and must be positive.
     pub flex_shrink: f32,
 
     /// The fill color of this element
@@ -539,12 +537,11 @@ pub enum Filter {
 }
 
 impl Filter {
-    /// Whether this filter has no visible effect, so painting can skip it entirely (and the
-    /// element can avoid the offscreen isolation pass when *all* of its filters are identities).
+    /// Returns whether the filter has no visible effect.
     ///
-    /// Each variant declares its own no-op case here rather than the pipeline special-casing
-    /// blur — adding a filter that this returns `true` for is silently dropped before it ever
-    /// reaches the renderer.
+    /// Paint drops identity filters before they reach the renderer and skips offscreen
+    /// isolation when all filters are identities. Each variant defines its own no-op
+    /// case here, so the pipeline does not need to special-case blur.
     pub fn is_identity(&self) -> bool {
         match self {
             Filter::Blur(radius) => *radius <= Pixels::ZERO,
@@ -560,13 +557,11 @@ impl Filter {
     }
 }
 
-/// The scene-space (device-pixel) form of a [`Filter`], carried on the scene primitives that the
-/// renderers consume. Produced by [`Filter::scale`]; pixel magnitudes are in [`ScaledPixels`].
+/// A [`Filter`] in device-pixel coordinates, produced by [`Filter::scale`] with
+/// magnitudes in [`ScaledPixels`].
 ///
-/// This is intentionally a separate enum from [`Filter`] (rather than reusing it) so the scene
-/// stays in device space like every other primitive, and so the renderers `match` on it
-/// exhaustively — adding a filter variant breaks each backend's match, forcing a deliberate
-/// implement-or-decline decision per backend instead of silently rendering nothing.
+/// A separate enum keeps scene data in device space. Exhaustive matches force each
+/// renderer to implement or explicitly decline new filter variants, avoiding silent omissions.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScaledFilter {
     /// A gaussian blur with the given radius, in scaled (device) pixels.
@@ -637,9 +632,9 @@ pub enum TextTransform {
     /// Do not transform text.
     #[default]
     None,
-    /// Uppercase text (Unicode, byte-length preserving — see [`TextTransform`]).
+    /// Uppercases Unicode text while preserving byte length. See [`TextTransform`].
     Uppercase,
-    /// Lowercase text (Unicode, byte-length preserving — see [`TextTransform`]).
+    /// Lowercases Unicode text while preserving byte length. See [`TextTransform`].
     Lowercase,
     /// `text-transform: capitalize` semantics (Tailwind class `capitalize`): per Unicode word, only
     /// the first alphabetic character is mapped to uppercase; the rest of the string is unchanged.
@@ -810,13 +805,11 @@ impl TextStyle {
     }
 }
 
-/// A highlight style to apply, similar to a `TextStyle` except
-/// for a single font, uniformly sized and spaced text.
+/// A highlight style for text in a single font, size, and spacing.
 ///
-/// Layout extras on the base [`TextStyle`] — such as [`TextStyle::letter_spacing`] and
-/// [`TextStyle::text_transform`] — are not stored here; highlighted segments inherit them
-/// from the surrounding style (see [`TextStyle::highlight`] and
-/// [`crate::StyledText::with_default_highlights`]).
+/// Layout properties such as [`TextStyle::letter_spacing`] and [`TextStyle::text_transform`]
+/// are not stored here. Highlighted segments inherit them from the surrounding style.
+/// See [`TextStyle::highlight`] and [`crate::StyledText::with_default_highlights`].
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct HighlightStyle {
     /// The color of the text
@@ -1025,9 +1018,9 @@ impl Style {
             );
         }
 
-        // The element's own box — background, inset shadows, children, and border — painted as a
-        // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
-        // and its children together as one group; without a filter it paints directly.
+        // Paint the background, inset shadows, children, and border as one group.
+        // CSS `filter` isolates this group so the renderer blurs it together.
+        // Without a filter, paint directly.
         let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
@@ -1194,9 +1187,7 @@ pub enum Fill {
 }
 
 impl Fill {
-    /// Unwrap this fill into a solid color, if it is one.
-    ///
-    /// If the fill is not a solid color, this method returns `None`.
+    /// Returns the solid color, or `None` for other fills.
     pub fn color(&self) -> Option<Background> {
         match self {
             Fill::Color(color) => Some(*color),
@@ -1546,17 +1537,13 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-/// How children overflowing their container should affect layout
+/// How overflowing children affect layout.
 ///
-/// In CSS the primary effect of this property is to control whether contents of a parent container that overflow that container should
-/// be displayed anyway, be clipped, or trigger the container to become a scroll container. However it also has secondary effects on layout,
-/// the main ones being:
+/// CSS overflow can display overflowing content, clip it, or create a scroll container.
+/// Taffy handles only the layout effects:
 ///
-///   - The automatic minimum size Flexbox/CSS Grid items with non-`Visible` overflow is `0` rather than being content based
-///   - `Overflow::Scroll` nodes have space in the layout reserved for a scrollbar (width controlled by the `scrollbar_width` property)
-///
-/// In Taffy, we only implement the layout related secondary effects as we are not concerned with drawing/painting. The amount of space reserved for
-/// a scrollbar is controlled by the `scrollbar_width` property. If this is `0` then `Scroll` behaves identically to `Hidden`.
+/// - Flexbox and grid items with non-`Visible` overflow have an automatic minimum size of `0`.
+/// - `Overflow::Scroll` reserves `scrollbar_width` for a scrollbar. At `0`, its layout matches `Hidden`.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/overflow>
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -1572,9 +1559,8 @@ pub enum Overflow {
     /// The automatic minimum size of this node as a flexbox/grid item should be `0`.
     /// Content that overflows this node should *not* contribute to the scroll region of its parent.
     Hidden,
-    /// The automatic minimum size of this node as a flexbox/grid item should be `0`. Additionally, space should be reserved
-    /// for a scrollbar. The amount of space reserved is controlled by the `scrollbar_width` property.
-    /// Content that overflows this node should *not* contribute to the scroll region of its parent.
+    /// Sets the automatic flexbox/grid minimum size to `0` and reserves `scrollbar_width`
+    /// for a scrollbar. Overflow does not contribute to the parent scroll region.
     Scroll,
 }
 
@@ -1594,11 +1580,10 @@ pub enum Position {
     /// Offsets do not affect the position of any other items; they are effectively a correction factor applied at the end.
     #[default]
     Relative,
-    /// The offset is computed relative to this item's closest positioned ancestor, if any.
-    /// Otherwise, it is placed relative to the origin.
-    /// No space is created for the item in the page layout, and its size will not be altered.
+    /// Positions relative to the closest positioned ancestor, or the origin if none exists.
+    /// Reserves no layout space and does not alter the item size.
     ///
-    /// WARNING: to opt-out of layouting entirely, you must use [`Display::None`] instead on your [`Style`] object.
+    /// Use [`Display::None`] on [`Style`] to exclude the item from layout entirely.
     Absolute,
 }
 

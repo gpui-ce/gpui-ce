@@ -495,11 +495,11 @@ impl Platform for WindowsPlatform {
             }
             "#;
 
-        // Defer spawning to the foreground executor so it runs after the
-        // current `AppCell` borrow is released. On Windows, `Command::spawn()`
-        // can pump the Win32 message loop (via `CreateProcessW`), which
-        // re-enters message handling possibly resulting in another mutable
-        // borrow of the `AppCell` ending up with a double borrow panic
+        // Defer spawning to the foreground executor until the current `AppCell`
+        // borrow is released.
+        //
+        // `Command::spawn()` can pump the Win32 message loop through `CreateProcessW`,
+        // re-entering handlers and causing a double borrow panic.
         let Some(powershell) = get_powershell() else {
             log::error!("failed to restart: PowerShell is unavailable");
             return;
@@ -1040,9 +1040,8 @@ impl WindowsPlatformInner {
             std::process::exit(0);
         }
 
-        // Shutdown couldn't run synchronously, since the AppCell is already borrowed.
-        // Windows may terminate the application as soon as we return from this handler, but if we post a WM_QUIT message now,
-        // we may get to gracefully shut down the app before we're terminated by the OS.
+        // AppCell is already borrowed, so shutdown must be asynchronous. Post WM_QUIT
+        // for a chance to shut down before Windows terminates the app on return.
         unsafe { PostQuitMessage(0) };
         Some(0)
     }
@@ -1071,9 +1070,8 @@ impl WindowsPlatformInner {
             'timeout_loop: loop {
                 if start.elapsed().as_millis() >= MAIN_TASK_TIMEOUT {
                     log::debug!("foreground task timeout reached");
-                    // we spent our budget on gpui tasks, we likely have a lot of work queued so drain system events first to stay responsive
-                    // then quit out of foreground work to allow us to process other gpui events first before returning back to foreground task work
-                    // if we don't we might not for example process window quit events
+                    // The task budget is exhausted. Drain system events and yield to other
+                    // GPUI events so queued work cannot starve window quit events.
                     let mut msg = MSG::default();
                     let process_message = |msg: &_| {
                         if translate_accelerator(msg).is_none() {
@@ -1084,8 +1082,8 @@ impl WindowsPlatformInner {
                     let peek_msg = |msg: &mut _, msg_kind| unsafe {
                         PeekMessageW(msg, None, 0, 0, PM_REMOVE | msg_kind).as_bool()
                     };
-                    // We need to process a paint message here as otherwise we will re-enter `run_foreground_task` before painting if we have work remaining.
-                    // The reason for this is that windows prefers custom application message processing over system messages.
+                    // Process paint now. Windows prioritizes application messages, so queued
+                    // work would otherwise re-enter `run_foreground_task` before painting.
                     if peek_msg(&mut msg, PM_QS_PAINT) {
                         process_message(&msg);
                     }
@@ -1112,8 +1110,8 @@ impl WindowsPlatformInner {
                 }
             }
 
-            // Someone could enqueue a Runnable here. The flag is still true, so they will not PostMessage.
-            // We need to check for those Runnables after we clear the flag.
+            // Recheck after clearing the flag. Runnables enqueued while it was true
+            // will not have posted a message.
             self.dispatcher.wake_posted.store(false, Ordering::Release);
             let mut main_receiver = self.main_receiver.clone();
             match main_receiver.try_pop() {
@@ -1287,9 +1285,8 @@ fn open_target_in_explorer(target: &Path) -> Result<()> {
     let highlight = [file_item as *const _];
     unsafe { SHOpenFolderAndSelectItems(dir_item as _, Some(&highlight), 0) }.or_else(|err| {
         if err.code().0 == ERROR_FILE_NOT_FOUND.0 as i32 {
-            // On some systems, the above call mysteriously fails with "file not
-            // found" even though the file is there.  In these cases, ShellExecute()
-            // seems to work as a fallback (although it won't select the file).
+            // Some systems mysteriously report "file not found" for existing files.
+            // ShellExecute() seems to work as a fallback, but will not select the file.
             open_target(dir).context("Opening target parent folder")
         } else {
             Err(anyhow::anyhow!("Can not open target path: {}", err))
@@ -1435,8 +1432,8 @@ fn handle_gpu_device_lost(
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
     text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
-    // Here we wait a bit to ensure the system has time to recover from the device lost state.
-    // If we don't wait, the final drawing result will be blank.
+    // Give the system time to recover from device loss. Recreating the device
+    // immediately can leave the final drawing result blank.
     std::thread::sleep(std::time::Duration::from_millis(350));
 
     *directx_devices = try_to_recover_from_device_lost(|| {

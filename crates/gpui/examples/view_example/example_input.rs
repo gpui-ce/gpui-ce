@@ -1,14 +1,13 @@
-//! `Input` — a single-line text input. The shaping layer over `Editor`.
+//! `Input` wraps `Editor` in a single-line text input.
 //!
-//! Construct it two ways, depending on how much state you want to own:
-//!   * `Input::new(value: Entity<String>)`  — you hold just the string; the input
-//!     allocates the `Editor` internally via `use_state`. Value readable, cursor hidden.
-//!   * `Input::editor(editor: Entity<Editor>)` — you hold the editor; cursor/selection
-//!     are now yours to read and drive too.
+//! `Input::new(value: Entity<String>)` shares the string and allocates an editor
+//! with `use_state`. Callers can read the value, while the input owns the cursor.
 //!
-//! Either way the chrome is identical. Because the string (or editor) is the
-//! input's *identity*, the internal `use_state(Editor)` is collision-safe across
-//! any number of inputs.
+//! `Input::editor(editor: Entity<Editor>)` lets callers read and control cursor
+//! and selection state too.
+//!
+//! Both render identically and use the string or editor identity to keep
+//! internal state separate across inputs.
 
 use gpui::{
     App, BoxShadow, CursorStyle, Entity, EntityId, Hsla, IntoElement, Pixels, StyleRefinement,
@@ -68,8 +67,7 @@ impl gpui::View for Input {
     }
 
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        // Get the editor: use the one we were handed, or allocate it under our
-        // own (string-derived) identity so it persists and never collides.
+        // Reuse the provided editor or persist one under the string's identity.
         let editor = match self.source {
             Source::Value(value) => {
                 window.use_state(cx, move |window, cx| Editor::over(value, window, cx))

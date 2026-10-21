@@ -1,6 +1,5 @@
-//! Renders one of every primitive kind through the headless WGPU renderer and checks
-//! that each one actually lands on the target. This is the cross-platform smoke test for
-//! the shared render plan, instance transport, and generated shaders.
+//! Renders and checks every primitive kind through headless WGPU to test the shared
+//! render plan, instance transport, and generated shaders across platforms.
 #![cfg(feature = "test-support")]
 
 use gpui::{
@@ -199,8 +198,8 @@ fn every_primitive_kind_renders() {
         background: solid_background(blue),
         ..Default::default()
     });
-    // 8–9. Gradient drop and inset shadows. The inset gradient stays in the element's paint
-    // coordinate space while its offset hole is smaller.
+    // 8 and 9. Gradient drop and inset shadows. The inset gradient stays in the element's
+    // paint coordinate space while its offset hole is smaller.
     let gradient = linear_gradient(
         90.0,
         linear_color_stop(red, 0.0),

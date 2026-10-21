@@ -1,14 +1,12 @@
-//! Touch gesture recognition vocabulary.
+//! Touch gesture recognition.
 //!
-//! GPUI recognizes gestures from raw [`TouchEvent`](crate::TouchEvent)s in a
-//! single, portable arena in gpui core: recognizers compete for in-flight
-//! touches, winners claim them, and losers are cancelled. Recognized gestures
-//! are surfaced through *existing* semantic events wherever possible, a tap
-//! becomes [`ClickEvent::Touch`](crate::ClickEvent), a pan becomes
-//! [`ScrollWheelEvent`](crate::ScrollWheelEvent)s carrying a
-//! [`TouchPhase`](crate::TouchPhase), and a pinch becomes
-//! [`PinchEvent`](crate::PinchEvent)s — so components written against
-//! `on_click` and scroll containers work untouched on mobile.
+//! Recognizers share one portable arena in GPUI core and compete for active
+//! [`TouchEvent`](crate::TouchEvent)s. Winners claim touches and losers are cancelled.
+//!
+//! Taps become [`ClickEvent::Touch`](crate::ClickEvent),
+//! pans become [`ScrollWheelEvent`](crate::ScrollWheelEvent)s with a
+//! [`TouchPhase`](crate::TouchPhase), and pinches become [`PinchEvent`](crate::PinchEvent)s.
+//! Existing `on_click` handlers and scroll containers work on mobile.
 
 use std::collections::VecDeque;
 use std::mem;
@@ -142,11 +140,10 @@ impl Default for GestureTuning {
     }
 }
 
-/// How free scrolling decelerates after a fling.
+/// Deceleration after a fling.
 ///
-/// This models deceleration only. Boundary behavior — bouncing, edge glow,
-/// clamping — is the scroll container's policy: the container is the one that
-/// knows its extents.
+/// The scroll container handles bouncing, edge glow, and clamping because it knows
+/// the content bounds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScrollPhysics {
     /// Exponential velocity decay, the `UIScrollView` model:
@@ -180,11 +177,10 @@ impl ScrollPhysics {
         }
     }
 
-    /// Android scroll feel: `OverScroller` with stock friction, at Android's
-    /// nominal density of 160 density-independent pixels per inch — the
-    /// right pairing when fling distances are in logical pixels. Platforms
-    /// that fling in physical pixels, or know the display's true density in
-    /// their logical space, should construct
+    /// Android `OverScroller` deceleration with stock friction at the nominal density
+    /// of 160 density-independent pixels per inch, for fling distances in logical pixels.
+    ///
+    /// For physical pixels or a known logical display density, construct
     /// [`ScrollPhysics::FrictionSpline`] directly.
     pub fn android() -> Self {
         Self::FrictionSpline {
@@ -467,10 +463,9 @@ const MOMENTUM_STOP_VELOCITY: f32 = 10.;
 /// reflect an earlier part of the gesture, not the speed at release.
 const VELOCITY_WINDOW: Duration = Duration::from_millis(100);
 
-/// A pause between samples longer than this means the finger stopped:
-/// anything before the pause describes an earlier motion, not the release
-/// (Flutter's `kAssumePointerMoveStoppedMilliseconds`). Touch hardware
-/// reports movement every 8–16ms while the finger is in motion.
+/// A longer pause means the finger stopped, so earlier samples do not describe
+/// release motion. Matches Flutter's `kAssumePointerMoveStoppedMilliseconds`.
+/// Touch hardware reports movement every 8 to 16ms during motion.
 const VELOCITY_ASSUME_STOPPED_GAP: Duration = Duration::from_millis(40);
 
 const VELOCITY_MAX_SAMPLES: usize = 20;
@@ -552,10 +547,10 @@ struct CompletedTap {
     count: usize,
 }
 
-/// One fling in progress. The trajectory is a closed-form curve of elapsed
-/// time — each tick evaluates it and emits the increment — so the fling is
-/// exactly frame-rate independent: a stalled frame simply resumes further
-/// along the same curve.
+/// An active fling on a closed-form trajectory of elapsed time.
+///
+/// Each tick emits the position increment at its elapsed time, so motion is independent
+/// of frame rate. A stalled frame resumes further along the same trajectory.
 struct Momentum {
     /// Where the pan started; synthesized scroll events keep hit-testing
     /// there so momentum stays with the container the gesture began on.
@@ -1033,14 +1028,13 @@ impl VelocityTracker {
         self.samples.back().map(|(time, _)| *time)
     }
 
-    /// The velocity at the newest sample, in pixels per second.
+    /// Velocity at the newest sample in pixels per second.
     ///
-    /// Fits a second-degree polynomial by least squares over the trailing
-    /// [`VELOCITY_WINDOW`] and takes its derivative at the newest sample,
-    /// like Flutter's `VelocityTracker` and Android's `lsq2` strategy. An
-    /// endpoint difference over the same window would report the window's
-    /// *average* speed, which for a flick — still accelerating at lift-off —
-    /// is roughly half the speed the finger actually had at release.
+    /// Differentiates a least-squares quadratic fit over the trailing [`VELOCITY_WINDOW`],
+    /// matching Flutter's `VelocityTracker` and Android's `lsq2` strategy.
+    ///
+    /// An endpoint difference over the same window gives average speed, roughly half
+    /// the release speed for a flick still accelerating at lift-off.
     fn velocity(&self) -> Point<f32> {
         let Some((newest_time, _)) = self.samples.back() else {
             return Point::default();

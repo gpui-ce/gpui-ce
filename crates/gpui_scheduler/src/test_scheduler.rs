@@ -268,10 +268,8 @@ impl TestScheduler {
         }
     }
 
-    /// Execute one tick of the scheduler, processing expired timers and running
-    /// at most one task. Returns true if any work was done.
-    ///
-    /// This is the public interface for GPUI's TestDispatcher to drive task execution.
+    /// Processes expired timers and runs at most one task. Returns whether work was done.
+    /// GPUI's TestDispatcher uses this to drive execution.
     pub fn tick(&self) -> bool {
         self.step_filtered(false)
     }
@@ -341,12 +339,9 @@ impl TestScheduler {
         let runnable = {
             let state = &mut *self.state.lock();
 
-            // Find candidate tasks:
-            // - For foreground tasks (with session_id), only the first task from each session
-            //   is a candidate (to preserve intra-session ordering)
-            // - For background tasks (no session_id), all are candidates
-            // - Tasks from blocked sessions are excluded
-            // - If background_only is true, skip foreground tasks entirely
+            // Preserve session order by considering only each session's first task.
+            // Include all background tasks. Exclude blocked sessions and, in background-only
+            // mode, all foreground tasks.
             let mut seen_sessions = HashSet::new();
             let candidate_indices: Vec<usize> = state
                 .runnables
@@ -354,18 +349,14 @@ impl TestScheduler {
                 .enumerate()
                 .filter(|(_, runnable)| {
                     if let Some(session_id) = runnable.session_id {
-                        // Skip foreground tasks if background_only mode
                         if background_only {
                             return false;
                         }
-                        // Exclude tasks from blocked sessions
                         if state.blocked_sessions.contains(&session_id) {
                             return false;
                         }
-                        // Only include first task from each session (insert returns true if new)
                         seen_sessions.insert(session_id)
                     } else {
-                        // Background tasks are always candidates
                         true
                     }
                 })
@@ -399,7 +390,6 @@ impl TestScheduler {
                     state.runnables.remove(candidate_indices[selected_idx])
                 }
             } else {
-                // Non-randomized: just take the first candidate task
                 state.runnables.remove(candidate_indices[0])
             }
         };
@@ -416,15 +406,12 @@ impl TestScheduler {
         false
     }
 
-    /// Drops all runnable tasks from the scheduler.
+    /// Drops queued tasks for the leak detector, since tasks can keep entities alive.
     ///
-    /// This is used by the leak detector to ensure that all tasks have been dropped as tasks may keep entities alive otherwise.
-    /// Why do we even have tasks left when tests finish you may ask. The reason for that is simple, the scheduler itself is the executor and it retains the scheduled runnables.
-    /// A lot of tasks, including every foreground task contain an executor handle that keeps the test scheduler alive, causing a reference cycle, thus the need for this function right now.
+    /// The scheduler retains runnables even after tests finish. Many tasks, including every
+    /// foreground task, retain an executor handle that forms a cycle with the scheduler.
     pub fn drain_tasks(&self) {
-        // dropping runnables may reschedule tasks
-        // due to drop impls with executors in them
-        // so drop until we reach a fixpoint
+        // Drop until no tasks remain, since destructors with executors may reschedule work.
         loop {
             let mut state = self.state.lock();
             if state.runnables.is_empty() && state.timers.is_empty() {
@@ -491,7 +478,6 @@ impl TestScheduler {
             // Enforce a hard timeout to prevent tests from hanging indefinitely
             let hard_deadline = start + Duration::from_secs(15);
 
-            // Use the earlier of the provided deadline or the hard timeout deadline
             let effective_deadline = deadline
                 .map(|d| d.min(hard_deadline))
                 .unwrap_or(hard_deadline);
@@ -501,14 +487,12 @@ impl TestScheduler {
             loop {
                 let now = Instant::now();
                 if now >= effective_deadline {
-                    // Check if we hit the hard timeout
                     if now >= hard_deadline {
                         panic!(
                             "Test timed out after 15 seconds while parking. \
                             This may indicate a deadlock or missing waker.",
                         );
                     }
-                    // Hit the provided deadline
                     return false;
                 }
 
@@ -518,11 +502,9 @@ impl TestScheduler {
                 thread::park_timeout(park_duration);
                 let elapsed = before_park.elapsed();
 
-                // Advance the test clock by the real elapsed time while parking
                 self.clock.advance(elapsed);
 
-                // Check if any timers have expired after advancing the clock.
-                // If so, return so the caller can process them.
+                // Let the caller process timers that expired while parked.
                 if self
                     .state
                     .lock()
@@ -533,10 +515,8 @@ impl TestScheduler {
                     return true;
                 }
 
-                // Check if we were woken up by a different thread.
-                // We use a flag because timing-based detection is unreliable:
-                // OS scheduling delays can cause elapsed >= park_duration even when
-                // we were woken early by unpark().
+                // Detect external wakes with a flag. OS scheduling can make elapsed time
+                // exceed park_duration even after an early unpark().
                 if std::mem::take(&mut self.state.lock().unparked) {
                     return true;
                 }
@@ -586,13 +566,11 @@ fn assert_correct_thread(expected: &Thread, state: &Arc<Mutex<SchedulerState>>) 
 }
 
 impl Scheduler for TestScheduler {
-    /// Block until the given future completes, with an optional timeout. If the
-    /// future is unable to make progress at any moment before the timeout and
-    /// no other tasks or timers remain, we panic unless parking is allowed. If
-    /// parking is allowed, we block up to the timeout or indefinitely if none
-    /// is provided. This is to allow testing a mix of deterministic and
-    /// non-deterministic async behavior, such as when interacting with I/O in
-    /// an otherwise deterministic test.
+    /// Blocks until the future completes or the optional timeout expires.
+    ///
+    /// Panics if the future cannot progress and no other tasks or timers remain,
+    /// unless parking is allowed. Parking waits for external work,
+    /// such as I/O in a deterministic test, up to the timeout or indefinitely without one.
     #[cfg(not(target_family = "wasm"))]
     fn block(
         &self,
@@ -678,10 +656,8 @@ impl Scheduler for TestScheduler {
         self.clock.clone()
     }
 
-    /// In the test world, dedicated work is just a fresh local session driven
-    /// by the test scheduler's run loop alongside everything else. No real
-    /// thread is spawned, so determinism under `TestScheduler::many` is
-    /// preserved.
+    /// Runs dedicated work in a fresh local session on the test loop, preserving
+    /// determinism under `TestScheduler::many` without spawning a thread.
     fn spawn_dedicated(
         self: Arc<Self>,
         f: Box<
@@ -700,13 +676,9 @@ impl Scheduler for TestScheduler {
             self,
             schedule_local_dispatch(weak_scheduler.clone(), session_id),
         );
-        // The dedicated future sits in this scheduler's own queue until its
-        // first poll. A `LocalExecutor` holds the scheduler strongly, so
-        // capturing one here would create a reference cycle
-        // (scheduler -> queued runnable -> future -> executor -> scheduler)
-        // that leaks both if the scheduler is dropped before ever being run.
-        // Construct the executor lazily at first poll, when the runnable is
-        // already out of the queue.
+        // Construct the executor on first poll, after removing the runnable from the queue.
+        // Capturing it now would form a scheduler -> runnable -> future -> executor -> scheduler
+        // cycle and leak if the scheduler is dropped before running.
         spawner.spawn(async move {
             let scheduler = weak_scheduler
                 .upgrade()
@@ -897,8 +869,7 @@ impl TracingWaker {
 
 pub struct Yield(usize);
 
-/// A wrapper around `Arc<Mutex<StdRng>>` that provides convenient methods
-/// for random number generation without requiring explicit locking.
+/// An `Arc<Mutex<StdRng>>` wrapper that locks around random number generation.
 #[derive(Clone)]
 pub struct SharedRng(Arc<Mutex<StdRng>>);
 

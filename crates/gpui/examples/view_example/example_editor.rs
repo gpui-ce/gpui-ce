@@ -1,11 +1,8 @@
-//! `Editor` — the workhorse entity. It owns the cursor, blink, focus, keyboard
-//! handling, and the specialized text-shaping renderer. The *text itself* lives
-//! in a shared `Entity<String>` it's handed at construction, so the value is
-//! readable/writable from outside while the editing machinery stays in here.
+//! `Editor` owns cursor state, blinking, focus, keyboard handling, and text
+//! shaping and rendering. The text lives in an `Entity<String>` supplied at
+//! construction, so callers can read and write it independently.
 //!
-//! This is the piece that proves the point: a text input is genuinely
-//! complicated, and `View` lets all of that complexity live in one entity that
-//! anything can embed.
+//! Any `View` can embed the editor and reuse its editing behavior.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -30,14 +27,13 @@ pub struct Editor {
 }
 
 impl Editor {
-    /// An editor that owns its own string internally, seeded with `text`.
-    /// Nothing to allocate or wire up at the call site.
+    /// Creates an editor with its own string, seeded with `text`.
     pub fn new(text: impl Into<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let value = cx.new(|_| text.into());
         Self::over(value, window, cx)
     }
 
-    /// An editor over a string *you* own, so the value is shared in and out.
+    /// Creates an editor over a shared string.
     pub fn over(value: Entity<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
@@ -48,11 +44,11 @@ impl Editor {
             this.stop_blink(cx);
         });
 
-        // The value is shared: anything can write it while we hold a cursor into
-        // it. Observe it so external writes (a) clamp the cursor back onto a char
-        // boundary before the next IME round-trip can slice out of bounds, and
-        // (b) notify us, so an `editor.cached(..)` subtree re-renders — the cache
-        // is keyed on *our* notify, not the value's.
+        // External writes can invalidate the cursor. Observe them to clamp it to
+        // a character boundary before the next IME read can slice out of bounds.
+        //
+        // Notify this editor so `editor.cached(..)` rerenders, since its cache tracks
+        // our notifications rather than the string's.
         let value_sub = cx.observe(&value, |this, value, cx| {
             let content = value.read(cx);
             let mut cursor = this.cursor.min(content.len());
@@ -73,7 +69,7 @@ impl Editor {
         }
     }
 
-    /// The current text. Read this from anywhere to get the value out.
+    /// Returns the shared text.
     pub fn text(&self, cx: &App) -> String {
         self.value.read(cx).clone()
     }
@@ -309,9 +305,7 @@ impl gpui::Render for Editor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// EditorText — the specialized renderer: shapes the text and paints the cursor.
-// ---------------------------------------------------------------------------
+// EditorText shapes text and paints the cursor.
 
 struct EditorText {
     editor: Entity<Editor>,

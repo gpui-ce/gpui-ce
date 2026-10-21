@@ -69,15 +69,11 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
+    /// Blurs this element and its children as an isolated group, like CSS `filter: blur(<radius>)`.
+    /// Use [`Styled::backdrop_blur`] to blur content behind it.
     ///
-    /// This isolates the element's subtree, blurs it as a group, and composites the
-    /// result back. To blur the content *behind* the element instead (frosted glass),
-    /// use [`Styled::backdrop_blur`].
-    ///
-    /// *Appends* to the element's filter chain, so it composes with other convenience
-    /// setters (`.blur(8.).<other_filter>()`). To replace the whole chain, use
-    /// [`Styled::filter`].
+    /// Appends to the filter chain, composing with other filter setters.
+    /// Use [`Styled::filter`] to replace the chain.
     fn blur(mut self, radius: impl Into<Pixels>) -> Self {
         self.style()
             .filter
@@ -94,12 +90,10 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
-    /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::bg`]
-    /// so the background tints the blurred backdrop.
+    /// Blurs content behind the element, like CSS `backdrop-filter: blur(<radius>)`.
+    /// Pair with a translucent [`Styled::bg`] to tint the blurred backdrop.
     ///
-    /// *Appends* to the element's backdrop-filter chain. To replace the whole chain, use
-    /// [`Styled::backdrop_filter`].
+    /// Appends to the backdrop-filter chain. Use [`Styled::backdrop_filter`] to replace it.
     fn backdrop_blur(mut self, radius: impl Into<Pixels>) -> Self {
         self.style()
             .backdrop_filter
@@ -249,17 +243,16 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the truncate overflowing text with an ellipsis (…) at the start if needed.
-    /// Typically more adequate for file paths where the end is more important than the beginning.
-    /// Note: This doesn't exist in Tailwind CSS.
+    /// Truncates overflowing text with a leading ellipsis, preserving the end.
+    /// Useful for file paths where the filename matters more than the directory prefix.
+    /// Has no Tailwind CSS equivalent.
     fn text_ellipsis_start(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::TruncateStart(ELLIPSIS));
         self
     }
 
-    /// Sets the truncate overflowing text with an ellipsis (…) in the middle if needed.
-    /// Preserves the beginning and end of the text. Useful for filenames.
-    /// Note: This doesn't exist in Tailwind CSS.
+    /// Truncates overflowing text with a middle ellipsis, preserving both ends.
+    /// Useful for filenames. Has no Tailwind CSS equivalent.
     fn text_ellipsis_middle(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::TruncateMiddle(ELLIPSIS));
         self
@@ -678,7 +671,7 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the aspect ratio of the element to 1/1 – equal width and height.
+    /// Sets equal width and height, an aspect ratio of 1/1.
     /// [Docs](https://tailwindcss.com/docs/aspect-ratio)
     fn aspect_square(mut self) -> Self {
         self.style().aspect_ratio = Some(1.0);

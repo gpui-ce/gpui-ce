@@ -44,9 +44,7 @@ impl Menu {
     }
 }
 
-/// OS menus are menus that are recognized by the operating system
-/// This allows the operating system to provide specialized items for
-/// these menus
+/// A menu the operating system recognizes and supplies specialized items for.
 pub struct OsMenu {
     /// The name of the menu
     pub name: SharedString,
@@ -221,9 +219,7 @@ impl MenuItem {
     }
 }
 
-/// OS menus are menus that are recognized by the operating system
-/// This allows the operating system to provide specialized items for
-/// these menus
+/// A menu the operating system recognizes and supplies specialized items for.
 #[derive(Clone)]
 pub struct OwnedOsMenu {
     /// The name of the menu
@@ -304,9 +300,7 @@ impl Clone for OwnedMenuItem {
 // be moved to GPUI-provided actions that make this association
 // without leaking the platform details to GPUI users
 
-/// OS actions are actions that are recognized by the operating system
-/// This allows the operating system to provide specialized behavior for
-/// these actions
+/// Actions the operating system recognizes and supplies specialized behavior for.
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum OsAction {
     /// The 'cut' action

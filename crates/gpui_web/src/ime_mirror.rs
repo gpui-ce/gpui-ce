@@ -1,18 +1,16 @@
 //! The hidden `<textarea>` that connects browser IMEs to GPUI.
 //!
-//! IMEs (software keyboards, composition engines) decide what backspace,
-//! autocorrect, and suggestions mean by inspecting the focused editable
-//! element's value and selection. This module owns that element and keeps a
-//! window of the document's text mirrored into it, so IME edits arrive as
-//! interpretable events instead of operations against an empty field.
+//! IMEs inspect the focused element's value and selection for backspace,
+//! autocorrect, and suggestions. This module mirrors nearby document text
+//! into the element so those edits arrive as interpretable events.
 //!
-//! The element's value and selection are only ever written by [`sync`],
-//! reached through [`ImeMirror::schedule_sync`]: every write is observed by
-//! the IME and makes the browser restart the IME's input connection, so
-//! writes must be coalesced to at most one per browser event-loop turn,
-//! landing only after the current gesture's events have all dispatched.
-//! Keeping the element and its write path private to this module makes that
-//! discipline a compile-time guarantee rather than a convention.
+//! Only [`sync`], reached through [`ImeMirror::schedule_sync`], writes the
+//! value and selection. Each write restarts the IME connection, so requests
+//! coalesce into at most one write per browser event-loop turn, after all
+//! events for the gesture have dispatched.
+//!
+//! The element and its write path are private to this module, so the compiler
+//! enforces this restriction.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -22,58 +20,42 @@ use wasm_bindgen::JsCast;
 
 use crate::window::WebWindowInner;
 
-/// UTF-16 code units of document text mirrored on each side of the
-/// selection.
+/// UTF-16 code units mirrored on each side of the selection.
 ///
-/// There is no demand-driven protocol to size this against: an IME's
-/// context requests (e.g. Android's `getTextBeforeCursor`) are answered by
-/// the browser from the element's current state, invisibly to the page, so
-/// the window must be provisioned ahead of time. The lower bound is what
-/// IMEs actually read — sentence-scale context, on the order of a hundred
-/// units. The upper bound is that the window size is a per-keystroke cost,
-/// not a one-time cost: every imported edit diffs the element's full value
-/// against the stored mirror, and every rebuild writes the full window into
-/// the element and re-snapshots it across the browser–IME boundary, all on
-/// the main thread between frames. An IME that would read further than the
-/// window simply sees text truncated at the window's edge — the same thing
-/// it sees near the start of any short field — so oversizing buys nothing.
+/// The browser answers IME context requests, such as Android's
+/// `getTextBeforeCursor`, without notifying the page. Reserve context ahead
+/// of time for sentence-scale reads of roughly a hundred units.
+///
+/// Larger windows cost more on every keystroke. Edits diff the full value,
+/// and rebuilds copy the window and snapshot it across the browser-IME
+/// boundary, all on the main thread between frames. Reads beyond the window
+/// see truncated text, as they would in a short field.
 const CONTEXT_CHARS: usize = 512;
 
-/// The element is left alone until the selection gets this close to the
-/// mirrored window's edge (unless it desynchronizes outright). Must exceed
-/// the span an IME plausibly reads or edits around the caret within a
-/// single gesture (a long word plus autocorrect lookback); beyond that,
-/// recentering lazily is strictly better, because every recenter is an
-/// element write and therefore an IME restart.
+/// Recenter when the selection gets this close to the mirror's edge, or on
+/// desynchronization. Must exceed a gesture's read and edit span, including
+/// a long word and autocorrect lookback. Every recenter restarts the IME.
 const MIN_EDGE_CHARS: usize = 64;
 
-/// The hidden `<textarea>` IMEs edit, plus the bookkeeping that relates it
-/// to the document.
+/// The hidden `<textarea>` and its document mapping.
 ///
-/// The element and every value/selection write on it are private to this
-/// module; other code interacts through read accessors, focus and
-/// read-only control, and [`ImeMirror::schedule_sync`].
+/// Value and selection writes stay private. Other code uses read accessors,
+/// focus, read-only control, and [`ImeMirror::schedule_sync`].
 pub(crate) struct ImeMirror {
     element: web_sys::HtmlTextAreaElement,
-    /// The mirror text most recently synced to (or observed in) the hidden
-    /// element. `input` events diff the element's new value against this to
-    /// recover what edit the IME performed.
+    /// The last synced or observed text, diffed against `input` events to
+    /// recover IME edits.
     text: RefCell<String>,
-    /// The element's selection (in element-local UTF-16 offsets) as of the
-    /// last sync or imported edit. Gives IME edits their position relative
-    /// to the caret; deliberately element-local, never document
-    /// coordinates, which go stale in a collaborative document.
+    /// Selection after the last sync or imported edit, in element-local
+    /// UTF-16 offsets. IME edits use caret-relative positions because
+    /// document coordinates go stale during collaboration.
     selection: Cell<(u32, u32)>,
-    /// Document offset where the mirror window starts — as a *hint only*.
-    /// It is never trusted for edits: every use first re-verifies the
-    /// stored window text against the document at this alignment, so a
-    /// stale hint costs a window rebuild instead of a misplaced edit.
+    /// Hint for the mirror's document offset, never used to position edits.
+    /// Every use verifies the stored text against the document at this
+    /// alignment, so a stale hint triggers a rebuild instead of a misplaced edit.
     window_hint: Cell<usize>,
-    /// Whether a coalesced sync is already scheduled for the next task.
-    /// Multiple sync requests within one gesture must collapse into a
-    /// single element write after the gesture: keyboards sample the field
-    /// between writes, and a mid-gesture barrage desynchronizes their word
-    /// model.
+    /// Whether a sync is scheduled for the next task. Coalescing requests
+    /// into one write after the gesture preserves the keyboard's word model.
     sync_scheduled: Cell<bool>,
     /// Whether the `selectionchange` import saw an element selection move
     /// it could not apply (the app selection changed underneath). Sync
@@ -97,9 +79,8 @@ impl ImeMirror {
         document: &web_sys::Document,
         body: &web_sys::HtmlElement,
     ) -> anyhow::Result<Self> {
-        // A textarea rather than an input: single-line inputs silently strip
-        // newlines from assigned values, which would make the mirror text
-        // disagree with what was written into it.
+        // Use a textarea because single-line inputs strip newlines and would
+        // desynchronize the mirror.
         let element: web_sys::HtmlTextAreaElement = document
             .create_element("textarea")
             .map_err(|e| anyhow::anyhow!("Failed to create textarea element: {e:?}"))?
@@ -119,11 +100,9 @@ impl ImeMirror {
         body.append_child(&element)
             .map_err(|e| anyhow::anyhow!("Failed to append input to body: {e:?}"))?;
         element.focus().ok();
-        // The element must stay focused to receive hardware-key and IME
-        // events, but on touch-first devices a focused *editable* element
-        // invites the browser to summon the virtual keyboard on the next
-        // user gesture — including a scroll. Start read-only there; only a
-        // recognized tap on text input lifts it (`sync_virtual_keyboard`).
+        // Keep focus for hardware keys and IME events. On touch devices, start
+        // read-only so scrolling cannot summon the virtual keyboard. Only a
+        // recognized text-input tap enables editing in `sync_virtual_keyboard`.
         if primary_pointer_is_coarse() {
             element.set_read_only(true);
         }
@@ -136,9 +115,8 @@ impl ImeMirror {
             sync_scheduled: Cell::new(false),
             selection_import_rejected: Cell::new(false),
         };
-        // Until an input handler asks otherwise, the element is an IME
-        // conduit, not a form field: browser-side text assistance would
-        // mutate it behind the app's back.
+        // Disable browser text assistance until the input handler requests it,
+        // to prevent edits outside the app's control.
         this.apply_configuration(&TextInputConfiguration::default());
         Ok(this)
     }
@@ -237,11 +215,9 @@ impl ImeMirror {
         self.selection.get()
     }
 
-    /// Adopts the element's current value and selection as the mirror
-    /// baseline without writing to the element. Used when the browser
-    /// itself applied an edit (an imported IME edit, a composition commit):
-    /// the element is already what the IME expects, and echoing a write
-    /// back would restart the IME mid-gesture.
+    /// Adopts the browser's edited value and selection without writing back,
+    /// which would restart the IME mid-gesture. Used for imported IME edits
+    /// and composition commits.
     pub(crate) fn adopt_element_state(&self) {
         *self.text.borrow_mut() = self.element.value();
         let selection_start = self.selection_start().unwrap_or(0);
@@ -261,20 +237,13 @@ impl ImeMirror {
         self.selection_import_rejected.set(true);
     }
 
-    /// Schedules a coalesced sync of the mirror for the next task.
+    /// Schedules a coalesced sync for the next task.
     ///
-    /// Event handlers must not write to the mirror element mid-gesture:
-    /// every write (value, selection) is observed by the IME, and a
-    /// sequence of writes inside one gesture desynchronizes its model of
-    /// the field (every native-behaving reference — a plain textarea —
-    /// performs at most one such change per gesture). Deferring to a
-    /// zero-delay timeout coalesces all sync requests from one gesture into
-    /// a single write that lands after the browser has finished processing
-    /// the gesture's events.
+    /// Mid-gesture value or selection writes desynchronize the IME's field
+    /// model. A zero-delay timeout coalesces requests into one write after
+    /// the gesture's events, matching a plain textarea's behavior.
     ///
-    /// `sync` is deliberately nested here so that scheduling is the only
-    /// way to reach it: a direct synchronous call would reintroduce the
-    /// mid-gesture writes this indirection exists to prevent.
+    /// Nesting `sync` here prevents direct calls from writing mid-gesture.
     pub(crate) fn schedule_sync(window: &Rc<WebWindowInner>) {
         if window.ime_mirror.sync_scheduled.replace(true) {
             return;
@@ -304,18 +273,14 @@ impl ImeMirror {
         /// input-handler protocol and JavaScript string indexing agree by
         /// construction.
         ///
-        /// Writing to the element is a last resort: any rewrite of its
-        /// value or selection makes the browser restart the IME's input
-        /// connection, which resets the keyboard's state — fatal in the
-        /// middle of a keyboard's multi-step edit sequence (suggestion
-        /// picks arrive as delete-then-insert pairs). After an imported
-        /// edit, the element already *is* a faithful — if off-center —
-        /// window of the document, so this first verifies the element
-        /// against the document at its current alignment and skips every
-        /// write while that holds. The window is rebuilt only when the app
-        /// changed independently (caret moved by tap or keybinding, remote
-        /// edit inside the window) or the selection drifted too close to
-        /// the window's edge to give the IME context.
+        /// Value and selection writes restart the IME and reset keyboard state,
+        /// breaking multi-step edits such as suggestion delete-then-insert pairs.
+        /// Verify the current window against the document at its current alignment
+        /// and skip every write while it remains valid, even if off-center.
+        ///
+        /// Rebuild only for independent app changes, such as remote edits within
+        /// the window or caret moves by tap or keybinding, or when the selection
+        /// gets too close to an edge to provide enough IME context.
         fn sync(window: &WebWindowInner) {
             if window.is_composing.get() {
                 return;
@@ -450,14 +415,10 @@ fn move_selection_within_window(
     }
     let window_start = mirror.window_hint.get();
 
-    // The new selection must sit inside the window with enough context
-    // on both sides — except where the window is pinned to a boundary (of
-    // the document or of the editable range), where less context is all
-    // the context there is. This is the common case: a chat thread's
-    // caret usually sits at the end of the document, where the window has
-    // no right margin at all.
-    // A window that leaks outside the editable range mirrors text the IME
-    // must not reach, however consistent it is.
+    // Keep context on both sides unless the window reaches a document or
+    // editable-range boundary, such as a caret at a chat thread's end.
+    //
+    // Never mirror text outside the editable range, which the IME must not edit.
     if let Some(range) = editable_range
         && (window_start < range.start || window_start + stored_length > range.end)
     {
@@ -542,11 +503,8 @@ fn is_consistent(
     {
         return false;
     }
-    // Enough context on both sides of the selection, unless the window
-    // is pinned to a boundary of the document or of the editable range
-    // (start of window at the left boundary, or window end at the right
-    // boundary — the document's approximated by the stored window being
-    // shorter than requested on that side).
+    // Require context on both sides unless the window starts at the document
+    // or editable range's left boundary, or ends at its right boundary.
     let app_window_start = match app_selection.start.checked_sub(element_selection_start) {
         Some(start) => start,
         None => return false,

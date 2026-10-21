@@ -11,11 +11,10 @@ use refineable::Refineable;
 use std::mem;
 use std::{any::TypeId, fmt, ops::Range};
 
-/// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
+/// A type-erased view handle that can be downcast to `Entity<V>`.
 ///
-/// This is the type-erased counterpart to [`ViewElement`]: it holds an entity plus
-/// a function pointer to its render, and is itself a [`View`], so embedding it as an
-/// element goes through the same [`ViewElement`] machinery as any other view.
+/// Stores an entity and render function pointer, implementing [`View`] through
+/// [`ViewElement`].
 #[derive(Clone, Debug)]
 pub struct AnyView {
     entity: AnyEntity,
@@ -32,11 +31,10 @@ impl<V: Render> From<Entity<V>> for AnyView {
 }
 
 impl AnyView {
-    /// Embed this view as a cached [`ViewElement`] laid out at `style`.
+    /// Embeds this view as a cached [`ViewElement`] laid out at `style`.
     ///
-    /// The rendered subtree is recycled from the previous frame unless
-    /// [Context::notify] was called on the backing entity since it was rendered
-    /// (or [Window::refresh] is called, which ignores caching).
+    /// Reuses the subtree until [Context::notify] is called on the entity.
+    /// [Window::refresh] bypasses caching.
     pub fn cached(self, style: StyleRefinement) -> ViewElement<AnyView> {
         ViewElement::new(self).cached(style)
     }
@@ -80,9 +78,8 @@ impl PartialEq for AnyView {
 
 impl Eq for AnyView {}
 
-/// `AnyView` is the type-erased [`View`]: its `render` is a function pointer rather
-/// than a concrete type, but it participates in the reactive graph exactly like any
-/// other view via [`ViewElement`].
+/// Renders through a function pointer while participating in [`View`] updates
+/// through [`ViewElement`].
 impl View for AnyView {
     fn entity_id(&self) -> Option<EntityId> {
         Some(self.entity.entity_id())
@@ -183,26 +180,22 @@ mod any_view {
     }
 }
 
-/// A renderable that participates in GPUI's reactive graph — the unifying model
-/// behind [`Render`] and [`RenderOnce`].
+/// A renderable in the GPUI reactive graph, shared by [`Render`] and [`RenderOnce`].
 ///
-/// When `entity_id()` returns `Some`, that id becomes the view's identity: it gets
-/// a unique element-id space (so internal `use_state` / `.id(..)` never collide
-/// across siblings) and `cx.notify()` on that entity re-renders only this view's
-/// subtree. `None` behaves like a stateless component.
+/// A `Some` entity id gives the view its own element-id scope, isolating internal
+/// `use_state` and `.id(..)` values. Notifying that entity re-renders only its subtree.
+/// `None` behaves as a stateless component.
 ///
-/// You rarely implement `View` directly. `Entity<T: Render>` and any `T: RenderOnce`
-/// get a blanket impl below; implement it by hand only when a component needs both
-/// parent-supplied props *and* a backing entity for identity.
+/// You rarely need to implement `View` directly. `Entity<T: Render>` and `T: RenderOnce`
+/// already implement it. Implement it directly when a component needs both
+/// parent-supplied properties and entity identity.
 pub trait View: 'static + Sized {
-    /// This view's identity, if it has one. A view typically holds the backing
-    /// entity as a field and returns its [`EntityId`] here.
+    /// The backing [`EntityId`], if any, used as this view's [`ElementId`].
     ///
-    /// The id becomes this view's [`ElementId`], so two views keyed on the same
-    /// entity must not be rendered at the same position in the element tree
-    /// (e.g. as siblings under the same parent): their internal element state
-    /// (`use_state`, scroll offsets, etc.) would silently collide. Nesting is
-    /// fine — the id is scoped by the parent path.
+    /// Views using the same entity must have different parent element-id paths, or
+    /// their internal state, such as `use_state` and scroll offsets, will collide.
+    /// Siblings and views under wrappers without ids share a scope. Nesting under an
+    /// element with an id gives the child a different parent path.
     fn entity_id(&self) -> Option<EntityId>;
 
     /// Render this view into an element tree, consuming `self`.
@@ -276,13 +269,11 @@ impl<T: Render> View for Entity<T> {
 }
 
 impl<T: Render> Entity<T> {
-    /// Embed this entity as a cached [`ViewElement`] laid out at `style`.
+    /// Embeds this entity as a cached [`ViewElement`] laid out at `style`.
     ///
-    /// The rendered subtree is reused until the entity is notified (or the
-    /// cached bounds / text style change). Caching requires a definite size:
-    /// a cached view is laid out from `style` and is *not* measured from its
-    /// contents. Use [`ViewElement::new`] (or `.child(entity)`) for the
-    /// uncached case.
+    /// Reuses the subtree until notification or changes to cached bounds or text style.
+    /// Requires a definite size because contents are not measured.
+    /// Use [`ViewElement::new`] or `.child(entity)` for an uncached view.
     #[track_caller]
     pub fn cached(self, style: StyleRefinement) -> ViewElement<Entity<T>> {
         ViewElement::new(self).cached(style)
@@ -314,15 +305,12 @@ impl<V: View> ViewElement<V> {
         }
     }
 
-    /// Enable caching of this view's rendered subtree, laid out at `style`.
-    /// The composer supplies the layout style because caching skips rendering
-    /// the contents to measure them.
+    /// Caches the subtree laid out at `style`, skipping content measurement.
     ///
-    /// Crate-private on purpose: caching is only sound for entity-backed views,
-    /// where [`Context::notify`] is the contract that busts the cache. A stateless
-    /// view has no such contract, so a frozen subtree could never be invalidated.
-    /// Reach this through [`Entity::cached`] or [`AnyView::cached`], which are
-    /// entity-backed by construction.
+    /// Kept crate-private because callers must supply entity-backed views, whose
+    /// [`Context::notify`] invalidates the cache. The generic `View` bound does not
+    /// enforce this requirement, and stateless views cannot invalidate their cache.
+    /// Access through [`Entity::cached`] or [`AnyView::cached`], which have backing entities.
     pub(crate) fn cached(mut self, style: StyleRefinement) -> Self {
         self.cached_style = Some(style);
         self

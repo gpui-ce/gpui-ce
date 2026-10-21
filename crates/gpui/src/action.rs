@@ -39,22 +39,19 @@ macro_rules! actions {
     };
 }
 
-/// Actions are used to implement keyboard-driven UI. When you declare an action, you can bind keys
-/// to the action in the keymap and listeners for that action in the element tree.
-///
-/// To declare a list of simple actions, you can use the actions! macro, which defines a simple unit
-/// struct action for each listed action name in the given namespace.
+/// Keyboard actions connect keymap bindings to listeners in the element tree.
+/// The `actions!` macro defines a unit struct for each name in the given namespace.
 ///
 /// ```
 /// use gpui::actions;
 /// actions!(editor, [MoveUp, MoveDown, MoveLeft, MoveRight, Newline]);
 /// ```
 ///
-/// Registering the actions with the same name will result in a panic during  `App` creation.
+/// Duplicate action names panic during `App` creation.
 ///
-/// # Derive Macro
+/// # Derive macro
 ///
-/// More complex data types can also be actions, by using the derive macro for `Action`:
+/// Derive `Action` for data-carrying actions:
 ///
 /// ```
 /// use gpui::Action;
@@ -78,22 +75,18 @@ macro_rules! actions {
 /// - `no_json` causes the `build` method to always error and `action_json_schema` to return `None`,
 ///   and allows actions not implement `serde::Serialize` and `schemars::JsonSchema`.
 ///
-/// - `no_register` skips registering the action. This is useful for implementing the `Action` trait
-///   while not supporting invocation by name or JSON deserialization.
+/// - `no_register` skips registration while still deriving `Action`. The action registry
+///   cannot invoke it by name or construct it from keymap JSON.
 ///
-/// - `deprecated_aliases = ["editor::SomeAction"]` specifies deprecated old names for the action.
-///   These action names should *not* correspond to any actions that are registered. These old names
-///   can then still be used to refer to invoke this action. In Zed, the keymap JSON schema will
-///   accept these old names and provide warnings.
+/// - `deprecated_aliases = ["editor::SomeAction"]` keeps old names callable. They must not
+///   name registered actions. Zed accepts them in keymaps with schema warnings.
 ///
 /// - `deprecated = "Message about why this action is deprecation"` specifies a deprecation message.
 ///   In Zed, the keymap JSON schema will cause this to be displayed as a warning.
 ///
-/// # Manual Implementation
+/// # Manual implementation
 ///
-/// If you want to control the behavior of the action trait manually, you can use the lower-level
-/// `#[register_action]` macro, which only generates the code needed to register your action before
-/// `main`.
+/// For a manual implementation, `#[register_action]` generates only registration before `main`.
 ///
 /// ```
 /// use gpui::{SharedString, register_action};
@@ -261,13 +254,11 @@ struct ActionData {
     pub json_schema: fn(&mut schemars::SchemaGenerator) -> Option<schemars::Schema>,
 }
 
-/// This type must be public so that our macros can build it in other crates.
-/// But this is an implementation detail and should not be used directly.
+/// Public for macro use in other crates. Do not use directly.
 #[doc(hidden)]
 pub struct MacroActionBuilder(pub fn() -> MacroActionData);
 
-/// This type must be public so that our macros can build it in other crates.
-/// But this is an implementation detail and should not be used directly.
+/// Public for macro use in other crates. Do not use directly.
 #[doc(hidden)]
 pub struct MacroActionData {
     pub name: &'static str,
@@ -412,10 +403,7 @@ impl ActionRegistry {
     }
 }
 
-/// Generate a list of all the registered actions.
-/// Useful for transforming the list of available actions into a
-/// format suited for static analysis such as in validating keymaps, or
-/// generating documentation.
+/// Lists registered actions for keymap validation, static analysis, or documentation.
 pub fn generate_list_of_all_registered_actions() -> impl Iterator<Item = MacroActionData> {
     inventory::iter::<MacroActionBuilder>
         .into_iter()

@@ -18,9 +18,9 @@
 //!                              └────────────────────────────────┘   └─────────────────────┘
 //! ```
 //!
-//! In order for GPUI apps to be usable for people using assistive technology,
-//! we must do a few things:
-//! - Inform the system when the UI changes meaningfully. This includes:
+//! GPUI supports assistive technology by:
+//!
+//! - Informing the system when the UI changes meaningfully. This includes:
 //!   - Reporting new/removed/changed UI elements
 //!   - *Not* reporting irrelevant UI changes, e.g. an invisible `div()` being
 //!     added.
@@ -32,13 +32,11 @@
 //! - Allowing the system to interact with the UI by dispatching actions to
 //!   nodes. Note that AccessKit has its own [`Action`] type, which is not the
 //!   [`crate::Action`] trait.
-//! - Activate and deactivate accessibility features when requested by the
+//! - Activating and deactivating accessibility features when requested by the
 //!   system.
 //!
-//! Activating and deactivating at the right time is trivial, so I won't go into
-//! detail here. The other two are almost orthogonal in implementation.
-//!
-//! The state for both lives in the [`A11y`] struct in this module.
+//! UI-change reporting and action dispatch have largely independent implementations.
+//! Both keep their state in the [`A11y`] struct in this module.
 //!
 //! ### Reporting UI changes
 //!
@@ -48,9 +46,7 @@
 //! update, and calls platform-specific APIs to inform screen readers about the
 //! changes. Nodes may have been created, destroyed, or updated.
 //!
-//! Each node has an ID, and this ID *should* be stable across frames. If a
-//! node's ID changes, then, from AccessKit's point of view, it is a different
-//! node.
+//! Keep node IDs stable across frames. AccessKit treats a changed ID as a new node.
 //!
 //! We derive the node ID from the [`GlobalElementId`] in
 //! [`GlobalElementId::accesskit_node_id`]. Nodes without [`GlobalElementId`]s
@@ -66,30 +62,25 @@
 //!
 //! #### Synthetic children
 //!
-//! Additionally, some nodes can register "synthetic children" using
-//! [`Element::a11y_synthetic_children`]. Normally, one accesskit node is pushed
-//! for every [`Element`] with a role and id. However, sometimes a single
-//! element may want to produce many accesskit nodes. These extra nodes are
-//! referred to as "synthetic children" of the element providing a non-default
-//! [`Element::a11y_synthetic_children`] implementation.
+//! Each [`Element`] with a role and ID normally produces one AccessKit node.
+//! [`Element::a11y_synthetic_children`] can add extra nodes as synthetic children.
 //!
-//! The user is provided a builder-style API using [`A11ySubtreeBuilder`], which
-//! allows them to create push nodes that are children of the current node, as
-//! well as modify the current node itself.
+//! [`A11ySubtreeBuilder`] can add children and modify the current node.
 //!
-//! GPUI calls this callback *after* prepainting (and just before popping the
-//! corresponding element), since this step may need prepaint information to be
-//! available. In the future, we may want to add prepaint information more
-//! generally to [`Element::write_a11y_info`], but for now that's not necessary.
+//! GPUI calls this after prepainting, just before popping the element, so
+//! prepaint information is available.
+//!
+//! If other accessibility properties need prepaint data, we may need to extend
+//! [`Element::write_a11y_info`] to receive it too. The synthetic-child callback
+//! handles the current need.
 //!
 //! ### Responding to actions
 //!
-//! On adapter creation, we provide a callback to the adapter, which can be used
-//! to dispatch actions. This callback forwards to [`A11y::action_listeners`], a
-//! mapping from [`NodeId`]s to action handlers (basically just `Box<dyn
-//! Fn()>`).
+//! On adapter creation, GPUI provides an action callback that forwards to
+//! [`A11y::action_listeners`], which maps [`NodeId`]s to action handlers.
 //!
 //! This is populated in:
+//!
 //! - [`Window::on_a11y_action`], which is called by:
 //! - [`Interactivity::paint`], which is called by:
 //! - [`StatefulInteractiveElement::on_a11y_action`], which is a public-facing API
@@ -140,12 +131,9 @@ pub(crate) struct A11y {
     active_flag: Arc<AtomicBool>,
     /// Whether a11y features are active for *this specific frame*.
     ///
-    /// At the start of each frame, we load [`Self::active_flag`] (using
-    /// [`Self::sync_active_flag`]) and use this to determine whether we
-    /// should construct a [`TreeUpdate`] for this frame. It's important that
-    /// this value is stable within a frame, because the builder API exposed by
-    /// this type maintains a stack of nodes and each must be pushed and popped
-    /// exactly once.
+    /// [`Self::sync_active_flag`] reads [`Self::active_flag`] at frame start
+    /// to decide whether to build a [`TreeUpdate`]. This stays stable during
+    /// the frame so every builder node is pushed and popped exactly once.
     ///
     /// At the end of the frame, we re-call [`Self::sync_active_flag`] to
     /// determine whether we should actually send the finished [`TreeUpdate`].
@@ -212,10 +200,8 @@ impl A11y {
         self.window_title = Some(title.into());
     }
 
-    /// Ensures that [`Self::is_active`] returns up to date information.
-    ///
-    /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
-    /// for more commentary.
+    /// Refreshes [`Self::is_active`] from [`Self::active_flag`].
+    /// See [`Self::active_this_frame`] for frame-stability requirements.
     pub(crate) fn sync_active_flag(&mut self) {
         self.active_this_frame =
             !self.force_disabled && (self.forced || self.active_flag.load(Ordering::SeqCst));
@@ -351,10 +337,8 @@ impl<'a> A11ySubtreeBuilder<'a> {
 
     /// Derive a [`NodeId`] for a synthetic child.
     ///
-    /// The generated ID is based on the hash of `key`, as well as the parent's
-    /// ID. This means that `key`s must be unique within the same
-    /// [`Element::a11y_synthetic_children`] call, but may be duplicated across
-    /// different calls.
+    /// Hashes `key` with the parent ID. Keys must be unique within one
+    /// [`Element::a11y_synthetic_children`] call but may repeat across calls.
     pub fn synthetic_node_id(&self, key: impl Hash) -> NodeId {
         let mut hasher = std::hash::DefaultHasher::default();
         self.parent_id.0.hash(&mut hasher);

@@ -383,21 +383,18 @@ impl WebWindowInner {
             .map_or(0.0, |viewport| viewport.height() * viewport.scale())
     }
 
-    /// Whether the software keyboard is likely hidden — a heuristic, since
-    /// no cross-browser keyboard-visibility signal exists. It infers from
-    /// the visual viewport: a shown keyboard shrinks its height well below
-    /// the greatest height seen at the current width (the width only changes
-    /// on rotation, which restarts the calibration). `window.innerHeight`
-    /// can't serve as the reference because Android shrinks it along with
-    /// the keyboard. Unknown states err toward "visible" so ordinary
-    /// editable taps don't gratuitously restart the IME session.
+    /// Estimates whether the software keyboard is hidden. No cross-browser
+    /// visibility signal exists, so compare the visual viewport's height with
+    /// its maximum at the current width. A shown keyboard shrinks that height.
+    /// Rotation changes width and resets calibration.
     ///
-    /// Restricted to coarse-pointer environments: elsewhere (desktop
-    /// browsers, including touchscreen laptops) viewport height tracks
-    /// user window resizes rather than a software keyboard, so the
-    /// calibration would misfire. Split-screen resizes on mobile can still
-    /// fool it; tracking `visualViewport` resize events around focus
-    /// transitions would be sturdier.
+    /// Android shrinks `window.innerHeight` with the keyboard, so it cannot be
+    /// the reference. Unknown states count as visible to avoid restarting the
+    /// IME on ordinary editable taps.
+    ///
+    /// Use only with coarse pointers. Desktop resizes, including touchscreen
+    /// laptops, would misfire. Mobile split-screen resizes can still fool it.
+    /// Tracking `visualViewport` resizes around focus changes could improve it.
     fn keyboard_likely_dismissed(&self) -> bool {
         let coarse_pointer = self
             .browser_window
@@ -800,24 +797,19 @@ impl WebWindowInner {
 
     /// Imports IME edits from the hidden input into the app.
     ///
-    /// Text-editing `beforeinput` events are deliberately left uncancelled,
-    /// so the browser applies them to the mirror element exactly as the IME
-    /// expects (cancelling them and echoing the edit back programmatically
-    /// restarts the IME connection on every keystroke, which desynchronizes
-    /// the keyboard's internal state — e.g. Gboard then swallows backspaces
-    /// against a stale private buffer). The resulting `input` event is
-    /// diffed against the last known mirror text; IME edits are contiguous,
-    /// so a common prefix/suffix diff recovers them exactly.
+    /// Leave text-editing `beforeinput` uncancelled so the browser updates the
+    /// mirror. Cancelling and writing back restarts the IME connection on
+    /// every keystroke, causing bugs such as Gboard swallowing backspaces
+    /// against a stale buffer. A common prefix/suffix diff of the resulting
+    /// `input` recovers the contiguous edit.
     ///
-    /// The diff supplies only the *shape* of the edit — how many UTF-16
-    /// units were removed before/after the element's pre-edit selection and
-    /// what text replaced them. It never supplies document coordinates:
-    /// mirror offsets captured at sync time go stale whenever the document
-    /// changes underneath (this is a live collaborative document). The
-    /// position comes from `selected_text_range()` queried in this same
-    /// synchronous callback — the editor resolves its selection through
-    /// anchors, so the freshly-fetched offsets are exact, and nothing can
-    /// run between the query and the edit below.
+    /// The diff gives removed UTF-16 units relative to the pre-edit selection
+    /// and replacement text. It describes the edit, never its document position.
+    /// Document offsets from sync time can go stale during collaboration.
+    ///
+    /// Query `selected_text_range()` in this synchronous callback. The editor
+    /// resolves its selection through anchors, so these offsets are current.
+    /// Apply the edit before anything else can run.
     fn register_input(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
         self.listen_input("input", move |event: JsValue| {
@@ -908,24 +900,16 @@ impl WebWindowInner {
         })
     }
 
-    /// Imports IME-driven selection moves on the mirror element into the app.
+    /// Imports IME selection moves so the app can render previews such as
+    /// Android's slide-on-backspace deletion range. Apply moves relative to
+    /// the stored element selection using the app selection queried in this
+    /// callback. Document coordinates can go stale during collaboration.
     ///
-    /// Some IME gestures preview their effect by moving the field's
-    /// selection before committing an edit — Android's slide-on-backspace
-    /// grows a selection over the text it will delete. A native field
-    /// renders that selection itself; this import gives the app the same
-    /// chance. Like edit imports, the move is expressed relative to the
-    /// element's stored selection and applied to the app selection queried
-    /// in the same synchronous callback, never through document coordinates,
-    /// which go stale in a collaborative document.
+    /// Filter self-generated events by stored state rather than suppression flags.
+    /// Asynchronous `selectionchange` events caused by sync or import arrive after
+    /// the stored selection has already updated. A match needs no import.
     ///
-    /// Self-inflicted events are filtered by state, not by suppression
-    /// flags: `selectionchange` dispatches asynchronously, after the sync or
-    /// import that caused it has already adopted the element's selection, so
-    /// a stored-state match means there is nothing to import.
-    ///
-    /// Registered on the document: Chrome dispatches text-control selection
-    /// changes there, not on the element.
+    /// Register on the document, where Chrome dispatches text-control changes.
     fn register_selection_change(self: &Rc<Self>) -> Option<EventListenerHandle> {
         let document = self.browser_window.document()?;
         let this = Rc::clone(self);
@@ -1022,17 +1006,13 @@ impl WebWindowInner {
         })
     }
 
-    /// Paste is delivered through the DOM `paste` event rather than
-    /// `Platform::read_from_clipboard`: the browser's asynchronous clipboard
-    /// read API cannot fit that synchronous signature, while `ClipboardEvent`
-    /// exposes `clipboardData` synchronously inside the event. It fires for
-    /// any browser-initiated paste (keyboard, menu bar, context menu).
+    /// Handles keyboard, menu bar, and context-menu pastes through the DOM
+    /// `paste` event. Its `clipboardData` is synchronous, while the browser's
+    /// clipboard read API cannot fit `Platform::read_from_clipboard`.
     ///
-    /// Text-only pastes reach the input handler synchronously. Pasted image
-    /// files only expose their bytes through asynchronous blob reads, so
-    /// pastes containing images are delivered once those reads resolve — to
-    /// whichever input handler is focused at that point, matching how an
-    /// application-level paste action would behave.
+    /// Text-only pastes are synchronous. Image bytes require asynchronous
+    /// blob reads, so image pastes go to the input handler focused when those
+    /// reads finish, as an application-level paste action would.
     fn register_paste(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
         self.listen_input("paste", move |event: JsValue| {

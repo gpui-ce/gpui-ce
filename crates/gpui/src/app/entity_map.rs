@@ -629,7 +629,7 @@ impl AnyWeakEntity {
     /// weak.assert_released();
     /// ```
     ///
-    /// # Debugging Leaks
+    /// # Debugging leaks
     ///
     /// If this method panics due to leaked handles, set the `LEAK_BACKTRACE` environment
     /// variable to see where the leaked handles were allocated:
@@ -666,9 +666,8 @@ impl AnyWeakEntity {
 
     /// Creates a weak entity that can never be upgraded.
     pub fn new_invalid() -> Self {
-        /// To hold the invariant that all ids are unique, and considering that slotmap
-        /// increases their IDs from `0`, we can decrease ours from `u64::MAX` so these
-        /// two will never conflict (u64 is way too large).
+        /// Uses IDs decreasing from `u64::MAX` to avoid collisions with slotmap IDs
+        /// increasing from `0`.
         static UNIQUE_NON_CONFLICTING_ID_GENERATOR: AtomicU64 = AtomicU64::new(u64::MAX);
         let entity_id = UNIQUE_NON_CONFLICTING_ID_GENERATOR.fetch_sub(1, SeqCst);
 
@@ -872,8 +871,7 @@ static LEAK_BACKTRACE: std::sync::LazyLock<bool> =
 
 /// Unique identifier for a specific entity handle instance.
 ///
-/// This is distinct from `EntityId` - while multiple handles can point to the same
-/// entity (same `EntityId`), each handle has its own unique `HandleId`.
+/// Handles to the same `EntityId` each have a distinct `HandleId`.
 #[cfg(any(test, feature = "leak-detection"))]
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub(crate) struct HandleId {
@@ -888,13 +886,11 @@ pub(crate) struct HandleId {
 ///
 /// # How do leaks happen?
 ///
-/// Entities are reference-counted structures that can own other entities
-/// allowing to form cycles. If such a strong-reference counted cycle is
-/// created, all participating strong entities in this cycle will effectively
-/// leak as they cannot be released anymore.
+/// Entities can own other entities. Cycles of strong references leak because
+/// their counts never reach zero.
 ///
-/// Cycles can also happen if an entity owns a task or subscription that it
-/// itself owns a strong reference to the entity again.
+/// A task or subscription owned by an entity can also create a cycle by holding
+/// a strong reference back to it.
 ///
 /// # Usage
 ///
@@ -910,7 +906,7 @@ pub(crate) struct HandleId {
 /// weak.assert_released();
 /// ```
 ///
-/// # Debugging Leaks
+/// # Debugging leaks
 ///
 /// When a leak is detected, the detector will panic with information about the leaked
 /// handles. To see where the leaked handles were allocated, set the `LEAK_BACKTRACE`
@@ -920,10 +916,7 @@ pub(crate) struct HandleId {
 /// LEAK_BACKTRACE=1 cargo test my_test
 /// ```
 ///
-/// This will capture and display backtraces for each leaked handle, helping you
-/// identify where leaked handles were created.
-///
-/// # How It Works
+/// # How it works
 ///
 /// - When an entity handle is created (via `Entity::new`, `Entity::clone`, or
 ///   `WeakEntity::upgrade`), `handle_created` is called to register the handle.
@@ -1037,9 +1030,8 @@ impl LeakDetector {
 
     /// Asserts that no entities created after `snapshot` still have alive handles.
     ///
-    /// Entities that were already tracked at the time of the snapshot are ignored,
-    /// even if they still have handles. Only *new* entities (those whose
-    /// `EntityId` was not present in the snapshot) are considered leaks.
+    /// Ignores entities whose `EntityId` was already in the snapshot, even if
+    /// they still have handles.
     ///
     /// # Panics
     ///
@@ -1131,10 +1123,8 @@ impl fmt::Debug for BacktraceFormatter {
             PrintFmt::Short
         };
 
-        // When printing paths we try to strip the cwd if it exists, otherwise
-        // we just print the path as-is. Note that we also only do this for the
-        // short format, because if it's full we presumably want to print
-        // everything.
+        // Strip the working directory from short-format paths when available.
+        // Otherwise, print the path as-is. Keep full-format paths intact.
         let cwd = std::env::current_dir();
         let mut print_path = move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
             let path = path.into_path_buf();

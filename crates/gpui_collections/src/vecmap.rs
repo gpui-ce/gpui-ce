@@ -1,19 +1,11 @@
-/// A collection that provides a map interface but is backed by vectors.
+/// A vector-backed map for small key-value stores, where more complex algorithms
+/// cost more than they save.
 ///
-/// This is suitable for small key-value stores where the item count is not
-/// large enough to overcome the overhead of a more complex algorithm.
+/// Provides a subset of [`std::collections::HashMap`] and [`crate::HashMap`] APIs.
+/// Add missing APIs as needed. Iteration follows insertion order, like [`crate::IndexMap`].
 ///
-/// If this meets your use cases, then [`VecMap`] should be a drop-in
-/// replacement for [`std::collections::HashMap`] or [`crate::HashMap`]. Note
-/// that we are adding APIs on an as-needed basis. If the API you need is not
-/// present yet, please add it!
-///
-/// Because it uses vectors as a backing store, the map also iterates over items
-/// in insertion order, like [`crate::IndexMap`].
-///
-/// This struct uses a struct-of-arrays (SoA) representation which tends to be
-/// more cache efficient and promotes autovectorization when using simple key or
-/// value types.
+/// Separate key and value arrays tend to improve cache use and autovectorization
+/// for simple key or value types.
 #[derive(Default)]
 pub struct VecMap<K, V> {
     keys: Vec<K>,
@@ -46,10 +38,7 @@ impl<K: Eq, V> VecMap<K, V> {
         }
     }
 
-    /// Like [`Self::entry`] but takes its key by reference instead of by value.
-    ///
-    /// This can be helpful if you have a key where cloning is expensive, as we
-    /// can avoid cloning the key until a value is inserted under that entry.
+    /// Like [`Self::entry`], but borrows the key and clones it only when inserting a value.
     pub fn entry_ref<'a, 'k>(&'a mut self, key: &'k K) -> EntryRef<'k, 'a, K, V> {
         match self.keys.iter().position(|k| k == key) {
             Some(index) => EntryRef::Occupied(OccupiedEntry {

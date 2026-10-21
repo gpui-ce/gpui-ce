@@ -267,10 +267,9 @@ impl TestAppContext {
         .unwrap()
     }
 
-    /// Opens a new window with a specific size.
+    /// Opens a window with a specific size for layout-sensitive tests.
     ///
-    /// Unlike `add_window` which uses maximized bounds, this allows controlling
-    /// the window dimensions, which is important for layout-sensitive tests.
+    /// `add_window` uses maximized bounds instead.
     pub fn open_window<F, V>(
         &mut self,
         window_size: Size<Pixels>,
@@ -778,8 +777,8 @@ impl VisualTestContext {
             .unwrap()
     }
 
-    /// Creates a new VisualTestContext. You would typically shadow the passed in
-    /// TestAppContext with this, as this is typically more useful.
+    /// Creates a window-specific context. Usually shadows the app context:
+    ///
     /// `let cx = VisualTestContext::from_window(window, cx);`
     pub fn from_window(window: AnyWindowHandle, cx: &TestAppContext) -> Self {
         Self {

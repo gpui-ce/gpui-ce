@@ -113,9 +113,7 @@ impl<T: ReceiveData> DataOffer<T> {
             }
         };
 
-        // Normalize the text to unix line endings, otherwise
-        // copying from eg: firefox inserts a lot of blank
-        // lines, and that is super annoying.
+        // Normalize to Unix line endings to avoid extra blank lines when copying from Firefox.
         let result = text_content.replace("\r\n", "\n");
         Some(ClipboardItem::new_string(result))
     }

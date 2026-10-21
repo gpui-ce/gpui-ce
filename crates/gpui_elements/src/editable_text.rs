@@ -1,8 +1,8 @@
-//! Implementation for editable-text elements (gpui equivalent of html
+//! Editable text elements equivalent to HTML
 //! [`<input>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/input) and
-//! [`<textarea>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/textarea)).
+//! [`<textarea>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/textarea).
 //!
-//! Both [`text_input`] and [`text_area`] create an [`EditableTextElement`]. This element supports:
+//! [`text_input`] and [`text_area`] create an [`EditableTextElement`] with:
 //! - navigating via keyboard & mouse (by character, word, line, and document)
 //! - highlight selection via keyboard & mouse (holding shift, double/triple click mouse, mouse drag)
 //! - typing using an InputMethodEditor (IME) for writing Chinese, Japanese, and Korean utf-16
@@ -13,18 +13,16 @@
 //!
 //! For all input actions, see documentation in the [`actions`] module.
 //!
-//! Editable text elements will default to using [`String`] as the storage medium (see [`StringStorage`]).
-//! Standard library strings are not ideal though for large text documents. For such uses,
-//! it is encouraged that implementers consider rolling their own [`UnicodeTextStorage`] medium.
+//! Storage defaults to [`String`] through [`StringStorage`]. For large documents,
+//! implement [`UnicodeTextStorage`] with a more efficient backing store.
 //!
-//! Unlike other elements, editable text internally owns its [`FocusHandle`](gpui::FocusHandle).
-//! This is required due to limitations of the [`Interactivity`](gpui::Interactivity) api and
-//! that a user cannot interact with a text-input field if it cannot be focused.
+//! Editable text owns its [`FocusHandle`](gpui::FocusHandle) because the
+//! [`Interactivity`](gpui::Interactivity) API cannot otherwise guarantee focusability.
+//! A text field must be focusable for the user to interact with it.
 //!
-//! ### Usage Samples
+//! ### Usage examples
 //!
-//! A single-line text input with a fixed width and text that does not wrap
-//! (overflow text is clipped and does not scroll).
+//! A fixed-width, single-line input with no wrapping. Overflow is clipped without scrolling.
 //! ```
 //! # use gpui::prelude::*;
 //! # fn test() -> gpui_ce_elements::editable_text::EditableTextElement {
@@ -69,10 +67,10 @@
 //! # }
 //! ```
 //!
-//! The user-inputted text can be accessed via event callbacks on the element.
-//! There is no callback representing the concept of "user is done editing". Its recommended that
-//! users write a [debounce](https://developer.mozilla.org/en-US/docs/Glossary/Debounce)
-//! or some way to detect "focus lost" to signify the user leaving the field.
+//! Read input through event callbacks. There is no callback for finished editing.
+//!
+//! Use a [debounce](https://developer.mozilla.org/en-US/docs/Glossary/Debounce) or
+//! detect focus loss to decide when the user has left the field.
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
@@ -95,7 +93,7 @@
 //! # }
 //! ```
 //!
-//! You can configure the default value of the editable text by using [`use_keyed_init`]:
+//! Set default text with [`use_keyed_init`]:
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # use gpui_ce_elements::editable_text::{text_input, EditableTextState, StringStorage};
@@ -115,7 +113,7 @@
 //! # }
 //! ```
 //!
-//! To use a blinking caret, you can use one of the templated functions:
+//! Enable caret blinking with a preset or custom interval:
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
@@ -128,7 +126,7 @@
 //! # }
 //! ```
 //!
-//! or construct a caret entity with a blinking interval when constructing the state:
+//! Or create a blinking caret entity with the state:
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
@@ -150,11 +148,12 @@
 //! # }
 //! ```
 //!
-//! Full-text examples can be found in the [examples folder](https://github.com/gpui-ce/gpui-ce/tree/main/crates/gpui_elements/examples)
+//! See the [full examples](https://github.com/gpui-ce/gpui-ce/tree/main/crates/gpui_elements/examples)
 //!
-//! ### Backlog of not-yet implemented features:
+//! ### Unimplemented features
 //! - detecting focus being lost on an EditableText field
-//! - text sanitation & validation (see no-op implementation of [`EditableTextState::validate_incoming_text`])
+//! - configurable text sanitation and validation beyond single-line newline removal
+//!   in [`EditableTextState::validate_incoming_text`]
 //! - nav & select via PageUp/PageDown
 //! - screen reader support via a11y
 //! - masking text (e.g. for passwords)

@@ -79,8 +79,8 @@ use crate::MacActivationPolicy;
 /// [Context::on_app_quit] before fully quitting.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Temporary(?) wrapper around [`RefCell<App>`] to help us debug any double borrows.
-/// Strongly consider removing after stabilization.
+/// Temporary [`RefCell<App>`] wrapper for debugging double borrows.
+/// Consider removing after stabilization.
 #[doc(hidden)]
 pub struct AppCell {
     app: RefCell<App>,
@@ -166,8 +166,9 @@ impl ApplicationHandle {
         f(cx)
     }
 
-    /// An [`AsyncApp`] for use across await points. It holds the app weakly; keeping the
-    /// app alive remains this handle's job.
+    /// An [`AsyncApp`] for use across await points.
+    ///
+    /// Holds the app weakly, so keep this handle alive to retain the app.
     pub fn to_async(&self) -> AsyncApp {
         self.update(|cx| cx.to_async())
     }
@@ -293,13 +294,12 @@ impl Application {
 
     /// Start the application for an embedder that drives the run loop itself.
     ///
-    /// On ordinary platforms `Platform::run` blocks for the lifetime of the app, and the
-    /// app state is kept alive by [`Application::run`]'s stack frame. Embedded platforms —
-    /// where the run loop belongs to someone else, e.g. GPUI compiled into a Wasm guest,
-    /// or a GPUI view hosted inside a foreign native application — implement
-    /// `Platform::run` to invoke the launch callback and return immediately. This method
-    /// supports that shape: it returns an [`ApplicationHandle`] that keeps the app alive
-    /// and lets the embedder re-enter it whenever the external run loop yields control.
+    /// Ordinarily, `Platform::run` blocks and [`Application::run`] keeps app state alive
+    /// on its stack. Embedded platforms, such as Wasm guests or views in foreign native
+    /// apps, implement `Platform::run` to invoke the launch callback and return immediately.
+    ///
+    /// The returned [`ApplicationHandle`] keeps the app alive and lets the
+    /// embedder re-enter GPUI when its run loop yields control.
     pub fn run_embedded<F>(self, on_finish_launching: F) -> ApplicationHandle
     where
         F: 'static + FnOnce(&mut App),
@@ -338,12 +338,12 @@ impl Application {
         self
     }
 
-    /// Returns a handle to the [`BackgroundExecutor`] associated with this app, which can be used to spawn futures in the background.
+    /// Returns this app's [`BackgroundExecutor`] for spawning background futures.
     pub fn background_executor(&self) -> BackgroundExecutor {
         self.0.borrow().background_executor.clone()
     }
 
-    /// Returns a handle to the [`ForegroundExecutor`] associated with this app, which can be used to spawn futures in the foreground.
+    /// Returns this app's [`ForegroundExecutor`] for spawning foreground futures.
     pub fn foreground_executor(&self) -> ForegroundExecutor {
         self.0.borrow().foreground_executor.clone()
     }
@@ -771,10 +771,8 @@ pub struct App {
     /// Per-App event arena.
     pub(crate) event_arena: Arena,
 
-    // Drop globals last. We need to ensure all tasks owned by entities and
-    // callbacks are marked cancelled at this point as this will also shutdown
-    // the tokio runtime. As any task attempting to spawn a blocking tokio task,
-    // might panic.
+    // Drop globals last because this also shuts down Tokio. Cancel entity
+    // and callback tasks first, or spawning a blocking task may panic.
     pub(crate) globals_by_type: TypeIdHashMap<Box<dyn Any>>,
     // Entities which are retained until explicitly removed from the app or dropped at end of life-cycle.
     // This is an alternative way to define "global" data which uses entities.
@@ -824,8 +822,7 @@ pub struct App {
     quit_mode: QuitMode,
     quitting: bool,
 
-    // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
-    // Otherwise it may report false positives.
+    // Drop the leak detector after tasks and callbacks to avoid false positives.
     #[cfg(any(test, feature = "leak-detection"))]
     _ref_counts: Arc<RwLock<EntityRefCounts>>,
 }
@@ -1013,9 +1010,8 @@ impl App {
 
     /// Asserts that no entities created after `snapshot` still have alive handles.
     ///
-    /// Entities that were already tracked at the time of the snapshot are ignored,
-    /// even if they still have handles. Only *new* entities (those whose
-    /// `EntityId` was not present in the snapshot) are considered leaks.
+    /// Ignores entities whose `EntityId` was already in the snapshot, even if
+    /// they still have handles.
     ///
     /// # Panics
     ///
@@ -1330,9 +1326,9 @@ impl App {
         self.platform.active_window()
     }
 
-    /// Opens a new window with the given option and the root view returned by the given function.
-    /// The function is invoked with a `Window`, which can be used to interact with window-specific
-    /// functionality.
+    /// Opens a window with the given options and root view builder.
+    ///
+    /// The builder receives a `Window` for window-specific operations.
     pub fn open_window<V: 'static + Render>(
         &mut self,
         options: crate::WindowOptions,
@@ -1349,10 +1345,8 @@ impl App {
                     window.root.replace(root_view.into());
                     window.defer(cx, |window: &mut Window, cx| window.appearance_changed(cx));
 
-                    // allow a window to draw at least once before returning
-                    // this didn't cause any issues on non windows platforms as it seems we always won the race to on_request_frame
-                    // on windows we quite frequently lose the race and return a window that has never rendered, which leads to a crash
-                    // where DispatchTree::root_node_id asserts on empty nodes
+                    // Draw before returning. On Windows, racing on_request_frame
+                    // can otherwise expose an empty dispatch tree and panic in root_node_id.
                     let clear = window.draw(cx);
                     clear.clear(cx);
 
@@ -1464,12 +1458,12 @@ impl App {
     /// the OS-wide setting. Pass `None` to clear the override and follow the system again.
     /// The current value is reported by [`App::window_appearance`].
     ///
-    /// On macOS this sets the underlying `NSApplication.appearance`, which controls the
-    /// native window chrome (the window border and titlebar) of every window. Use this
-    /// when the app uses a dark theme while the system is in light mode (or vice versa)
-    /// so the window edges render to match the theme. While an appearance is forced,
-    /// windows stop tracking system light/dark changes; pass `None` to resume following
-    /// the system. On other platforms this is a no-op.
+    /// On macOS, sets `NSApplication.appearance` so every window's border and
+    /// titlebar match the app theme, even when it differs from the system theme.
+    /// Forced appearances stop following system light/dark changes until
+    /// cleared with `None`.
+    ///
+    /// No-op on other platforms.
     pub fn set_window_appearance(&self, appearance: Option<WindowAppearance>) {
         self.platform.set_window_appearance(appearance);
     }
@@ -1755,9 +1749,8 @@ impl App {
         self.pending_effects.push_back(effect);
     }
 
-    /// Called at the end of [`App::update`] to complete any side effects
-    /// such as notifying observers, emitting events, etc. Effects can themselves
-    /// cause effects, so we continue looping until all effects are processed.
+    /// Completes side effects at the end of [`App::update`], including observer
+    /// notifications and events. Loops until all resulting effects are processed.
     fn flush_effects(&mut self) {
         loop {
             self.release_dropped_entities();
@@ -1937,11 +1930,9 @@ impl App {
         });
     }
 
-    /// Run `f` against the entity's *current* window — the most recently
-    /// rendered window that referenced the entity, or its creation window if
-    /// it has yet to be rendered. Returns `None` if the entity has no
-    /// current window, or if that window has been closed, or if it is
-    /// already on the update stack.
+    /// Run `f` against the last rendered window referencing the entity, or its
+    /// creation window before the first render. Returns `None` if the window
+    /// is absent, closed, or already on the update stack.
     pub fn with_window<R>(
         &mut self,
         entity_id: EntityId,
@@ -2764,10 +2755,9 @@ impl App {
         self.loading_assets.contains_key(&asset_id)
     }
 
-    /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
+    /// Loads an asset asynchronously and returns its shared task.
     ///
-    /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
-    /// time, and the results of this call will be cached
+    /// Calls for the same asset share one in-flight `Asset::load` and cache its result.
     pub fn fetch_asset<A: Asset>(&mut self, source: &A::Source) -> (Shared<Task<A::Output>>, bool) {
         let asset_id = (TypeId::of::<A>(), hash(source));
         let mut is_first = false;

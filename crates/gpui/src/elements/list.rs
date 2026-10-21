@@ -1,11 +1,10 @@
-//! A list element that can be used to render a large number of differently sized elements
-//! efficiently. Clients of this API need to ensure that elements outside of the scrolled
-//! area do not change their height for this element to function correctly. If your elements
-//! do change height, notify the list element via [`ListState::splice`] or [`ListState::reset`].
-//! In order to minimize re-renders, this element's state is stored intrusively
-//! on your own views, so that your code can coordinate directly with the list element's cached state.
+//! A list for rendering many elements of different heights.
 //!
-//! If all of your elements are the same height, see [`crate::UniformList`] for a simpler API
+//! Offscreen elements must keep their heights unless the caller notifies the list via
+//! [`ListState::splice`] or [`ListState::reset`]. Store list state on your view to
+//! coordinate with its cache and minimize re-renders.
+//!
+//! For equal-height elements, see [`crate::UniformList`].
 
 use crate::{
     AnyElement, App, AppContext, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges,
@@ -75,12 +74,11 @@ struct StateInner {
     follow_state: FollowState,
 }
 
-/// Deferred scroll adjustment applied after the scroll-top item has been remeasured.
+/// Deferred scroll adjustment after remeasuring the scroll-top item.
 ///
-/// An absolute pending scroll preserves the same pixel offset into the item, which keeps
-/// visible text stable while content is appended to or removed from that item. A
-/// proportional pending scroll preserves the same fractional position within the item,
-/// which is useful when the whole list is being resized and each item scales similarly.
+/// Absolute adjustments preserve the pixel offset into the item, keeping text stable
+/// while content is appended or removed. Proportional adjustments preserve the fraction
+/// of its height when resizing a list whose items scale similarly.
 #[derive(Clone)]
 enum PendingScroll {
     /// Preserve the same pixel offset into the item after it is remeasured.
@@ -111,7 +109,7 @@ enum ScrollAnchor {
 /// Controls whether the list automatically follows new content at the end.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FollowMode {
-    /// Normal scrolling — no automatic following.
+    /// Normal scrolling without automatic following.
     #[default]
     Normal,
     /// The list should auto-scroll along with the tail, when scrolled to bottom.
@@ -196,8 +194,7 @@ pub enum ListSizingBehavior {
 /// The measuring behavior to apply during layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ListMeasuringBehavior {
-    /// Measure all items in the list.
-    /// Note: This can be expensive for the first frame in a large list.
+    /// Measures all items. Can make the first frame expensive in large lists.
     Measure(bool),
     /// Only measure visible items
     #[default]
@@ -305,12 +302,10 @@ struct Count(usize);
 struct Height(Pixels);
 
 impl ListState {
-    /// Construct a new list state, for storage on a view.
+    /// Creates list state for storage on a view.
     ///
-    /// The overdraw parameter controls how much extra space is rendered
-    /// above and below the visible area. Elements within this area will
-    /// be measured even though they are not visible. This can help ensure
-    /// that the list doesn't flicker or pop in when scrolling.
+    /// `overdraw` controls how much space above and below the viewport is rendered
+    /// and measured, even while invisible, to reduce flicker while scrolling.
     pub fn new(item_count: usize, alignment: ListAlignment, overdraw: Pixels) -> Self {
         let this = Self(Rc::new(RefCell::new(StateInner {
             last_layout_bounds: None,
@@ -338,20 +333,16 @@ impl ListState {
         self
     }
 
-    /// Pre-populate every unmeasured item with a uniform height hint so the scrollbar thumb
-    /// is correctly sized from the first frame, without measuring all items up front.
+    /// Seeds unmeasured items with a uniform height hint to size the scrollbar on the first frame.
     ///
-    /// As items are actually rendered their real heights replace the hint, so the scrollbar
-    /// converges to the exact size over time. This is a cheaper alternative to [`Self::measure_all`]
-    /// for lists where items have roughly uniform heights (e.g. table rows).
+    /// Rendered items replace the hint with measured heights, refining the scrollbar over time.
+    /// Cheaper than [`Self::measure_all`] for roughly uniform items, such as table rows.
     pub fn with_uniform_item_height(self, height: Pixels) -> Self {
         self.apply_uniform_item_height(height);
         self
     }
 
-    /// Reset this instantiation of the list state.
-    ///
-    /// Note that this will cause scroll events to be dropped until the next paint.
+    /// Resets list state, dropping scroll events until the next paint.
     pub fn reset(&self, element_count: usize) {
         let old_count = {
             let state = &mut *self.0.borrow_mut();
@@ -402,13 +393,11 @@ impl ListState {
         self.remeasure_items_with_scroll_anchor(0..count, ScrollAnchor::Proportional);
     }
 
-    /// Mark items in `range` as needing remeasurement while preserving
-    /// the current scroll position. Unlike [`Self::splice`], this does
-    /// not change the number of items or blow away `logical_scroll_top`.
+    /// Marks `range` for remeasurement while preserving scroll position, item count,
+    /// and `logical_scroll_top`. [`Self::splice`] replaces items instead.
     ///
-    /// Use this when an item's content has changed and its rendered
-    /// height may be different (e.g., streaming text, tool results
-    /// loading), but the item itself still exists at the same index.
+    /// Use when content changes height but keeps its index, such as streaming text
+    /// or a tool result finishing loading.
     pub fn remeasure_items(&self, range: Range<usize>) {
         self.remeasure_items_with_scroll_anchor(range, ScrollAnchor::Absolute);
     }
@@ -424,10 +413,8 @@ impl ListState {
                         offset: scroll_top.offset_in_item,
                     }),
                     ScrollAnchor::Proportional => {
-                        // If the scroll-top item falls within the remeasured range,
-                        // store a fractional offset so the layout can restore the
-                        // proportional scroll position after the item is re-rendered
-                        // at its new height.
+                        // Save a fractional offset when remeasuring the scroll-top item
+                        // to restore proportional scroll position at its new height.
                         let mut cursor = state.items.cursor::<Count>(());
                         cursor.seek(&Count(scroll_top.item_ix), Bias::Right);
 
@@ -504,10 +491,11 @@ impl ListState {
         self.splice_focusable(old_range, (0..count).map(|_| None))
     }
 
-    /// Register with the list state that the items in `old_range` have been replaced
-    /// by new items. As opposed to [`Self::splice`], this method allows an iterator of optional focus handles
-    /// to be supplied to properly integrate with items in the list that can be focused. If a focused item
-    /// is scrolled out of view, the list will continue to render it to allow keyboard interaction.
+    /// Replaces `old_range` with new items and optional focus handles.
+    ///
+    /// Unlike [`Self::splice`], this accepts focus handles. Items with a supplied handle
+    /// stay rendered while they contain focus, including focused descendants, even offscreen.
+    /// This preserves keyboard interaction.
     pub fn splice_focusable(
         &self,
         old_range: Range<usize>,
@@ -594,12 +582,9 @@ impl ListState {
         state.logical_scroll_top = Some(scroll_top);
     }
 
-    /// Scroll the list to the very end (past the last item).
-    ///
-    /// Unlike [`scroll_to_reveal_item`], this uses the total item count as the
-    /// anchor, so the list's layout pass will walk backwards from the end and
-    /// always show the bottom of the last item — even when that item is still
-    /// growing (e.g. during streaming).
+    /// Scrolls past the last item using the total item count as the anchor. Unlike
+    /// [`scroll_to_reveal_item`], layout walks backward from the end to show the bottom
+    /// of the last item, even while it grows.
     pub fn scroll_to_end(&self) {
         let state = &mut *self.0.borrow_mut();
         let item_count = state.items.summary().count;
@@ -634,15 +619,11 @@ impl ListState {
         }
     }
 
-    /// Pause tail-following, freezing the list at its current scroll
-    /// position. Unlike [`Self::set_follow_mode`] with [`FollowMode::Normal`],
-    /// this keeps the list in `Tail` mode, so it will resume following
-    /// automatically once the view returns to the bottom. No-op when the list
-    /// isn't currently following.
+    /// Pauses tail-following at the current scroll position while keeping `Tail` mode.
+    /// Following resumes at the bottom. Does nothing unless currently following.
     ///
-    /// Useful when something other than the user grows an item (e.g. zooming a
-    /// diagram) and the current position should stay put rather than snapping
-    /// to the end.
+    /// Use when programmatic growth, such as zooming a diagram, should preserve position.
+    /// [`Self::set_follow_mode`] with [`FollowMode::Normal`] disables following instead.
     pub fn pause_following_tail(&self) {
         self.0.borrow_mut().follow_state.stop_following();
     }
@@ -736,10 +717,8 @@ impl ListState {
         None
     }
 
-    /// Call this method when the user starts dragging the scrollbar.
-    ///
-    /// This will prevent the height reported to the scrollbar from changing during the drag
-    /// as items in the overdraw get measured, and help offset scroll position changes accordingly.
+    /// Call when a scrollbar drag starts to freeze the reported height during overdraw
+    /// measurement and compensate for scroll position changes.
     pub fn scrollbar_drag_started(&self) {
         let mut state = self.0.borrow_mut();
         state.scrollbar_drag_start_height = Some(state.items.summary().height);
@@ -752,12 +731,10 @@ impl ListState {
         self.0.borrow_mut().scrollbar_drag_start_height.take();
     }
 
-    /// Returns `true` if the scrollbar is currently being dragged.
-    ///
-    /// This is set between [`scrollbar_drag_started`](Self::scrollbar_drag_started)
-    /// and [`scrollbar_drag_ended`](Self::scrollbar_drag_ended) calls. Useful for
-    /// consumers that need to distinguish scrollbar drags from wheel/trackpad scrolls,
-    /// e.g. to suppress auto-scroll behavior during manual positioning.
+    /// Returns whether the scrollbar is being dragged, between
+    /// [`scrollbar_drag_started`](Self::scrollbar_drag_started) and
+    /// [`scrollbar_drag_ended`](Self::scrollbar_drag_ended). Use to distinguish scrollbar
+    /// drags from wheel or trackpad scrolling when controlling auto-scroll.
     pub fn is_scrollbar_dragging(&self) -> bool {
         self.0.borrow().scrollbar_drag_start_height.is_some()
     }
@@ -800,13 +777,12 @@ impl ListState {
         self.0.borrow().last_layout_bounds.unwrap_or_default()
     }
 
-    /// Returns whether the item is entirely above the viewport, or `None` if
-    /// the list has not measured enough layout to know.
+    /// Returns whether the item is entirely above the viewport, or `None` before enough
+    /// layout has been measured.
     ///
-    /// A zero-height viewport still yields a definitive answer: callers may
-    /// size sibling UI based on this query (potentially squeezing the list
-    /// itself to zero height), so returning `None` in that case would make
-    /// the answer oscillate from frame to frame.
+    /// A zero-height viewport still returns an answer. A sibling sized from this query
+    /// might consume all available height. Returning `None` could then make the sibling
+    /// size and the list height oscillate between frames.
     pub fn item_is_above_viewport(&self, ix: usize) -> Option<bool> {
         let viewport_bounds = self.0.borrow().last_layout_bounds?;
 
@@ -1278,7 +1254,7 @@ impl StateInner {
             // Avoid honoring autoscroll requests from elements other than our children.
             window.take_autoscroll();
 
-            // Only paint the visible items, if there is actually any space for them (taking padding into account)
+            // Paint visible items only if space remains after padding.
             if bounds.size.height > padding.top + padding.bottom {
                 let mut item_origin = bounds.origin + Point::new(px(0.), padding.top);
                 item_origin.y -= layout_response.scroll_top.offset_in_item;
@@ -1294,10 +1270,8 @@ impl StateInner {
                             let mut item_ix = item.index;
                             let mut offset_in_item = autoscroll_bounds.top() - item_origin.y;
 
-                            // The requested top can sit above this item's own
-                            // top. Walk into earlier items so the offset stays
-                            // non-negative and no blank space appears above the
-                            // list.
+                            // Walk into earlier items if the requested top precedes this item,
+                            // keeping the offset non-negative and avoiding blank space above the list.
                             if offset_in_item < Pixels::ZERO {
                                 let mut cursor = self.items.cursor::<Count>(());
                                 cursor.seek(&Count(item_ix), Bias::Right);
@@ -1613,11 +1587,8 @@ impl Element for List {
     ) {
         let current_view = window.current_view();
 
-        // Register the scroll listener before painting children so that, in
-        // the bubble phase (which runs in reverse registration order),
-        // children's scroll-wheel handlers run first and can stop propagation
-        // to prevent the list from scrolling. This matches the ordering of
-        // div-based scroll containers.
+        // Register before children so their scroll handlers run first during reverse-order
+        // bubbling and can stop list scrolling, matching div scroll containers.
         let list_state = self.state.clone();
         let height = bounds.size.height;
         let scroll_top = prepaint.layout.scroll_top;
@@ -2061,10 +2032,8 @@ mod test {
         assert_eq!(state.item_is_above_viewport(3), Some(false));
         assert_eq!(state.item_is_below_viewport(3), Some(true));
 
-        // Squeeze the list to zero height, e.g. because a sibling element
-        // (sized based on the queries above) consumed all the space. The
-        // answers must remain definitive rather than becoming `None`,
-        // otherwise the sibling's size can oscillate between frames.
+        // Keep answers definitive when a sibling sized from these queries squeezes
+        // the list to zero height. Returning `None` could make its size oscillate.
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(0.)), |_, cx| {
             cx.new(|_| TestListView(state.clone())).into_any_element()
         });
@@ -2131,9 +2100,7 @@ mod test {
     fn test_remeasure(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
-        // Create a list with 10 items, each 100px tall. We'll keep a reference
-        // to the item height so we can later change the height and assert how
-        // `ListState` handles it.
+        // Retain the height of ten 100px items to test how `ListState` handles resizing.
         let item_height = Rc::new(Cell::new(100usize));
         let state = ListState::new(10, crate::ListAlignment::Top, px(10.));
 
@@ -2177,10 +2144,8 @@ mod test {
         assert_eq!(offset.item_ix, 2);
         assert_eq!(offset.offset_in_item, px(40.));
 
-        // Update the `item_height` to be 50px instead of 100px so we can assert
-        // that the scroll position is proportionally preserved, that is,
-        // instead of 40px from the top of item 2, it should be 20px, since the
-        // item's height has been halved.
+        // Halving item height from 100px to 50px should halve the offset
+        // within item 2 from 40px to 20px.
         item_height.set(50);
         state.remeasure();
 
@@ -2400,7 +2365,7 @@ mod test {
 
         state.set_follow_mode(FollowMode::Tail);
 
-        // First paint — items are 50px, total 500px, viewport 200px.
+        // First paint with 50px items, 500px total, and a 200px viewport.
         // Follow-tail should anchor to the end.
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, _| {
             view.clone().into_any_element()
@@ -2422,12 +2387,8 @@ mod test {
             view.into_any_element()
         });
 
-        // After growth, follow-tail should have re-anchored to the new end.
-        // 800px total − 200px viewport = 600px offset → item 7 at offset 40px,
-        // but follow-tail anchors to item_count (10), and layout walks back to
-        // fill 200px, landing at item 7 (7 × 80 = 560, 800 − 560 = 240 > 200,
-        // so item 8: 8 × 80 = 640, 800 − 640 = 160 < 200 → keeps walking →
-        // item 7: offset = 800 − 200 = 600, item_ix = 600/80 = 7, remainder 40).
+        // Tail-following anchors at item_count, then walks back to fill the 200px viewport.
+        // For 800px of content, offset 600px is item 7 at 40px with 80px items.
         let offset = state.logical_scroll_top();
         assert_eq!(offset.item_ix, 7);
         assert_eq!(offset.offset_in_item, px(40.));
@@ -2564,7 +2525,7 @@ mod test {
 
         state.set_follow_mode(FollowMode::Tail);
 
-        // Paint with follow-tail — scroll anchored to the bottom.
+        // Paint with tail-following anchored to the bottom.
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, cx| {
             cx.new(|_| TestView(state.clone())).into_any_element()
         });
@@ -2606,7 +2567,7 @@ mod test {
 
         state.set_follow_mode(FollowMode::Tail);
 
-        // Paint with follow-tail — scroll anchored to the bottom.
+        // Paint with tail-following anchored to the bottom.
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, _| {
             view.clone().into_any_element()
         });
@@ -2734,8 +2695,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(0.));
         assert!(!state.is_following_tail());
 
-        // Enable follow-tail — this should immediately snap the scroll anchor
-        // to the end, like the user just sent a prompt.
+        // Enabling tail-following should immediately anchor scrolling at the end.
         state.set_follow_mode(FollowMode::Tail);
 
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, _| {
@@ -2822,7 +2782,7 @@ mod test {
         });
         assert!(state.is_following_tail());
 
-        // Scroll up — follow_tail should suspend (not fully disengage).
+        // Scrolling up should pause follow_tail without disabling it.
         cx.simulate_event(ScrollWheelEvent {
             position: point(px(50.), px(100.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(50.))),
@@ -2879,9 +2839,8 @@ mod test {
         });
         assert!(state.is_following_tail());
 
-        // Scroll up a meaningful amount — suspends follow_tail.
-        // 20 items × 50px = 1000px. viewport 200px. scroll_max = 800px.
-        // Scrolling up 200px puts us at 600px, clearly not at bottom.
+        // Scrolling up 200px pauses follow_tail at 600px, below the 800px maximum.
+        // Content is 20 items × 50px = 1000px, with a 200px viewport.
         cx.simulate_event(ScrollWheelEvent {
             position: point(px(50.), px(100.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(200.))),
@@ -2894,11 +2853,8 @@ mod test {
         // temporarily wrong (0px for the invalidated item).
         state.remeasure_items(19..20);
 
-        // Paint — layout re-measures the invalidated item with its true
-        // height. The re-engagement check uses these fresh measurements.
-        // Since we scrolled 200px up from the 800px max, we're at
-        // ~600px — NOT at the bottom, so follow_tail should NOT
-        // re-engage.
+        // Layout remeasures the invalidated item before checking re-engagement.
+        // At about 600px, 200px above the 800px maximum, tail-following must stay paused.
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, _| {
             view.clone().into_any_element()
         });
@@ -2935,12 +2891,11 @@ mod test {
         });
         assert!(state.is_following_tail());
 
-        // Drag the scrollbar up to the middle — follow_tail should suspend.
+        // Dragging the scrollbar to the middle should pause follow_tail.
         state.set_offset_from_scrollbar(point(px(0.), px(-150.)));
         assert!(!state.is_following_tail());
 
-        // Drag the scrollbar back to the bottom — follow_tail should re-engage
-        // on the next paint.
+        // Dragging the scrollbar to the bottom should resume follow_tail next paint.
         state.set_offset_from_scrollbar(point(px(0.), px(-300.)));
         cx.draw(point(px(0.), px(0.)), size(px(100.), px(200.)), |_, _| {
             view.into_any_element()

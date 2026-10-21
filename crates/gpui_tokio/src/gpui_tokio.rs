@@ -7,11 +7,10 @@ pub use tokio::task::JoinError;
 
 /// Initializes the Tokio wrapper using a new Tokio runtime with 2 worker threads.
 ///
-/// If you need more threads (or access to the runtime outside of GPUI), you can create the runtime
-/// yourself and pass a Handle to `init_from_handle`.
+/// For more threads or access outside GPUI, create a runtime and pass its handle to `init_from_handle`.
 pub fn init(cx: &mut App) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        // Since we now have two executors, let's try to keep our footprint small
+        // Limit threads because GPUI also has an executor.
         .worker_threads(2)
         .enable_all()
         .build()
@@ -50,8 +49,9 @@ impl Drop for GlobalTokio {
 pub struct Tokio {}
 
 impl Tokio {
-    /// Spawns the given future on Tokio's thread pool, and returns it via a GPUI task
-    /// Note that the Tokio task will be cancelled if the GPUI task is dropped
+    /// Spawns the future on Tokio's thread pool and returns a GPUI task.
+    ///
+    /// Dropping the GPUI task cancels the Tokio task.
     pub fn spawn<C, Fut, R>(cx: &C, f: Fut) -> Task<Result<R, JoinError>>
     where
         C: AppContext,
@@ -72,8 +72,9 @@ impl Tokio {
         })
     }
 
-    /// Spawns the given future on Tokio's thread pool, and returns it via a GPUI task
-    /// Note that the Tokio task will be cancelled if the GPUI task is dropped
+    /// Spawns the future on Tokio's thread pool and returns a GPUI task.
+    ///
+    /// Dropping the GPUI task cancels the Tokio task.
     pub fn spawn_result<C, Fut, R>(cx: &C, f: Fut) -> Task<anyhow::Result<R>>
     where
         C: AppContext,

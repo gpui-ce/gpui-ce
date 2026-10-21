@@ -74,9 +74,8 @@ impl<T: ContextLessSummary> Summary for T {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NoSummary;
 
-/// Catch-all implementation for when you need something that implements [`Summary`] without a specific type.
-/// We implement it on a `NoSummary` instead of re-using `()`, as that avoids blanket impl collisions with `impl<T: Summary> Dimension for T`
-/// (as we also need unit type to be a fill-in dimension)
+/// A placeholder [`Summary`]. Uses a distinct type so `()` can be a placeholder dimension
+/// without conflicting with `impl<T: Summary> Dimension for T`.
 impl ContextLessSummary for NoSummary {
     fn zero() -> Self {
         NoSummary
@@ -85,13 +84,9 @@ impl ContextLessSummary for NoSummary {
     fn add_summary(&mut self, _: &Self) {}
 }
 
-/// Each [`Summary`] type can have more than one [`Dimension`] type that it measures.
+/// A measure of a [`Summary`] used to seek in a [`SumTree`]. A summary can support several dimensions.
 ///
-/// You can use dimensions to seek to a specific location in the [`SumTree`]
-///
-/// # Example:
-/// Zed's rope has a `TextSummary` type that summarizes lines, characters, and bytes.
-/// Each of these are different dimensions we may want to seek to
+/// For example, Zed's rope `TextSummary` measures lines, characters, and bytes.
 pub trait Dimension<'a, S: Summary>: Clone {
     fn zero(cx: S::Context<'_>) -> Self;
 
@@ -164,10 +159,8 @@ where
     }
 }
 
-/// Bias is used to settle ambiguities when determining positions in an ordered sequence.
-///
-/// The primary use case is for text, where Bias influences
-/// which character an offset or anchor is associated with.
+/// Resolves ambiguous positions in an ordered sequence, such as which character
+/// a text offset or anchor attaches to.
 ///
 /// # Examples
 /// Given the buffer `AˇBCD`:
@@ -604,8 +597,7 @@ impl<T: Item> SumTree<T> {
         Cursor::new(self, cx)
     }
 
-    /// Note: If the summary type requires a non `()` context, then the filter cursor
-    /// that is returned cannot be used with Rust's iterators.
+    /// The returned filter cursor supports Rust iterators only when the summary context is `()`.
     pub fn filter<'a, 'b, F, U>(
         &'a self,
         cx: <T::Summary as Summary>::Context<'b>,
@@ -980,15 +972,10 @@ impl<T: Item> SumTree<T> {
         }
     }
 
-    // Merge two nodes into `large`.
+    // Prepend `small` to `large`. If they exceed capacity, return the first half in
+    // a new node and leave the second half in `large`.
     //
-    // `large` will contain the contents of `small` followed by its own data.
-    // If the combined data exceed the node capacity, returns a new node that
-    // holds the first half of the merged items and `large` is left with the
-    // second half
-    //
-    // The nodes must be on the same height
-    // It only makes sense to call this when `small` is underflowing
+    // Nodes must have the same height. This is only useful when `small` is underflowing.
     fn merge_into_right(
         small: Self,
         large: &mut Self,

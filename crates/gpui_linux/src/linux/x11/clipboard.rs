@@ -89,8 +89,7 @@ x11rb::atom_manager! {
         TIFF_MIME: ImageFormat::mime_type(ImageFormat::Tiff).as_bytes(),
         ICO__MIME: ImageFormat::mime_type(ImageFormat::Ico ).as_bytes(),
         PNM__MIME: ImageFormat::mime_type(ImageFormat::Pnm ).as_bytes(),
-        // This is just some random name for the property on our window, into which
-        // the clipboard owner writes the data we requested.
+        // Property where the clipboard owner writes requested data. The name is arbitrary.
         ARBOARD_CLIPBOARD,
     }
 }
@@ -99,8 +98,7 @@ thread_local! {
     static ATOM_NAME_CACHE: RefCell<HashMap<Atom, &'static str>> = Default::default();
 }
 
-// Some clipboard items, like images, may take a very long time to produce a
-// `SelectionNotify`. Multiple seconds long.
+// Clipboard items such as images may take seconds to produce `SelectionNotify`.
 const LONG_TIMEOUT_DUR: Duration = Duration::from_millis(4000);
 const SHORT_TIMEOUT_DUR: Duration = Duration::from_millis(10);
 
@@ -255,13 +253,11 @@ impl Inner {
         let mut data_guard = selection.data.write();
         *data_guard = Some(data);
 
-        // Lock the mutex to both ensure that no wakers of `data_changed` can wake us between
-        // dropping the `data_guard` and calling `wait[_for]` and that we don't we wake other
-        // threads in that position.
+        // Lock to prevent lost `data_changed` wakeups between dropping `data_guard`
+        // and calling `wait[_for]`, both for this thread and other waiters.
         let mut guard = selection.mutex.lock();
 
-        // Notify any existing waiting threads that we have changed the data in the selection.
-        // It is important that the mutex is locked to prevent this notification getting lost.
+        // Notify selection-data waiters while holding the mutex to prevent lost wakeups.
         selection.data_changed.notify_all();
 
         match wait {
@@ -426,9 +422,7 @@ impl Inner {
                     match result {
                         ReadSelNotifyResult::GotData(data) => return Ok(data),
                         ReadSelNotifyResult::IncrStarted => {
-                            // This means we received an indication that an the
-                            // data is going to be sent INCRementally. Let's
-                            // reset our timeout.
+                            // An INCR response starts incremental transfer. Reset the timeout.
                             timeout_end += SHORT_TIMEOUT_DUR;
                         }
                         ReadSelNotifyResult::EventNotRecognized => (),
@@ -557,11 +551,11 @@ impl Inner {
             log::warn!("Received a SelectionNotify while already expecting INCR segments.");
             return Ok(ReadSelNotifyResult::EventNotRecognized);
         }
-        // Accept any property type. The property type will typically match the format type except
-        // when it is `TARGETS` in which case it is `ATOM`. `ANY` is provided to handle the case
-        // where the clipboard is not convertible to the requested format. In this case
-        // `reply.type_` will have format information, but `bytes` will only be non-empty if `ANY`
-        // is provided.
+        // Use `ANY` to accept format mismatches, including `ATOM` for `TARGETS`.
+        // Other property types normally match the requested format.
+        //
+        // If conversion fails, `reply.type_` reports the format, but `bytes` is non-empty
+        // only when `ANY` was requested.
         let property_type = AtomEnum::ANY;
         // request the selection
         let mut reply = reader
@@ -580,10 +574,8 @@ impl Inner {
 
         // we found something
         if reply.type_ == self.atoms.INCR {
-            // Note that we call the get_property again because we are
-            // indicating that we are ready to receive the data by deleting the
-            // property, however deleting only works if the type matches the
-            // property type. But the type didn't match in the previous call.
+            // Repeat get_property with the matching type so deletion succeeds,
+            // signaling readiness to receive data. The previous call's type differed.
             reply = reader
                 .conn
                 .get_property(
@@ -788,9 +780,7 @@ impl Inner {
             return Ok(());
         }
 
-        // It's important that we lock the state before sending the request
-        // because we don't want the request server thread to lock the state
-        // after the request but before we can lock it here.
+        // Lock before sending so the request server cannot acquire the state first.
         let mut handover_state = self.handover_state.lock();
 
         log::trace!("Sending the data to the clipboard manager");
@@ -809,8 +799,7 @@ impl Inner {
         *handover_state = ManagerHandoverState::InProgress;
         let max_handover_duration = Duration::from_millis(100);
 
-        // Note that we are using a parking_lot condvar here, which doesn't wake up
-        // spuriously
+        // parking_lot condvars do not wake spuriously.
         let result = self
             .handover_cv
             .wait_for(&mut handover_state, max_handover_duration);
@@ -869,11 +858,8 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
                     let mut data_guard = selection.data.write();
                     *data_guard = None;
 
-                    // It is important that this mutex is locked at the time of calling
-                    // `notify_all` to prevent notifications getting lost in case the sleeping
-                    // thread has unlocked its `data_guard` and is just about to sleep.
-                    // It is also important that the RwLock is kept write-locked for the same
-                    // reason.
+                    // Hold this mutex and the RwLock write guard through `notify_all` so a
+                    // thread between unlocking `data_guard` and sleeping cannot miss the wakeup.
                     let _guard = selection.mutex.lock();
                     selection.data_changed.notify_all();
                 }
@@ -906,10 +892,8 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
             Event::SelectionNotify(event) => {
-                // We've requested the clipboard content and this is the answer.
-                // Considering that this thread is not responsible for reading
-                // clipboard contents, this must come from the clipboard manager
-                // signaling that the data was handed over successfully.
+                // This thread does not read clipboard contents, so the response confirms
+                // successful handover to the clipboard manager.
                 if event.selection != context.atoms.CLIPBOARD_MANAGER {
                     log::error!(
                         "Received a `SelectionNotify` from a selection other than the CLIPBOARD_MANAGER. This is unexpected in this thread."
@@ -918,20 +902,16 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
                 }
                 let handover_state = context.handover_state.lock();
                 if *handover_state == ManagerHandoverState::InProgress {
-                    // Note that some clipboard managers send a selection notify
-                    // before even sending a request for the actual contents.
-                    // (That's why we use the "notified" & "written" flags)
+                    // Some clipboard managers notify before requesting content, so track
+                    // "notified" and "written" separately.
                     log::trace!(
                         "The clipboard manager indicated that it's done requesting the contents from us."
                     );
                     notified = true;
 
-                    // One would think that we could also finish if the property
-                    // here is set 0, because that indicates failure. However
-                    // this is not the case; for example on KDE plasma 5.18, we
-                    // immediately get a SelectionNotify with property set to 0,
-                    // but following that, we also get a valid SelectionRequest
-                    // from the clipboard manager.
+                    // Do not finish when property is 0 despite its failure meaning. KDE
+                    // Plasma 5.18 sends SelectionNotify with property 0 before a valid
+                    // SelectionRequest from the clipboard manager.
                     if written {
                         handover_finished(&context, handover_state);
                     }
@@ -1138,13 +1118,12 @@ fn into_unknown<E: std::fmt::Display>(error: E) -> Error {
     }
 }
 
-/// Clipboard selection
+/// Selects the Linux clipboard to read or write.
 ///
-/// Linux has a concept of clipboard "selections" which tend to be used in different contexts. This
-/// enum provides a way to get/set to a specific clipboard
+/// Linux clipboard selections serve different contexts, such as explicit copy
+/// and paste or the current text selection.
 ///
-/// See <https://specifications.freedesktop.org/clipboards-spec/clipboards-0.1.txt> for a better
-/// description of the different clipboards.
+/// See <https://specifications.freedesktop.org/clipboards-spec/clipboards-0.1.txt>.
 #[derive(Copy, Clone, Debug)]
 pub enum ClipboardKind {
     /// Typically used selection for explicit cut/copy/paste actions (ie. windows/macos like
@@ -1184,20 +1163,15 @@ pub(crate) enum WaitConfig {
 
 #[non_exhaustive]
 pub enum Error {
-    /// The clipboard contents were not available in the requested format.
-    /// This could either be due to the clipboard being empty or the clipboard contents having
-    /// an incompatible format to the requested one (eg when calling `get_image` on text)
+    /// The clipboard is empty or has an incompatible format, such as text
+    /// when calling `get_image`.
     ContentNotAvailable,
 
-    /// The native clipboard is not accessible due to being held by an other party.
+    /// Another process or thread holds the native clipboard.
+    /// Concurrent clipboard access within this program can also cause this error.
     ///
-    /// This "other party" could be a different process or it could be within
-    /// the same program. So for example you may get this error when trying
-    /// to interact with the clipboard from multiple threads at once.
-    ///
-    /// Note that it's OK to have multiple `Clipboard` instances. The underlying
-    /// implementation will make sure that the native clipboard is only
-    /// opened for transferring data and then closed as soon as possible.
+    /// Multiple `Clipboard` instances are supported. The implementation opens
+    /// the native clipboard only while transferring data, then closes it promptly.
     ClipboardOccupied,
 
     /// The image or the text that was about the be transferred to/from the clipboard could not be

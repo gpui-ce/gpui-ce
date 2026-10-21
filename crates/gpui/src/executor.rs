@@ -32,9 +32,7 @@ pub struct ForegroundExecutor {
     not_send: PhantomData<Rc<()>>,
 }
 
-/// Extension trait for `Task<Result<T, E>>` that adds `detach_and_log_err` with an `&App` context.
-///
-/// This trait is automatically implemented for all `Task<Result<T, E>>` types.
+/// Adds `detach_and_log_err` with an `&App` context to all `Task<Result<T, E>>` types.
 pub trait TaskExt<T, E> {
     /// Run the task to completion in the background and log any errors that occur.
     fn detach_and_log_err(self, cx: &App);
@@ -91,17 +89,13 @@ impl BackgroundExecutor {
         self.inner.clone()
     }
 
-    /// Spawn a closure on a fresh session pinned to its own [`SchedulerLocalExecutor`].
-    /// The closure runs on a new OS thread under the platform scheduler, or on
-    /// the test scheduler's loop in tests.
+    /// Spawns a closure in a new session on its own [`SchedulerLocalExecutor`].
+    /// Uses a new OS thread in production and the test scheduler loop in tests.
     ///
-    /// Prefer this over [`Self::spawn`] for futures whose polls need more stack
-    /// than shared background threads guarantee. Dedicated threads get the
-    /// standard library's default 2 MiB, while `spawn` polls futures on
-    /// whatever threads the platform dispatcher provides — on macOS those are
-    /// GCD workers whose stacks are fixed at 512 KiB by the kernel (see `PTH_DEFAULT_STACKSIZE` in
-    /// <https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_internal.h#L154>),
-    /// the tightest background-stack budget of any platform.
+    /// Prefer this to [`Self::spawn`] when polling needs more stack. Dedicated threads
+    /// get the standard library default of 2 MiB. Shared macOS GCD workers have the
+    /// smallest platform stack at 512 KiB, fixed by `PTH_DEFAULT_STACKSIZE`.
+    /// See <https://github.com/apple-oss-distributions/libpthread/blob/42d026df5b07825070f60134b980a1ec2552dfee/kern/kern_internal.h#L154>.
     #[track_caller]
     pub fn spawn_dedicated<F, Fut>(&self, f: F) -> Task<Fut::Output>
     where
@@ -219,12 +213,10 @@ impl BackgroundExecutor {
         self.dispatcher.as_test().unwrap().scheduler().tick()
     }
 
-    /// In tests, run tasks until the scheduler would park.
+    /// In tests, drains all work that can make progress until the scheduler would park.
     ///
-    /// Under the scheduler-backed test dispatcher, `tick()` will not advance the clock, so a pending
-    /// timer can keep `has_pending_tasks()` true even after all currently-runnable tasks have been
-    /// drained. To preserve the historical semantics that tests relied on (drain all work that can
-    /// make progress), we advance the clock to the next timer when no runnable tasks remain.
+    /// `tick()` does not advance time, so pending timers can keep `has_pending_tasks()`
+    /// true after runnable tasks are exhausted. Advance to the next timer in that case.
     #[cfg(any(test, feature = "test-support"))]
     pub fn run_until_parked(&self) {
         let scheduler = self.dispatcher.as_test().unwrap().scheduler();
@@ -377,15 +369,15 @@ impl ForegroundExecutor {
         self.inner.spawn(future)
     }
 
-    /// On platforms with dedicated support, enqueues the given future to run
-    /// on the main thread during platform idle time. Without a `timeout`,
-    /// polls may be deferred indefinitely while the platform stays busy;
-    /// with one, a poll still waiting after that long runs as ordinary main-thread work.
-    /// Each poll occupies part of one idle slice, so long synchronous stretches
-    /// should bound themselves against [`Self::idle_time_remaining`] and yield.
+    /// Runs the future on the main thread during platform idle time.
     ///
-    /// On platforms without dedicated support, schedules the given future to run
-    /// with a low priority, ignoring `timeout`.
+    /// With native idle support, a busy platform can defer polls indefinitely unless
+    /// `timeout` is set. After that time, a waiting poll runs as ordinary main-thread work.
+    ///
+    /// Each poll uses part of an idle slice. Bound synchronous work by
+    /// [`Self::idle_time_remaining`] and yield.
+    ///
+    /// Without native idle support, runs at low priority and ignores `timeout`.
     #[track_caller]
     pub fn spawn_when_idle<R>(
         &self,
@@ -408,11 +400,10 @@ impl ForegroundExecutor {
             })
     }
 
-    /// The time remaining in the current idle slice, when called from a task
-    /// spawned via [`Self::spawn_when_idle`] on a platform that meters idle
-    /// time. `None` when idle time is unmetered (or the caller is not inside
-    /// an idle slice); work that must bound itself should then fall back to a
-    /// budget of its own.
+    /// Returns the remaining idle-slice time for [`Self::spawn_when_idle`] tasks.
+    ///
+    /// Returns `None` outside a slice or if the platform does not meter idle time.
+    /// Work that needs a time limit should use a separate budget in that case.
     pub fn idle_time_remaining(&self) -> Option<Duration> {
         self.dispatcher.idle_time_remaining()
     }
@@ -431,9 +422,8 @@ impl ForegroundExecutor {
         };
         let mut future = std::pin::pin!(future);
 
-        // In async GPUI tests, we must allow foreground tasks scheduled by the test itself
-        // (which are associated with the test session) to make progress while we block.
-        // Otherwise, awaiting futures that depend on same-session foreground work can deadlock.
+        // Allow same-session foreground tasks to progress while blocking in async tests,
+        // or futures depending on them can deadlock.
         scheduler.block(None, future.as_mut(), None);
 
         output.take().expect("block_test future did not complete")

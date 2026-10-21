@@ -1,10 +1,5 @@
-//! Styling Patterns Example
-//!
-//! This example demonstrates different styling approaches in GPUI:
-//!
-//! 1. Interactive states - hover, active, focus, focus_visible
-//! 2. Conditional styling - when, when_some, map
-//! 3. Theming patterns - using Colors for consistent styling
+//! Style hover, active, focus, and focus_visible states. Apply conditional
+//! styles with when, when_some, and map, and theme them with Colors.
 
 use gpui::colors::Colors;
 use gpui::{

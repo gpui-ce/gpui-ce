@@ -29,8 +29,7 @@ impl Default for EditableTextHistory {
     }
 }
 
-/// A patch-based history entry for memory-efficient undo/redo operations.
-/// Instead of storing the full content, we store only the change needed to reverse the edit.
+/// An undo/redo entry storing the patch needed to reverse an edit, rather than full content.
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
     /// The byte range that was modified (after the edit, for undo; before the edit, for redo).
@@ -69,9 +68,7 @@ impl EditableTextHistory {
         if let Some(last) = self.undo_stack.last_mut()
             && now.duration_since(last.timestamp) < self.grouping_interval
         {
-            // The change was triggered within group interval timing.
-            // Try to extend the existing patch (which is a mutation).
-            // If extending successeds, then we can early-out. Otherwise the mutation is non-contiguous.
+            // Within the grouping interval, merge contiguous changes into the last patch.
             if last.extend(&range, new_text_len) {
                 return;
             }
@@ -127,9 +124,9 @@ impl EditableTextHistory {
 
 impl HistoryEntry {
     fn extend(&mut self, range: &Range<usize>, new_text_len: usize) -> bool {
-        // NOTE: Could be more robust. Currently only supports human-written extensions from start towards end.
+        // This could be more robust. Currently it only merges typing from start to end.
 
-        // ranges must be contiguous in order to integrate/extend
+        // Ranges must be contiguous to merge.
         if self.range.end != range.start {
             return false;
         }

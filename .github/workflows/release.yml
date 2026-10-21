@@ -23,7 +23,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Determine pre-release status
   prerelease:
     runs-on: ubuntu-latest
     outputs:
@@ -41,7 +40,6 @@ jobs:
             echo "value=true"  >> "$GITHUB_OUTPUT"
           fi
 
-  # Run full CI on the tag via justfile
   verify:
     needs: [prerelease]
     runs-on: ubuntu-latest
@@ -71,7 +69,6 @@ jobs:
       - run: just test
       - run: just test-doc
 
-  # Verify packages are publishable
   verify-publish:
     needs: [prerelease, verify]
     runs-on: ubuntu-latest
@@ -84,7 +81,6 @@ jobs:
       - name: Dry-run publish check
         run: just publish true
 
-  # Publish to crates.io
   publish:
     needs: [prerelease, verify-publish]
     runs-on: ubuntu-latest
@@ -99,7 +95,6 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # Create GitHub Release
   github-release:
     needs: [prerelease, publish]
     runs-on: ubuntu-latest

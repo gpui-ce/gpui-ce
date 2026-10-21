@@ -8,12 +8,10 @@ use crate::paths::SanitizedPath;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-/// A list of absolute paths, with an associated display order.
+/// Absolute paths with a display order.
 ///
-/// Two `PathList` values are considered equal if they contain the same paths,
-/// regardless of the order in which those paths were originally provided.
-///
-/// The paths can be retrieved in the original order using `ordered_paths()`.
+/// Two lists are equal when they contain the same paths, regardless of input order.
+/// `ordered_paths()` returns paths in their original order.
 #[derive(Default, Debug, Clone)]
 pub struct PathList {
     /// The paths, in lexicographic order.

@@ -61,13 +61,10 @@ impl Animation {
     }
 }
 
-/// An extension trait for adding the animation wrapper to both Elements and Components
+/// Adds animation wrappers to elements and components.
 ///
-/// Animations rendered through this trait automatically respect
-/// [`App::reduce_motion`](crate::App::reduce_motion): when it is set,
-/// the element is rendered in a static state (the end state for oneshot
-/// animations, the start state for repeating ones) and no animation frames are
-/// scheduled.
+/// When [`App::reduce_motion`](crate::App::reduce_motion) returns `true`, renders the end
+/// state of oneshot animations or the start of repeating ones without scheduling animation frames.
 pub trait AnimationExt {
     /// Render this component or element with an animation
     fn with_animation(

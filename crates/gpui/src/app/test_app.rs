@@ -1,9 +1,9 @@
-//! A clean testing API for GPUI applications.
+//! A testing API for GPUI applications.
 //!
-//! `TestApp` provides a simpler alternative to `TestAppContext` with:
-//! - Automatic effect flushing after updates
-//! - Clean window creation and inspection
-//! - Input simulation helpers
+//! `TestApp` flushes effects after each update and provides helpers for:
+//!
+//! - Window creation and inspection.
+//! - Input simulation.
 //!
 //! # Example
 //! ```ignore
@@ -33,10 +33,7 @@ use crate::{
 };
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
-/// A test application context with a clean API.
-///
-/// Unlike `TestAppContext`, `TestApp` automatically flushes effects after
-/// each update and provides simpler window management.
+/// A test app that manages test windows and flushes effects after each update.
 pub struct TestApp {
     app: Rc<AppCell>,
     platform: Rc<TestPlatform>,

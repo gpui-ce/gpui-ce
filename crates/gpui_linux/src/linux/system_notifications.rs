@@ -89,7 +89,7 @@ impl SystemNotificationState {
     pub(crate) fn dismiss(&self, _tag: &str) {
         // The XDG notifications protocol only allows closing via the
         // server-assigned id on a live handle, which `wait_for_action`
-        // consumes; stale notifications simply age out of the shade.
+        // consumes. Stale notifications age out of the shade.
     }
 
     pub(crate) fn on_response(

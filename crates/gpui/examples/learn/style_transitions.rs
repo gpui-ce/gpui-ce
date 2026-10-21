@@ -1,6 +1,4 @@
-//! Transition Example
-//!
-//! This example demonstrates declarative style transitions in GPUI.
+//! Declarative style transitions.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

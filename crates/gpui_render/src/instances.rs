@@ -4,10 +4,9 @@ use std::ops::Range;
 
 /// A contiguous run of instances inside one pipeline's whole-frame instance buffer.
 ///
-/// The render plan hands out `Range<usize>` slices of the scene arrays; backends draw them
-/// with 32-bit GPU indices. Building this once at the boundary keeps every draw call
-/// working from the same validated base and count, and makes the base impossible to lose
-/// between "which instances" and "which draw arguments".
+/// Converts the render plan's `Range<usize>` scene slices to validated 32-bit GPU
+/// indices once at the boundary. Backends share the validated base and count,
+/// keeping them together when building draw arguments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstanceRange {
     first: u32,

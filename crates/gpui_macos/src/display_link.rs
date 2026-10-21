@@ -1,54 +1,41 @@
-//! Frame pacing for macOS windows, built on `CVDisplayLink`.
+//! Frame pacing for macOS windows through `CVDisplayLink`.
 //!
-//! CVDisplayLink has no safe teardown: `CVDisplayLinkStop` merely flags the
-//! link's io thread to exit "soon" and returns immediately, and there is no
-//! way to learn when (or whether) a final output callback has finished. Two
-//! crash classes came from ignoring this:
+//! `CVDisplayLinkStop` returns before the I/O thread exits, with no way to
+//! know whether the final callback has finished. Releasing the link let the
+//! I/O thread read freed internals, causing a crash in `CVHWTime::reset`.
+//! Leaking the link fixed that in #32116.
 //!
-//! * releasing the link after `stop` let the still-running io thread read the
-//!   freed link's internals (segfault in `CVHWTime::reset`, fixed by leaking
-//!   the link in #32116);
-//! * releasing the dispatch source that the output callback dereferenced via
-//!   its context pointer let a straggler callback read freed memory (segfault
-//!   in `dispatch_source_merge_data`, Sentry issue ZED-7XR).
+//! The callback also dereferenced a dispatch source through its context
+//! pointer. Releasing that source let a late callback read freed memory,
+//! causing a crash in `dispatch_source_merge_data`, ZED-7XR.
 //!
-//! Instead of leaking one link and one source per teardown (and teardown
-//! happens on every resize tick, activation, and occlusion change), we keep a
-//! single immortal `CVDisplayLink` per display in a static registry and have
-//! windows subscribe to it:
+//! A static registry keeps one lazily created, never-released link per display.
+//! Windows subscribe instead of tearing down links on resize, activation, or
+//! occlusion changes. The callback receives an integer display ID and only
+//! dereferences the static registry, so callbacks after stop are harmless.
 //!
-//! * Links are created lazily and never released, so the release race cannot
-//!   occur. The output callback's context is the display id (an integer, not
-//!   a pointer), and the only memory the callback dereferences is the static
-//!   registry, so a straggler callback after `stop` is a harmless no-op.
-//! * Each window owns one dispatch source for the life of the window. On
-//!   window close it is removed from the registry under the lock (making it
-//!   unreachable from the callback), cancelled, and genuinely released.
-//! * A display's link runs iff it has subscribers; windows never start or
-//!   stop links directly, so interleaved starts/stops of windows sharing a
-//!   display cannot conflict.
+//! Each window owns one dispatch source for its lifetime. Closing removes it
+//! under the lock, making it unreachable from callbacks, then cancels and
+//! releases it. Only the registry starts and stops links. A link runs exactly
+//! while it has subscribers, so windows sharing a display cannot stop each
+//! other's frame callbacks.
 //!
-//! One tradeoff of immortal entries: a link created for a given
-//! `CGDirectDisplayID` is reused forever, including after the display is
-//! unplugged and one reappears with the same id, or after mode/refresh-rate
-//! changes. `CVDisplayLink` looks up display timing dynamically, so a cached
-//! link keeps pacing correctly; if that ever proves untrue the fix is to
-//! also refresh entries from a display-reconfiguration callback, not to
-//! release links (which would reintroduce the teardown race).
+//! Links survive disconnection, display-ID reuse, and mode or refresh-rate
+//! changes. `CVDisplayLink` queries timing dynamically. If cached timing ever
+//! fails, refresh entries on display reconfiguration. Releasing links would
+//! reintroduce the teardown race.
 //!
-//! Lock ordering: the output callback runs on the link's io thread and takes
-//! the registry lock, possibly while holding CVDisplayLink-internal locks. To
-//! avoid a lock cycle through those (undocumented) internals, we never call a
-//! CoreVideo function while holding the registry lock. Registry mutations and
-//! link start/stop happen on the main thread only, which keeps the `running`
-//! flag and the link's actual state consistent without holding the lock
-//! across the calls.
+//! Never call CoreVideo while holding the registry lock. The I/O callback
+//! takes that lock and may hold undocumented CoreVideo locks, creating a
+//! possible cycle. Registry changes and link start/stop run only on the main
+//! thread, keeping `running` consistent with the link's actual state without
+//! locking across those calls.
 //!
-//! `std::sync::Mutex` rather than `parking_lot` is deliberate: on macOS it is
-//! currently backed by `os_unfair_lock`, whose priority donation resolves
-//! inversions between the high-priority io thread and the main thread. (That
-//! is a std implementation detail, not a guarantee; if it changes, the cost
-//! is added latency under contention, not incorrectness.)
+//! On macOS, `std::sync::Mutex` currently uses `os_unfair_lock`. Its priority
+//! donation resolves priority inversion between the high-priority I/O thread
+//! and the main thread. This is why the registry uses it instead of
+//! `parking_lot`. The backing lock is an implementation detail. If it changes,
+//! contention latency may increase, but correctness is unaffected.
 
 use anyhow::Result;
 use core_graphics::display::CGDirectDisplayID;
@@ -271,11 +258,10 @@ impl WindowFrameSource {
 impl Drop for WindowFrameSource {
     fn drop(&mut self) {
         self.stop();
-        // Unsubscribing makes this source unreachable from the output
-        // callback, so unlike before (ZED-7XR) it is safe to actually release
-        // it. Cancelling first guarantees the event handler never runs again;
-        // its context points at the window's native view, which may be
-        // deallocated after this.
+        // Unsubscribing prevents the output callback from reaching this source,
+        // fixing ZED-7XR. Cancel before releasing to prevent further handler calls.
+        // The handler's context points to the window's native view, which may
+        // be deallocated after this.
         self.frame_requests.cancel();
     }
 }

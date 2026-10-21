@@ -254,7 +254,7 @@ impl Transformation {
     }
 
     fn into_matrix(self, center: Point<Pixels>, scale_factor: f32) -> TransformationMatrix {
-        //Note: if you read this as a sequence of matrix multiplications, start from the bottom
+        // Read these matrix multiplications from bottom to top.
         TransformationMatrix::unit()
             .translate(center.scale(scale_factor) + self.translate.scale(scale_factor))
             .rotate(self.rotate)
