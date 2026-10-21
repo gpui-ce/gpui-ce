@@ -267,6 +267,7 @@ impl VisualTestAppContext {
             window,
             MouseMoveEvent {
                 position,
+                delta: Point::default(),
                 modifiers,
                 pressed_button: button.into(),
             },

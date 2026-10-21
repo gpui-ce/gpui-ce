@@ -22,7 +22,7 @@ use image::RgbaImage;
 use core_foundation::base::{CFRelease, CFTypeRef};
 use core_foundation_sys::base::CFEqual;
 use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
-use core_graphics::display::CGDirectDisplayID;
+use core_graphics::display::{CGAssociateMouseAndMouseCursorPosition, CGDirectDisplayID};
 use ctor::ctor;
 use foreign_types::ForeignTypeRef;
 use futures::channel::oneshot;
@@ -2453,6 +2453,24 @@ impl PlatformWindow for MacWindow {
 
     fn a11y_update_window_bounds(&self) {
         // macOS handles window bounds tracking automatically via NSAccessibility.
+    }
+
+    fn set_pointer_hidden(&self, hidden: bool) {
+        if hidden {
+            unsafe {
+                let _: () = msg_send![class!(NSCursor), hide];
+            };
+        } else {
+            unsafe {
+                let _: () = msg_send![class!(NSCursor), unhide];
+            };
+        }
+    }
+
+    fn set_pointer_locked(&self, locked: bool) {
+        unsafe {
+            CGAssociateMouseAndMouseCursorPosition(!locked as _);
+        };
     }
 }
 
