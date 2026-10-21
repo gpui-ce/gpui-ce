@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "hello_web"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "hello_web"
+path = "main.rs"
+
+[dependencies]
+gpui = { path = "../../../gpui", package = "gpui-ce" }
+gpui_platform = { path = "../../../gpui_platform" }
+web-sys = { version = "0.3", features = ["console", "Location", "Window"] }
+web-time = "1"
+gpui_fonts = { path = "../../../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }

@@ -1,0 +1,351 @@
+[package]
+name = "gpui-ce"
+version = "0.2.2"
+edition.workspace = true
+authors = ["Nathan Sobo <nathan@zed.dev>"]
+description = "A community fork of Zed's GPU-accelerated UI framework"
+repository = "https://github.com/gpui-ce/gpui-ce"
+publish = true
+license = "Apache-2.0"
+homepage = "https://gpui-ce.github.io/"
+readme = "README.md"
+keywords = ["desktop", "gui", "immediate"]
+categories = ["gui"]
+rust-version = "1.95"                                                  # required for Vec::push_mut
+
+[lints]
+workspace = true
+
+[features]
+default = ["font-kit", "wayland", "x11", "windows-manifest", "image-default-formats"]
+# Enables the opt-in custom WGPU control API on platforms that support shared
+# texture surfaces.
+custom-gpu = []
+wgpu-surfaces = []
+test-support = [
+  "leak-detection",
+  "collections/test-support",
+  "wayland",
+  "x11",
+  "proptest",
+]
+bench-support = ["profiler", "dep:criterion"]
+# Preserve the published feature name while consumers migrate to `bench-support`.
+bench = ["bench-support"]
+inspector = ["gpui_macros/inspector"]
+leak-detection = ["backtrace"]
+wayland = []
+x11 = []
+screen-capture = ["dep:windows-capture"]
+windows-manifest = ["dep:embed-resource"]
+profiler = ["dep:hdrhistogram"]
+stacker = ["dep:stacksafe"]
+embedded-assets = ["dep:rust-embed"]
+hot-patching = ["dep:dioxus-devtools", "dep:subsecond"]
+image-default-formats = ["image/default-formats"]
+
+[lib]
+name = "gpui"
+path = "src/gpui.rs"
+doctest = false
+
+[dependencies]
+accesskit.workspace = true
+anyhow.workspace = true
+async-task.workspace = true
+backtrace = { workspace = true, optional = true }
+bitflags.workspace = true
+
+collections.workspace = true
+criterion = { workspace = true, optional = true }
+ctor.workspace = true
+derive_more.workspace = true
+derive_setters.workspace = true
+etagere.workspace = true
+futures.workspace = true
+futures-concurrency.workspace = true
+gpui_macros.workspace = true
+gpui_shared_string.workspace = true
+http.workspace = true
+image.workspace = true
+inventory.workspace = true
+itertools.workspace = true
+log.workspace = true
+num_cpus = "1.13"
+parking = "2.0.0"
+parking_lot.workspace = true
+palette.workspace = true
+phf.workspace = true
+postage.workspace = true
+proptest = { workspace = true, optional = true }
+chrono.workspace = true
+profiling.workspace = true
+rand.workspace = true
+raw-window-handle.workspace = true
+regex.workspace = true
+refineable.workspace = true
+scheduler.workspace = true
+resvg = { version = "0.48.1", default-features = false, features = [
+  "text",
+  "system-fonts",
+  "memmap-fonts",
+  "raster-images",
+] }
+rust-embed = { version = "8.12", optional = true }
+usvg = { version = "0.48.1", default-features = false }
+skrifa.workspace = true
+schemars.workspace = true
+seahash = "4.1"
+serde.workspace = true
+serde_json.workspace = true
+slotmap.workspace = true
+smallvec.workspace = true
+async-channel.workspace = true
+stacksafe = { workspace = true, optional = true }
+strum.workspace = true
+sum_tree.workspace = true
+taffy = "=0.13.0"
+thiserror.workspace = true
+tracing.workspace = true
+gpui_util.workspace = true
+unicode-segmentation.workspace = true
+unicode-bidi.workspace = true
+hdrhistogram = { workspace = true, optional = true }
+waker-fn = "1.2.0"
+lyon = "1.0"
+pin-project = "1.1.10"
+spin = "0.10.0"
+pollster.workspace = true
+url.workspace = true
+uuid.workspace = true
+web-time.workspace = true
+heapless.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+dioxus-devtools = { version = "=0.7.10", features = ["serve"], optional = true }
+subsecond = { version = "=0.7.10", optional = true }
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-video.workspace = true
+core-text = "21"
+font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
+foreign-types = "0.5"
+log.workspace = true
+objc2 = { workspace = true, optional = true }
+objc2-metal = { version = "0.3", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_System_Power",
+] }
+windows-capture = { workspace = true, optional = true }
+windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
+
+
+[dev-dependencies]
+accesskit_consumer.workspace = true
+backtrace.workspace = true
+smol.workspace = true
+collections = { workspace = true, features = ["test-support"] }
+env_logger.workspace = true
+gpui_ce_elements = { path = "../gpui_elements" }
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+gpui_util = { workspace = true }
+lyon = { version = "1.0", features = ["extra"] }
+rand.workspace = true
+scheduler = { workspace = true, features = ["test-support"] }
+image = { workspace = true, features = ["png"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+proptest = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { version = "0.3", features = ["console"] }
+
+[build-dependencies]
+embed-resource = { version = "3.0", optional = true }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+bindgen = "0.72"
+
+[package.metadata.cargo-shear]
+ignored = [
+  "bindgen",
+  "font-kit",
+  "getrandom",
+  "objc2",
+  "objc2-metal",
+  "tracing",
+]
+ignored-paths = ["src/_ownership_and_data_flow.rs"]
+
+# ============================================================================
+# Learn Examples - Educational examples for learning GPUI
+# ============================================================================
+
+[[example]]
+name = "interactive_elements"
+path = "examples/learn/interactive_elements.rs"
+
+[[example]]
+name = "actions_and_keybinds"
+path = "examples/learn/actions_and_keybinds.rs"
+
+[[example]]
+name = "uniform_list"
+path = "examples/learn/uniform_list.rs"
+
+[[example]]
+name = "creating_components"
+path = "examples/learn/creating_components.rs"
+
+[[example]]
+name = "layout"
+path = "examples/learn/layout.rs"
+
+[[example]]
+name = "styling"
+path = "examples/learn/styling.rs"
+
+[[example]]
+name = "async_tasks"
+path = "examples/learn/async_tasks.rs"
+
+[[example]]
+name = "custom_drawing"
+path = "examples/learn/custom_drawing.rs"
+
+[[example]]
+name = "animation"
+path = "examples/learn/animation.rs"
+
+[[example]]
+name = "text"
+path = "examples/learn/text.rs"
+
+[[example]]
+name = "transitions"
+path = "examples/learn/transitions.rs"
+
+[[example]]
+name = "style_transitions"
+path = "examples/learn/style_transitions.rs"
+
+[[example]]
+name = "motion_showcase"
+path = "examples/learn/motion_showcase.rs"
+
+[[example]]
+name = "haptic_feedback"
+path = "examples/learn/haptic_feedback.rs"
+
+[[example]]
+name = "blur"
+path = "examples/learn/blur.rs"
+
+[[example]]
+name = "corner_smoothing"
+path = "examples/learn/corner_smoothing.rs"
+
+[[example]]
+name = "keyring"
+path = "examples/learn/keyring.rs"
+
+# ============================================================================
+# Bench Examples - Performance benchmarks
+# ============================================================================
+
+[[example]]
+name = "data_table"
+path = "examples/bench/data_table.rs"
+
+[[example]]
+name = "paths_bench"
+path = "examples/bench/paths_bench.rs"
+
+[[example]]
+name = "pattern"
+path = "examples/bench/pattern.rs"
+
+[[example]]
+name = "shadow"
+path = "examples/bench/shadow.rs"
+
+# ============================================================================
+# Legacy Examples - Original examples (to be updated)
+# ============================================================================
+
+[[example]]
+name = "focus_visible"
+path = "examples/legacy/focus_visible.rs"
+
+[[example]]
+name = "gif_viewer"
+path = "examples/legacy/gif_viewer.rs"
+
+[[example]]
+name = "gradient"
+path = "examples/legacy/gradient.rs"
+
+[[example]]
+name = "hello_world"
+path = "examples/legacy/hello_world.rs"
+
+[[example]]
+name = "image_loading"
+path = "examples/legacy/image_loading.rs"
+
+[[example]]
+name = "inline_layout"
+path = "examples/legacy/inline_layout.rs"
+
+[[example]]
+name = "layer_shell"
+path = "examples/legacy/layer_shell.rs"
+
+[[example]]
+name = "on_window_close_quit"
+path = "examples/legacy/on_window_close_quit.rs"
+
+[[example]]
+name = "opacity"
+path = "examples/legacy/opacity.rs"
+
+[[example]]
+name = "scrollable"
+path = "examples/legacy/scrollable.rs"
+
+[[example]]
+name = "svg"
+path = "examples/legacy/svg/svg.rs"
+
+[[example]]
+name = "tab_stop"
+path = "examples/legacy/tab_stop.rs"
+
+[[example]]
+name = "tree"
+path = "examples/legacy/tree.rs"
+
+[[example]]
+name = "window"
+path = "examples/legacy/window.rs"
+
+[[example]]
+name = "window_positioning"
+path = "examples/legacy/window_positioning.rs"
+
+[[example]]
+name = "window_shadow"
+path = "examples/legacy/window_shadow.rs"

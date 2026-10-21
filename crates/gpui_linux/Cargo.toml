@@ -1,0 +1,131 @@
+[package]
+name = "gpui_ce_linux"
+version = "0.1.0"
+description.workspace = true
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/gpui_linux.rs"
+
+[features]
+default = ["wayland", "x11"]
+test-support = ["gpui/test-support"]
+wayland = [
+  "bitflags",
+  "gpui_wgpu",
+  "ashpd/wayland",
+
+  "calloop-wayland-source",
+  "memfd",
+  "wayland-backend",
+  "wayland-client",
+  "wayland-cursor",
+  "wayland-protocols",
+  "wayland-protocols-plasma",
+  "wayland-protocols-wlr",
+  "filedescriptor",
+  "xkbcommon/wayland",
+  "open",
+  "gpui/wayland",
+]
+x11 = [
+  "gpui_wgpu",
+  "ashpd",
+
+  "as-raw-xcb-connection",
+  "x11rb",
+  "xkbcommon/x11",
+  "xim",
+  "x11-clipboard",
+  "filedescriptor",
+  "open",
+]
+
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+accesskit.workspace = true
+accesskit_unix.workspace = true
+anyhow.workspace = true
+bytemuck = "1"
+collections.workspace = true
+image.workspace = true
+futures.workspace = true
+gpui = { workspace = true, default-features = false }
+gpui_util.workspace = true
+gpui_parley = { workspace = true, features = ["system-fonts"] }
+gpui_wgpu = { workspace = true, optional = true }
+itertools.workspace = true
+libc.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+strum.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+# Always used
+oo7 = { version = "0.6", default-features = false, features = [
+  "async-std",
+  "native_crypto",
+] }
+calloop = "0.14.3"
+notify-rust.workspace = true
+raw-window-handle.workspace = true
+
+# Used in both windowing options
+ashpd = { workspace = true, optional = true }
+bitflags = { workspace = true, optional = true }
+filedescriptor = { version = "0.8.2", optional = true }
+open = { version = "5.2.0", optional = true }
+xkbcommon = { version = "0.8.0", default-features = false, optional = true }
+
+# Screen capture
+
+# Wayland
+calloop-wayland-source = { version = "0.4.1", optional = true }
+memfd = { version = "0.6.5", optional = true }
+wayland-backend = { version = "0.3.15", features = [
+  "client_system",
+  "dlopen",
+  "log",
+], optional = true }
+wayland-client = { version = "0.31.11", optional = true }
+wayland-cursor = { version = "0.31.11", optional = true }
+wayland-protocols = { version = "0.32.9", features = [
+  "client",
+  "staging",
+  "unstable",
+], optional = true }
+wayland-protocols-plasma = { version = "0.3.9", features = [
+  "client",
+], optional = true }
+wayland-protocols-wlr = { version = "0.3.9", features = [
+  "client",
+], optional = true }
+
+# X11
+as-raw-xcb-connection = { version = "1", optional = true }
+x11rb = { version = "0.13.1", features = [
+  "allow-unsafe-code",
+  "xkb",
+  "randr",
+  "xinput",
+  "cursor",
+  "resource_manager",
+  "sync",
+  "dri3",
+], optional = true }
+xim = { version = "0.4.0-zed", package = "zed-xim", features = [
+  "x11rb-xcb",
+  "x11rb-client",
+], optional = true }
+x11-clipboard = { version = "0.9.3", optional = true }
+
+[package.metadata.cargo-shear]
+ignored = ["bitflags", "scap", "x11-clipboard"]

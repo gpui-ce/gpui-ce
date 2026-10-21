@@ -1,0 +1,52 @@
+# Build artifacts
+**/target
+**/cargo-target
+*.wasm
+
+# IDEs & Editors
+.idea/       # JetBrains (CLion, IntelliJ, etc.)
+.vscode/
+.trae/
+.zed/
+*.swp        # Vim swap files
+*.swo        # Vim swap overflow files
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+xcuserdata/
+
+# AI agents
+.claude/
+.cursor/
+.aider/
+.copilot/
+.codex/
+.gemini/
+.agents/
+
+# MacOS file system clutter.
+._*
+.DS_STORE
+.DS_Store
+
+# Python
+**/venv
+.venv
+*.pyc
+.pytest_cache
+
+# Nix
+**/.direnv
+.envrc
+/result
+
+# Environment and secrets
+.env
+.env.secret.toml
+.netrc
+
+# Misc
+**/*.db
+.build
+
+/build
