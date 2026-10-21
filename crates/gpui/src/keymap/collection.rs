@@ -66,56 +66,30 @@ impl ActionBindingCollection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TestAppContext;
 
     actions!([TestAction]);
 
-    #[gpui::test]
-    fn test_default_empty(_cx: &mut TestAppContext) {
-        assert!(ActionBindingCollection::default().entries.is_empty());
-    }
+    #[test]
+    fn test_action_bindings() {
+        let mut collection = ActionBindingCollection::default();
+        assert!(collection.entries.is_empty());
 
-    #[gpui::test]
-    fn test_single_binding(_cx: &mut TestAppContext) {
-        let collection = ActionBindingCollection::default();
-        let collection = collection.with::<TestAction>("enter");
+        for (key, expected) in [
+            ("enter", &["enter"][..]),
+            ("escape", &["enter", "escape"][..]),
+        ] {
+            collection = collection.with::<TestAction>(key);
 
-        let entry = collection.entries.get(&TypeId::of::<TestAction>());
-        let entry = entry.map(|entry| &entry.keystrokes);
-        assert_eq!(entry, Some(&vec![SharedString::new_static("enter")]));
+            let entry = collection.entries.get(&TypeId::of::<TestAction>()).unwrap();
+            assert_eq!(entry.keystrokes, expected);
 
-        let out_bindings = collection.as_keybindings(None).collect::<Vec<_>>();
-        assert_eq!(out_bindings.len(), 1);
-    }
+            let bindings = collection.as_keybindings(None).collect::<Vec<_>>();
+            assert_eq!(bindings.len(), expected.len());
+        }
 
-    #[gpui::test]
-    fn test_single_action_many_keys(_cx: &mut TestAppContext) {
-        let collection = ActionBindingCollection::default();
-        let collection = collection.with::<TestAction>("enter");
-        let collection = collection.with::<TestAction>("escape");
-
-        let entry = collection.entries.get(&TypeId::of::<TestAction>());
-        let entry = entry.map(|entry| &entry.keystrokes);
-        assert_eq!(
-            entry,
-            Some(&vec![
-                SharedString::new_static("enter"),
-                SharedString::new_static("escape")
-            ])
-        );
-
-        let out_bindings = collection.as_keybindings(None).collect::<Vec<_>>();
-        assert_eq!(out_bindings.len(), 2);
-    }
-
-    #[gpui::test]
-    fn test_single_action_many_keys_context(_cx: &mut TestAppContext) {
-        let collection = ActionBindingCollection::default();
-        let collection = collection.with::<TestAction>("enter");
-        let collection = collection.with::<TestAction>("escape");
-        let out_bindings = collection
+        let bindings = collection
             .as_keybindings(Some("test_content"))
             .collect::<Vec<_>>();
-        assert_eq!(out_bindings.len(), 2);
+        assert_eq!(bindings.len(), 2);
     }
 }

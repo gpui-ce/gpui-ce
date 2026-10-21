@@ -292,18 +292,7 @@ impl TestAppContext {
 
     /// Adds a new window with no content.
     pub fn add_empty_window(&mut self) -> &mut VisualTestContext {
-        let mut cx = self.app.borrow_mut();
-        let bounds = Bounds::maximized(None, &cx);
-        let window = cx
-            .open_window(
-                WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
-                |_, cx| cx.new(|_| Empty),
-            )
-            .unwrap();
-        drop(cx);
-        let cx = VisualTestContext::from_window(*window.deref(), self).into_mut();
-        cx.run_until_parked();
-        cx
+        self.add_window_view(|_window, _cx| Empty).1
     }
 
     /// Adds a new window, and returns its root view and a `VisualTestContext` which can be used
@@ -317,20 +306,11 @@ impl TestAppContext {
         F: FnOnce(&mut Window, &mut Context<V>) -> V,
         V: 'static + Render,
     {
-        let mut cx = self.app.borrow_mut();
-        let bounds = Bounds::maximized(None, &cx);
-        let window = cx
-            .open_window(
-                WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
-                |window, cx| cx.new(|cx| build_root_view(window, cx)),
-            )
-            .unwrap();
-        drop(cx);
+        let window = self.add_window(build_root_view);
         let view = window.root(self).unwrap();
         let cx = VisualTestContext::from_window(*window.deref(), self).into_mut();
         cx.run_until_parked();
 
-        // it might be nice to try and cleanup these at the end of each test.
         (view, cx)
     }
 
@@ -874,19 +854,8 @@ impl VisualTestContext {
 
     /// Simulate a primary mouse click at the given point
     pub fn simulate_click(&mut self, position: Point<Pixels>, modifiers: Modifiers) {
-        self.simulate_event(MouseDownEvent {
-            position,
-            modifiers,
-            button: MouseButton::Left,
-            click_count: 1,
-            first_mouse: false,
-        });
-        self.simulate_event(MouseUpEvent {
-            position,
-            modifiers,
-            button: MouseButton::Left,
-            click_count: 1,
-        });
+        self.simulate_mouse_down(position, MouseButton::Left, modifiers);
+        self.simulate_mouse_up(position, MouseButton::Left, modifiers);
     }
 
     /// Simulate a modifiers changed event

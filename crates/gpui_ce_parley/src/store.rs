@@ -1276,67 +1276,37 @@ mod tests {
     }
 
     #[test]
-    fn portable_color_outline_fallback_returns_a_tintable_mask() {
-        let source = Blob::from(SOURCE_SERIF.data.to_vec());
-        let font = FontRef::new(source.as_ref()).unwrap();
-        let normalized_coords = font
-            .axes()
-            .location(std::iter::empty::<(Tag, f32)>())
-            .coords()
-            .to_vec();
-        let variations =
-            verified_design_variations(&font, &normalized_coords, Synthesis::default(), &[])
-                .unwrap();
-        let face = RasterFace {
-            font_id: FontId(1),
-            source_id: source.id(),
-            source: &source,
-            face_index: 0,
-            normalized_coords: &normalized_coords,
-            variations: &variations,
-            synthesis: FontSynthesis::default(),
-            has_color_glyphs: false,
-        };
-        let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
-        let raster_style = PreparedRasterStyle::preblend(RasterStyleRequest {
-            font_id: face.font_id,
-            glyph_id,
-            scene_color: rgba(0xe02010cc),
-            requested_mode: GlyphRenderMode::Color,
-            foreground_dependency: ForegroundDependency::AlphaOnly,
-        });
-        let params = RenderGlyphParams {
-            font_id: face.font_id,
-            glyph_id,
-            font_size: px(24.0),
-            subpixel_variant: point(0, 0),
-            scale_factor: 1.0,
-            raster_style,
-        };
-
-        let raster = SwashGlyphRasterizer::default()
-            .rasterize(face, &params)
-            .unwrap();
-        assert_eq!(raster.format, RasterizedGlyphFormat::AlphaMask);
-        assert!(raster.pixels.iter().any(|coverage| *coverage != 0));
-    }
-
-    #[test]
     fn portable_rasterization_distinguishes_empty_outline_and_bitmap_glyphs_from_failures() {
-        for (name, data, mode, visible, expected_format) in [
+        for (name, data, raster_style, visible, empty_format, expected_format) in [
             (
                 "outline",
                 SOURCE_SERIF.data,
-                GlyphRenderMode::Grayscale,
+                PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
                 'A',
+                RasterizedGlyphFormat::AlphaMask,
                 RasterizedGlyphFormat::AlphaMask,
             ),
             (
                 "bitmap",
                 NOTO_COLOR_EMOJI.data,
-                GlyphRenderMode::Color,
+                PreparedRasterStyle::independent(GlyphRenderMode::Color),
                 '😀',
                 RasterizedGlyphFormat::BgraColor,
+                RasterizedGlyphFormat::BgraColor,
+            ),
+            (
+                "color outline",
+                SOURCE_SERIF.data,
+                PreparedRasterStyle::preblend(RasterStyleRequest {
+                    font_id: FontId(1),
+                    glyph_id: GlyphId(1),
+                    scene_color: rgba(0xe02010cc),
+                    requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: ForegroundDependency::AlphaOnly,
+                }),
+                'A',
+                RasterizedGlyphFormat::BgraColor,
+                RasterizedGlyphFormat::AlphaMask,
             ),
         ] {
             let source = Blob::from(data.to_vec());
@@ -1357,7 +1327,7 @@ mod tests {
                 normalized_coords: &normalized_coords,
                 variations: &variations,
                 synthesis: FontSynthesis::default(),
-                has_color_glyphs: mode == GlyphRenderMode::Color,
+                has_color_glyphs: expected_format == RasterizedGlyphFormat::BgraColor,
             };
             let params = |glyph_id| RenderGlyphParams {
                 font_id: face.font_id,
@@ -1365,13 +1335,13 @@ mod tests {
                 font_size: px(24.0),
                 subpixel_variant: point(0, 0),
                 scale_factor: 1.0,
-                raster_style: PreparedRasterStyle::independent(mode),
+                raster_style,
             };
             let mut rasterizer = SwashGlyphRasterizer::default();
             let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
             let empty = rasterizer.rasterize(face, &params(space)).unwrap();
             assert_eq!(empty.size, Size::default(), "{name}");
-            assert_eq!(empty.format, expected_format, "{name}");
+            assert_eq!(empty.format, empty_format, "{name}");
             assert!(empty.pixels.is_empty(), "{name}");
 
             let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
@@ -1384,18 +1354,26 @@ mod tests {
             );
 
             let glyph = GlyphId(font.charmap().map(visible).unwrap().to_u32());
-            let recovered = rasterizer.rasterize(face, &params(glyph)).unwrap();
 
-            if mode == GlyphRenderMode::Color {
-                assert!(
-                    recovered.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-                    "{name}"
-                );
-            } else {
-                assert!(
-                    recovered.pixels.iter().any(|coverage| *coverage != 0),
-                    "{name}"
-                );
+            for raster in [
+                SwashGlyphRasterizer::default()
+                    .rasterize(face, &params(glyph))
+                    .unwrap(),
+                rasterizer.rasterize(face, &params(glyph)).unwrap(),
+            ] {
+                assert_eq!(raster.format, expected_format, "{name}");
+
+                if expected_format == RasterizedGlyphFormat::BgraColor {
+                    assert!(
+                        raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                        "{name}"
+                    );
+                } else {
+                    assert!(
+                        raster.pixels.iter().any(|coverage| *coverage != 0),
+                        "{name}"
+                    );
+                }
             }
         }
     }

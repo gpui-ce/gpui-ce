@@ -124,17 +124,23 @@ fn shader_buffer_layouts_match_host_layouts() {
         crate::artifacts::BASE_WGSL,
         crate::artifacts::SUBPIXEL_DUAL_SOURCE_WGSL,
     ]
-    .map(|source| naga::front::wgsl::parse_str(source).unwrap());
+    .map(|source| {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(module.to_ctx()).unwrap();
+
+        (module, layouter)
+    });
 
     for layouts in [gpui::SCENE_BUFFER_LAYOUTS, interface::RENDER_BUFFER_LAYOUTS] {
         for layout in layouts {
-            let ty = modules
+            let (ty, stride) = modules
                 .iter()
-                .find_map(|module| {
-                    module
-                        .types
-                        .iter()
-                        .find_map(|(_, ty)| (ty.name.as_deref() == Some(layout.name)).then_some(ty))
+                .find_map(|(module, layouter)| {
+                    module.types.iter().find_map(|(handle, ty)| {
+                        (ty.name.as_deref() == Some(layout.name))
+                            .then_some((ty, layouter[handle].to_stride()))
+                    })
                 })
                 .unwrap_or_else(|| panic!("missing shader ABI type {}", layout.name));
             let naga::TypeInner::Struct { members, span } = &ty.inner else {
@@ -144,6 +150,11 @@ fn shader_buffer_layouts_match_host_layouts() {
             assert_eq!(
                 *span as usize, layout.size,
                 "shader ABI size: {}",
+                layout.name
+            );
+            assert_eq!(
+                stride as usize, layout.size,
+                "shader ABI stride: {}",
                 layout.name
             );
             assert_eq!(

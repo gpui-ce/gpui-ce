@@ -669,223 +669,94 @@ mod tests {
         let started_at = Instant::now();
         let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
         let mut state = None;
-        let mut value = EndpointBiased(10.0);
 
-        assert!(!apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
-
-        value = EndpointBiased(20.0);
-        assert!(apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
-        assert_eq!(value, EndpointBiased(10.0));
-
-        value = EndpointBiased(20.0);
-        assert!(apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_millis(500),
-            false,
-        ));
-        assert_eq!(value, EndpointBiased(15.0));
-
-        value = EndpointBiased(20.0);
-        assert!(!apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(value, EndpointBiased(20.0));
-
-        value = EndpointBiased(30.0);
-        assert!(apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(2),
-            false,
-        ));
-        assert_eq!(value, EndpointBiased(20.0));
-
-        value = EndpointBiased(30.0);
-        assert!(apply_required(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_millis(2_500),
-            false,
-        ));
-        assert_eq!(value, EndpointBiased(25.0));
+        for (milliseconds, authored, expected, active) in [
+            (0, 10.0, 10.0, false),
+            (0, 20.0, 10.0, true),
+            (500, 20.0, 15.0, true),
+            (1_000, 20.0, 20.0, false),
+            (2_000, 30.0, 20.0, true),
+            (2_500, 30.0, 25.0, true),
+        ] {
+            let mut value = EndpointBiased(authored);
+            let actual = apply_required(
+                &mut state,
+                &mut value,
+                Some(&motion),
+                started_at + Duration::from_millis(milliseconds),
+                false,
+            );
+            assert_eq!((actual, value), (active, EndpointBiased(expected)));
+        }
 
         let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
             .with_easing(|_| 0.5)
             .into();
         let mut state = None;
-        let mut value = 10.0_f32;
-        assert!(!apply_required(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at,
-            false,
-        ));
 
-        value = 20.0;
-        assert!(apply_required(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at,
-            false,
-        ));
-        assert_eq!(value, 15.0);
-
-        value = 20.0;
-        assert!(!apply_required(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(value, 15.0);
+        for (milliseconds, authored, expected, active) in [
+            (0, 10.0_f32, 10.0, false),
+            (0, 20.0, 15.0, true),
+            (1_000, 20.0, 15.0, false),
+        ] {
+            let mut value = authored;
+            let actual = apply_required(
+                &mut state,
+                &mut value,
+                Some(&nonstandard_endpoint),
+                started_at + Duration::from_millis(milliseconds),
+                false,
+            );
+            assert_eq!((actual, value), (active, expected));
+        }
     }
 
     #[test]
-    fn optional_completion_uses_motion_progress_not_value_equality() {
+    fn optional_completion_and_retarget_use_the_authored_endpoint() {
         let started_at = Instant::now();
         let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
-        let mut state = None;
-        let mut value = Some(EndpointBiased(10.0));
 
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
+        for target in [None, Some(20.0)] {
+            let mut state = None;
 
-        value = None;
-        assert!(apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
-        assert_eq!(value, Some(EndpointBiased(10.0)));
-
-        value = None;
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(value, None);
-
-        value = None;
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(2),
-            false,
-        ));
-        assert_eq!(value, None);
+            for (milliseconds, authored, expected, active) in [
+                (0, Some(10.0), Some(10.0), false),
+                (0, target, Some(10.0), true),
+                (1_000, target, target, false),
+                (2_000, target.map(|_value| 30.0), target, target.is_some()),
+            ] {
+                let mut value = authored.map(EndpointBiased);
+                let actual = apply_optional(
+                    &mut state,
+                    &mut value,
+                    Some(&motion),
+                    started_at + Duration::from_millis(milliseconds),
+                    false,
+                );
+                assert_eq!((actual, value), (active, expected.map(EndpointBiased)));
+            }
+        }
 
         let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
             .with_easing(|_| 0.5)
             .into();
         let mut state = None;
-        let mut value = Some(10.0_f32);
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at,
-            false,
-        ));
 
-        value = None;
-        assert!(apply_optional(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at,
-            false,
-        ));
-        assert_eq!(value, Some(5.0));
-
-        value = None;
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&nonstandard_endpoint),
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(value, Some(5.0));
-    }
-
-    #[test]
-    fn optional_some_completion_and_retarget_use_the_authored_endpoint() {
-        let started_at = Instant::now();
-        let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
-        let mut state = None;
-        let mut value = Some(EndpointBiased(10.0));
-
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
-
-        value = Some(EndpointBiased(20.0));
-        assert!(apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at,
-            false,
-        ));
-        assert_eq!(value, Some(EndpointBiased(10.0)));
-
-        value = Some(EndpointBiased(20.0));
-        assert!(!apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(value, Some(EndpointBiased(20.0)));
-
-        value = Some(EndpointBiased(30.0));
-        assert!(apply_optional(
-            &mut state,
-            &mut value,
-            Some(&motion),
-            started_at + Duration::from_secs(2),
-            false,
-        ));
-        assert_eq!(value, Some(EndpointBiased(20.0)));
+        for (milliseconds, authored, expected, active) in [
+            (0, Some(10.0_f32), Some(10.0), false),
+            (0, None, Some(5.0), true),
+            (1_000, None, Some(5.0), false),
+        ] {
+            let mut value = authored;
+            let actual = apply_optional(
+                &mut state,
+                &mut value,
+                Some(&nonstandard_endpoint),
+                started_at + Duration::from_millis(milliseconds),
+                false,
+            );
+            assert_eq!((actual, value), (active, expected));
+        }
     }
 
     #[test]

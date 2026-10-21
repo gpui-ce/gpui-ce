@@ -361,30 +361,21 @@ mod tests {
     use usvg::fontdb::{Database, Family, Query};
 
     #[test]
-    fn renders_parsed_svg_at_requested_size() -> Result<()> {
+    fn renders_parsed_svg_at_exact_and_aspect_constrained_sizes() -> Result<()> {
         let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
-        let requested_size = Size::new(DevicePixels(24), DevicePixels(12));
-        let image = renderer.render_parsed(&svg, SvgSize::ExactSize(requested_size))?;
+        let expected = Size::new(DevicePixels(24), DevicePixels(12));
 
-        assert_eq!(image.size(0), requested_size);
-        Ok(())
-    }
-
-    #[test]
-    fn preserves_aspect_ratio_for_width_constrained_size() -> Result<()> {
-        let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
-        let svg = renderer.parse_svg(
-            br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
-        )?;
-        let image = renderer.render_parsed(
-            &svg,
+        for requested in [
+            SvgSize::ExactSize(expected),
             SvgSize::Size(Size::new(DevicePixels(24), DevicePixels(24))),
-        )?;
+        ] {
+            let image = renderer.render_parsed(&svg, requested)?;
+            assert_eq!(image.size(0), expected);
+        }
 
-        assert_eq!(image.size(0), Size::new(DevicePixels(24), DevicePixels(12)));
         Ok(())
     }
 
@@ -397,9 +388,7 @@ mod tests {
 
     #[test]
     fn text_with_split_glyph_clusters_in_mixed_fonts_does_not_panic() {
-        let mut db = Database::new();
-        db.load_font_data(gpui_fonts::IBM_PLEX.to_vec());
-        db.load_font_data(gpui_fonts::LILEX.to_vec());
+        let db = db_with_bundled_fonts();
         let options = usvg::Options {
             fontdb: std::sync::Arc::new(db),
             ..Default::default()

@@ -4035,12 +4035,13 @@ mod tests {
     }
 
     #[test]
-    fn document_structure_preserves_source_ranges_fragments_and_line_counts() {
+    fn document_structure_and_navigation_preserve_source_ranges_across_scripts_and_clamps() {
         let system = test_system();
 
         for case in document_cases() {
             let layout = layout_document_case(&system, &case);
             assert_document_structure(&case.text, &layout);
+            assert_document_navigation(&case.text, &layout);
 
             if case.exact_line_count {
                 assert_eq!(
@@ -4063,16 +4064,6 @@ mod tests {
                 assert_eq!(layout.width, Pixels::ZERO);
                 assert!(layout.paint_fragments.is_empty());
             }
-        }
-    }
-
-    #[test]
-    fn document_navigation_preserves_source_boundaries_across_scripts_and_clamps() {
-        let system = test_system();
-
-        for case in document_cases() {
-            let layout = layout_document_case(&system, &case);
-            assert_document_navigation(&case.text, &layout);
         }
 
         assert_paragraph_break_interaction(&system);
@@ -4987,6 +4978,16 @@ mod tests {
         }
     }
 
+    fn bounds(
+        cx: &mut HeadlessAppContext,
+        window: gpui::AnyWindowHandle,
+        selector: &str,
+    ) -> Bounds<Pixels> {
+        cx.debug_bounds(window, selector)
+            .unwrap()
+            .unwrap_or_else(|| panic!("missing {selector}"))
+    }
+
     mod inline_reflow;
 
     mod direction_layout {
@@ -5128,16 +5129,6 @@ mod tests {
                             ),
                     )
             }
-        }
-
-        fn bounds(
-            cx: &mut HeadlessAppContext,
-            window: gpui::AnyWindowHandle,
-            selector: &str,
-        ) -> Bounds<Pixels> {
-            cx.debug_bounds(window, selector)
-                .unwrap()
-                .unwrap_or_else(|| panic!("missing {selector}"))
         }
 
         #[test]

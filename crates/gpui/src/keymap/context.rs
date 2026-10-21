@@ -826,8 +826,6 @@ mod tests {
             (not_eq("a", "b"), "a != b"),
             (descendant(ident("a"), ident("b")), "a > b"),
             (not(ident("a")), "!a"),
-            (not_eq("a", "b"), "a != b"),
-            (descendant(ident("a"), ident("b")), "a > b"),
             (not(and(ident("a"), ident("b"))), "!(a && b)"),
             (not(or(ident("a"), ident("b"))), "!(a || b)"),
             (and(ident("a"), ident("b")), "a && b"),

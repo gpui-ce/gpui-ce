@@ -5159,6 +5159,7 @@ impl ScrollHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ActivationStep::{Focus, Press, Release};
 
     #[gpui::test]
     fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
@@ -6441,135 +6442,91 @@ mod tests {
         .unwrap();
     }
 
-    fn key_down(cx: &mut TestAppContext, window: AnyWindowHandle, key: &str) {
-        let keystroke = Keystroke::parse(key).unwrap();
-        cx.update_window(window, |_, window, cx| {
-            window.dispatch_event(
-                KeyDownEvent {
-                    keystroke,
-                    is_held: false,
-                    prefer_character_input: false,
+    enum ActivationStep {
+        Focus(usize),
+        Press(&'static str),
+        Release(&'static str),
+    }
+
+    #[test]
+    fn keyboard_activation_requires_a_valid_press_and_release_for_the_current_focus() {
+        let cases: &[(&str, &[ActivationStep], &[&str])] = &[
+            ("same element", &[Press("enter"), Release("enter")], &["a"]),
+            (
+                "focus moved",
+                &[Press("enter"), Focus(1), Release("enter")],
+                &[],
+            ),
+            // Returning focus must reject the press from the previous focus generation.
+            (
+                "focus returned",
+                &[Press("enter"), Focus(1), Focus(0), Release("enter")],
+                &[],
+            ),
+            (
+                "intervening release",
+                &[
+                    Press("escape"),
+                    Press("space"),
+                    Release("escape"),
+                    Release("space"),
+                ],
+                &[],
+            ),
+            (
+                "mixed activation keys",
+                &[Press("space"), Release("enter")],
+                &["a"],
+            ),
+            (
+                "intervening press",
+                &[Press("enter"), Press("a"), Release("enter")],
+                &[],
+            ),
+            (
+                "modified key",
+                &[Press("cmd-enter"), Release("cmd-enter")],
+                &[],
+            ),
+        ];
+
+        for &(name, steps, expected) in cases {
+            let (mut cx, window, clicks, focus_a, focus_b) = setup_keyboard_activation_test();
+            let focus = [focus_a, focus_b];
+            focus_and_draw(&mut cx, window, &focus[0]);
+
+            for step in steps {
+                match step {
+                    Focus(idx) => focus_and_draw(&mut cx, window, &focus[*idx]),
+                    Press(key) => {
+                        let keystroke = Keystroke::parse(key).unwrap();
+
+                        cx.update_window(window, |_view, window, cx| {
+                            window.dispatch_event(
+                                KeyDownEvent {
+                                    keystroke,
+                                    is_held: false,
+                                    prefer_character_input: false,
+                                }
+                                .to_platform_input(),
+                                cx,
+                            );
+                        })
+                        .unwrap();
+                    }
+                    Release(key) => {
+                        let keystroke = Keystroke::parse(key).unwrap();
+
+                        cx.update_window(window, |_view, window, cx| {
+                            window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+                        })
+                        .unwrap();
+                    }
                 }
-                .to_platform_input(),
-                cx,
-            );
-        })
-        .unwrap();
-    }
+            }
 
-    fn key_up(cx: &mut TestAppContext, window: AnyWindowHandle, key: &str) {
-        let keystroke = Keystroke::parse(key).unwrap();
-        cx.update_window(window, |_, window, cx| {
-            window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
-        })
-        .unwrap();
-    }
-
-    /// Pressing and releasing Enter on the same focused element fires a click.
-    #[test]
-    fn keyboard_activation_fires_click_on_same_element() {
-        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
-
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "enter");
-        key_up(&mut cx, window, "enter");
-
-        assert_eq!(*clicks.borrow(), vec!["a"]);
-    }
-
-    /// Moving focus between keydown and keyup must not synthesize a click on the
-    /// newly focused element. Previously keyup fired on whichever element held focus.
-    #[test]
-    fn keyboard_activation_does_not_leak_across_focus_change() {
-        let (mut cx, window, clicks, focus_a, focus_b) = setup_keyboard_activation_test();
-
-        // Enter pressed while "a" is focused...
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "enter");
-
-        // ...focus moves to "b" before the release (as a confirm action would)...
-        focus_and_draw(&mut cx, window, &focus_b);
-        key_up(&mut cx, window, "enter");
-
-        // ...so neither element is clicked: "a" never saw the up, and "b"
-        // never saw the down.
-        assert!(clicks.borrow().is_empty(), "clicks: {:?}", clicks.borrow());
-    }
-
-    /// A keydown left pending when focus moves away must not click when focus returns.
-    /// The stamped generation rejects the stale state when a menu trigger reopens.
-    #[test]
-    fn keyboard_activation_does_not_leak_when_focus_returns() {
-        let (mut cx, window, clicks, focus_a, focus_b) = setup_keyboard_activation_test();
-
-        // Enter pressed on "a"...
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "enter");
-
-        // ...focus leaves "a" before its keyup (so the pending state is never
-        // consumed), then comes back to "a"...
-        focus_and_draw(&mut cx, window, &focus_b);
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_up(&mut cx, window, "enter");
-
-        // ...and the now-stale pending keydown must not fire a click.
-        assert!(clicks.borrow().is_empty(), "clicks: {:?}", clicks.borrow());
-    }
-
-    /// Releasing a non-activation key cancels pending activation. For escape-down,
-    /// space-down, escape-up, space-up, the intervening escape-up must prevent a click.
-    #[test]
-    fn keyboard_activation_cleared_by_intervening_key_release() {
-        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
-
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "escape");
-        key_down(&mut cx, window, "space");
-        key_up(&mut cx, window, "escape");
-        key_up(&mut cx, window, "space");
-
-        assert!(clicks.borrow().is_empty(), "clicks: {:?}", clicks.borrow());
-    }
-
-    /// The flag is a single activation marker, not keyed by which activation
-    /// key was used, so a Space down paired with an Enter up on the same
-    /// element still fires a click.
-    #[test]
-    fn keyboard_activation_does_not_distinguish_space_and_enter() {
-        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
-
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "space");
-        key_up(&mut cx, window, "enter");
-
-        assert_eq!(*clicks.borrow(), vec!["a"]);
-    }
-
-    /// A non-activation key pressed between the activation down and up clears
-    /// the pending flag, suppressing the click.
-    #[test]
-    fn keyboard_activation_cleared_by_intervening_keydown() {
-        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
-
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "enter");
-        key_down(&mut cx, window, "a");
-        key_up(&mut cx, window, "enter");
-
-        assert!(clicks.borrow().is_empty(), "clicks: {:?}", clicks.borrow());
-    }
-
-    /// A modified Enter (e.g. cmd-enter) is not treated as an activation key,
-    /// so it neither sets the pending flag nor fires a click on release.
-    #[test]
-    fn keyboard_activation_ignores_modified_keys() {
-        let (mut cx, window, clicks, focus_a, _focus_b) = setup_keyboard_activation_test();
-
-        focus_and_draw(&mut cx, window, &focus_a);
-        key_down(&mut cx, window, "cmd-enter");
-        key_up(&mut cx, window, "cmd-enter");
-
-        assert!(clicks.borrow().is_empty(), "clicks: {:?}", clicks.borrow());
+            assert_eq!(*clicks.borrow(), expected, "{name}");
+        }
     }
 
     /// Two sibling tab groups, each a focusable container that is *not* itself a

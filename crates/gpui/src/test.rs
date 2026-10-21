@@ -21,14 +21,47 @@
 //!   assert!(true)
 //! }
 //! ```
-use crate::{Entity, Subscription, TestAppContext, TestDispatcher};
+use crate::{
+    AtlasKey, DevicePixels, Entity, ImageId, PlatformAtlas, RenderImageParams, Subscription,
+    TestAppContext, TestDispatcher, size,
+};
 use futures::StreamExt as _;
 use proptest::prelude::{Just, Strategy, any};
 use std::{
+    borrow::Cow,
     env,
     panic::{self, RefUnwindSafe, UnwindSafe},
     pin::Pin,
 };
+
+/// Checks that removing a tile frees its space while another tile keeps the texture alive.
+#[track_caller]
+pub fn assert_atlas_reuses_removed_space(atlas: &dyn PlatformAtlas) {
+    let image_key = |image_id| {
+        AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(image_id),
+            frame_index: 0,
+        })
+    };
+    let insert = |key: &AtlasKey, dimension| {
+        atlas
+            .get_or_insert_with(key, &mut || {
+                Ok(Some((
+                    size(DevicePixels(dimension), DevicePixels(dimension)),
+                    Cow::Owned(vec![0; dimension as usize * dimension as usize * 4]),
+                )))
+            })
+            .expect("allocation should succeed")
+            .expect("callback returns Some")
+    };
+    let keeper = insert(&image_key(1), 64);
+    let removed = insert(&image_key(2), 700);
+    assert_eq!(keeper.texture_id, removed.texture_id);
+
+    atlas.remove(&image_key(2));
+    let replacement = insert(&image_key(3), 700);
+    assert_eq!(replacement.texture_id, keeper.texture_id);
+}
 
 /// Scheduler seed strategy for `#[gpui::property_test]`. Uses `$SEED` when set and
 /// never shrinks because scheduler seeds have equal complexity.

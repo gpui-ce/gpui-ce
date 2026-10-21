@@ -630,6 +630,184 @@ mod tests {
 
     actions!(dispatch_test, [TestAction, SecondaryTestAction]);
 
+    #[derive(Clone)]
+    struct TestInputElement {
+        focus_handle: FocusHandle,
+        text: Rc<RefCell<String>>,
+        action_count: Option<Rc<Cell<usize>>>,
+        prefers_ime: bool,
+    }
+
+    impl TestInputElement {
+        fn new(cx: &mut Context<Self>, prefers_ime: bool) -> Self {
+            Self {
+                focus_handle: cx.focus_handle(),
+                text: Rc::default(),
+                action_count: prefers_ime.then(Rc::default),
+                prefers_ime,
+            }
+        }
+    }
+
+    impl Element for TestInputElement {
+        type RequestLayoutState = ();
+
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            Some("custom".into())
+        }
+
+        fn source_location(&self) -> Option<&'static panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _element_id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, Self::RequestLayoutState) {
+            (window.request_layout(Style::default(), [], cx), ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _element_id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            _bounds: Bounds<Pixels>,
+            _request_layout: &mut Self::RequestLayoutState,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> Self::PrepaintState {
+            window.set_focus_handle(&self.focus_handle, cx);
+        }
+
+        fn paint(
+            &mut self,
+            _element_id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            _bounds: Bounds<Pixels>,
+            _request_layout: &mut Self::RequestLayoutState,
+            _prepaint_state: &mut Self::PrepaintState,
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            let mut key_context = KeyContext::default();
+            key_context.add("Terminal");
+            window.set_key_context(key_context);
+            window.handle_input(&self.focus_handle, self.clone(), cx);
+            let action_count = self.action_count.clone();
+            window.on_action(
+                std::any::TypeId::of::<TestAction>(),
+                move |_action, phase, _window, _cx| {
+                    if let Some(action_count) = &action_count
+                        && phase == DispatchPhase::Bubble
+                    {
+                        action_count.set(action_count.get() + 1);
+                    }
+                },
+            );
+        }
+    }
+
+    impl IntoElement for TestInputElement {
+        type Element = Self;
+
+        fn into_element(self) -> Self::Element {
+            self
+        }
+    }
+
+    impl InputHandler for TestInputElement {
+        fn selected_text_range(
+            &mut self,
+            _ignore_disabled_input: bool,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<UTF16Selection> {
+            None
+        }
+
+        fn marked_text_range(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Range<usize>> {
+            None
+        }
+
+        fn text_for_range(
+            &mut self,
+            _range: Range<usize>,
+            _actual_range: &mut Option<Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<String> {
+            None
+        }
+
+        fn replace_text_in_range(
+            &mut self,
+            replacement_range: Option<Range<usize>>,
+            text: &str,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+            if replacement_range.is_some() {
+                unimplemented!()
+            }
+
+            self.text.borrow_mut().push_str(text)
+        }
+
+        fn replace_and_mark_text_in_range(
+            &mut self,
+            replacement_range: Option<Range<usize>>,
+            new_text: &str,
+            _selected_range: Option<Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+            if replacement_range.is_some() {
+                unimplemented!()
+            }
+
+            self.text.borrow_mut().push_str(new_text)
+        }
+
+        fn unmark_text(&mut self, _window: &mut Window, _cx: &mut App) {}
+
+        fn prefers_ime_for_printable_keys(&mut self, _window: &mut Window, _cx: &mut App) -> bool {
+            self.prefers_ime
+        }
+
+        fn bounds_for_range(
+            &mut self,
+            _range: Range<usize>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Bounds<Pixels>> {
+            None
+        }
+
+        fn character_index_for_point(
+            &mut self,
+            _position: Point<Pixels>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<usize> {
+            None
+        }
+    }
+
+    impl Render for TestInputElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.clone()
+        }
+    }
+
     fn test_dispatch_tree(bindings: Vec<KeyBinding>) -> DispatchTree {
         let registry = ActionRegistry::default();
 
@@ -813,160 +991,6 @@ mod tests {
 
     #[crate::test]
     fn test_pending_input_observers_notified_on_focus_change_and_blur(cx: &mut TestAppContext) {
-        #[derive(Clone)]
-        struct CustomElement {
-            focus_handle: FocusHandle,
-            text: Rc<RefCell<String>>,
-        }
-
-        impl CustomElement {
-            fn new(cx: &mut Context<Self>) -> Self {
-                Self {
-                    focus_handle: cx.focus_handle(),
-                    text: Rc::default(),
-                }
-            }
-        }
-
-        impl Element for CustomElement {
-            type RequestLayoutState = ();
-
-            type PrepaintState = ();
-
-            fn id(&self) -> Option<ElementId> {
-                Some("custom".into())
-            }
-
-            fn source_location(&self) -> Option<&'static panic::Location<'static>> {
-                None
-            }
-
-            fn request_layout(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                window: &mut Window,
-                cx: &mut App,
-            ) -> (LayoutId, Self::RequestLayoutState) {
-                (window.request_layout(Style::default(), [], cx), ())
-            }
-
-            fn prepaint(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                _: Bounds<Pixels>,
-                _: &mut Self::RequestLayoutState,
-                window: &mut Window,
-                cx: &mut App,
-            ) -> Self::PrepaintState {
-                window.set_focus_handle(&self.focus_handle, cx);
-            }
-
-            fn paint(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                _: Bounds<Pixels>,
-                _: &mut Self::RequestLayoutState,
-                _: &mut Self::PrepaintState,
-                window: &mut Window,
-                cx: &mut App,
-            ) {
-                let mut key_context = KeyContext::default();
-                key_context.add("Terminal");
-                window.set_key_context(key_context);
-                window.handle_input(&self.focus_handle, self.clone(), cx);
-                window.on_action(std::any::TypeId::of::<TestAction>(), |_, _, _, _| {});
-            }
-        }
-
-        impl IntoElement for CustomElement {
-            type Element = Self;
-
-            fn into_element(self) -> Self::Element {
-                self
-            }
-        }
-
-        impl InputHandler for CustomElement {
-            fn selected_text_range(
-                &mut self,
-                _: bool,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<UTF16Selection> {
-                None
-            }
-
-            fn marked_text_range(&mut self, _: &mut Window, _: &mut App) -> Option<Range<usize>> {
-                None
-            }
-
-            fn text_for_range(
-                &mut self,
-                _: Range<usize>,
-                _: &mut Option<Range<usize>>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<String> {
-                None
-            }
-
-            fn replace_text_in_range(
-                &mut self,
-                replacement_range: Option<Range<usize>>,
-                text: &str,
-                _: &mut Window,
-                _: &mut App,
-            ) {
-                if replacement_range.is_some() {
-                    unimplemented!()
-                }
-                self.text.borrow_mut().push_str(text)
-            }
-
-            fn replace_and_mark_text_in_range(
-                &mut self,
-                replacement_range: Option<Range<usize>>,
-                new_text: &str,
-                _: Option<Range<usize>>,
-                _: &mut Window,
-                _: &mut App,
-            ) {
-                if replacement_range.is_some() {
-                    unimplemented!()
-                }
-                self.text.borrow_mut().push_str(new_text)
-            }
-
-            fn unmark_text(&mut self, _: &mut Window, _: &mut App) {}
-
-            fn bounds_for_range(
-                &mut self,
-                _: Range<usize>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<Bounds<Pixels>> {
-                None
-            }
-
-            fn character_index_for_point(
-                &mut self,
-                _: Point<Pixels>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<usize> {
-                None
-            }
-        }
-
-        impl Render for CustomElement {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                self.clone()
-            }
-        }
-
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("ctrl-b", TestAction, Some("Terminal"))]);
             cx.bind_keys([KeyBinding::new("ctrl-b h", TestAction, Some("Terminal"))]);
@@ -974,7 +998,7 @@ mod tests {
             cx.bind_keys([KeyBinding::new("ctrl-d h", TestAction, None)]);
         });
 
-        let (test, cx) = cx.add_window_view(|_, cx| CustomElement::new(cx));
+        let (test, cx) = cx.add_window_view(|_window, cx| TestInputElement::new(cx, false));
         let focus_handle = test.update(cx, |test, _| test.focus_handle.clone());
 
         let pending_input_changed_count = Rc::new(RefCell::new(0usize));
@@ -1046,172 +1070,12 @@ mod tests {
 
     #[crate::test]
     fn test_input_handler_pending(cx: &mut TestAppContext) {
-        #[derive(Clone)]
-        struct CustomElement {
-            focus_handle: FocusHandle,
-            text: Rc<RefCell<String>>,
-            action_count: Rc<Cell<usize>>,
-        }
-        impl CustomElement {
-            fn new(cx: &mut Context<Self>) -> Self {
-                Self {
-                    focus_handle: cx.focus_handle(),
-                    text: Rc::default(),
-                    action_count: Rc::default(),
-                }
-            }
-        }
-        impl Element for CustomElement {
-            type RequestLayoutState = ();
-
-            type PrepaintState = ();
-
-            fn id(&self) -> Option<ElementId> {
-                Some("custom".into())
-            }
-            fn source_location(&self) -> Option<&'static panic::Location<'static>> {
-                None
-            }
-            fn request_layout(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                window: &mut Window,
-                cx: &mut App,
-            ) -> (LayoutId, Self::RequestLayoutState) {
-                (window.request_layout(Style::default(), [], cx), ())
-            }
-            fn prepaint(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                _: Bounds<Pixels>,
-                _: &mut Self::RequestLayoutState,
-                window: &mut Window,
-                cx: &mut App,
-            ) -> Self::PrepaintState {
-                window.set_focus_handle(&self.focus_handle, cx);
-            }
-            fn paint(
-                &mut self,
-                _: Option<&GlobalElementId>,
-                _: Option<&InspectorElementId>,
-                _: Bounds<Pixels>,
-                _: &mut Self::RequestLayoutState,
-                _: &mut Self::PrepaintState,
-                window: &mut Window,
-                cx: &mut App,
-            ) {
-                let mut key_context = KeyContext::default();
-                key_context.add("Terminal");
-                window.set_key_context(key_context);
-                window.handle_input(&self.focus_handle, self.clone(), cx);
-                let action_count = self.action_count.clone();
-                window.on_action(
-                    std::any::TypeId::of::<TestAction>(),
-                    move |_, phase, _, _| {
-                        if phase == DispatchPhase::Bubble {
-                            action_count.set(action_count.get() + 1);
-                        }
-                    },
-                );
-            }
-        }
-        impl IntoElement for CustomElement {
-            type Element = Self;
-
-            fn into_element(self) -> Self::Element {
-                self
-            }
-        }
-
-        impl InputHandler for CustomElement {
-            fn selected_text_range(
-                &mut self,
-                _: bool,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<UTF16Selection> {
-                None
-            }
-
-            fn marked_text_range(&mut self, _: &mut Window, _: &mut App) -> Option<Range<usize>> {
-                None
-            }
-
-            fn text_for_range(
-                &mut self,
-                _: Range<usize>,
-                _: &mut Option<Range<usize>>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<String> {
-                None
-            }
-
-            fn replace_text_in_range(
-                &mut self,
-                replacement_range: Option<Range<usize>>,
-                text: &str,
-                _: &mut Window,
-                _: &mut App,
-            ) {
-                if replacement_range.is_some() {
-                    unimplemented!()
-                }
-                self.text.borrow_mut().push_str(text)
-            }
-
-            fn replace_and_mark_text_in_range(
-                &mut self,
-                replacement_range: Option<Range<usize>>,
-                new_text: &str,
-                _: Option<Range<usize>>,
-                _: &mut Window,
-                _: &mut App,
-            ) {
-                if replacement_range.is_some() {
-                    unimplemented!()
-                }
-                self.text.borrow_mut().push_str(new_text)
-            }
-
-            fn unmark_text(&mut self, _: &mut Window, _: &mut App) {}
-
-            fn prefers_ime_for_printable_keys(&mut self, _: &mut Window, _: &mut App) -> bool {
-                true
-            }
-
-            fn bounds_for_range(
-                &mut self,
-                _: Range<usize>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<Bounds<Pixels>> {
-                None
-            }
-
-            fn character_index_for_point(
-                &mut self,
-                _: Point<Pixels>,
-                _: &mut Window,
-                _: &mut App,
-            ) -> Option<usize> {
-                None
-            }
-        }
-        impl Render for CustomElement {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                self.clone()
-            }
-        }
-
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("ctrl-b", TestAction, Some("Terminal"))]);
             cx.bind_keys([KeyBinding::new("ctrl-b h", TestAction, Some("Terminal"))]);
             cx.bind_keys([KeyBinding::new("ctrl-x k", TestAction, Some("Terminal"))]);
         });
-        let (test, cx) = cx.add_window_view(|_, cx| CustomElement::new(cx));
+        let (test, cx) = cx.add_window_view(|_window, cx| TestInputElement::new(cx, true));
         let focus_handle = test.update(cx, |test, _| test.focus_handle.clone());
         cx.update(|window, cx| {
             window.focus(&focus_handle, cx);
@@ -1256,7 +1120,7 @@ mod tests {
         cx.update(|window, _| assert!(!window.has_pending_keystrokes()));
         assert_eq!(query_prefers_ime_for_printable_keys(cx), Some(true));
         test.update(cx, |test, _| {
-            assert_eq!(test.action_count.get(), 1);
+            assert_eq!(test.action_count.as_ref().unwrap().get(), 1);
             assert_eq!(test.text.borrow().as_str(), "");
         });
 

@@ -1618,265 +1618,96 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_left_at_start_of_content(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
+    fn fallback_navigation_handles_boundaries_and_selection(cx: &mut TestAppContext) {
+        let next = CaretPosition::attached_to_next_cluster;
+        let previous = CaretPosition::attached_to_previous_cluster;
+        let selection = |anchor, caret| CaretSelection::from(next(anchor)).with_caret(caret);
+        let movements: [(TestMovementAction, &[(&str, Range<usize>, CaretSelection)]); 13] = [
+            (
+                |input, window, cx| input.nav_left(&NavLeft, window, cx),
+                &[
+                    ("hello", 0..0, 0.into()),
+                    ("hello", 3..3, 2.into()),
+                    ("hello", 1..4, 1.into()),
+                    ("ab\ncd", 3..3, 2.into()),
+                    ("ab\ncd", 2..2, 1.into()),
+                ],
+            ),
+            (
+                |input, window, cx| input.nav_right(&NavRight, window, cx),
+                &[
+                    ("hello", 5..5, 5.into()),
+                    ("hello", 2..2, 3.into()),
+                    ("hello", 1..4, 4.into()),
+                    ("ab\ncd", 1..1, 2.into()),
+                    ("ab\ncd", 2..2, 3.into()),
+                ],
+            ),
+            (
+                |input, window, cx| input.nav_line_start(&NavLineStart, window, cx),
+                &[("first\nsecond", 9..9, 6.into())],
+            ),
+            (
+                |input, window, cx| input.nav_line_end(&NavLineEnd, window, cx),
+                &[("first\nsecond", 8..8, 12.into())],
+            ),
+            (
+                |input, window, cx| input.nav_start(&NavDocumentStart, window, cx),
+                &[("first\nsecond\nthird", 9..9, 0.into())],
+            ),
+            (
+                |input, window, cx| input.nav_end(&NavDocumentEnd, window, cx),
+                &[("first\nsecond\nthird", 0..0, previous(18).into())],
+            ),
+            (
+                |input, window, cx| input.nav_left_word(&NavWordLeft, window, cx),
+                &[
+                    ("hello world", 0..0, 0.into()),
+                    ("hello world test", 11..11, 6.into()),
+                ],
+            ),
+            (
+                |input, window, cx| input.nav_right_word(&NavWordRight, window, cx),
+                &[
+                    ("hello world", 11..11, 11.into()),
+                    ("hello world test", 0..0, 5.into()),
+                ],
+            ),
+            (
+                |input, window, cx| input.select_left(&SelectLeft, window, cx),
+                &[("hello", 3..3, selection(3, next(2)))],
+            ),
+            (
+                |input, window, cx| input.select_right(&SelectRight, window, cx),
+                &[("hello", 2..2, selection(2, next(3)))],
+            ),
+            (
+                |input, window, cx| input.select_all(&SelectAll, window, cx),
+                &[("hello\nworld", 3..3, selection(11, next(0)))],
+            ),
+            (
+                |input, window, cx| input.select_start(&SelectDocumentStart, window, cx),
+                &[("hello world", 6..6, selection(6, next(0)))],
+            ),
+            (
+                |input, window, cx| input.select_end(&SelectDocumentEnd, window, cx),
+                &[("hello world", 6..6, selection(6, previous(11)))],
+            ),
+        ];
 
-    #[gpui::test]
-    fn test_left_moves_by_grapheme(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 3);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection(), 2.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_left_collapses_selection_to_start(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(4),
-                caret: CaretPosition::attached_to_next_cluster(1),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection(), 1.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_left_stops_at_end_of_line(cx: &mut TestAppContext) {
-        // "ab\ncd" - cursor at position 3 (start of "cd", after newline)
-        // Pressing left should move to position 2 (end of "ab", before newline)
-        let view = create_test_input(cx, "ab\ncd", 3);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection(), 2.into()); // cursor at end of line 1
-        });
-    }
-
-    #[gpui::test]
-    fn test_right_at_end_of_content(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 5.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_right_moves_by_grapheme(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 2);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 3.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_right_collapses_selection_to_end(cx: &mut TestAppContext) {
-        let view = create_test_input(
-            cx,
-            "hello",
-            CaretSelection {
-                anchor: CaretPosition::attached_to_next_cluster(4),
-                caret: CaretPosition::attached_to_next_cluster(1),
-            },
-        );
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 4.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_right_stops_at_end_of_line(cx: &mut TestAppContext) {
-        // "ab\ncd" - cursor at position 1 (after 'a')
-        // Pressing right should move to position 2 (end of "ab", before newline)
-        let view = create_test_input(cx, "ab\ncd", 1);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 2.into()); // cursor at end of line 1
-        });
-    }
-
-    #[gpui::test]
-    fn test_right_crosses_newline(cx: &mut TestAppContext) {
-        // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
-        // Pressing right should move to position 3 (after newline, start of "cd")
-        let view = create_test_input(cx, "ab\ncd", 2);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right(&NavRight, window, cx);
-            assert_eq!(input.caret_selection(), 3.into()); // cursor at start of line 2
-        });
-    }
-
-    #[gpui::test]
-    fn test_left_crosses_newline(cx: &mut TestAppContext) {
-        // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
-        // Pressing left should move to position 1 (after 'a')
-        let view = create_test_input(cx, "ab\ncd", 2);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left(&NavLeft, window, cx);
-            assert_eq!(input.caret_selection(), 1.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_home_moves_to_line_start(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "first\nsecond", 9);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_line_start(&NavLineStart, window, cx);
-            assert_eq!(input.caret_selection(), 6.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_end_moves_to_line_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "first\nsecond", 8);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_line_end(&NavLineEnd, window, cx);
-            assert_eq!(input.caret_selection(), 12.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_move_to_beginning(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "first\nsecond\nthird", 9);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_start(&NavDocumentStart, window, cx);
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_move_to_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "first\nsecond\nthird", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_end(&NavDocumentEnd, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection::from(CaretPosition::attached_to_previous_cluster(18))
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_word_left_at_start(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left_word(&NavWordLeft, window, cx);
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_word_left_stops_at_boundary(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world test", 11);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_left_word(&NavWordLeft, window, cx);
-            assert_eq!(input.caret_selection(), 6.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_word_right_at_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 11);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right_word(&NavWordRight, window, cx);
-            assert_eq!(input.caret_selection(), 11.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_word_right_stops_at_boundary(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world test", 0);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_right_word(&NavWordRight, window, cx);
-            assert_eq!(input.caret_selection(), 5.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_select_left_extends_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 3);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_left(&SelectLeft, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(3),
-                    caret: CaretPosition::attached_to_next_cluster(2),
-                }
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_select_right_extends_selection(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 2..2);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_right(&SelectRight, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(2),
-                    caret: CaretPosition::attached_to_next_cluster(3),
-                }
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_select_all(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello\nworld", 3);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_all(&SelectAll, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(11),
-                    caret: CaretPosition::attached_to_next_cluster(0),
-                }
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_select_to_beginning(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 6);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_start(&SelectDocumentStart, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(6),
-                    caret: CaretPosition::attached_to_next_cluster(0),
-                }
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_select_to_end(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello world", 6);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_end(&SelectDocumentEnd, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(6),
-                    caret: CaretPosition::attached_to_previous_cluster(11),
-                }
-            );
-        });
+        for (action, cases) in movements {
+            for (text, initial, expected) in cases {
+                let view = create_test_input(cx, text, initial.clone());
+                update_movement_input(view, cx, |input, window, cx| {
+                    action(input, window, cx);
+                    assert_eq!(
+                        input.caret_selection(),
+                        *expected,
+                        "{text:?} at {initial:?}"
+                    );
+                });
+            }
+        }
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2453,79 +2284,53 @@ mod tests {
         });
     }
 
-    // Single-line input tests
+    #[gpui::test]
+    fn single_line_actions_preserve_content_and_selection(cx: &mut TestAppContext) {
+        let actions: [(&str, TestMovementAction, CaretSelection); 5] = [
+            (
+                "hello",
+                |input, window, cx| input.insert_enter(&Enter, window, cx),
+                5.into(),
+            ),
+            (
+                "hello world",
+                |input, window, cx| input.nav_up(&NavUp, window, cx),
+                0.into(),
+            ),
+            (
+                "hello world",
+                |input, window, cx| input.nav_down(&NavDown, window, cx),
+                11.into(),
+            ),
+            (
+                "hello world",
+                |input, window, cx| input.select_up(&SelectUp, window, cx),
+                CaretSelection::from(5).with_caret(CaretPosition::attached_to_next_cluster(0)),
+            ),
+            (
+                "hello world",
+                |input, window, cx| input.select_down(&SelectDown, window, cx),
+                CaretSelection::from(5).with_caret(CaretPosition::attached_to_previous_cluster(11)),
+            ),
+        ];
 
-    fn create_single_line_input(
-        cx: &mut TestAppContext,
-        content: &str,
-        selected_range: impl Into<CaretSelection>,
-    ) -> WindowHandle<TestView> {
-        cx.add_window(|_window, cx| {
-            let input = cx.new(|cx| {
-                let mut input = default_state(content, cx);
-                input.set_selection(selected_range);
-                input
+        for (text, action, expected) in actions {
+            let view = cx.add_window(|_window, cx| {
+                let input = cx.new(|cx| {
+                    let mut input = default_state(text, cx);
+                    input.set_selection(5);
+
+                    input
+                });
+
+                TestView { input }
             });
-            TestView { input }
-        })
-    }
-
-    #[gpui::test]
-    fn test_single_line_enter_does_nothing(cx: &mut TestAppContext) {
-        let view = create_single_line_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.insert_enter(&Enter, window, cx);
-            assert_eq!(input.as_str(), "hello");
-            assert_eq!(input.caret_selection(), 5.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_single_line_up_moves_to_start(cx: &mut TestAppContext) {
-        let view = create_single_line_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_up(&NavUp, window, cx);
-            assert_eq!(input.caret_selection(), 0.into());
-        });
-    }
-
-    #[gpui::test]
-    fn test_single_line_down_moves_to_end(cx: &mut TestAppContext) {
-        let view = create_single_line_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.nav_down(&NavDown, window, cx);
-            assert_eq!(input.caret_selection(), 11.into()); // "hello world".len() == 11
-        });
-    }
-
-    #[gpui::test]
-    fn test_single_line_select_up_selects_to_start(cx: &mut TestAppContext) {
-        let view = create_single_line_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_up(&SelectUp, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(5),
-                    caret: CaretPosition::attached_to_next_cluster(0),
-                }
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_single_line_select_down_selects_to_end(cx: &mut TestAppContext) {
-        let view = create_single_line_input(cx, "hello world", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.select_down(&SelectDown, window, cx);
-            assert_eq!(
-                input.caret_selection(),
-                CaretSelection {
-                    anchor: CaretPosition::attached_to_next_cluster(5),
-                    caret: CaretPosition::attached_to_previous_cluster(11),
-                }
-            ); // "hello world".len() == 11
-        });
+            update_movement_input(view, cx, |input, window, cx| {
+                action(input, window, cx);
+                assert_eq!(input.as_str(), text);
+                assert_eq!(input.caret_selection(), expected);
+            });
+        }
     }
 
     #[gpui::test]

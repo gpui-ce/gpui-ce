@@ -2847,7 +2847,6 @@ dependencies = [
  "js-sys",
  "log",
  "metal",
- "naga 29.0.4",
  "objc2 0.6.4",
  "objc2-metal 0.3.2",
  "parking_lot",

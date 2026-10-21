@@ -1121,27 +1121,24 @@ mod tests {
         }
     }
 
+    fn direction_node(
+        engine: &mut TaffyLayoutEngine,
+        direction: LayoutDirection,
+        children: &[LayoutId],
+    ) -> LayoutId {
+        engine.request_layout(direction_style(direction), px(16.0), 1.0, children)
+    }
+
     #[test]
     fn direction_defaults_to_ltr_and_inherits_through_overrides() {
         let mut engine = TaffyLayoutEngine::new();
-        let inherited_grandchild = engine.request_layout(
-            direction_style(LayoutDirection::Inherit),
-            px(16.0),
-            1.0,
-            &[],
-        );
-        let rtl_child = engine.request_layout(
-            direction_style(LayoutDirection::RightToLeft),
-            px(16.0),
-            1.0,
+        let inherited_grandchild = direction_node(&mut engine, LayoutDirection::Inherit, &[]);
+        let rtl_child = direction_node(
+            &mut engine,
+            LayoutDirection::RightToLeft,
             &[inherited_grandchild],
         );
-        let root = engine.request_layout(
-            direction_style(LayoutDirection::Inherit),
-            px(16.0),
-            1.0,
-            &[rtl_child],
-        );
+        let root = direction_node(&mut engine, LayoutDirection::Inherit, &[rtl_child]);
 
         let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
 
@@ -1166,26 +1163,11 @@ mod tests {
     #[test]
     fn auto_direction_uses_first_eligible_strong_descendant() {
         let mut engine = TaffyLayoutEngine::new();
-        let neutral = engine.request_layout(
-            direction_style(LayoutDirection::Inherit),
-            px(16.0),
-            1.0,
-            &[],
-        );
+        let neutral = direction_node(&mut engine, LayoutDirection::Inherit, &[]);
         engine.set_direction_text(neutral, "123 …".into());
-        let arabic = engine.request_layout(
-            direction_style(LayoutDirection::Inherit),
-            px(16.0),
-            1.0,
-            &[],
-        );
+        let arabic = direction_node(&mut engine, LayoutDirection::Inherit, &[]);
         engine.set_direction_text(arabic, "مرحبا".into());
-        let root = engine.request_layout(
-            direction_style(LayoutDirection::Auto),
-            px(16.0),
-            1.0,
-            &[neutral, arabic],
-        );
+        let root = direction_node(&mut engine, LayoutDirection::Auto, &[neutral, arabic]);
 
         let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
 
@@ -1202,19 +1184,9 @@ mod tests {
     #[test]
     fn auto_direction_excludes_directional_subtrees_and_falls_back_to_ltr() {
         let mut engine = TaffyLayoutEngine::new();
-        let explicit_child = engine.request_layout(
-            direction_style(LayoutDirection::RightToLeft),
-            px(16.0),
-            1.0,
-            &[],
-        );
+        let explicit_child = direction_node(&mut engine, LayoutDirection::RightToLeft, &[]);
         engine.set_direction_text(explicit_child, "مرحبا".into());
-        let root = engine.request_layout(
-            direction_style(LayoutDirection::Auto),
-            px(16.0),
-            1.0,
-            &[explicit_child],
-        );
+        let root = direction_node(&mut engine, LayoutDirection::Auto, &[explicit_child]);
 
         let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
 
@@ -1231,18 +1203,8 @@ mod tests {
     #[test]
     fn auto_direction_updates_when_source_text_changes() {
         let mut engine = TaffyLayoutEngine::new();
-        let text = engine.request_layout(
-            direction_style(LayoutDirection::Inherit),
-            px(16.0),
-            1.0,
-            &[],
-        );
-        let root = engine.request_layout(
-            direction_style(LayoutDirection::Auto),
-            px(16.0),
-            1.0,
-            &[text],
-        );
+        let text = direction_node(&mut engine, LayoutDirection::Inherit, &[]);
+        let root = direction_node(&mut engine, LayoutDirection::Auto, &[text]);
         engine.set_direction_text(text, "English".into());
         let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
         assert_eq!(

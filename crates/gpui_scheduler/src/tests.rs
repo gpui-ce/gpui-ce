@@ -17,29 +17,32 @@ use std::{
 };
 
 #[test]
-fn test_foreground_executor_spawn() {
-    let result = TestScheduler::once(async |scheduler| {
-        let task = scheduler.foreground().spawn(async move { 42 });
-        task.await
-    });
-    assert_eq!(result, 42);
-}
-
-#[test]
-fn test_background_executor_spawn() {
+fn test_executor_spawn() {
     TestScheduler::once(async |scheduler| {
-        let task = scheduler.background().spawn(async move { 42 });
-        let result = task.await;
-        assert_eq!(result, 42);
+        assert_eq!(scheduler.foreground().spawn(async { 42 }).await, 42);
     });
-}
 
-#[test]
-fn test_dedicated_executor_spawn() {
     TestScheduler::once(async |scheduler| {
-        let dedicated = DedicatedExecutor::new(&scheduler.background());
-        let task = dedicated.spawn(async move { 42 });
-        assert_eq!(task.await, 42);
+        assert_eq!(scheduler.background().spawn(async { 42 }).await, 42);
+    });
+
+    TestScheduler::once(async |scheduler| {
+        assert_eq!(
+            DedicatedExecutor::new(&scheduler.background())
+                .spawn(async { 42 })
+                .await,
+            42
+        );
+    });
+
+    TestScheduler::once(async |scheduler| {
+        assert_eq!(
+            scheduler
+                .background()
+                .spawn_dedicated(|_executor| async { 42 })
+                .await,
+            42
+        );
     });
 }
 
@@ -361,31 +364,6 @@ fn test_helper_methods() {
 }
 
 #[test]
-fn test_many_with_arbitrary_seed() {
-    for seed in [0u64, 1, 5, 42] {
-        let mut seeds_seen = Vec::new();
-        let iterations = 3usize;
-
-        for current_seed in seed..seed + iterations as u64 {
-            let scheduler = Arc::new(TestScheduler::new(TestSchedulerConfig::with_seed(
-                current_seed,
-            )));
-            let captured_seed = current_seed;
-            scheduler
-                .foreground()
-                .block_on(async { seeds_seen.push(captured_seed) });
-            scheduler.run();
-        }
-
-        assert_eq!(
-            seeds_seen,
-            (seed..seed + iterations as u64).collect::<Vec<_>>(),
-            "Expected {iterations} iterations starting at seed {seed}"
-        );
-    }
-}
-
-#[test]
 fn test_block_with_timeout() {
     TestScheduler::once(async |scheduler| {
         let foreground = scheduler.foreground();
@@ -508,59 +486,47 @@ impl Future for Yield {
 }
 
 #[test]
-fn test_nondeterministic_wake_detection() {
-    let config = TestSchedulerConfig {
-        allow_parking: false,
-        ..Default::default()
-    };
-    let scheduler = Arc::new(TestScheduler::new(config));
+fn test_nondeterministic_wake_and_drop_detection() {
+    for action in [Waker::wake as fn(Waker), drop::<Waker>] {
+        let config = TestSchedulerConfig {
+            allow_parking: false,
+            ..Default::default()
+        };
+        let scheduler = Arc::new(TestScheduler::new(config));
 
-    struct SendWakerToThread {
-        waker_tx: Option<std::sync::mpsc::Sender<Waker>>,
-    }
+        let (waker_tx, waker_rx) = std::sync::mpsc::channel::<Waker>();
 
-    impl Future for SendWakerToThread {
-        type Output = ();
+        scheduler.foreground().block_on(future::poll_fn(|cx| {
+            waker_tx.send(cx.waker().clone()).unwrap();
 
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            if let Some(tx) = self.waker_tx.take() {
-                tx.send(cx.waker().clone()).ok();
-            }
             Poll::Ready(())
-        }
+        }));
+
+        let handle = std::thread::spawn(move || {
+            if let Ok(waker) = waker_rx.recv() {
+                action(waker);
+            }
+        });
+
+        handle.join().ok();
+
+        // The non-determinism error should be detected when end_test is called
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.end_test();
+        }));
+        assert!(result.is_err(), "Expected end_test to panic");
+        let panic_payload = result.unwrap_err();
+        let panic_message = panic_payload
+            .downcast_ref::<String>()
+            .map(|s| s.as_str())
+            .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<unknown panic>");
+        assert!(
+            panic_message.contains("Your test is not deterministic"),
+            "Expected panic message to contain non-determinism error, got: {}",
+            panic_message
+        );
     }
-
-    let (waker_tx, waker_rx) = std::sync::mpsc::channel::<Waker>();
-
-    scheduler.foreground().block_on(SendWakerToThread {
-        waker_tx: Some(waker_tx),
-    });
-
-    let handle = std::thread::spawn(move || {
-        if let Ok(waker) = waker_rx.recv() {
-            // This should trigger the non-determinism detection
-            waker.wake();
-        }
-    });
-
-    handle.join().ok();
-
-    // The non-determinism error should be detected when end_test is called
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scheduler.end_test();
-    }));
-    assert!(result.is_err(), "Expected end_test to panic");
-    let panic_payload = result.unwrap_err();
-    let panic_message = panic_payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| panic_payload.downcast_ref::<&str>().copied())
-        .unwrap_or("<unknown panic>");
-    assert!(
-        panic_message.contains("Your test is not deterministic"),
-        "Expected panic message to contain non-determinism error, got: {}",
-        panic_message
-    );
 }
 
 #[test]
@@ -571,27 +537,6 @@ fn test_nondeterministic_wake_allowed_with_parking() {
     };
     let scheduler = Arc::new(TestScheduler::new(config));
 
-    struct WakeFromExternalThread {
-        waker_sent: bool,
-        waker_tx: Option<std::sync::mpsc::Sender<Waker>>,
-    }
-
-    impl Future for WakeFromExternalThread {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            if !self.waker_sent {
-                self.waker_sent = true;
-                if let Some(tx) = self.waker_tx.take() {
-                    tx.send(cx.waker().clone()).ok();
-                }
-                Poll::Pending
-            } else {
-                Poll::Ready(())
-            }
-        }
-    }
-
     let (waker_tx, waker_rx) = std::sync::mpsc::channel::<Waker>();
 
     std::thread::spawn(move || {
@@ -601,66 +546,16 @@ fn test_nondeterministic_wake_allowed_with_parking() {
         }
     });
 
-    scheduler.foreground().block_on(WakeFromExternalThread {
-        waker_sent: false,
-        waker_tx: Some(waker_tx),
-    });
-}
+    let mut waker_tx = Some(waker_tx);
+    scheduler.foreground().block_on(future::poll_fn(|cx| {
+        if let Some(sender) = waker_tx.take() {
+            sender.send(cx.waker().clone()).unwrap();
 
-#[test]
-fn test_nondeterministic_waker_drop_detection() {
-    let config = TestSchedulerConfig {
-        allow_parking: false,
-        ..Default::default()
-    };
-    let scheduler = Arc::new(TestScheduler::new(config));
-
-    struct SendWakerToThread {
-        waker_tx: Option<std::sync::mpsc::Sender<Waker>>,
-    }
-
-    impl Future for SendWakerToThread {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            if let Some(tx) = self.waker_tx.take() {
-                tx.send(cx.waker().clone()).ok();
-            }
-            Poll::Ready(())
+            return Poll::Pending;
         }
-    }
 
-    let (waker_tx, waker_rx) = std::sync::mpsc::channel::<Waker>();
-
-    scheduler.foreground().block_on(SendWakerToThread {
-        waker_tx: Some(waker_tx),
-    });
-
-    let handle = std::thread::spawn(move || {
-        if let Ok(waker) = waker_rx.recv() {
-            // This should trigger the non-determinism detection on drop
-            drop(waker);
-        }
-    });
-
-    handle.join().ok();
-
-    // The non-determinism error should be detected when end_test is called
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scheduler.end_test();
+        Poll::Ready(())
     }));
-    assert!(result.is_err(), "Expected end_test to panic");
-    let panic_payload = result.unwrap_err();
-    let panic_message = panic_payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| panic_payload.downcast_ref::<&str>().copied())
-        .unwrap_or("<unknown panic>");
-    assert!(
-        panic_message.contains("Your test is not deterministic"),
-        "Expected panic message to contain non-determinism error, got: {}",
-        panic_message
-    );
 }
 
 #[test]
@@ -717,17 +612,6 @@ fn test_background_priority_scheduling() {
         high_before_low_count,
         iterations
     );
-}
-
-#[test]
-fn test_spawn_dedicated_basic_round_trip() {
-    let result = TestScheduler::once(async |scheduler| {
-        scheduler
-            .background()
-            .spawn_dedicated(|_executor| async { 42 })
-            .await
-    });
-    assert_eq!(result, 42);
 }
 
 #[test]
@@ -797,7 +681,8 @@ fn test_spawn_dedicated_inner_spawn_local() {
 fn test_spawn_dedicated_determinism_under_many() {
     use parking_lot::Mutex;
 
-    let outcomes = TestScheduler::many(if cfg!(miri) { 4 } else { 20 }, async |scheduler| {
+    let iterations = if cfg!(miri) { 4 } else { 20 };
+    let mut run_tasks = async |scheduler: Arc<TestScheduler>| {
         let trace = Arc::new(Mutex::new(Vec::<u32>::new()));
 
         let background = scheduler.background();
@@ -820,33 +705,9 @@ fn test_spawn_dedicated_determinism_under_many() {
         }
 
         (trace.lock().clone(), outputs)
-    });
-
-    // Identical seeds must produce identical traces.
-    let outcomes_replay = TestScheduler::many(if cfg!(miri) { 4 } else { 20 }, async |scheduler| {
-        let trace = Arc::new(Mutex::new(Vec::<u32>::new()));
-
-        let background = scheduler.background();
-        let mut tasks = Vec::new();
-        for id in 0..4_u32 {
-            let trace = trace.clone();
-            let task = background.spawn_dedicated(move |executor| async move {
-                for step in 0..3 {
-                    trace.lock().push(id * 100 + step);
-                    executor.spawn(async {}).await;
-                }
-                id
-            });
-            tasks.push(task);
-        }
-
-        let mut outputs = Vec::new();
-        for task in tasks {
-            outputs.push(task.await);
-        }
-
-        (trace.lock().clone(), outputs)
-    });
+    };
+    let outcomes = TestScheduler::many(iterations, &mut run_tasks);
+    let outcomes_replay = TestScheduler::many(iterations, &mut run_tasks);
 
     assert_eq!(
         outcomes, outcomes_replay,

@@ -767,7 +767,7 @@ mod renderer {
 
         #[test]
         fn collection_faces_are_selected_and_compacted_by_physical_index() {
-            let collection = test_collection(&[
+            let collection = gpui_fonts::test_collection(&[
                 *gpui_fonts::SOURCE_SERIF,
                 *gpui_fonts::IBM_PLEX,
                 *gpui_fonts::IBM_PLEX_ITALIC,
@@ -842,38 +842,6 @@ mod renderer {
                 collection_source.strong_count(),
                 retained_before_rasterizer + 1
             );
-        }
-
-        fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
-            let header_len = 12 + faces.len() * 4;
-            let mut collection = vec![0; header_len];
-            collection[..4].copy_from_slice(TTC_TAG);
-            collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-            collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
-
-            for (face_idx, face) in faces.iter().enumerate() {
-                while !collection.len().is_multiple_of(4) {
-                    collection.push(0);
-                }
-
-                let face_offset = collection.len();
-                let offset_position = 12 + face_idx * 4;
-                collection[offset_position..offset_position + 4]
-                    .copy_from_slice(&(face_offset as u32).to_be_bytes());
-                collection.extend_from_slice(face);
-
-                let font = FontRef::from_index(face, 0).unwrap();
-
-                for (table_idx, record) in font.table_directory().table_records().iter().enumerate()
-                {
-                    let table_offset_position = face_offset + 12 + table_idx * 16 + 8;
-                    let collection_offset = record.offset() + face_offset as u32;
-                    collection[table_offset_position..table_offset_position + 4]
-                        .copy_from_slice(&collection_offset.to_be_bytes());
-                }
-            }
-
-            collection
         }
 
         #[test]

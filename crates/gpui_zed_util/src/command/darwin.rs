@@ -653,30 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_cat_stdin() {
-        smol::block_on(async {
-            let mut child = Command::new("/bin/cat")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("failed to spawn");
-
-            if let Some(ref mut stdin) = child.stdin {
-                stdin
-                    .write_all(b"hello from stdin")
-                    .await
-                    .expect("failed to write");
-                stdin.close().await.expect("failed to close");
-            }
-            drop(child.stdin.take());
-
-            let output = child.output().await.expect("failed to get output");
-            assert!(output.status.success());
-            assert_eq!(output.stdout, b"hello from stdin");
-        });
-    }
-
-    #[test]
     fn test_spawn_stderr() {
         smol::block_on(async {
             let output = Command::new("/bin/sh")
@@ -880,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stdio_piped_stdin() {
+    fn test_spawn_cat_with_piped_stdin() {
         smol::block_on(async {
             let mut child = Command::new("/bin/cat")
                 .stdin(Stdio::piped())
