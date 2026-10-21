@@ -61,7 +61,7 @@ pub struct WindowsWindowState {
     pub hovered: Cell<bool>,
     pub direct_manipulation: DirectManipulationHandler,
 
-    pub renderer: RefCell<DirectXRenderer>,
+    pub renderer: RefCell<WindowRenderer>,
     /// Set when the next `draw_window` call must be treated as a forced
     /// render. Used after a GPU device-lost recovery, where the next frame
     /// must both re-enable drawing (via `mark_drawable`) and bypass the GPUI
@@ -105,12 +105,16 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) parent_hwnd: Option<HWND>,
+    /// Per-window icon set via `WM_SETICON` (from `WindowParams::icon`);
+    /// destroyed with the window. The window-class icon stays the fallback.
+    window_icon: std::cell::Cell<Option<HICON>>,
 }
 
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
         directx_devices: &DirectXDevices,
+        #[cfg(feature = "wgpu")] renderer_context: &RendererContext,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
         cursor_visible: Arc<AtomicBool>,
@@ -137,8 +141,13 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
+        #[cfg(not(feature = "wgpu"))]
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
+        #[cfg(feature = "wgpu")]
+        let _ = directx_devices;
+        #[cfg(feature = "wgpu")]
+        let renderer = WindowRenderer::new(hwnd, renderer_context)?;
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
@@ -252,6 +261,8 @@ impl WindowsWindowInner {
         let state = WindowsWindowState::new(
             hwnd,
             &context.directx_devices,
+            #[cfg(feature = "wgpu")]
+            &context.renderer_context,
             cs,
             context.current_cursor,
             context.cursor_visible.clone(),
@@ -278,6 +289,7 @@ impl WindowsWindowInner {
             platform_window_handle: context.platform_window_handle,
             system_settings: WindowsSystemSettings::new(),
             parent_hwnd: context.parent_hwnd,
+            window_icon: std::cell::Cell::new(None),
         }))
     }
 
@@ -407,6 +419,8 @@ struct WindowCreateContext {
     appearance: WindowAppearance,
     disable_direct_composition: bool,
     directx_devices: DirectXDevices,
+    #[cfg(feature = "wgpu")]
+    renderer_context: RendererContext,
     invalidate_devices: Arc<AtomicBool>,
     draw_coordinator: Rc<DrawCoordinator>,
     parent_hwnd: Option<HWND>,
@@ -435,6 +449,8 @@ impl WindowsWindow {
             platform_window_handle,
             disable_direct_composition,
             directx_devices,
+            #[cfg(feature = "wgpu")]
+            renderer_context,
             invalidate_devices,
             draw_coordinator,
         } = creation_info;
@@ -520,6 +536,8 @@ impl WindowsWindow {
             appearance,
             disable_direct_composition,
             directx_devices,
+            #[cfg(feature = "wgpu")]
+            renderer_context,
             invalidate_devices,
             draw_coordinator,
             parent_hwnd,
@@ -550,6 +568,30 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
+        // Per-window product icon (title bar / taskbar / alt-tab). Falls back
+        // to the window-class icon (exe resource) when the caller passes none.
+        if let Some(rgba) = params.icon.as_deref() {
+            match create_icon_from_rgba(rgba) {
+                Ok(icon) => {
+                    unsafe {
+                        SendMessageW(
+                            hwnd,
+                            WM_SETICON,
+                            Some(WPARAM(ICON_BIG as usize)),
+                            Some(LPARAM(icon.0 as isize)),
+                        );
+                        SendMessageW(
+                            hwnd,
+                            WM_SETICON,
+                            Some(WPARAM(ICON_SMALL as usize)),
+                            Some(LPARAM(icon.0 as isize)),
+                        );
+                    }
+                    this.window_icon.set(Some(icon));
+                }
+                Err(err) => log::warn!("failed to build window icon from rgba: {err:?}"),
+            }
+        }
         this.state.border_offset.update(hwnd)?;
         let placement =
             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
@@ -597,6 +639,11 @@ impl Drop for WindowsWindow {
                 unsafe {
                     RevokeDragDrop(handle).log_err();
                     DestroyWindow(handle).log_err();
+                }
+                // Per-window icon from `WM_SETICON`: owned by us, not shared
+                // via LR_SHARED, so destroy it with the window.
+                if let Some(icon) = this.window_icon.take() {
+                    unsafe { DestroyIcon(icon).log_err() };
                 }
             })
             .detach();
@@ -774,10 +821,7 @@ impl PlatformWindow for WindowsWindow {
         Some(done_rx)
     }
 
-    fn activate(&self, token: Option<&str>) -> bool {
-        if token.is_some() {
-            return false;
-        }
+    fn activate(&self) {
         let hwnd = self.0.hwnd;
         let this = self.0.clone();
         self.0
@@ -829,7 +873,6 @@ impl PlatformWindow for WindowsWindow {
                 unsafe { SetForegroundWindow(hwnd).as_bool() };
             })
             .detach();
-        true
     }
 
     fn request_attention(&self) {
@@ -1050,6 +1093,8 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn draw(&self, scene: &Scene) {
+        // The WGPU renderer drives its own redraw hints internally; both
+        // renderer flavors log and continue after a failed frame.
         self.state
             .renderer
             .borrow_mut()
@@ -1075,6 +1120,26 @@ impl PlatformWindow for WindowsWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.state.renderer.borrow().gpu_specs().log_err()
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
+        let (device, queue) = self.state.renderer.borrow().gpu_context();
+        Some(Box::new((device, queue)))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_device_lost(&self) -> Option<bool> {
+        Some(self.state.renderer.borrow().device_lost())
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.state
+            .renderer
+            .borrow()
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
     }
 
     fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -1438,6 +1503,106 @@ enum WindowOpenState {
 }
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+
+/// Convert an RGBA image into an `HICON` suitable for `WM_SETICON`
+/// (title bar + taskbar + alt-tab). The color bitmap is a 32bpp premultiplied
+/// BGRA DIB; the AND mask is all-zero, letting the alpha channel drive
+/// transparency on Vista+.
+fn create_icon_from_rgba(rgba: &image::RgbaImage) -> Result<HICON> {
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HGDIOBJ,
+    };
+
+    let width = rgba.width() as i32;
+    let height = rgba.height() as i32;
+    if width <= 0 || height <= 0 {
+        return Err(anyhow::anyhow!("icon has empty dimensions").into());
+    }
+
+    // Premultiplied BGRA, top-down row order.
+    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    for p in rgba.pixels() {
+        let a = u32::from(p[3]);
+        bgra.push((u32::from(p[2]) * a / 255) as u8);
+        bgra.push((u32::from(p[1]) * a / 255) as u8);
+        bgra.push((u32::from(p[0]) * a / 255) as u8);
+        bgra.push(p[3]);
+    }
+
+    let bitmap_info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut color_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let color = unsafe {
+        CreateDIBSection(
+            None,
+            &bitmap_info,
+            DIB_RGB_COLORS,
+            &mut color_bits,
+            None,
+            0,
+        )
+    }
+    .context("CreateDIBSection for icon color bitmap")?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), color_bits as *mut u8, bgra.len());
+    }
+
+    // AND mask: 1bpp, DWORD-aligned rows, all zero (alpha alone decides).
+    let mask_row_bytes = ((width + 31) / 32) * 4;
+    let mask_bits = vec![0u8; (mask_row_bytes * height) as usize];
+    let mask_info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 1,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut mask_dest: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mask = unsafe {
+        CreateDIBSection(
+            None,
+            &mask_info,
+            DIB_RGB_COLORS,
+            &mut mask_dest,
+            None,
+            0,
+        )
+    }
+    .context("CreateDIBSection for icon mask bitmap")?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(mask_bits.as_ptr(), mask_dest as *mut u8, mask_bits.len());
+    }
+
+    let icon_info = ICONINFO {
+        fIcon: true.into(),
+        xHotspot: 0,
+        yHotspot: 0,
+        hbmMask: mask,
+        hbmColor: color,
+    };
+    // CreateIconIndirect copies both bitmaps; ours can go.
+    let icon = unsafe { CreateIconIndirect(&icon_info) }.context("CreateIconIndirect")?;
+    unsafe {
+        let _ = DeleteObject(HGDIOBJ(color.0));
+        let _ = DeleteObject(HGDIOBJ(mask.0));
+    }
+    Ok(icon)
+}
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();
