@@ -105,6 +105,9 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) parent_hwnd: Option<HWND>,
+    /// Per-window icon set via `WM_SETICON` (from `WindowParams::icon`);
+    /// destroyed with the window. The window-class icon stays the fallback.
+    window_icon: std::cell::Cell<Option<HICON>>,
 }
 
 impl WindowsWindowState {
@@ -278,6 +281,7 @@ impl WindowsWindowInner {
             platform_window_handle: context.platform_window_handle,
             system_settings: WindowsSystemSettings::new(),
             parent_hwnd: context.parent_hwnd,
+            window_icon: std::cell::Cell::new(None),
         }))
     }
 
@@ -550,6 +554,30 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
+        // Per-window product icon (title bar / taskbar / alt-tab). Falls back
+        // to the window-class icon (exe resource) when the caller passes none.
+        if let Some(rgba) = params.icon.as_deref() {
+            match create_icon_from_rgba(rgba) {
+                Ok(icon) => {
+                    unsafe {
+                        SendMessageW(
+                            hwnd,
+                            WM_SETICON,
+                            Some(WPARAM(ICON_BIG as usize)),
+                            Some(LPARAM(icon.0 as isize)),
+                        );
+                        SendMessageW(
+                            hwnd,
+                            WM_SETICON,
+                            Some(WPARAM(ICON_SMALL as usize)),
+                            Some(LPARAM(icon.0 as isize)),
+                        );
+                    }
+                    this.window_icon.set(Some(icon));
+                }
+                Err(err) => log::warn!("failed to build window icon from rgba: {err:?}"),
+            }
+        }
         this.state.border_offset.update(hwnd)?;
         let placement =
             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
@@ -597,6 +625,11 @@ impl Drop for WindowsWindow {
                 unsafe {
                     RevokeDragDrop(handle).log_err();
                     DestroyWindow(handle).log_err();
+                }
+                // Per-window icon from `WM_SETICON`: owned by us, not shared
+                // via LR_SHARED, so destroy it with the window.
+                if let Some(icon) = this.window_icon.take() {
+                    unsafe { DestroyIcon(icon).log_err() };
                 }
             })
             .detach();
@@ -1483,6 +1516,139 @@ enum WindowOpenState {
 }
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+
+/// Convert an RGBA image into an `HICON` suitable for `WM_SETICON`
+/// (title bar + taskbar + alt-tab). The color bitmap is a 32bpp premultiplied
+/// BGRA DIB; the AND mask is all-zero, letting the alpha channel drive
+/// transparency on Vista+.
+fn create_icon_from_rgba(rgba: &image::RgbaImage) -> Result<HICON> {
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HGDIOBJ, RGBQUAD,
+    };
+
+    /// 1bpp `BI_RGB` DIBs with `biClrUsed == 0` need a two-entry (black +
+    /// white) palette after the header; `BITMAPINFO` only carries storage for
+    /// one `RGBQUAD`, so this layout hands GDI the full palette it reads.
+    #[repr(C)]
+    struct MaskBitmapInfo {
+        header: BITMAPINFOHEADER,
+        palette: [RGBQUAD; 2],
+    }
+
+    let width = rgba.width() as i32;
+    let height = rgba.height() as i32;
+    if width <= 0 || height <= 0 {
+        return Err(anyhow::anyhow!("icon has empty dimensions").into());
+    }
+
+    // Premultiplied BGRA, top-down row order.
+    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    for p in rgba.pixels() {
+        let a = u32::from(p[3]);
+        bgra.push((u32::from(p[2]) * a / 255) as u8);
+        bgra.push((u32::from(p[1]) * a / 255) as u8);
+        bgra.push((u32::from(p[0]) * a / 255) as u8);
+        bgra.push(p[3]);
+    }
+
+    let bitmap_info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut color_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let color = unsafe {
+        CreateDIBSection(
+            None,
+            &bitmap_info,
+            DIB_RGB_COLORS,
+            &mut color_bits,
+            None,
+            0,
+        )
+    }
+    .context("CreateDIBSection for icon color bitmap")?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), color_bits as *mut u8, bgra.len());
+    }
+
+    // AND mask: 1bpp, DWORD-aligned rows, all zero (alpha alone decides).
+    let mask_row_bytes = ((width + 31) / 32) * 4;
+    let mask_bits = vec![0u8; (mask_row_bytes * height) as usize];
+    let mask_info = MaskBitmapInfo {
+        header: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 1,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        // Black (all-zero) and white (all-one) entries; the mask bits above
+        // index only black, but GDI reads both on creation.
+        palette: [
+            RGBQUAD::default(),
+            RGBQUAD {
+                rgbBlue: 0xFF,
+                rgbGreen: 0xFF,
+                rgbRed: 0xFF,
+                rgbReserved: 0,
+            },
+        ],
+    };
+    let mut mask_dest: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mask = unsafe {
+        CreateDIBSection(
+            None,
+            &mask_info as *const MaskBitmapInfo as *const BITMAPINFO,
+            DIB_RGB_COLORS,
+            &mut mask_dest,
+            None,
+            0,
+        )
+    }
+    // A failed mask DIB must not leak the color bitmap (GDI handles have no
+    // RAII here).
+    .map_err(|e| {
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(color.0));
+        }
+        anyhow::anyhow!("CreateDIBSection for icon mask bitmap: {e}")
+    })?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(mask_bits.as_ptr(), mask_dest as *mut u8, mask_bits.len());
+    }
+
+    let icon_info = ICONINFO {
+        fIcon: true.into(),
+        xHotspot: 0,
+        yHotspot: 0,
+        hbmMask: mask,
+        hbmColor: color,
+    };
+    // CreateIconIndirect copies both bitmaps; ours can go. A failure here
+    // must release both (same no-RAII rule).
+    let icon = unsafe { CreateIconIndirect(&icon_info) }.map_err(|e| {
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(color.0));
+            let _ = DeleteObject(HGDIOBJ(mask.0));
+        }
+        anyhow::anyhow!("CreateIconIndirect: {e}")
+    })?;
+    unsafe {
+        let _ = DeleteObject(HGDIOBJ(color.0));
+        let _ = DeleteObject(HGDIOBJ(mask.0));
+    }
+    Ok(icon)
+}
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();
