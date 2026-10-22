@@ -554,8 +554,26 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
+        this.state.border_offset.update(hwnd)?;
+        let placement =
+            retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
+        if params.show {
+            let mut placement = placement;
+            if !params.focus {
+                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+            }
+            unsafe { SetWindowPlacement(hwnd, &placement)? };
+        } else {
+            this.state.initial_placement.set(Some(WindowOpenStatus {
+                placement,
+                state: WindowOpenState::Windowed,
+            }));
+        }
+
         // Per-window product icon (title bar / taskbar / alt-tab). Falls back
         // to the window-class icon (exe resource) when the caller passes none.
+        // Applied after the fallible placement steps above so a failure there
+        // cannot leak the `HICON`: its `Drop` runs only once the window exists.
         if let Some(rgba) = params.icon.as_deref() {
             match create_icon_from_rgba(rgba) {
                 Ok(icon) => {
@@ -577,21 +595,6 @@ impl WindowsWindow {
                 }
                 Err(err) => log::warn!("failed to build window icon from rgba: {err:?}"),
             }
-        }
-        this.state.border_offset.update(hwnd)?;
-        let placement =
-            retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
-        if params.show {
-            let mut placement = placement;
-            if !params.focus {
-                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
-            }
-            unsafe { SetWindowPlacement(hwnd, &placement)? };
-        } else {
-            this.state.initial_placement.set(Some(WindowOpenStatus {
-                placement,
-                state: WindowOpenState::Windowed,
-            }));
         }
 
         Ok(Self(this))
@@ -1519,8 +1522,8 @@ const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
 
 /// Convert an RGBA image into an `HICON` suitable for `WM_SETICON`
 /// (title bar + taskbar + alt-tab). The color bitmap is a 32bpp premultiplied
-/// BGRA DIB; the AND mask is all-zero, letting the alpha channel drive
-/// transparency on Vista+.
+/// BGRA DIB; the AND mask marks zero-alpha pixels so a fully transparent image
+/// stays transparent instead of degrading to an opaque black square.
 fn create_icon_from_rgba(rgba: &image::RgbaImage) -> Result<HICON> {
     use windows::Win32::Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HGDIOBJ, RGBQUAD,
@@ -1541,8 +1544,9 @@ fn create_icon_from_rgba(rgba: &image::RgbaImage) -> Result<HICON> {
         return Err(anyhow::anyhow!("icon has empty dimensions").into());
     }
 
-    // Premultiplied BGRA, top-down row order.
-    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    // Premultiplied BGRA, top-down row order. The source buffer length is
+    // already `width * height * 4` in `usize`, so it cannot overflow.
+    let mut bgra = Vec::with_capacity(rgba.as_raw().len());
     for p in rgba.pixels() {
         let a = u32::from(p[3]);
         bgra.push((u32::from(p[2]) * a / 255) as u8);
@@ -1579,9 +1583,18 @@ fn create_icon_from_rgba(rgba: &image::RgbaImage) -> Result<HICON> {
         std::ptr::copy_nonoverlapping(bgra.as_ptr(), color_bits as *mut u8, bgra.len());
     }
 
-    // AND mask: 1bpp, DWORD-aligned rows, all zero (alpha alone decides).
-    let mask_row_bytes = ((width + 31) / 32) * 4;
-    let mask_bits = vec![0u8; (mask_row_bytes * height) as usize];
+    // AND mask: 1bpp, DWORD-aligned rows, top-down. A set bit marks a
+    // transparent pixel (zero alpha): when the whole alpha channel is zero
+    // Windows falls back to the AND mask, and an all-zero mask would render
+    // such pixels as an opaque black square.
+    let mask_row_bytes = (((width + 31) / 32) * 4) as usize;
+    let mut mask_bits = vec![0u8; mask_row_bytes * height as usize];
+    for (x, y, p) in rgba.enumerate_pixels() {
+        if p[3] == 0 {
+            let byte = y as usize * mask_row_bytes + x as usize / 8;
+            mask_bits[byte] |= 1 << (7 - (x % 8));
+        }
+    }
     let mask_info = MaskBitmapInfo {
         header: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
