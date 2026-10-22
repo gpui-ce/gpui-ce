@@ -226,6 +226,7 @@ fn solid_quad(
         border_color: transparent_black().into(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        ..Quad::default()
     }
 }
 
@@ -392,19 +393,26 @@ mod tests {
 
     #[test]
     fn frame_count_accumulates_across_mode_changes() {
-        let mut overlay = DebugFrameOverlay::new();
-        for _ in 0..3 {
+        for (hidden_frames, after_full, after_hidden) in [
+            (1, "FRAMES     2", "FRAMES     3"),
+            (3, "FRAMES     4", "FRAMES     5"),
+        ] {
+            let mut overlay = DebugFrameOverlay::new();
+
+            for _frame in 0..hidden_frames {
+                overlay.record_frame(Duration::from_millis(10));
+            }
+
+            overlay.set_mode(DebugFrameOverlayMode::Minimal);
+            assert_eq!(overlay.lines(), vec![" 10.0 MS".to_string()]);
+            overlay.set_mode(DebugFrameOverlayMode::Full);
             overlay.record_frame(Duration::from_millis(10));
+            assert_eq!(overlay.lines()[4], after_full);
+            overlay.set_mode(DebugFrameOverlayMode::Hidden);
+            overlay.record_frame(Duration::from_millis(10));
+            overlay.set_mode(DebugFrameOverlayMode::Full);
+            assert_eq!(overlay.lines()[4], after_hidden);
         }
-        overlay.set_mode(DebugFrameOverlayMode::Minimal);
-        assert_eq!(overlay.lines(), vec![" 10.0 MS".to_string()]);
-        overlay.set_mode(DebugFrameOverlayMode::Full);
-        overlay.record_frame(Duration::from_millis(10));
-        assert_eq!(overlay.lines()[4], "FRAMES     4");
-        overlay.set_mode(DebugFrameOverlayMode::Hidden);
-        overlay.record_frame(Duration::from_millis(10));
-        overlay.set_mode(DebugFrameOverlayMode::Full);
-        assert_eq!(overlay.lines()[4], "FRAMES     5");
     }
 
     #[test]
@@ -417,13 +425,5 @@ mod tests {
         assert_eq!(overlay.lines()[4], "FRAMES 99999");
         overlay.total_frame_count = 100_000;
         assert_eq!(overlay.lines()[4], "FRAMES  LOTS");
-    }
-
-    #[test]
-    fn toggling_on_shows_previous_frame_immediately() {
-        let mut overlay = DebugFrameOverlay::new();
-        overlay.record_frame(Duration::from_millis(10));
-        overlay.set_mode(DebugFrameOverlayMode::Minimal);
-        assert_eq!(overlay.lines(), vec![" 10.0 MS".to_string()]);
     }
 }

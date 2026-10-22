@@ -81,16 +81,10 @@ struct Geometry {
 impl Geometry {
     fn read(cx: &mut HeadlessAppContext, window: WindowHandle<InlineTranslationView>) -> Self {
         let any_window = window.into();
-        let mut debug_bounds = |selector| {
-            cx.debug_bounds(any_window, selector)
-                .unwrap()
-                .unwrap_or_else(|| panic!("missing debug bounds for {selector}"))
-        };
-
-        let inline = debug_bounds(INLINE);
-        let first_box = debug_bounds(FIRST_BOX);
-        let second_box = debug_bounds(SECOND_BOX);
-        let nested = debug_bounds(NESTED);
+        let inline = bounds(cx, any_window, INLINE);
+        let first_box = bounds(cx, any_window, FIRST_BOX);
+        let second_box = bounds(cx, any_window, SECOND_BOX);
+        let nested = bounds(cx, any_window, NESTED);
 
         let text_groups = [
             text_group_bounds(cx, any_window, first_group_color()),
@@ -185,6 +179,24 @@ fn assert_point_close(actual: Point<Pixels>, expected: Point<Pixels>, context: &
     assert_close(actual.y, expected.y, context);
 }
 
+fn open_view<View: Render + 'static>(
+    cx: &mut HeadlessAppContext,
+    viewport: Size<Pixels>,
+    scale_factor: f32,
+    view: View,
+) -> WindowHandle<View> {
+    let window = cx
+        .open_window(viewport, |window, cx| {
+            window.set_scale_factor(scale_factor);
+
+            cx.new(|_cx| view)
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+}
+
 fn update_view<View: Render>(
     cx: &mut HeadlessAppContext,
     window: WindowHandle<View>,
@@ -208,14 +220,12 @@ fn centered_inline_lines_move_as_one_group_during_fractional_resize() {
 
     let mut cx = HeadlessAppContext::new(Arc::new(text_system));
 
-    let window = cx
-        .open_window(size(px(340.), px(180.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| InlineTranslationView { width_offset: 0. })
-        })
-        .unwrap();
-
-    cx.run_until_parked();
+    let window = open_view(
+        &mut cx,
+        size(px(340.), px(180.)),
+        SCALE_FACTOR,
+        InlineTranslationView { width_offset: 0. },
+    );
 
     let initial = Geometry::read(&mut cx, window);
     initial.assert_valid();
@@ -455,14 +465,7 @@ fn open_overflow_paragraph(
     scale: f32,
 ) -> (WindowHandle<OverflowParagraph>, CapturedParagraphs) {
     let painted = view.painted.clone();
-    let window = cx
-        .open_window(size(px(viewport_width), px(180.)), |window, cx| {
-            window.set_scale_factor(scale);
-
-            cx.new(|_cx| view)
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let window = open_view(cx, size(px(viewport_width), px(180.)), scale, view);
 
     (window, painted)
 }
@@ -810,26 +813,26 @@ impl Render for NestedWrapping {
 #[test]
 fn nested_spans_wrap_like_flat_styled_text_without_boundary_breaks() {
     let mut cx = headless();
-    let nested = cx
-        .open_window(size(px(360.), px(300.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| NestedWrapping {
-                width: 130.,
-                font_width: FontWidth::NORMAL,
-                flat: false,
-            })
-        })
-        .unwrap();
-    let flat = cx
-        .open_window(size(px(360.), px(300.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| NestedWrapping {
-                width: 130.,
-                font_width: FontWidth::NORMAL,
-                flat: true,
-            })
-        })
-        .unwrap();
+    let nested = open_view(
+        &mut cx,
+        size(px(360.), px(300.)),
+        SCALE_FACTOR,
+        NestedWrapping {
+            width: 130.,
+            font_width: FontWidth::NORMAL,
+            flat: false,
+        },
+    );
+    let flat = open_view(
+        &mut cx,
+        size(px(360.), px(300.)),
+        SCALE_FACTOR,
+        NestedWrapping {
+            width: 130.,
+            font_width: FontWidth::NORMAL,
+            flat: true,
+        },
+    );
 
     for (width, font_width) in [
         (130., FontWidth::NORMAL),
@@ -923,24 +926,17 @@ fn inline_sizing_depends_on_parent_context() {
         ParentContext::Flex,
         ParentContext::Grid,
     ] {
-        let window = cx
-            .open_window(size(px(300.), px(240.)), |window, cx| {
-                window.set_scale_factor(SCALE_FACTOR);
-                cx.new(|_| ContextView {
-                    context: parent_context,
-                })
-            })
-            .unwrap();
-        cx.run_until_parked();
+        let window = open_view(
+            &mut cx,
+            size(px(300.), px(240.)),
+            SCALE_FACTOR,
+            ContextView {
+                context: parent_context,
+            },
+        );
 
-        let span = cx
-            .debug_bounds(window.into(), "context-inline")
-            .unwrap()
-            .unwrap();
-        let badge = cx
-            .debug_bounds(window.into(), "context-badge")
-            .unwrap()
-            .unwrap();
+        let span = bounds(&mut cx, window.into(), "context-inline");
+        let badge = bounds(&mut cx, window.into(), "context-badge");
 
         match parent_context {
             ParentContext::Block | ParentContext::Default => {
@@ -1009,25 +1005,13 @@ impl Render for MixedFlow {
 fn blocks_split_nested_spans_and_hidden_absolute_empty_children_add_no_rows() {
     let mut cx = headless();
 
-    let window = cx
-        .open_window(size(px(300.), px(240.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| MixedFlow)
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let window = open_view(&mut cx, size(px(300.), px(240.)), SCALE_FACTOR, MixedFlow);
 
     let fragments = quads(&mut cx, window.into(), first_group_color());
     assert_eq!(fragments.len(), 2);
 
-    let block = cx
-        .debug_bounds(window.into(), "inner-block")
-        .unwrap()
-        .unwrap();
-    let following = cx
-        .debug_bounds(window.into(), "following-block")
-        .unwrap()
-        .unwrap();
+    let block = bounds(&mut cx, window.into(), "inner-block");
+    let following = bounds(&mut cx, window.into(), "following-block");
 
     assert_close(
         block.origin.y,
@@ -1041,7 +1025,7 @@ fn blocks_split_nested_spans_and_hidden_absolute_empty_children_add_no_rows() {
     );
     assert_close(following.origin.y, fragments[1].bottom(), "no phantom rows");
 
-    let paragraph = cx.debug_bounds(window.into(), "mixed").unwrap().unwrap();
+    let paragraph = bounds(&mut cx, window.into(), "mixed");
     assert_close(
         paragraph.bottom(),
         following.bottom(),
@@ -1112,29 +1096,26 @@ impl Render for AtomicFlow {
 fn inline_flex_and_box_only_spans_move_as_atomic_content() {
     let mut cx = headless();
 
-    let window = cx
-        .open_window(size(px(340.), px(240.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| AtomicFlow { width: 150. })
-        })
-        .unwrap();
+    let window = open_view(
+        &mut cx,
+        size(px(340.), px(240.)),
+        SCALE_FACTOR,
+        AtomicFlow { width: 150. },
+    );
     let mut previous = None;
 
     for width in [150., 290.] {
         update_view(&mut cx, window, |view| view.width = width);
 
-        let badge = cx.debug_bounds(window.into(), "badge").unwrap().unwrap();
-        let span = cx.debug_bounds(window.into(), "box-span").unwrap().unwrap();
+        let badge = bounds(&mut cx, window.into(), "badge");
+        let span = bounds(&mut cx, window.into(), "box-span");
 
-        let left = cx.debug_bounds(window.into(), "badge-a").unwrap().unwrap();
-        let right = cx.debug_bounds(window.into(), "badge-b").unwrap().unwrap();
+        let left = bounds(&mut cx, window.into(), "badge-a");
+        let right = bounds(&mut cx, window.into(), "badge-b");
 
-        let icon_span = cx
-            .debug_bounds(window.into(), "icon-span")
-            .unwrap()
-            .unwrap();
-        let image = cx.debug_bounds(window.into(), "image").unwrap().unwrap();
-        let svg = cx.debug_bounds(window.into(), "svg").unwrap().unwrap();
+        let icon_span = bounds(&mut cx, window.into(), "icon-span");
+        let image = bounds(&mut cx, window.into(), "image");
+        let svg = bounds(&mut cx, window.into(), "svg");
 
         assert_bounds_close(icon_span, image.union(&svg), "box-only span bounds");
         assert_close(image.size.width, px(12.), "inline image stays atomic");
@@ -1353,23 +1334,22 @@ fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle(
     let scroll = gpui::ScrollHandle::new();
     let focus = cx.update(|cx| cx.focus_handle());
 
-    let window = cx
-        .open_window(size(px(350.), px(300.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| InteractiveFlow {
-                width: 190.,
-                large: false,
-                atomic: false,
-                clicks: clicks.clone(),
-                hovered: hovered.clone(),
-                counts: counts.clone(),
-                callback: callback.clone(),
-                focus: focus.clone(),
-                scroll: scroll.clone(),
-            })
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let window = open_view(
+        &mut cx,
+        size(px(350.), px(300.)),
+        SCALE_FACTOR,
+        InteractiveFlow {
+            width: 190.,
+            large: false,
+            atomic: false,
+            clicks: clicks.clone(),
+            hovered: hovered.clone(),
+            counts: counts.clone(),
+            callback: callback.clone(),
+            focus: focus.clone(),
+            scroll: scroll.clone(),
+        },
+    );
 
     let regions = quads(&mut cx, window.into(), first_group_color());
     assert!(regions.len() >= 3);
@@ -1430,14 +1410,10 @@ fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle(
             .is_none()
     );
 
-    window
-        .update(&mut cx, |view, _, cx| {
-            view.width = 250.;
-            view.large = true;
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+    update_view(&mut cx, window, |view| {
+        view.width = 250.;
+        view.large = true;
+    });
 
     let resized = quads(&mut cx, window.into(), first_group_color());
     assert_ne!(resized, regions);
@@ -1461,18 +1437,9 @@ fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle(
     assert_eq!(clicks.get(), 4);
 
     scroll.set_offset(Point::default());
-    window
-        .update(&mut cx, |view, _, cx| {
-            view.atomic = true;
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
+    update_view(&mut cx, window, |view| view.atomic = true);
 
-    let atomic = cx
-        .debug_bounds(window.into(), "interactive-span")
-        .unwrap()
-        .unwrap();
+    let atomic = bounds(&mut cx, window.into(), "interactive-span");
     assert_close(
         atomic.size.width,
         px(100.),
@@ -1547,13 +1514,12 @@ impl Render for MixedTypography {
 fn mixed_font_sizes_colors_and_underlines_paint_in_their_wrapped_rows() {
     let mut cx = headless();
 
-    let window = cx
-        .open_window(size(px(320.), px(300.)), |window, cx| {
-            window.set_scale_factor(SCALE_FACTOR);
-            cx.new(|_| MixedTypography)
-        })
-        .unwrap();
-    cx.run_until_parked();
+    let window = open_view(
+        &mut cx,
+        size(px(320.), px(300.)),
+        SCALE_FACTOR,
+        MixedTypography,
+    );
 
     let mut glyph_heights = Vec::new();
 

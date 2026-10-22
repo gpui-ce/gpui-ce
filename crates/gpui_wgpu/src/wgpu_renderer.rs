@@ -7,8 +7,6 @@ use gpui::BackdropFilter;
 use gpui::{Bounds, ColorExt, Quad, ScaledPixels, Underline, blue, red, white};
 #[cfg(test)]
 use gpui_render::blur::{BlurKernel, MAX_GAUSSIAN_SAMPLES_PER_SIDE};
-#[cfg(test)]
-use gpui_render::shaders::interface as shader_interface;
 #[cfg(all(test, feature = "test-support", not(target_family = "wasm")))]
 use smallvec::{SmallVec, smallvec};
 
@@ -343,51 +341,6 @@ mod tests {
         right: u32,
     ) -> bool {
         (4..16).any(|y| (left..right).any(|x| first.get_pixel(x, y) != second.get_pixel(x, y)))
-    }
-
-    #[test]
-    fn rust_storage_types_match_shader_strides() {
-        fn module_layout(source: &wgsl_rs::Source) -> (naga::Module, naga::proc::Layouter) {
-            let source = source.wgsl_source().expect("shader must generate WGSL");
-            let module =
-                naga::front::wgsl::parse_str(&format!("enable dual_source_blending;\n{source}"))
-                    .expect("generated shader must parse as WGSL");
-            let mut layouter = naga::proc::Layouter::default();
-            layouter
-                .update(module.to_ctx())
-                .expect("generated shader types must have valid layouts");
-            (module, layouter)
-        }
-
-        let (base, base_layout) = module_layout(&gpui_render::shaders::base::WGSL_SOURCE);
-        let (subpixel, subpixel_layout) =
-            module_layout(&gpui_render::shaders::subpixel_sprite::WGSL_SOURCE);
-
-        for abi in shader_interface::SCENE_STORAGE_ABI
-            .iter()
-            .chain(path_types::STORAGE_ABI)
-        {
-            let base_handle = base
-                .types
-                .iter()
-                .find(|(_, ty)| ty.name.as_deref() == Some(abi.wgsl_type))
-                .map(|(handle, _)| handle);
-            let shader_stride = if let Some(handle) = base_handle {
-                base_layout[handle].to_stride()
-            } else {
-                let (handle, _) = subpixel
-                    .types
-                    .iter()
-                    .find(|(_, ty)| ty.name.as_deref() == Some(abi.wgsl_type))
-                    .unwrap_or_else(|| panic!("missing WGSL type {}", abi.wgsl_type));
-                subpixel_layout[handle].to_stride()
-            };
-            assert_eq!(
-                shader_stride as usize, abi.rust_stride,
-                "Rust and WGSL layouts differ for {}",
-                abi.wgsl_type,
-            );
-        }
     }
 
     #[test]

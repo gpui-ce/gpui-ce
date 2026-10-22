@@ -303,6 +303,15 @@ mod tests {
         [ActionAlpha, ActionBeta, ActionGamma, ActionDelta,]
     );
 
+    #[track_caller]
+    fn assert_bindings(keymap: &Keymap, action: &dyn Action, expected: &[&str]) {
+        let actual = keymap
+            .bindings_for_action(action)
+            .map(|binding| binding.keystrokes[0].inner().unparse())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{:?}", action);
+    }
+
     #[test]
     fn test_keymap() {
         let bindings = [
@@ -346,26 +355,30 @@ mod tests {
 
     #[test]
     fn test_depth_precedence() {
-        let bindings = [
-            KeyBinding::new("ctrl-a", ActionBeta {}, Some("pane")),
-            KeyBinding::new("ctrl-a", ActionGamma {}, Some("editor")),
-        ];
+        for (key, outer, inner) in [
+            ("ctrl-a", "pane", "editor"),
+            ("cmd-r", "Workspace", "Editor"),
+        ] {
+            let bindings = [
+                KeyBinding::new(key, ActionBeta {}, Some(outer)),
+                KeyBinding::new(key, ActionGamma {}, Some(inner)),
+            ];
+            let mut keymap = Keymap::default();
+            keymap.add_bindings(bindings);
 
-        let mut keymap = Keymap::default();
-        keymap.add_bindings(bindings);
+            let (result, pending) = keymap.bindings_for_input(
+                &[Keystroke::parse(key).unwrap()],
+                &[
+                    KeyContext::parse(outer).unwrap(),
+                    KeyContext::parse(inner).unwrap(),
+                ],
+            );
 
-        let (result, pending) = keymap.bindings_for_input(
-            &[Keystroke::parse("ctrl-a").unwrap()],
-            &[
-                KeyContext::parse("pane").unwrap(),
-                KeyContext::parse("editor").unwrap(),
-            ],
-        );
-
-        assert!(!pending);
-        assert_eq!(result.len(), 2);
-        assert!(result[0].action.partial_eq(&ActionGamma {}));
-        assert!(result[1].action.partial_eq(&ActionBeta {}));
+            assert!(!pending);
+            assert_eq!(result.len(), 2);
+            assert!(result[0].action.partial_eq(&ActionGamma {}));
+            assert!(result[1].action.partial_eq(&ActionBeta {}));
+        }
     }
 
     #[test]
@@ -776,33 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn test_context_precedence_with_same_source() {
-        // Test case: User has both Workspace and Editor bindings for the same key
-        // Editor binding should take precedence over Workspace binding
-        let bindings = [
-            KeyBinding::new("cmd-r", ActionAlpha {}, Some("Workspace")),
-            KeyBinding::new("cmd-r", ActionBeta {}, Some("Editor")),
-        ];
-
-        let mut keymap = Keymap::default();
-        keymap.add_bindings(bindings);
-
-        // Test with context stack: [Workspace, Editor] (Editor is deeper)
-        let (result, _) = keymap.bindings_for_input(
-            &[Keystroke::parse("cmd-r").unwrap()],
-            &[
-                KeyContext::parse("Workspace").unwrap(),
-                KeyContext::parse("Editor").unwrap(),
-            ],
-        );
-
-        // Both bindings should be returned, but Editor binding should be first (highest precedence)
-        assert_eq!(result.len(), 2);
-        assert!(result[0].action.partial_eq(&ActionBeta {})); // Editor binding first
-        assert!(result[1].action.partial_eq(&ActionAlpha {})); // Workspace binding second
-    }
-
-    #[test]
     fn test_bindings_for_action() {
         let bindings = [
             KeyBinding::new("ctrl-a", ActionAlpha {}, Some("pane")),
@@ -818,15 +804,6 @@ mod tests {
         assert_bindings(&keymap, &ActionAlpha {}, &["ctrl-a"]);
         assert_bindings(&keymap, &ActionBeta {}, &[]);
         assert_bindings(&keymap, &ActionGamma {}, &["ctrl-c"]);
-
-        #[track_caller]
-        fn assert_bindings(keymap: &Keymap, action: &dyn Action, expected: &[&str]) {
-            let actual = keymap
-                .bindings_for_action(action)
-                .map(|binding| binding.keystrokes[0].inner().unparse())
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected, "{:?}", action);
-        }
     }
 
     #[test]
@@ -871,15 +848,6 @@ mod tests {
 
         assert_bindings(&keymap, &ActionAlpha {}, &["tab"]);
         assert_bindings(&keymap, &ActionBeta {}, &["tab"]);
-
-        #[track_caller]
-        fn assert_bindings(keymap: &Keymap, action: &dyn Action, expected: &[&str]) {
-            let actual = keymap
-                .bindings_for_action(action)
-                .map(|binding| binding.keystrokes[0].inner().unparse())
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected, "{:?}", action);
-        }
     }
 
     #[test]

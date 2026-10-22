@@ -493,63 +493,38 @@ mod tests {
 
     #[test]
     fn run_ready_main_tasks_does_not_wait_for_background_handoffs() {
-        let dispatcher = Arc::new(ThreadedDispatcher::new());
-        let background = BackgroundExecutor::new(dispatcher.clone());
-        let foreground = ForegroundExecutor::new(dispatcher.clone());
+        for pre_poll_main in [false, true] {
+            let dispatcher = Arc::new(ThreadedDispatcher::new());
+            let background = BackgroundExecutor::new(dispatcher.clone());
+            let foreground = ForegroundExecutor::new(dispatcher.clone());
 
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        background
-            .spawn(async move {
-                thread::sleep(Duration::from_millis(10));
-                sender.send(()).ok();
-            })
-            .detach();
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            background
+                .spawn(async move {
+                    thread::sleep(Duration::from_millis(10));
+                    sender.send(()).ok();
+                })
+                .detach();
 
-        let completed = Arc::new(AtomicBool::new(false));
-        foreground
-            .spawn({
-                let completed = completed.clone();
-                async move {
-                    receiver.await.ok();
-                    completed.store(true, Ordering::SeqCst);
-                }
-            })
-            .detach();
+            let completed = Arc::new(AtomicBool::new(false));
+            foreground
+                .spawn({
+                    let completed = completed.clone();
+                    async move {
+                        receiver.await.ok();
+                        completed.store(true, Ordering::SeqCst);
+                    }
+                })
+                .detach();
 
-        assert!(dispatcher.run_ready_main_tasks());
-        assert!(!completed.load(Ordering::SeqCst));
+            if pre_poll_main {
+                assert!(dispatcher.run_ready_main_tasks());
+                assert!(!completed.load(Ordering::SeqCst));
+            }
 
-        dispatcher.run_until_idle();
-        assert!(completed.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn run_until_idle_completes_background_to_main_handoffs() {
-        let dispatcher = Arc::new(ThreadedDispatcher::new());
-        let background = BackgroundExecutor::new(dispatcher.clone());
-        let foreground = ForegroundExecutor::new(dispatcher.clone());
-
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        background
-            .spawn(async move {
-                thread::sleep(Duration::from_millis(10));
-                sender.send(()).ok();
-            })
-            .detach();
-
-        let completed = Arc::new(AtomicBool::new(false));
-        foreground
-            .spawn({
-                let completed = completed.clone();
-                async move {
-                    receiver.await.ok();
-                    completed.store(true, Ordering::SeqCst);
-                }
-            })
-            .detach();
-
-        dispatcher.run_until_idle();
-        assert!(completed.load(Ordering::SeqCst));
+            dispatcher.run_until_idle();
+            assert!(completed.load(Ordering::SeqCst));
+        }
     }
 
     #[test]

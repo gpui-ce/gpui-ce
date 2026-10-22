@@ -1162,12 +1162,7 @@ mod tests {
         let counter = ForegroundRunnableCounter::new();
         let (mut journal, mut collector) = test_journal(counter);
         let events = [
-            ForegroundEvent::Input(InputTiming {
-                kind: "test",
-                start,
-                end: start + Duration::from_millis(1),
-                caused_invalidation: false,
-            }),
+            input_event(start, start + Duration::from_millis(1)),
             ForegroundEvent::Action(ActionTiming {
                 name: "test.action",
                 start: start + Duration::from_millis(2),
@@ -1206,12 +1201,7 @@ mod tests {
             start,
             end: start + Duration::from_millis(1),
         });
-        let input = ForegroundEvent::Input(InputTiming {
-            kind: "test",
-            start,
-            end: start + Duration::from_millis(2),
-            caused_invalidation: false,
-        });
+        let input = input_event(start, start + Duration::from_millis(2));
 
         journal.begin_turn();
         journal.begin_turn();
@@ -1224,13 +1214,10 @@ mod tests {
 
         journal.record_event(input);
         journal.end_turn(input.end_time());
-        assert!(collector.collect_unseen().entries.iter().any(|entry| {
-            matches!(
-                entry,
-                ForegroundJournalEntry::Boundary(IntervalBoundary::Idle { ended_at })
-                    if *ended_at == input.end_time()
-            )
-        }));
+        assert!(has_idle_boundary_at(
+            &collector.collect_unseen().entries,
+            input.end_time()
+        ));
     }
 
     #[test]
@@ -1259,13 +1246,10 @@ mod tests {
         journal.record_event(second);
         counter.finished();
         journal.end_turn(second.end_time());
-        assert!(collector.collect_unseen().entries.iter().any(|entry| {
-            matches!(
-                entry,
-                ForegroundJournalEntry::Boundary(IntervalBoundary::Idle { ended_at })
-                    if *ended_at == second.end_time()
-            )
-        }));
+        assert!(has_idle_boundary_at(
+            &collector.collect_unseen().entries,
+            second.end_time()
+        ));
     }
 
     #[test]
@@ -1376,12 +1360,7 @@ mod tests {
 
         let unblocked_end = start + FRAME_DEADLINE + Duration::from_millis(1);
         journal.begin_turn();
-        journal.record_event(ForegroundEvent::Input(InputTiming {
-            kind: "test",
-            start: start + FRAME_DEADLINE,
-            end: unblocked_end,
-            caused_invalidation: false,
-        }));
+        journal.record_event(input_event(start + FRAME_DEADLINE, unblocked_end));
         journal.end_turn(unblocked_end);
         assert!(has_boundary_at(
             &collector.collect_unseen().entries,
@@ -1401,12 +1380,7 @@ mod tests {
 
         let event_end = start + Duration::from_millis(2);
         journal.begin_turn();
-        journal.record_event(ForegroundEvent::Input(InputTiming {
-            kind: "test",
-            start: start + Duration::from_millis(1),
-            end: event_end,
-            caused_invalidation: false,
-        }));
+        journal.record_event(input_event(start + Duration::from_millis(1), event_end));
         journal.end_turn(event_end);
         assert!(has_boundary_at(
             &collector.collect_unseen().entries,
@@ -1435,12 +1409,7 @@ mod tests {
 
         let event_end = start + Duration::from_millis(620);
         journal.begin_turn();
-        journal.record_event(ForegroundEvent::Input(InputTiming {
-            kind: "test",
-            start: start + Duration::from_millis(600),
-            end: event_end,
-            caused_invalidation: false,
-        }));
+        journal.record_event(input_event(start + Duration::from_millis(600), event_end));
         journal.end_turn(event_end);
 
         let entries = collector.collect_unseen().entries;
@@ -2526,12 +2495,7 @@ mod tests {
                 .map(|&(first, second)| {
                     let start = origin + Duration::from_micros(u64::from(first.min(second)));
                     let end = origin + Duration::from_micros(u64::from(first.max(second)));
-                    ForegroundEvent::Input(InputTiming {
-                        kind: "test",
-                        start,
-                        end,
-                        caused_invalidation: false,
-                    })
+                    input_event(start, end)
                 })
                 .collect();
             let small_polls = small_poll_spans
@@ -2628,12 +2592,7 @@ mod tests {
                     }
                     1 => {}
                     2 => {
-                        writer.record_event(ForegroundEvent::Input(InputTiming {
-                            kind: "test",
-                            start: at,
-                            end: at,
-                            caused_invalidation: false,
-                        }));
+                        writer.record_event(input_event(at, at));
                         model.record_input(at_micros);
                     }
                     3 => {
@@ -2707,13 +2666,23 @@ mod tests {
         })
     }
 
+    fn has_idle_boundary_at(entries: &[ForegroundJournalEntry], at: Instant) -> bool {
+        entries.iter().any(|entry| {
+            matches!(entry, ForegroundJournalEntry::Boundary(IntervalBoundary::Idle { ended_at }) if *ended_at == at)
+        })
+    }
+
     fn input_entry(start: Instant, end: Instant) -> ForegroundJournalEntry {
-        ForegroundJournalEntry::Event(ForegroundEvent::Input(InputTiming {
+        ForegroundJournalEntry::Event(input_event(start, end))
+    }
+
+    fn input_event(start: Instant, end: Instant) -> ForegroundEvent {
+        ForegroundEvent::Input(InputTiming {
             kind: "test",
             start,
             end,
             caused_invalidation: false,
-        }))
+        })
     }
 
     fn pending_frame(window_id: WindowId, dirty_at: Instant) -> ForegroundJournalEntry {

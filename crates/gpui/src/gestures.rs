@@ -1306,9 +1306,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Moved, 100., 120.),
             now + Duration::from_millis(16),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Started);
         assert_eq!(scroll.position, point(px(100.), px(100.)));
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(20.)));
@@ -1317,9 +1315,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Moved, 100., 135.),
             now + Duration::from_millis(32),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Moved);
         assert_eq!(scroll.position, point(px(100.), px(100.)));
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(15.)));
@@ -1328,9 +1324,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Ended, 100., 135.),
             now + Duration::from_millis(48),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Ended);
     }
 
@@ -1346,18 +1340,14 @@ mod tests {
             &touch_event(touch, TouchPhase::Moved, 104., 120.),
             now + Duration::from_millis(16),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(20.)));
 
         let recognized = recognizer.handle_event_at(
             &touch_event(touch, TouchPhase::Moved, 134., 125.),
             now + Duration::from_millis(32),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(5.)));
     }
 
@@ -1373,9 +1363,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Moved, 120., 104.),
             now + Duration::from_millis(16),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(20.), px(0.)));
     }
 
@@ -1391,9 +1379,7 @@ mod tests {
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 120.);
         moved.predicted_position = Some(point(px(106.), px(128.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(16));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(28.)));
 
         // The next step is measured from where the previous prediction left
@@ -1401,9 +1387,7 @@ mod tests {
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 130.);
         moved.predicted_position = Some(point(px(104.), px(134.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(32));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(6.)));
 
         // A release without a fling (the finger stopped long before lifting)
@@ -1413,9 +1397,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Ended, 100., 130.),
             now + Duration::from_millis(120),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Ended);
         assert!(!recognizer.has_momentum());
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(-4.)));
@@ -1432,17 +1414,13 @@ mod tests {
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 120.);
         moved.predicted_position = Some(point(px(100.), px(130.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(16));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(30.)));
 
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 125.);
         moved.predicted_position = Some(point(px(100.), px(127.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(32));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(
             scroll.delta.pixel_delta(px(16.)),
             Point::<Pixels>::default()
@@ -1451,9 +1429,7 @@ mod tests {
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 125.);
         moved.predicted_position = Some(point(px(100.), px(126.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(40));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(
             scroll.delta.pixel_delta(px(16.)),
             Point::<Pixels>::default()
@@ -1462,17 +1438,13 @@ mod tests {
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 132.);
         moved.predicted_position = Some(point(px(100.), px(136.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(48));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(6.)));
 
         let mut moved = touch_event(touch, TouchPhase::Moved, 100., 124.);
         moved.predicted_position = Some(point(px(100.), px(140.)));
         let recognized = recognizer.handle_event_at(&moved, now + Duration::from_millis(64));
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(-12.)));
     }
 
@@ -1614,9 +1586,7 @@ mod tests {
                 ),
                 now + Duration::from_millis(step * 16),
             );
-            let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-                panic!("expected scroll, got {recognized:?}");
-            };
+            let scroll = scroll_event(&recognized);
             assert_eq!(scroll.delta.pixel_delta(px(16.)).x, px(0.));
         }
         recognizer.handle_event_at(
@@ -1739,9 +1709,7 @@ mod tests {
             &touch_event(TouchId(2), TouchPhase::Moved, 100., 197.),
             now + Duration::from_millis(216),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Moved);
         assert_eq!(scroll.delta.pixel_delta(px(16.)), point(px(0.), px(-3.)));
 
@@ -1750,9 +1718,7 @@ mod tests {
             &touch_event(TouchId(2), TouchPhase::Ended, 100., 197.),
             now + Duration::from_millis(232),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Ended);
     }
 
@@ -1771,9 +1737,7 @@ mod tests {
             &touch_event(touch, TouchPhase::Cancelled, 100., 150.),
             now + Duration::from_millis(32),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected cancelled scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Cancelled);
         assert!(!recognizer.has_momentum());
 
@@ -1816,9 +1780,7 @@ mod tests {
             &touch_event(TouchId(1), TouchPhase::Moved, 100., 150.),
             now + Duration::from_millis(32),
         );
-        let [RecognizedTouchGesture::Scroll(scroll)] = recognized.as_slice() else {
-            panic!("expected scroll, got {recognized:?}");
-        };
+        let scroll = scroll_event(&recognized);
         assert_eq!(scroll.touch_phase, TouchPhase::Started);
     }
 
@@ -2191,6 +2153,15 @@ mod tests {
 
         assert!(recognizer.offer_long_press(completed_touch).is_none());
         assert!(recognizer.offer_long_press(replacement_touch).is_some());
+    }
+
+    #[track_caller]
+    fn scroll_event(events: &[RecognizedTouchGesture]) -> &ScrollWheelEvent {
+        let [RecognizedTouchGesture::Scroll(scroll)] = events else {
+            panic!("expected one scroll event, got {events:?}");
+        };
+
+        scroll
     }
 
     fn touch_event(id: TouchId, phase: TouchPhase, x: f32, y: f32) -> TouchEvent {
