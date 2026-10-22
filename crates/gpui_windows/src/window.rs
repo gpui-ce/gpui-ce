@@ -238,10 +238,7 @@ impl WindowsWindowState {
         }
     }
 
-    /// get the logical size of the app's drawable area.
-    ///
-    /// Currently, GPUI uses the logical size of the app to handle mouse interactions (such as
-    /// whether the mouse collides with other elements of GPUI).
+    /// Returns the drawable area's logical size, used for mouse hit testing.
     fn content_size(&self) -> Size<Pixels> {
         self.logical_size.get()
     }
@@ -616,10 +613,7 @@ impl PlatformWindow for WindowsWindow {
         self.state.window_bounds()
     }
 
-    /// get the logical size of the app's drawable area.
-    ///
-    /// Currently, GPUI uses the logical size of the app to handle mouse interactions (such as
-    /// whether the mouse collides with other elements of GPUI).
+    /// Returns the drawable area's logical size, used for mouse hit testing.
     fn content_size(&self) -> Size<Pixels> {
         self.state.content_size()
     }
@@ -840,11 +834,10 @@ impl PlatformWindow for WindowsWindow {
                     SetFocus(Some(hwnd)).ok();
                 }
 
-                // premium ragebait by windows, this is needed because the window
-                // must have received an input event to be able to set itself to foreground
-                // so let's just simulate user input as that seems to be the most reliable way
-                // some more info: https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
-                // bonus: this bug also doesn't manifest if you have vs attached to the process
+                // Windows requires an input event before a window can move to the foreground,
+                // so simulate one. This seems to be the most reliable way.
+                // The bug also does not occur with a VS debugger attached.
+                // https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
                 let inputs = [
                     INPUT {
                         r#type: INPUT_KEYBOARD,
@@ -1574,9 +1567,7 @@ fn get_module_handle() -> HMODULE {
 fn register_drag_drop(window: &Rc<WindowsWindowInner>) -> Result<()> {
     let window_handle = window.hwnd;
     let handler = WindowsDragDropHandler(window.clone());
-    // The lifetime of `IDropTarget` is handled by Windows, it won't release until
-    // we call `RevokeDragDrop`.
-    // So, it's safe to drop it here.
+    // Windows retains `IDropTarget` until `RevokeDragDrop`, so dropping it here is safe.
     let drag_drop_handler: IDropTarget = handler.into();
     unsafe {
         RegisterDragDrop(window_handle, &drag_drop_handler)
@@ -1586,13 +1577,8 @@ fn register_drag_drop(window: &Rc<WindowsWindowInner>) -> Result<()> {
 }
 
 fn calculate_window_rect(bounds: Bounds<DevicePixels>, border_offset: &WindowBorderOffset) -> RECT {
-    // NOTE:
-    // The reason we're not using `AdjustWindowRectEx()` here is
-    // that the size reported by this function is incorrect.
-    // You can test it, and there are similar discussions online.
+    // Calculate manually because `AdjustWindowRectEx()` reports incorrect sizes.
     // See: https://stackoverflow.com/questions/12423584/how-to-set-exact-client-size-for-overlapped-window-winapi
-    //
-    // So we manually calculate these values here.
     let mut rect = RECT {
         left: bounds.left().0,
         top: bounds.top().0,
@@ -1647,13 +1633,9 @@ fn retrieve_window_placement(
     } else {
         display.default_bounds()
     };
-    // `bounds` is expressed in logical pixels for `display`, so it must be converted
-    // to device pixels using that display's own scale factor. The window's current
-    // scale factor can't be used here: `CreateWindowExW` was called with
-    // `CW_USEDEFAULT`, so at this point the window may still be sitting on whichever
-    // monitor Windows picked by default, which can have a different DPI than `display`
-    // and would otherwise throw off the physical position (e.g. leaving the window
-    // partially off-screen when moved to a monitor with a different scale factor).
+    // Convert logical `bounds` using `display`'s scale factor. `CW_USEDEFAULT` may
+    // have placed the window on another monitor with a different DPI. Using the
+    // window's scale could position it partly off-screen.
     let bounds = bounds.to_device_pixels(display.scale_factor());
     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
     Ok(placement)

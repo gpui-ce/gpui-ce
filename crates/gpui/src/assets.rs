@@ -14,12 +14,10 @@ use std::{
     },
 };
 
-/// One way to store a set of assets for gpui to access.
-/// Can be provided to [`AssetRegistry`] to load asset binaries on-demand.
-/// Alternatively, assets can be provided pre-loaded to the registry while still using this api (though there are newer apis to do so).
+/// An asset source for [`AssetRegistry`], with on-demand and pre-loaded loading.
 ///
-/// Generally considered deprecated for new usages since [`AssetRegistry`] has more specific
-/// support for bundled, pre-loaded, and on-demand asset loading.
+/// Prefer the registry APIs for new code. They support bundled, pre-loaded, and
+/// on-demand assets directly.
 pub trait AssetSource: 'static + Send + Sync {
     /// Load the given asset from the source path.
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>>;
@@ -27,9 +25,8 @@ pub trait AssetSource: 'static + Send + Sync {
     /// List the assets at the given path.
     fn list(&self, path: &str) -> Result<Vec<SharedString>>;
 
-    /// Iterates over all paths (via [`list`]) and loads each asset in turn (via [`load`]),
-    /// yielding an iterator over all assets that were loaded successfully.
-    /// Output can be provided directly to [`AssetRegistry::extend`].
+    /// Loads paths from [`list`] using [`load`], yielding successful results.
+    /// The iterator can be passed to [`AssetRegistry::extend`].
     fn iter_preloaded(&self) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)> + '_> {
         let paths = self.list("").unwrap_or_default();
         let iter = paths.into_iter().filter_map(move |path| {
@@ -39,9 +36,10 @@ pub trait AssetSource: 'static + Send + Sync {
         Box::new(iter)
     }
 
-    /// Iterates over all paths (via [`list`]) and constructs an [`AssetEntry::OnDemand`],
-    /// which will call [`load`] on this `Arc<AssetSource>` when the path is requested, yielding the resulting iterator.
-    /// Output can be provided directly to [`AssetRegistry::extend`].
+    /// Maps paths from [`list`] to [`AssetEntry::OnDemand`] entries.
+    ///
+    /// Each entry calls [`load`] on this `Arc<AssetSource>` when requested.
+    /// Pass the iterator to [`AssetRegistry::extend`].
     fn iter_ondemand(self: Arc<Self>) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)>> {
         use gpui_util::ResultExt;
         let paths = self.list("").unwrap_or_default();
@@ -153,9 +151,11 @@ impl AssetRegistry {
         Ok(())
     }
 
-    /// Returns the asset data for a given path/key. If the asset is static/embedded or pre-loaded,
-    /// this will return [`Cow::Borrowed(&'this [u8])`] (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
-    /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as [`Cow::Owned(Vec<u8>)`].
+    /// Returns asset data for a path.
+    ///
+    /// Static, embedded, and pre-loaded assets return [`Cow::Borrowed(&'this [u8])`].
+    /// The borrowed data is either static or owned by this registry.
+    /// On-demand assets call the loader and return [`Cow::Owned(Vec<u8>)`].
     pub fn load<'this>(&'this self, path: impl AsRef<str>) -> Option<Cow<'this, [u8]>> {
         match self.entries.get(path.as_ref())? {
             AssetEntry::PreLoaded(Cow::Borrowed(data)) => Some(Cow::Borrowed(data)),
@@ -164,10 +164,10 @@ impl AssetRegistry {
         }
     }
 
-    /// Iterates over the provided and inserts each entry using the provided path in the item tuple.
-    /// Errors from insert are logged, and all errors are returned as a vec.
-    /// Returns OK if no duplicate paths are found (can occur if the iterator provided a path
-    /// that was already in the collection by the time that entry is inserted).
+    /// Inserts each path and entry from the iterator.
+    ///
+    /// Logs insertion errors and returns them in a vector. Returns `Ok` if no paths
+    /// conflict with existing entries or earlier entries in the iterator.
     pub fn extend<IterType, KeyType, EntryType>(
         &mut self,
         into_iter: IterType,
@@ -191,10 +191,8 @@ impl AssetRegistry {
         result
     }
 
-    /// Convenience method to create an asset iterator over paths and asset-data for
-    /// [`RustEmbed`](rust_embed::RustEmbed), since the crate only provides an iterator over file names.
-    ///
-    /// Can be provided as the input to [`extend`].
+    /// Pairs [`RustEmbed`](rust_embed::RustEmbed) file names with asset data
+    /// for use with [`extend`].
     #[cfg(feature = "embedded-assets")]
     pub fn iter_embed<T: rust_embed::RustEmbed>()
     -> impl Iterator<Item = (Cow<'static, str>, AssetEntry)> + 'static {

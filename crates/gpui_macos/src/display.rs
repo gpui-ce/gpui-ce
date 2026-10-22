@@ -22,12 +22,8 @@ impl MacDisplay {
     /// Get the primary screen - the one with the menu bar, and whose bottom left
     /// corner is at the origin of the AppKit coordinate system.
     pub fn primary() -> Self {
-        // Instead of iterating through all active systems displays via `all()` we use the first
-        // NSScreen and gets its CGDirectDisplayID, because we can't be sure that `CGGetActiveDisplayList`
-        // will always return a list of active displays (machine might be sleeping).
-        //
-        // The following is what Chromium does too:
-        //
+        // Use the first NSScreen because `CGGetActiveDisplayList` may return no
+        // active displays while sleeping. Chromium uses the same approach:
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
         let marker = MainThreadMarker::new().expect("NSScreen access requires the main thread");
         let screen = NSScreen::mainScreen(marker).expect("macOS reported no primary NSScreen");

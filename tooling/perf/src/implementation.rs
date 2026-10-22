@@ -1,13 +1,11 @@
-//! The implementation of the this crate is kept in a separate module
-//! so that it is easy to publish this crate as part of GPUI's dependencies
+//! Separate implementation module for publishing as a GPUI dependency.
 
 use collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::{num::NonZero, time::Duration};
 
 pub mod consts {
-    //! Preset identifiers and constants so that the profiler and proc macro agree
-    //! on their communication protocol.
+    //! Constants shared by the profiler and proc macro protocol.
 
     /// The suffix on the actual test function.
     pub const SUF_NORMAL: &str = "__ZED_PERF_FN";
@@ -15,8 +13,7 @@ pub mod consts {
     pub const SUF_MDATA: &str = "__ZED_PERF_MDATA";
     /// The env var in which we pass the iteration count to our tests.
     pub const ITER_ENV_VAR: &str = "ZED_PERF_ITER";
-    /// The prefix printed on all benchmark test metadata lines, to distinguish it from
-    /// possible output by the test harness itself.
+    /// Metadata line prefix that distinguishes benchmark output from test harness output.
     pub const MDATA_LINE_PREF: &str = "ZED_MDATA_";
     /// The version number for the data returned from the test metadata function.
     /// Increment on non-backwards-compatible changes.
@@ -46,16 +43,14 @@ pub enum Importance {
     Critical = 4,
     /// Regressions should be paid extra attention.
     Important = 3,
-    /// No extra attention should be paid to regressions, but they might still
-    /// be indicative of something happening.
+    /// Regressions need no extra attention but may indicate a problem.
     #[default]
     Average = 2,
-    /// Unclear if regressions are likely to be meaningful, but still worth keeping
-    /// an eye on. Lowest level that's checked by default by the profiler.
+    /// It's unclear whether regressions here are meaningful, but still worth watching.
+    /// The lowest importance checked by default.
     Iffy = 1,
-    /// Regressions are likely to be spurious or don't affect core functionality.
-    /// Only relevant if a lot of them happen, or as supplemental evidence for a
-    /// higher-importance benchmark regressing. Not checked by default.
+    /// Regressions are likely spurious or outside core functionality. Useful in large
+    /// numbers or to support higher-importance regressions. Not checked by default.
     Fluff = 0,
 }
 
@@ -114,8 +109,7 @@ pub struct TestMdata {
     /// How many iterations to pass this test if this is preset, or how many
     /// iterations a test ended up running afterwards if determined at runtime.
     pub iterations: Option<NonZero<usize>>,
-    /// The importance of this particular test. See the docs on `Importance` for
-    /// details.
+    /// The test's [`Importance`].
     pub importance: Importance,
     /// The weight of this particular test within its importance category. Used
     /// when comparing across runs.
@@ -178,11 +172,10 @@ impl Output {
             .push((name.as_ref().to_string(), Some(mdata), Ok(timings)));
     }
 
-    /// Reports a failure and adds it to this run's `Output`. If this test was tried
-    /// with some number of iterations (i.e. this was not a version mismatch or skipped
-    /// test), it should be reported also.
+    /// Adds a failure to this run's output. Include the iteration count if the test was
+    /// attempted, excluding version mismatches and skipped tests.
     ///
-    /// Using the `fail!()` macro is usually more convenient.
+    /// Prefer the `fail!()` macro.
     pub fn failure(
         &mut self,
         name: impl AsRef<str>,
@@ -223,9 +216,7 @@ impl Output {
         });
     }
 
-    /// Merges the output of two runs, appending a prefix to the results of the new run.
-    /// To be used in conjunction with `Output::blank()`, or else only some tests will have
-    /// a prefix set.
+    /// Merges a run's results with a prefix. Start from `Output::blank()` to prefix every test.
     pub fn merge<'a>(&mut self, other: Self, pref_other: impl Into<Option<&'a str>>) {
         let pref = if let Some(pref) = pref_other.into() {
             "crates/".to_string() + pref + "::"
@@ -243,9 +234,7 @@ impl Output {
             .collect();
     }
 
-    /// Evaluates the performance of `self` against `baseline`. The latter is taken
-    /// as the comparison point, i.e. a positive resulting `PerfReport` means that
-    /// `self` performed better.
+    /// Compares `self` with `baseline`. A positive `PerfReport` means `self` performed better.
     ///
     /// # Panics
     /// `self` and `baseline` are assumed to have the iterations field on all
@@ -258,8 +247,7 @@ impl Output {
         let deltas = self_categories
             .into_iter()
             .filter_map(|(cat, self_data)| {
-                // Only compare categories where both           meow
-                // runs have data.                              /
+                // Compare categories with data in both runs.
                 let mut other_data = other_categories.remove(&cat)?;
                 let mut max = f64::MIN;
                 let mut min = f64::MAX;
@@ -267,7 +255,7 @@ impl Output {
                 // Running totals for averaging out tests.
                 let mut r_total_numerator = 0.;
                 let mut r_total_denominator = 0;
-                // Yeah this is O(n^2), but realistically it'll hardly be a bottleneck.
+                // O(n^2), but unlikely to be a bottleneck for these benchmark sets.
                 for (name, (s_timings, s_iters, weight)) in self_data {
                     // Only use the new weights if they conflict.
                     let Some((o_timings, o_iters, _)) = other_data.remove(&name) else {
@@ -284,13 +272,12 @@ impl Output {
                     r_total_numerator += shift * f64::from(weight);
                     r_total_denominator += u32::from(weight);
                 }
-                // There were no runs here!
                 if r_total_denominator == 0 {
                     None
                 } else {
                     let mean = r_total_numerator / f64::from(r_total_denominator);
-                    // TODO: also aggregate standard deviation? That's harder to keep
-                    // meaningful, though, since we dk which tests are correlated.
+                    // TODO: Consider aggregating standard deviation. Unknown test correlations
+                    // make it hard to produce a meaningful result.
                     Some((cat, PerfDelta { max, mean, min }))
                 }
             })
@@ -299,8 +286,7 @@ impl Output {
         PerfReport { deltas }
     }
 
-    /// Collapses the `PerfReport` into a `HashMap` over `Importance`, with
-    /// each importance category having its tests contained.
+    /// Groups tests by `Importance` in a `HashMap`.
     fn collapse(self) -> HashMap<Importance, CategoryInfo> {
         let mut categories = HashMap::<Importance, HashMap<String, _>>::default();
         for entry in self.tests {
@@ -331,7 +317,6 @@ impl std::fmt::Display for Output {
         // We want to print important tests at the top, then alphabetical.
         let mut sorted = self.clone();
         sorted.sort();
-        // Markdown header for making a nice little table :>
         writeln!(
             f,
             "| Command | Iter/sec | Mean [ms] | SD [ms] | Iterations | Importance (weight) |",
@@ -340,7 +325,6 @@ impl std::fmt::Display for Output {
         for (name, metadata, timings) in &sorted.tests {
             match metadata {
                 Some(metadata) => match timings {
-                    // Happy path.
                     Ok(timings) => {
                         // If the test succeeded, then metadata.iterations is Some(_).
                         writeln!(
@@ -414,8 +398,7 @@ impl std::fmt::Display for PerfReport {
         }
         let sorted = self.deltas.iter().collect::<Vec<_>>();
         writeln!(f, "| Category | Max | Mean | Min |")?;
-        // We don't want to print too many newlines at the end, so handle newlines
-        // a little jankily like this.
+        // Avoid extra trailing newlines.
         write!(f, "|:---|---:|---:|---:|")?;
         for (cat, delta) in sorted.into_iter().rev() {
             const SIGN_POS: &str = "↑";

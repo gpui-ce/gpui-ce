@@ -195,8 +195,8 @@ pub fn some_or_debug_panic<T>(option: Option<T>) -> Option<T> {
     option
 }
 
-/// Expands to an immediately-invoked function expression. Good for using the ? operator
-/// in functions which do not return an Option or Result.
+/// Expands to an immediately invoked function, allowing `?` in functions that return neither
+/// `Option` nor `Result`.
 ///
 /// Accepts a normal block, an async block, or an async move block.
 #[macro_export]
@@ -215,9 +215,9 @@ pub trait ResultExt<E> {
     type Ok;
 
     fn log_err(self) -> Option<Self::Ok>;
-    /// Like [`ResultExt::log_err`], but uses `{:?}` formatting so `anyhow::Error` values emit their
-    /// full backtrace. Reach for this only when a backtrace is genuinely wanted — most call sites
-    /// should stick with `log_err` / `warn_on_err`, whose output is a single chained error message.
+    /// Like [`ResultExt::log_err`], but uses `{:?}` to emit `anyhow::Error` backtraces.
+    ///
+    /// Prefer `log_err` or `warn_on_err` for a single chained error message.
     fn log_err_with_backtrace(self) -> Option<Self::Ok>
     where
         E: std::fmt::Debug;
@@ -299,8 +299,7 @@ where
     let file = caller.file();
     #[cfg(windows)]
     let file = caller.file().replace('\\', "/");
-    // In this codebase all crates reside in a `crates` directory,
-    // so discard the prefix up to that segment to find the crate name
+    // All crates live under `crates`, so use the following path segment as the crate name.
     let file = file.split_once("crates/");
     let target = file.as_ref().and_then(|(_, s)| s.split_once("/src/"));
 
@@ -356,8 +355,7 @@ pub trait TryFutureExt {
         Self: Sized;
 }
 
-/// `{:?}`-formatting companion to [`TryFutureExt`]; emits a backtrace for `anyhow::Error`. Prefer
-/// [`TryFutureExt`] unless a backtrace is genuinely wanted.
+/// Uses `{:?}` to emit `anyhow::Error` backtraces. Prefer [`TryFutureExt`] otherwise.
 pub trait TryFutureExtBacktrace {
     fn log_err_with_backtrace(self) -> LogErrorWithBacktraceFuture<Self>
     where
@@ -523,7 +521,7 @@ impl<F: FnOnce()> Drop for Deferred<F> {
     }
 }
 
-/// Run the given function when the returned value is dropped (unless it's cancelled).
+/// Runs the function when the returned value is dropped, unless cancelled.
 #[must_use]
 pub fn defer<F: FnOnce()>(f: F) -> Deferred<F> {
     Deferred(Some(f))
@@ -575,7 +573,7 @@ fn type_id_hasher() {
         type_id.hash(&mut hasher);
         assert_ne!(hasher.finish(), 0);
     }
-    // Pick a variety of types, just to demonstrate it’s all sane. Normal, zero-sized, unsized, &c.
+    // Cover normal, zero-sized, and unsized types.
     verify_hashing_with(TypeId::of::<usize>());
     verify_hashing_with(TypeId::of::<()>());
     verify_hashing_with(TypeId::of::<str>());
@@ -594,12 +592,9 @@ where
         items.sort_by(compare);
         return;
     }
-    // When limit is near to items.len() it may be more efficient to sort the whole list and
-    // truncate, rather than always doing selection first as is done below. It's hard to analyze
-    // where the threshold for this should be since the quickselect style algorithm used by
-    // `select_nth_unstable_by` makes the prefix partially sorted, and so its work is not wasted -
-    // the expected number of comparisons needed by `sort_by` is less than it is for some arbitrary
-    // unsorted input.
+    // Sorting and truncating may be faster when limit is near items.len(). The crossover is
+    // hard to predict because `select_nth_unstable_by` partially sorts the prefix, reducing
+    // the comparisons needed by `sort_by`.
     items.select_nth_unstable_by(limit, compare);
     items.truncate(limit);
     items.sort_by(compare);

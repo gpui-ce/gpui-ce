@@ -1,13 +1,6 @@
-//! Text Example
-//!
-//! This example demonstrates text capabilities in GPUI:
-//!
-//! 1. Text Styling - Font sizes, weights, and colors
-//! 2. Text Alignment - Left, center, right alignment
-//! 3. Text Decoration - Underline, strikethrough
-//! 4. Text Overflow - Ellipsis, truncation, line clamping
-//! 5. Styled Text - Inline style variations with highlights
-//! 6. Character Grid - Unicode and emoji support
+//! Text styling, alignment, decoration, overflow, inline highlights, and Unicode.
+//! Includes font sizes, weights, colors, underlines, strikethrough, ellipsis,
+//! truncation, line clamping, and an emoji character grid.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

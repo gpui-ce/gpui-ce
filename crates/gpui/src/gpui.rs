@@ -119,10 +119,8 @@ pub use gpui_macros::{
 pub use resize::*;
 pub use spring::*;
 
-/// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].
-///
-/// This mirrors `criterion::criterion_group!` so GPUI benchmark files can keep the
-/// same shape as ordinary Criterion benchmarks.
+/// Defines a Criterion group for [`gpui::bench`] benchmarks, mirroring
+/// `criterion::criterion_group!`.
 ///
 /// [`gpui::bench`]: crate::bench
 #[macro_export]
@@ -132,10 +130,7 @@ macro_rules! bench_group {
     };
 }
 
-/// Defines the entry point for GPUI Criterion benchmark groups.
-///
-/// This mirrors `criterion::criterion_main!` so GPUI benchmark files can keep the
-/// same shape as ordinary Criterion benchmarks.
+/// Defines a GPUI Criterion benchmark entry point, mirroring `criterion::criterion_main!`.
 #[macro_export]
 macro_rules! bench_main {
     ($($tokens:tt)*) => {
@@ -238,10 +233,9 @@ pub trait AppContext {
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T;
 
-    /// Run `f` against the entity's *current* window — the most recently
-    /// rendered window that referenced the entity. Returns `None` if the
-    /// entity has no current window or that window is unavailable. See
-    /// [`App::with_window`] for the underlying lookup.
+    /// Runs `f` in the most recently rendered window that referenced the entity.
+    /// Returns `None` if it has no current window or that window is unavailable.
+    /// See [`App::with_window`] for the lookup.
     fn with_window<R>(
         &mut self,
         entity_id: EntityId,

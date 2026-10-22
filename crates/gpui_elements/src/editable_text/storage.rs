@@ -3,11 +3,9 @@ use gpui::{NavigationDirection, utf8_to_utf16_offset, utf16_to_utf8_offset};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Implement this trait to create a storage medium that can be used as the content of EditableText elements.
-/// Default implementation is [`StringStorage`].
+/// Text storage for editable elements. Defaults to [`StringStorage`].
 pub trait UnicodeTextStorage {
-    /// Returns the version/generation of the content, which should be incremented ever time the
-    /// content is changed so that rendering elements can reprocess the contents via the text layout engine.
+    /// Content generation. Increment on every change so rendering reruns text layout.
     fn version(&self) -> u16;
 
     /// Returns a reference to the utf8 string.
@@ -54,10 +52,10 @@ pub trait UnicodeTextStorage {
         self.utf_offset_16to8(range_utf16.start)..self.utf_offset_16to8(range_utf16.end)
     }
 
-    /// Builds a utf8 character range based on a caret position within the storage,
-    /// the direction to traverse, and the boundary to stop at.
-    /// The start of the range will be the earlier position (destination if Back, caret if Forward),
-    /// and the end will be the later position (caret if Back, destination if Forward).
+    /// Builds a UTF-8 range from the caret, traversal direction, and boundary.
+    ///
+    /// The start is the earlier position, the destination for Back or caret for Forward.
+    /// The end is the later position, the caret for Back or destination for Forward.
     fn range_from_caret(
         &self,
         caret: usize,
@@ -156,9 +154,9 @@ pub trait UnicodeTextStorage {
     }
 }
 
-/// [`UnicodeTextStorage`] implementation for [`String`].
-/// This is not the most performant, especially for large text documents.
-/// Its a decent default for editable text fields though.
+/// Default [`UnicodeTextStorage`] backed by [`String`].
+///
+/// For large documents, use a more efficient storage implementation.
 #[derive(Clone, Default)]
 pub struct StringStorage {
     value: String,

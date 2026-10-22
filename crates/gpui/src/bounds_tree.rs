@@ -10,13 +10,11 @@ use std::{
 /// Higher values = shorter tree = fewer cache misses, but more work per node.
 const MAX_CHILDREN: usize = 12;
 
-/// A spatial tree optimized for finding maximum ordering among intersecting bounds.
+/// An R-tree variant for finding the maximum z-order among overlapping bounds.
 ///
-/// This is an R-tree variant specifically designed for the use case of assigning
-/// z-order to overlapping UI elements. Key optimizations:
-/// - Tracks the leaf with global max ordering for O(1) fast-path queries
-/// - Uses higher branching factor (4) for lower tree height
-/// - Aggressive pruning during search based on max_order metadata
+/// The maximum-order leaf gives an O(1) answer when it intersects the query. Other
+/// searches prune subtrees using `max_order`. Internal nodes hold up to `MAX_CHILDREN`
+/// children to reduce tree height.
 #[derive(Debug)]
 pub(crate) struct BoundsTree<U>
 where

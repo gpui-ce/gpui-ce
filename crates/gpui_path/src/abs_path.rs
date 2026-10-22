@@ -145,17 +145,13 @@ impl AbsPathBuf {
         Self::new(home)
     }
 
-    /// Resolves `path` to its canonical on-disk spelling: symlinks and `..`
-    /// are resolved, relative input is anchored on the current directory, and
-    /// on case-insensitive filesystems each component takes the casing stored
-    /// on disk. Unlike [`std::fs::canonicalize`], the result never uses
-    /// Windows extended-length (`\\?\`) syntax, which chokes tools the path
-    /// is later handed to (e.g. `git`).
+    /// Resolves symlinks and `..`, anchors relative input on the current directory,
+    /// and restores stored casing on case-insensitive filesystems. Unlike
+    /// [`std::fs::canonicalize`], avoids Windows extended-length `\\?\` syntax
+    /// that tools such as git reject.
     ///
-    /// Paths act as identity in several places (lock keys, watch-target
-    /// comparisons, persisted repository records), so canonicalize a path
-    /// where it enters the system whenever it may have been spelled by a user
-    /// or an external tool.
+    /// Canonicalize user or external-tool input on entry because paths identify
+    /// lock keys, watch targets, and persisted repositories.
     pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<Self> {
         let canonical = dunce::canonicalize(path.as_ref())?;
         Self::new(canonical).map_err(io::Error::other)
@@ -252,9 +248,8 @@ mod tests {
             "canonical paths must not use Windows extended-length syntax: {canonical}"
         );
 
-        // A differently-cased spelling addresses the same directory only on a
-        // case-insensitive filesystem; when it does, canonicalization must
-        // restore the stored casing.
+        // A differently cased spelling refers to this directory only on case-insensitive
+        // filesystems. When it exists, canonicalization must restore the stored casing.
         let lowercased = root.join("camelcase");
         if std::fs::metadata(&lowercased).is_ok() {
             assert_eq!(

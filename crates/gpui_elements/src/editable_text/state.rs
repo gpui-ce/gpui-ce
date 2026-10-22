@@ -79,9 +79,9 @@ pub struct EditableTextState {
 
 impl EventEmitter<CaretNotify> for EditableTextState {}
 
-/// Event emitted when an `EditableTextState` is changed.
+/// Emitted after `EditableTextState` changes.
 ///
-/// This is not suitable for input sanitation (which should occur before the mutation).
+/// Sanitize input before mutation. This event arrives too late for sanitation.
 pub struct TextChanged;
 impl EventEmitter<TextChanged> for EditableTextState {}
 
@@ -98,14 +98,14 @@ impl AsRef<str> for EditableTextState {
 }
 
 impl EditableTextState {
-    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
-    /// If the state does not yet exist, a new one is created using the default [`UnicodeTextStorage`] medium.
+    /// Reuses state at `key` across consecutive frames, creating it with default
+    /// [`UnicodeTextStorage`] if absent.
     pub fn use_keyed(key: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Entity<Self> {
         Self::use_keyed_init(key, window, cx, |_, _| StringStorage::default())
     }
 
-    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
-    /// If the state does not yet exist, a new one is created calling `init` to create a [`UnicodeTextStorage`] medium.
+    /// Reuses state at `key` across consecutive frames, calling `init` to create
+    /// [`UnicodeTextStorage`] if absent.
     ///
     /// ```
     /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
@@ -133,12 +133,12 @@ impl EditableTextState {
         window.use_keyed_state(key, cx, |window, cx| Self::new(init(window, cx), cx))
     }
 
-    /// Creates a new EditableText state with a given storage medium.
+    /// Creates state with the given storage.
     ///
-    /// Does not intrinsicly handle the state being attached to an element
-    /// over multiple frames (e.g. via [`RenderOnce`]). Use [`use_keyed`] or [`use_keyed_init`] for that.
+    /// This does not attach state to an element across frames. Use [`use_keyed`]
+    /// or [`use_keyed_init`] to retain it across [`RenderOnce`] frames.
     ///
-    /// Expected to be called via [`AppContext::new`] such as:
+    /// Call through [`AppContext::new`]:
     /// ```
     /// # use gpui::{AppContext, Window, App, Entity};
     /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
@@ -306,14 +306,11 @@ impl EditableTextState {
         _range: &Range<usize>,
         text_to_insert: &'text str,
     ) -> Cow<'text, str> {
-        // TODO: Apply text sanitization, ideally using externally-sourced implementations.
-        // example optional/opt-in sanitations include:
-        // - single-line fields should prune /n & /r
-        // - maximum utf8 length
-        // - numbers only
-        // should also consider validation support, for features such as:
-        // - total syntax evaluation (e.g. passwords)
-        // - conforms to regex or math (e.g. ssn, phone number, email, etc)
+        // TODO: Extend sanitization beyond single-line \n and \r removal with opt-in
+        // UTF-8 length limits and numeric input, preferably through external implementations.
+        //
+        // Consider whole-input validation for passwords, regexes, numeric constraints,
+        // and formats such as SSNs, phone numbers, and email addresses.
         let mut text_to_insert = Cow::Borrowed(text_to_insert);
 
         if !self.layout_data.supports_multiline {
@@ -445,9 +442,9 @@ impl EditableTextState {
         self.caret_for_pixel_point(point, line_height).index
     }
 
-    /// Returns the caret for `endpoint`, using `opposite_endpoint` as the selection's other end.
-    /// Across visual lines, it maps an upper line's end to its start or a lower line's start to its
-    /// end; otherwise, it returns `endpoint` unchanged.
+    /// Returns the caret for `endpoint`, with `opposite_endpoint` as the other selection end.
+    /// Across visual lines, maps an upper line end to its start or a lower line start to its
+    /// end. Otherwise returns `endpoint` unchanged.
     fn adjust_drag_endpoint_at_visual_line_edge(
         &self,
         endpoint: CaretPosition,
@@ -557,8 +554,7 @@ impl EditableTextState {
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
         let point = self.find_point_for_caret(self.visible_caret());
 
-        // this scroll_offset diverges from the rest of gpui, as it is stored in the
-        // positive real number space (interactivity stores it in the negatives)
+        // This scroll offset is positive. GPUI interactivity stores negative offsets.
         let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
 
         if self.layout_data.scroll_bounds.contains(&point) {
@@ -590,10 +586,7 @@ impl EditableTextState {
         }
     }
 
-    /// Moves the caret to the provided position.
-    ///
-    /// Will cause the current scroll position/offset to update on the next frame,
-    /// if the line the carent is on is out of view.
+    /// Moves the caret to the position, scrolling next frame if its line is out of view.
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.move_to_caret(self.caret_for_index(caret_pos), cx);
     }
@@ -613,10 +606,7 @@ impl EditableTextState {
         }
     }
 
-    /// Changes the current selection to extend to the provided position.
-    ///
-    /// Will cause the current scroll position/offset to update on the next frame,
-    /// if the line the carent is on is out of view.
+    /// Extends the selection to the position, scrolling next frame if its line is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.select_to_caret(self.caret_for_index(caret_pos), cx);
     }
@@ -640,18 +630,11 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Removes a chunk of text at the cursor/selection.
-    /// No-op if the element is currently not accepting input.
+    /// Deletes the selection, or a range determined by `direction` and `boundary`
+    /// when none is selected. Does nothing unless accepting input.
     ///
-    /// If there is a selection of multiple characters, the slice of text represented
-    /// by range is replaced with an empty string.
-    /// If there is no selection, `direction` and `boundary` are used to determine the slice of text to remove.
-    ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the caret.
+    /// [`NavigationDirection::Back`] scans earlier and [`NavigationDirection::Forward`]
+    /// scans later. [`TextBoundary`] sets how far to scan.
     pub fn delete_linear(
         &mut self,
         direction: NavigationDirection,
@@ -695,15 +678,11 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Moves the caret somewhere relative to its current location, according to `direction` and `boundary`.
+    /// Moves the caret by `direction` and `boundary`. With a selection, jumps to its start
+    /// or end according to direction.
     ///
-    /// If there is currently a selection, the cursor will jump to the start/end of that selection based on `direction`.
-    ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the current caret
+    /// [`NavigationDirection::Back`] scans earlier and
+    /// [`NavigationDirection::Forward`] scans later. [`TextBoundary`] sets how far to scan.
     pub fn nav_linear(
         &mut self,
         direction: NavigationDirection,
@@ -817,14 +796,10 @@ impl EditableTextState {
         cx.notify();
     }
 
-    /// Extends the current selection to include some amount of textrelative the current
-    /// location of the caret, according to `direction` and `boundary`.
+    /// Extends the selection from the caret using `direction` and `boundary`.
     ///
-    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
-    ///
-    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
-    ///
-    /// [`TextBoundary`] describes how far to jump from the current caret
+    /// [`NavigationDirection::Back`] scans earlier and [`NavigationDirection::Forward`]
+    /// scans later. [`TextBoundary`] sets how far to scan.
     pub fn select_linear(
         &mut self,
         direction: NavigationDirection,
@@ -834,7 +809,7 @@ impl EditableTextState {
         self.move_linear(direction, boundary, true, cx);
     }
 
-    /// Updates the mouse-click tracker so we can detect when a mouse click results in different actions.
+    /// Tracks mouse clicks to distinguish click actions.
     fn apply_click(&mut self, click_count: usize, text_position: Point<Pixels>) {
         let should_continue_click =
             click_count > 1 && self.is_position_nearly_at_previous_click(text_position);
@@ -951,8 +926,7 @@ impl EditableTextState {
 
 impl EditableTextState {
     fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
-        // Use a series of fallbacks to pick the range to operate on.
-        // Fallback order: IME provided range, active IME marked range, selection
+        // Choose the first available range from the IME, active IME mark, or selection.
         let range = range_utf16.map(|range_utf16| self.storage.utf_range_16to8(&range_utf16));
         let range = range.or_else(|| self.marked_range.clone());
         let range = range.unwrap_or_else(|| self.selected_byte_range());
@@ -1429,9 +1403,8 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 }
 
-/// Backlog:
-/// - tests for document layout and wrap boundaries;
-///     permutations of: single and multiline fields, wrap vs no-wrap, overflow scroll vs no scroll
+/// TODO: Test document layout and wrapping for single-line and multiline fields,
+/// with and without wrapping and overflow scrolling.
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};

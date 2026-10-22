@@ -1,14 +1,10 @@
 //! Test support for GPUI.
 //!
-//! GPUI provides first-class support for testing, which includes a macro to run test that rely on having a context,
-//! and a test implementation of the `ForegroundExecutor` and `BackgroundExecutor` which ensure that your tests run
-//! deterministically even in the face of arbitrary parallelism.
+//! `gpui::test` provides contexts and deterministic foreground and background executors,
+//! including for parallel tasks.
 //!
-//! The output of the `gpui::test` macro is understood by other rust test runners, so you can use it with `cargo test`
-//! or `cargo-nextest`, or another runner of your choice.
-//!
-//! To make it possible to test collaborative user interfaces (like Zed) you can ask for as many different contexts
-//! as you need.
+//! The macro works with `cargo test`, `cargo-nextest`, and other Rust test runners.
+//! Request multiple contexts to test collaborative interfaces.
 //!
 //! ## Example
 //!
@@ -34,12 +30,10 @@ use std::{
     pin::Pin,
 };
 
-/// Strategy injected into `#[gpui::property_test]` tests to control the seed
-/// given to the scheduler. Doesn't shrink, since all scheduler seeds are
-/// equivalent in complexity. If `$SEED` is set, it always uses that value.
+/// Scheduler seed strategy for `#[gpui::property_test]`. Uses `$SEED` when set and
+/// never shrinks because scheduler seeds have equal complexity.
 ///
-/// Note: this function is not intended to be used directly. Rather, it is
-/// public so that it can be used from the `property_test` macro.
+/// Public for the macro, not for direct use.
 pub fn seed_strategy() -> impl Strategy<Value = u64> {
     match std::env::var("SEED") {
         Ok(val) => Just(val.parse().unwrap()).boxed(),
@@ -47,13 +41,10 @@ pub fn seed_strategy() -> impl Strategy<Value = u64> {
     }
 }
 
-/// Applies a fixed RNG seed to a proptest config so that case generation
-/// is deterministic. Uses `$SEED` if set, otherwise defaults to `0`.
-/// This bridges the GPUI `SEED` env var to proptest's RNG seed, so that
-/// a single variable controls both the scheduler seed and case generation.
+/// Fixes the proptest RNG seed to `$SEED`, or `0` if unset, so the same variable controls
+/// case generation and scheduler seeding.
 ///
-/// Note: this function is not intended to be used directly. Rather, it is
-/// public so that it can be used from the `property_test` macro.
+/// Public for `property_test`, not for direct use.
 pub fn apply_seed_to_proptest_config(
     mut config: proptest::test_runner::Config,
 ) -> proptest::test_runner::Config {
@@ -65,12 +56,8 @@ pub fn apply_seed_to_proptest_config(
     config
 }
 
-/// Similar to [`run_test`], but only runs the callback once, allowing
-/// [`FnOnce`] callbacks. This is intended for use with the
-/// `gpui::property_test` macro and generally should not be used directly.
-///
-/// Doesn't support many features of [`run_test`], since these are provided by
-/// proptest.
+/// Runs a [`FnOnce`] callback once for `gpui::property_test`, not for direct use.
+/// Proptest supplies the other features of [`run_test`].
 pub fn run_test_once<R>(
     seed: u64,
     test_fn: Box<dyn UnwindSafe + FnOnce(TestDispatcher) -> R>,
@@ -89,9 +76,7 @@ pub fn run_test_once<R>(
     }
 }
 
-/// Run the given test function with the configured parameters.
-/// This is intended for use with the `gpui::test` macro
-/// and generally should not be used directly.
+/// Runs the test function with configured parameters for `gpui::test`, not for direct use.
 pub fn run_test(
     num_iterations: usize,
     explicit_seeds: &[u64],

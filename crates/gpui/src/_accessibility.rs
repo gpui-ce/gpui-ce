@@ -1,19 +1,17 @@
 //! # Accessibility in GPUI
 //!
-//! "Accessibility" refers to the ability of your application to be used by all
-//! users, regardless of disability status. There are many aspects, all important, including:
-//! - Ensuring sufficient text contrast.
-//! - Providing a mechanism to disable animations.
-//! - Providing a mechanism to increase text sizes.
-//! - etc.
+//! Accessibility lets people use your app regardless of disability. It includes:
 //!
-//! This guide is focused on **programmatic accessibility**. This allows
-//! assistive technology, such as screen readers or Braille displays, to inspect
-//! and interact with your app. Docs for contributors working on accessibility
-//! support can be found in the `a11y` module's doc comment.
+//! - Sufficient text contrast.
+//! - Options to disable animations.
+//! - Adjustable text sizes.
 //!
-//! GPUI integrates with [AccessKit] to provide programmatic accessibility
-//! features (referred to as simply "accessibility" for the rest of this guide).
+//! This guide covers programmatic accessibility, which lets screen readers,
+//! Braille displays, and other assistive technology inspect and interact with
+//! your app. Contributor docs are in the `a11y` module.
+//!
+//! GPUI uses [AccessKit] for programmatic accessibility, called "accessibility"
+//! throughout this guide.
 //!
 //! A minimal example can be found in the `examples/a11y` directory.
 //!
@@ -47,8 +45,7 @@
 //! let middle = div().child(inner);  // no ID
 //! let outer = div().id("outer-id").child(middle);
 //! ```
-//! In this example, `inner`s global ID is (roughly speaking) `["outer-id",
-//! "inner-id"]`.
+//! Here, `inner`'s global ID is roughly `["outer-id", "inner-id"]`.
 //!
 //! Since `middle` doesn't have an ID itself, it has no global ID.
 //!
@@ -57,13 +54,10 @@
 //!
 //! ### IDs and accessibility
 //!
-//! When GPUI renders a frame, it walks your UI tree, and finds nodes with
-//! global IDs, and informs assistive technology about this node.
-//!
-//! In order for nodes to be reported, they must also have a non-`None`
-//! [`role`][Element::a11y_role]. This is used to inform assistive technology
-//! what *sort* of node it is (button, label, table, etc.). You can use
-//! [`div().id(...).role()`][StatefulInteractiveElement::role] to set the role.
+//! Each frame, GPUI reports nodes with global IDs and non-`None`
+//! [`role`][Element::a11y_role]s to assistive technology. The role identifies
+//! the node as a button, label, table, or other type. Set it with
+//! [`div().id(...).role()`][StatefulInteractiveElement::role].
 //!
 //! Nodes with the same global ID *across frames* are considered to be "the
 //! same" node. For example:
@@ -91,27 +85,15 @@
 //!         .child(text!("hello"))
 //!     );
 //! ```
-//! Logically, the UI has not changed. But the screen reader has no way of
-//! knowing that both child [`div`]s are "the same". So assistive technology
-//! will interpret this as one node being removed, and another node being added.
-//! This can be very disorienting for users, since announcements typically only
-//! happen when something has *meaningfully* changed.
-//!
-//! In other words, by controlling the ID of an element, you can control whether
-//! a change to a UI element is considered meaningful. You can also control
-//! whether elements are reported to assistive technology *at all* by setting
-//! the [`role`][Element::a11y_role], since nodes with no role are not reported.
+//! Although the UI looks unchanged, the new ID tells assistive technology
+//! that one node was removed and another added. This can trigger unexpected
+//! announcements. Keep IDs stable for nodes that persist across frames.
+//! Nodes without a [`role`][Element::a11y_role] are not reported at all.
 //!
 //! #### IDs and text
 //!
-//! Special care must be taken when dealing with text.
-//!
-//! GPUI provides the [`text!`] macro, which wraps strings in the [`Text`] type,
-//! but automatically derives an ID. Usually, this is what you want. However,
-//! the way it generates its ID is subtle and perhaps surprising.
-//!
-//! The ID of an invocation of the [`text!`] macro is derived from the
-//! **location in the source code of that invocation**. For example:
+//! The [`text!`] macro wraps strings in [`Text`] and derives an ID from
+//! its source location. For example:
 //!
 //! ```rust
 //! # use gpui::*;
@@ -132,7 +114,7 @@
 //! // are the same
 //! assert_eq!(a.id(), b.id());
 //! ```
-//! This can produce surprising behaviour. For example, this footgun:
+//! Reusing the same invocation in an iterator can create duplicate IDs:
 //! ```rust
 //! # use gpui::*;
 //! let todos = vec!["eat lunch", "drink water", "go to gym"];
@@ -146,10 +128,8 @@
 //!     .children(todo_divs);  // ERROR: multiple nodes with the same global ID
 //! ```
 //!
-//! Here, when we map the iterator, since we have only written [`text!`] once,
-//! there is only one ID. And since they have the same ancestors and the same
-//! ID, they will have the same global ID. In release builds, this will mean
-//! some nodes get silently dropped!
+//! Each item shares the same [`text!`] invocation and ancestors, producing
+//! duplicate global IDs. Release builds silently drop some of these nodes.
 //!
 //! To fix this, you can set an ID:
 //! ```rust
@@ -178,15 +158,13 @@
 //!     .role(Role::Document)
 //!     .children(todo_divs);
 //! ```
-//! Since the AccessKit [`NodeId`][accesskit::NodeId] is derived from the global
-//! ID, and the global ID takes into account the IDs of all ancestors, this
-//! works too.
+//! Global IDs include ancestor IDs, so giving each parent a unique ID also
+//! distinguishes its children. Each item gets a unique global ID and therefore
+//! a unique AccessKit [`NodeId`][accesskit::NodeId].
 //!
-//! Occasionally, you will need to create a [`Text`] element with *no* ID. You
-//! can achieve this with [`Text::new_inaccessible`]. If you are creating a
-//! custom UI component (e.g. a button), you may want this so that you can set a
-//! label property on a parent [`div`] without duplicating the text in the
-//! accessibility tree.
+//! [`Text::new_inaccessible`] creates text without an ID. Use it when a parent
+//! [`div`] already has a label, such as in a custom button, to avoid duplicating
+//! text in the accessibility tree.
 //!
 //! ## Hiding content from assistive technology
 //!
@@ -210,18 +188,12 @@
 //!
 //! ### Handling actions
 //!
-//! Assistive technology can dispatch actions to the UI. While many users of
-//! assistive technology use traditional input devices (e.g. a keyboard), some
-//! use more specialized systems. For example, users with limited mobility may
-//! use voice control to interact with your app.
+//! People using assistive technology may use a keyboard or a specialized input
+//! system, such as voice control. Assistive technology dispatches actions to
+//! specific UI nodes. Register handlers to respond to these requests.
 //!
-//! When a user dispatches an action, it is dispatched *to a specific node*. It
-//! is your responsibility to tell the UI elements how they should respond when
-//! a request comes in.
-//!
-//! Note, these actions are **totally unrelated** to GPUI's [`Action`] trait.
-//! AccessKit exposes [`accesskit::Action`]. In GPUI, this is re-exported as
-//! [`AccessibleAction`].
+//! These actions use [`accesskit::Action`], re-exported as [`AccessibleAction`],
+//! and are unrelated to GPUI's [`Action`] trait.
 //!
 //! To respond to an accessible action, use
 //! [`div().on_a11y_action()`][InteractiveElement::on_a11y_action]:
@@ -236,18 +208,16 @@
 //!     .child(my_cool_slider());
 //! ```
 //!
-//! Note that some common actions are automatically registered. For example,
+//! Some common actions are registered automatically. For example,
 //! [`.on_click()`][StatefulInteractiveElement::on_click] adds an
 //! [`AccessibleAction::Click`] handler that calls the click handler.
 //!
 //! ## Synthetic children
 //!
-//! Sometimes, a custom [`Element`] may want to appear as if it is really made
-//! of multiple nodes. For example, a totally hypothetical custom text editor
-//! element may want to have [`Role::TextInput`], while presenting children
-//! consisting of [`Role::TextRun`]s.
+//! [`Element::a11y_synthetic_children`] lets a custom element expose multiple
+//! nodes. A text editor can have [`Role::TextInput`] with [`Role::TextRun`]
+//! children. For example:
 //!
-//! This is possible using [`Element::a11y_synthetic_children`]. For example:
 //! ```rust,ignore
 //! # use gpui::*;
 //! impl Element for MyCustomTextField {
@@ -287,15 +257,10 @@
 //! }
 //! ```
 //!
-//! Notably, synthetic children are added *after* an element is
-//! [prepainted][Element::prepaint], so prepaint state can be used (for example,
-//! to determine what is visible on screen).
+//! Synthetic children are added after [prepaint][Element::prepaint], so they
+//! can use prepaint state to determine what is visible on screen.
 //!
 //! ## Further reading
-//!
-//! Designing high-quality accessible interfaces can be challenging, in the same
-//! way that designing high-quality traditional interfaces can be. The
-//! following pages have useful information:
 //!
 //! - [AccessKit]: The cross-platform accessibility toolkit GPUI uses
 //!   internally.
@@ -304,8 +269,8 @@
 //! - [ARIA Authoring Practices Guide][apg]: W3C patterns for accessible
 //!   widgets.
 //!
-//! Note that, while GPUI mimics web APIs, it doesn't necessarily behave
-//! *exactly* as a web browser would with the same attributes.
+//! GPUI mimics web APIs but may behave differently from a browser given the
+//! same attributes.
 //!
 //! [AccessKit]: https://accesskit.dev/
 //! [mdn-aria]: https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Accessibility/WAI-ARIA_basics

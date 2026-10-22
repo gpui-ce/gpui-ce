@@ -39,9 +39,8 @@ pub const TASK_POLL_FLOOR: Duration = Duration::from_micros(100);
 /// it starved in one interval.
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(1);
 
-// Backstop against pathological event storms within a single interval. At the
-// 100us floor, a fully hung second can produce at most ~10k recordable polls,
-// so this bound is only reachable when something is already deeply wrong.
+// Caps event storms within an interval. At the 100us floor, one fully busy
+// second produces at most ~10k recordable polls, below this limit.
 const MAX_INTERVAL_EVENTS: usize = 16 * 1024;
 
 // Allow 4MiB for the fixed ring allocation, including each slot's atomic
@@ -202,7 +201,7 @@ impl IntervalBoundary {
     }
 }
 
-/// A control-plane change to one window's pending-frame state.
+/// A change to one window's pending-frame state.
 #[derive(Debug, Copy, Clone)]
 pub enum FrameStateChange {
     /// The window has a frame waiting to be presented.
@@ -288,12 +287,12 @@ impl FrameSnapshot {
         self.occupancy_within(self.interval_start, self.interval_end())
     }
 
-    /// Like [`Self::occupancy`], but measured against an arbitrary window
-    /// (e.g. a reporting window anchored at a frame's first invalidation).
-    /// Event spans are clamped to the window. Folded polls carry no
-    /// individual timestamps, so each flush's total is apportioned by how
-    /// much of its span overlaps the window — assuming the folded time is
-    /// spread uniformly across the span.
+    /// Like [`Self::occupancy`], measured against any window, such as one
+    /// starting at a frame's first invalidation. Event spans are clamped to
+    /// the window.
+    ///
+    /// Folded polls lack individual timestamps, so each flush's total is
+    /// apportioned by span overlap, assuming uniformly spread work.
     pub fn occupancy_within(&self, window_start: Instant, window_end: Instant) -> Duration {
         let mut spans: Vec<(Instant, Instant)> = self
             .events
@@ -405,12 +404,12 @@ impl ForegroundJournalWriter {
     }
 
     // Idle boundaries require a retained event since the last boundary, not
-    // merely folded sub-floor polls. Sporadic wake-ups (timers, file
-    // watchers) leave the foreground idle after every tiny poll; a boundary
-    // for each would re-admit to the ring the very polls the fold keeps out
-    // of it, wrapping the ring within seconds. Folded-only work is discarded
-    // at true idle so unrelated wake-ups cannot accumulate toward a later
-    // frame budget. Polls remain folded while a frame or runnable is pending.
+    // just folded sub-floor polls. Recording a boundary after every tiny timer
+    // or file-watcher poll would put folded work back in the ring and wrap it
+    // within seconds.
+    //
+    // Discard folded-only work at true idle so unrelated wake-ups cannot count
+    // toward a later frame budget. Keep folds while a frame or runnable is pending.
     fn end_turn(&mut self, ended_at: Instant) {
         let Some(turn_depth) = self.turn_depth.checked_sub(1) else {
             debug_assert!(false, "foreground turn must be begun before it ends");
@@ -882,10 +881,9 @@ impl JournalPublisher {
 
 /// A cloneable handle to one foreground journal stream.
 ///
-/// Each collector has an independent cursor. Collectors briefly pin one slot
-/// at a time and never block recording; entries they could not observe are
-/// reported as discontinuities. Apps on the same foreground thread share the
-/// stream.
+/// Collectors have independent cursors and briefly pin one slot at a time
+/// without blocking recording. Missing entries become discontinuities.
+/// Apps on the same foreground thread share the stream.
 #[derive(Clone)]
 pub struct ForegroundJournal {
     ring: Arc<JournalRing>,

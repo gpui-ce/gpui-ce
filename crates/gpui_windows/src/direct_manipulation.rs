@@ -13,9 +13,8 @@ use windows::Win32::{
 
 use crate::*;
 
-/// Default viewport size in pixels. The actual content size doesn't matter
-/// because we're using the viewport only for gesture recognition, not for
-/// visual output.
+/// Default viewport size in pixels, used only for gesture recognition.
+/// The content size does not matter because the viewport produces no visual output.
 const DEFAULT_VIEWPORT_SIZE: i32 = 1000;
 
 pub(crate) struct DirectManipulationHandler {
@@ -294,10 +293,11 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
         let position = self.mouse_position();
         let modifiers = current_modifiers();
 
-        // Direct Manipulation reports both translation and scale in every content update.
-        // Translation values can shift during a pinch due to the zoom center shifting.
-        // We classify each gesture as either scroll or pinch and only emit one type of event.
-        // We allow Scroll -> Pinch (a pinch can start with a small pan) but not the reverse.
+        // Every Direct Manipulation content update reports both scale and translation.
+        // A pinch can shift translation as its zoom center moves.
+        //
+        // Emit one event type per gesture, permitting Scroll -> Pinch because a pinch
+        // can start with a small pan, but never Pinch -> Scroll.
         if !float_equals(scale, 1.0) {
             if self.gesture_kind.get() != GestureKind::Pinch {
                 self.end_gesture();

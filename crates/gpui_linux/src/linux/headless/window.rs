@@ -1,10 +1,10 @@
 //! Windows for the headless platform client.
 //!
-//! A headless window has no compositor surface and no GPU: layout, text
-//! shaping, and entity plumbing run normally, `draw` discards the scene, and
-//! the sprite atlas hands out tiles without uploading pixels (mirroring
-//! GPUI's `TestWindow`/`TestAtlas`). This lets command-line tools drive real
-//! `Window`-based code paths without a display server.
+//! Headless windows run layout, text shaping, and entity operations without
+//! a compositor surface or GPU. `draw` discards the scene, and the atlas
+//! allocates tiles without uploading pixels, like `TestWindow`/`TestAtlas`.
+//!
+//! Command-line tools can run real `Window` code without a display server.
 
 use std::cell::RefCell;
 use std::rc::Rc;

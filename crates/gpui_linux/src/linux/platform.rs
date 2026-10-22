@@ -691,8 +691,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                     item.unlock().await?;
                     let secret = item.secret().await?;
 
-                    // we lose the zeroizing capabilities at this boundary,
-                    // a current limitation GPUI's credentials api
+                    // GPUI's credentials API loses zeroization at this boundary.
                     return Ok(Some((username.to_string(), secret.to_vec())));
                 } else {
                     continue;

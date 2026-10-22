@@ -37,9 +37,8 @@ impl WindowTextSystem {
     /// Shape the given line, at the given font_size, for painting to the screen.
     /// Subsets of the line can be styled independently with the `runs` parameter.
     ///
-    /// Note that this method can only shape a single line of text. It will panic
-    /// if the text contains newlines. If you need to shape multiple lines of text,
-    /// use [`Self::shape_text`] instead.
+    /// Only shapes a single line and panics if the text contains newlines.
+    /// Use [`Self::shape_text`] for multiple lines.
     pub fn shape_line(
         &self,
         text: SharedString,
@@ -109,8 +108,8 @@ impl WindowTextSystem {
 
     /// Layout the given line of text, at the given font_size.
     /// Subsets of the line can be styled independently with the `runs` parameter.
-    /// Generally, you should prefer to use [`Self::shape_line`] instead, which
-    /// can be painted directly.
+    ///
+    /// Prefer [`Self::shape_line`] for a directly paintable result.
     pub fn layout_line(&self, text: &str, font_size: Pixels, runs: &[TextRun]) -> Arc<LineLayout> {
         self.line_layout_cache
             .layout_line(&SharedString::new(text), font_size, runs)

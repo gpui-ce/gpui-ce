@@ -39,14 +39,8 @@ pub fn home_dir() -> &'static PathBuf {
 }
 
 pub trait PathExt {
-    /// Compacts a given file path by replacing the user's home directory
-    /// prefix with a tilde (`~`).
-    ///
-    /// # Returns
-    ///
-    /// * A `PathBuf` containing the compacted file path. If the input path
-    ///   does not have the user's home directory prefix, or if we are not on
-    ///   Linux or macOS, the original path is returned unchanged.
+    /// On Linux and macOS, replaces the user's home directory prefix with `~`.
+    /// Returns the original path if the prefix is absent or on other platforms.
     fn compact(&self) -> PathBuf;
 
     /// Returns a file's extension or, if the file is hidden, its name without the leading dot
@@ -87,10 +81,8 @@ pub trait PathExt {
     /// Returns `None` if the path cannot be converted into a WSL one (network share).
     fn local_to_wsl(&self) -> Option<PathBuf>;
 
-    /// Returns a file's "full" joined collection of extensions, in the case where a file does not
-    /// just have a singular extension but instead has multiple (e.g File.tar.gz, Component.stories.tsx)
-    ///
-    /// Will provide back the extensions joined together such as tar.gz or stories.tsx
+    /// Returns joined extensions, such as `tar.gz` for `File.tar.gz` or
+    /// `stories.tsx` for `Component.stories.tsx`.
     fn multiple_extensions(&self) -> Option<String>;
 
     /// Try to make a shell-safe representation of the path.
@@ -638,9 +630,8 @@ impl PathWithPosition {
             };
         }
 
-        // Let's avoid repeated init cost on this. It is subject to thread contention, but
-        // so far this code isn't called from multiple hot paths. Getting contention here
-        // in the future seems unlikely.
+        // Reuse initialization. Thread contention is possible, but this is not currently
+        // called from multiple hot paths, so contention seems unlikely.
         static SUFFIX_RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(ROW_COL_CAPTURE_REGEX).unwrap());
         match SUFFIX_RE
@@ -661,9 +652,7 @@ impl PathWithPosition {
                 }
             }
             None => {
-                // The `ROW_COL_CAPTURE_REGEX` deals with separated digits only,
-                // but in reality there could be `foo/bar.py:22:in` inputs which we want to match too.
-                // The regex mentioned is not very extendable with "digit or random string" checks, so do this here instead.
+                // Handle suffixes such as `foo/bar.py:22:in` outside the digits-only regex.
                 let delimiter = ':';
                 let mut path_parts = s
                     .rsplitn(3, delimiter)
@@ -833,18 +822,9 @@ impl Default for PathMatcher {
     }
 }
 
-/// Compares two sequences of consecutive digits for natural sorting.
-///
-/// This function is a core component of natural sorting that handles numeric comparison
-/// in a way that feels natural to humans. It extracts and compares consecutive digit
-/// sequences from two iterators, handling various cases like leading zeros and very large numbers.
-///
-/// # Behavior
-///
-/// The function implements the following comparison rules:
-/// 1. Different numeric values: Compares by actual numeric value (e.g., "2" < "10")
-/// 2. Leading zeros: When values are equal, longer sequence wins (e.g., "002" > "2")
-/// 3. Large numbers: Falls back to string comparison for numbers that would overflow u128
+/// Compares consecutive digit sequences by numeric value for natural sorting.
+/// Equal values sort by length, so `"002" > "2"`. Values that overflow `u128`
+/// fall back to string comparison.
 ///
 /// # Examples
 ///
@@ -856,17 +836,9 @@ impl Default for PathMatcher {
 /// "999..." vs "1000..." -> Less (large number comparison)
 /// ```
 ///
-/// # Implementation Details
-///
-/// 1. Extracts consecutive digits into strings
-/// 2. Compares sequence lengths for leading zero handling
-/// 3. For equal lengths, compares digit by digit
-/// 4. For different lengths:
-///    - Attempts numeric comparison first (for numbers up to 2^128 - 1)
-///    - Falls back to string comparison if numbers would overflow
-///
-/// The function advances both iterators past their respective numeric sequences,
-/// regardless of the comparison result.
+/// Collects digit strings, comparing equal lengths lexically and differing lengths
+/// numerically when they fit in `u128`. Advances both iterators past their digit
+/// sequences regardless of the result.
 fn compare_numeric_segments<I>(
     a_iter: &mut std::iter::Peekable<I>,
     b_iter: &mut std::iter::Peekable<I>,
@@ -874,7 +846,6 @@ fn compare_numeric_segments<I>(
 where
     I: Iterator<Item = char>,
 {
-    // Collect all consecutive digits into strings
     let mut a_num_str = String::new();
     let mut b_num_str = String::new();
 
@@ -896,19 +867,14 @@ where
         b_iter.next();
     }
 
-    // First compare lengths (handle leading zeros)
     match a_num_str.len().cmp(&b_num_str.len()) {
-        Ordering::Equal => {
-            // Same length, compare digit by digit
-            match a_num_str.cmp(&b_num_str) {
-                Ordering::Equal => Ordering::Equal,
-                ordering => ordering,
-            }
-        }
+        Ordering::Equal => match a_num_str.cmp(&b_num_str) {
+            Ordering::Equal => Ordering::Equal,
+            ordering => ordering,
+        },
 
         // Different lengths but same value means leading zeros
         ordering => {
-            // Try parsing as numbers first
             if let (Ok(a_val), Ok(b_val)) = (a_num_str.parse::<u128>(), b_num_str.parse::<u128>()) {
                 match a_val.cmp(&b_val) {
                     Ordering::Equal => ordering, // Same value, longer one is greater (leading zeros)
@@ -922,27 +888,12 @@ where
     }
 }
 
-/// Performs natural sorting comparison between two strings.
+/// Compares strings case-insensitively with consecutive digits treated as numbers,
+/// so `"file2"` sorts before `"file10"`.
 ///
-/// Natural sorting is an ordering that handles numeric sequences in a way that matches human expectations.
-/// For example, "file2" comes before "file10" (unlike standard lexicographic sorting).
-///
-/// # Characteristics
-///
-/// * Case-sensitive with lowercase priority: When comparing same letters, lowercase comes before uppercase
-/// * Numbers are compared by numeric value, not character by character
-/// * Leading zeros affect ordering when numeric values are equal
-/// * Can handle numbers larger than u128::MAX (falls back to string comparison)
-/// * When strings are equal case-insensitively, lowercase is prioritized (lowercase < uppercase)
-///
-/// # Algorithm
-///
-/// The function works by:
-/// 1. Processing strings character by character in a case-insensitive manner
-/// 2. When encountering digits, treating consecutive digits as a single number
-/// 3. Comparing numbers by their numeric value rather than lexicographically
-/// 4. For non-numeric characters, using case-insensitive comparison
-/// 5. If everything is equal case-insensitively, using case-sensitive comparison as final tie-breaker
+/// Equal numeric values sort by digit count, with longer sequences last.
+/// Values above `u128::MAX` fall back to string comparison. Case breaks ties
+/// only after all characters match case-insensitively, with lowercase first.
 pub fn natural_sort(a: &str, b: &str) -> Ordering {
     let mut a_iter = a.chars().peekable();
     let mut b_iter = b.chars().peekable();
@@ -977,9 +928,7 @@ pub fn natural_sort(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Case-insensitive natural sort without applying the final lowercase/uppercase tie-breaker.
-/// This is useful when comparing individual path components where we want to keep walking
-/// deeper components before deciding on casing.
+/// Defers the case tie-breaker so deeper path components can decide the order first.
 fn natural_sort_no_tiebreak(a: &str, b: &str) -> Ordering {
     if a.eq_ignore_ascii_case(b) {
         Ordering::Equal
@@ -994,18 +943,13 @@ fn stem_and_extension(filename: &str) -> (Option<&str>, Option<&str>) {
     }
 
     match filename.rsplit_once('.') {
-        // Case 1: No dot was found. The entire name is the stem.
         None => (Some(filename), None),
 
-        // Case 2: A dot was found.
         Some((before, after)) => {
-            // This is the crucial check for dotfiles like ".bashrc".
-            // If `before` is empty, the dot was the first character.
-            // In that case, we revert to the "whole name is the stem" logic.
+            // A dotfile such as ".bashrc" has no extension.
             if before.is_empty() {
                 (Some(filename), None)
             } else {
-                // Otherwise, we have a standard stem and extension.
                 (Some(before), Some(after))
             }
         }
@@ -1251,9 +1195,8 @@ pub fn compare_paths(
 pub struct WslPath {
     pub distro: String,
 
-    // the reason this is an OsString and not any of the path types is that it needs to
-    // represent a unix path (with '/' separators) on windows. `from_path` does this by
-    // manually constructing it from the path components of a given windows path.
+    // Use OsString instead of a path type to represent a Unix path with `/`
+    // separators on Windows. `from_path` constructs it from Windows path components.
     pub path: std::ffi::OsString,
 }
 
@@ -1323,9 +1266,8 @@ impl std::fmt::Display for ToFilePathError {
 impl std::error::Error for ToFilePathError {}
 
 pub trait UrlExt {
-    /// A version of `url::Url::to_file_path` that does platform handling based on the provided `PathStyle` instead of the host platform.
-    ///
-    /// Prefer using this over `url::Url::to_file_path` when you need to handle paths in a cross-platform way as is the case for remoting interactions.
+    /// Like `url::Url::to_file_path`, but uses `PathStyle` instead of the host platform.
+    /// Use for cross-platform paths, such as remoting interactions.
     fn to_file_path_ext(&self, path_style: PathStyle) -> Result<PathBuf, ToFilePathError>;
 }
 
@@ -1623,7 +1565,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_case_insensitive() {
-        // Test that mixed mode is case-insensitive
         let mut paths = vec![
             (RelPath::from_unix_str("zebra.txt").unwrap(), true),
             (RelPath::from_unix_str("Apple").unwrap(), false),
@@ -1647,7 +1588,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_files_first_basic() {
-        // Test that files come before directories
         let mut paths = vec![
             (RelPath::from_unix_str("zebra.txt").unwrap(), true),
             (RelPath::from_unix_str("Apple").unwrap(), false),
@@ -1672,7 +1612,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_files_first_case_insensitive() {
-        // Test case-insensitive sorting within files and directories
         let mut paths = vec![
             (RelPath::from_unix_str("Zebra.txt").unwrap(), true),
             (RelPath::from_unix_str("apple").unwrap(), false),
@@ -1696,7 +1635,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_files_first_numeric() {
-        // Test natural number sorting with files first
         let mut paths = vec![
             (RelPath::from_unix_str("file10.txt").unwrap(), true),
             (RelPath::from_unix_str("dir2").unwrap(), false),
@@ -1720,7 +1658,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_case() {
-        // Test case-insensitive sorting with varied capitalization
         let mut paths = vec![
             (RelPath::from_unix_str("README.md").unwrap(), true),
             (RelPath::from_unix_str("readme.txt").unwrap(), true),
@@ -1740,7 +1677,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_files_and_dirs() {
-        // Verify directories and files are still mixed
         let mut paths = vec![
             (RelPath::from_unix_str("file2.txt").unwrap(), true),
             (RelPath::from_unix_str("Dir1").unwrap(), false),
@@ -1791,7 +1727,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_with_nested_paths() {
-        // Test that nested paths still work correctly
         let mut paths = vec![
             (RelPath::from_unix_str("src/main.rs").unwrap(), true),
             (RelPath::from_unix_str("Cargo.toml").unwrap(), true),
@@ -1834,7 +1769,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_dotfiles() {
-        // Test that dotfiles are handled correctly in mixed mode
         let mut paths = vec![
             (RelPath::from_unix_str(".gitignore").unwrap(), true),
             (RelPath::from_unix_str("README.md").unwrap(), true),
@@ -1855,7 +1789,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_files_first_dotfiles() {
-        // Test that dotfiles come first when they're files
         let mut paths = vec![
             (RelPath::from_unix_str(".gitignore").unwrap(), true),
             (RelPath::from_unix_str("README.md").unwrap(), true),
@@ -1916,7 +1849,6 @@ mod tests {
 
     #[test]
     fn compare_rel_paths_mixed_deep_nesting() {
-        // Test sorting with deeply nested paths
         let mut paths = vec![
             (RelPath::from_unix_str("a/b/c.txt").unwrap(), true),
             (RelPath::from_unix_str("A/B.txt").unwrap(), true),
@@ -2653,7 +2585,6 @@ mod tests {
 
     #[test]
     fn test_compare_numeric_segments() {
-        // Helper function to create peekable iterators and test
         fn compare(a: &str, b: &str) -> Ordering {
             let mut a_iter = a.chars().peekable();
             let mut b_iter = b.chars().peekable();
@@ -2775,7 +2706,6 @@ mod tests {
 
     #[test]
     fn test_compare_paths() {
-        // Helper function for cleaner tests
         fn compare(a: &str, is_a_file: bool, b: &str, is_b_file: bool) -> Ordering {
             compare_paths((Path::new(a), is_a_file), (Path::new(b), is_b_file))
         }

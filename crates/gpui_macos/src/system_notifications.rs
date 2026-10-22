@@ -1,9 +1,8 @@
 //! System notifications through the `UNUserNotificationCenter` API.
 //!
-//! Everything here runs lazily: nothing touches the notification center (and
-//! so nothing can trigger the authorization prompt or the framework's
-//! not-in-a-bundle abort) until the application posts a notification or
-//! registers a response callback.
+//! Access the notification center only when posting or registering a response
+//! callback. Until then, nothing can trigger an authorization prompt or the
+//! framework's abort outside an app bundle.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -116,11 +115,9 @@ struct NotificationCenter {
 
 impl NotificationCenter {
     fn new(sender: mpsc::UnboundedSender<SystemNotificationResponse>) -> Option<Self> {
-        // `UNUserNotificationCenter` raises `NSInternalInconsistencyException`
-        // ("bundleProxyForCurrentProcess is nil"), aborting the process, when
-        // the binary isn't part of an app bundle — which is how dev builds run
-        // via `cargo run`. A bundle identifier is only present when launched
-        // from a real `.app`, so use it as the guard.
+        // Without an app bundle, as in `cargo run`, `UNUserNotificationCenter`
+        // aborts with `NSInternalInconsistencyException`, "bundleProxyForCurrentProcess
+        // is nil". Guard access with the bundle identifier, present only in a `.app`.
         if NSBundle::mainBundle().bundleIdentifier().is_none() {
             log::info!("system notifications disabled: not running from an app bundle");
             return None;

@@ -155,7 +155,7 @@ fn set_clipboard_bytes<T>(data: &[T], format: u32) -> Result<()> {
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as _, data.len());
         GlobalUnlock(*global).ok();
         SetClipboardData(format, Some(HANDLE(global.0)))?;
-        // SetClipboardData succeeded — the system now owns the memory.
+        // SetClipboardData transferred memory ownership to the system.
         std::mem::forget(global);
     }
     Ok(())

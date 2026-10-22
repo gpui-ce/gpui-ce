@@ -109,20 +109,17 @@ pub const DEFAULT_ADDITIONAL_WINDOW_SIZE: Size<Pixels> = Size {
     height: Pixels(750.),
 };
 
-/// Represents the two different phases when dispatching events.
+/// The two event dispatch phases.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DispatchPhase {
-    /// After the capture phase comes the bubble phase, in which mouse event listeners are
-    /// invoked front to back and keyboard event listeners are invoked from the focused element
-    /// to the root of the element tree. This is the phase you'll most commonly want to use when
-    /// registering event listeners.
+    /// After capture, invokes mouse listeners front to back and keyboard listeners
+    /// from the focused element to the root. Use this phase for most listeners.
     #[default]
     Bubble,
-    /// During the initial capture phase, mouse event listeners are invoked back to front, and keyboard
-    /// listeners are invoked from the root of the tree downward toward the focused element. This phase
-    /// is used for special purposes such as clearing the "pressed" state for click events. If
-    /// you stop event propagation during this phase, you need to know what you're doing. Handlers
-    /// outside of the immediate region may rely on detecting non-local events during this phase.
+    /// Invokes mouse listeners back to front and keyboard listeners from the root
+    /// to the focused element. Used for tasks such as clearing click "pressed" state.
+    ///
+    /// Stopping propagation may prevent handlers elsewhere from detecting outside events.
     Capture,
 }
 
@@ -395,15 +392,11 @@ pub(crate) fn with_element_arena<R>(f: impl FnOnce(&mut Arena) -> R) -> R {
 /// `ArenaClearNeeded::clear` is deferred rather than freeing memory the outer
 /// draw still references (see `Arena::clear`).
 ///
-/// Call [`ElementArenaScope::exit`] with the same arena that was entered to
-/// obtain the [`ArenaClearNeeded`] token the draw now owes; requiring `exit`
-/// makes it impossible to request a clear before the scope has ended. The
-/// scope's teardown — restoring the thread-local and balancing `begin_scope`
-/// with `end_scope` — happens in `Drop`, so the arena's scope depth stays
-/// balanced on every path, including when a panic unwinds a draw before `exit`
-/// is reached. (If teardown lived only in `exit`, such a panic would leave the
-/// scope depth permanently elevated and defer every future clear, leaking
-/// memory unboundedly.)
+/// Call [`ElementArenaScope::exit`] with the entered arena to obtain the
+/// [`ArenaClearNeeded`] token after the scope ends. `Drop` restores the
+/// thread-local and balances `begin_scope` with `end_scope`, including during
+/// unwinding. Otherwise, a panic before `exit` would leave the scope depth
+/// elevated and defer every future clear, leaking memory.
 pub(crate) struct ElementArenaScope {
     /// The entered arena: compared against the argument in `exit`, and
     /// dereferenced in `Drop` to end its scope (see the SAFETY note there).
@@ -428,10 +421,9 @@ impl ElementArenaScope {
         }
     }
 
-    /// End the scope: restores the previously-current arena and ends the
-    /// arena's clear-deferral scope. Returns the token for the arena clear the
-    /// draw now owes; producing it here makes it impossible to request a clear
-    /// before the scope has ended (which would be silently deferred forever).
+    /// Restore the previous arena and end its clear-deferral scope. Returns
+    /// the clear token after the scope ends, so a premature clear cannot be
+    /// silently deferred forever.
     ///
     /// Panics if passed a different arena than was entered: ending the scope
     /// of the wrong arena would unbalance two arenas' scope depths, allowing
@@ -442,22 +434,17 @@ impl ElementArenaScope {
             "ElementArenaScope::exit called with a different arena than was entered"
         );
         self.exited = true;
-        // Teardown (restoring the thread-local and ending the arena's
-        // clear-deferral scope) runs in `Drop`, which fires both here — `self`
-        // is dropped as `exit` returns, before the token reaches the caller —
-        // and when a panic unwinds the draw before `exit` is reached.
+        // `Drop` restores the thread-local and ends clear deferral before
+        // the caller receives the token. It also runs during unwinding.
         ArenaClearNeeded::new(arena)
     }
 }
 
 impl Drop for ElementArenaScope {
     fn drop(&mut self) {
-        // Teardown lives here (rather than in `exit`) so it runs exactly once on
-        // every path: `exit` consumes and drops the guard on the normal path,
-        // and unwinding drops it on the panic path. Balancing `begin_scope` here
-        // keeps the arena's scope depth correct even when a draw panics; if this
-        // only happened in `exit`, a panic between `enter` and `exit` would leave
-        // the depth elevated and defer every future clear.
+        // Balance `begin_scope` on both normal exit and unwinding. Teardown
+        // only in `exit` would leave the depth elevated after a panic and
+        // defer every future clear.
         CURRENT_ELEMENT_ARENA.with(|current| {
             current.set(self.previous);
         });
@@ -719,8 +706,7 @@ impl PartialEq<WeakFocusHandle> for FocusHandle {
     }
 }
 
-/// Focusable allows users of your view to easily
-/// focus it (using window.focus_view(cx, view))
+/// Lets callers focus a view with `window.focus_view(cx, view)`.
 pub trait Focusable: 'static {
     /// Returns the focus handle associated with this view.
     fn focus_handle(&self, cx: &App) -> FocusHandle;
@@ -900,10 +886,8 @@ pub struct HitboxId(u64);
 
 #[cfg(feature = "test-support")]
 impl HitboxId {
-    /// A placeholder HitboxId exclusively for integration testing API's that
-    /// need a hitbox but where the value of the hitbox does not matter. The
-    /// alternative is to make the Hitbox optional but that complicates the
-    /// implementation.
+    /// A placeholder for integration tests that need a hitbox without a specific value.
+    /// Keeps those APIs from requiring an optional hitbox.
     pub const fn placeholder() -> Self {
         Self(0)
     }
@@ -995,12 +979,9 @@ impl Hitbox {
     /// `HitboxBehavior::BlockMouseExceptScroll` (`InteractiveElement::block_mouse_except_scroll`),
     /// or if the current input modality is keyboard (see [`Window::last_input_was_keyboard`]).
     ///
-    /// Handling of `ScrollWheelEvent` should typically use `should_handle_scroll` instead.
-    /// Concretely, this is due to use-cases like overlays that cause the elements under to be
-    /// non-interactive while still allowing scrolling. More abstractly, this is because
-    /// `is_hovered` is about element interactions directly under the mouse - mouse moves, clicks,
-    /// hover styling, etc. In contrast, scrolling is about finding the current outer scrollable
-    /// container.
+    /// Use `should_handle_scroll` for `ScrollWheelEvent`. Hover checks describe
+    /// direct mouse interactions, while scrolling finds the outer scrollable
+    /// container. Overlays can block clicks and hover while still allowing scroll.
     pub fn is_hovered(&self, window: &Window) -> bool {
         self.id.is_hovered(window)
     }
@@ -1039,11 +1020,8 @@ pub enum HitboxBehavior {
     /// })
     /// ```
     ///
-    /// This has effects beyond event handling - any use of hitbox checking, such as hover
-    /// styles and tooltips. These other behaviors are the main point of this mechanism. An
-    /// alternative might be to not affect mouse event handling - but this would allow
-    /// inconsistent UI where clicks and moves interact with elements that are not considered to
-    /// be hovered.
+    /// Also suppresses hover styles and tooltips, keeping them consistent with
+    /// mouse event handling.
     BlockMouse,
 
     /// All hitboxes behind this hitbox will have `hitbox.is_hovered() == false`, even when
@@ -1067,11 +1045,8 @@ pub enum HitboxBehavior {
     /// handled differently than other mouse events. If also blocking these scroll events is
     /// desired, then a `cx.stop_propagation()` handler like the one above can be used.
     ///
-    /// This has effects beyond event handling - this affects any use of `is_hovered`, such as
-    /// hover styles and tooltips. These other behaviors are the main point of this mechanism.
-    /// An alternative might be to not affect mouse event handling - but this would allow
-    /// inconsistent UI where clicks and moves interact with elements that are not considered to
-    /// be hovered.
+    /// Also suppresses hover styles and tooltips, keeping them consistent with
+    /// mouse event handling.
     BlockMouseExceptScroll,
 }
 
@@ -1659,11 +1634,9 @@ impl Window {
                 },
             });
 
-            // A11y can be activated at any time, and so we cannot compute a
-            // correct `TreeUpdate` on-demand. When this happens, we return a
-            // default empty `TreeUpdate`.
-            //
-            // So we force a new frame, which will then send a correct `TreeUpdate`.
+            // Activation can happen at any time, so we cannot build a correct
+            // `TreeUpdate` on demand. Return an empty update and force a frame
+            // to build the correct tree.
             let mut async_cx = cx.to_async();
             cx.foreground_executor()
                 .spawn(async move {
@@ -1776,11 +1749,10 @@ impl Window {
                 // unwinds. Remember force_render so the deferred frame still
                 // bypasses the view cache.
                 //
-                // Returning here skips `complete_frame`, which on Wayland would
-                // stall the window's frame callbacks (no `surface.commit()`) —
-                // but calling it would hit the App borrow panic above, and this
-                // branch is unreachable there in practice: only Windows pumps
-                // platform events (and thus requests frames) mid-draw.
+                // Skipping `complete_frame` would stall Wayland callbacks without
+                // `surface.commit()`, but calling it would panic on the App borrow.
+                // Only Windows pumps platform events and requests frames mid-draw,
+                // so Wayland cannot reach this branch in practice.
                 if draw_in_progress() {
                     log::debug!("deferring re-entrant window draw request");
                     deferred_force_render |= request_frame_options.force_render;
@@ -2157,10 +2129,10 @@ pub struct DispatchEventResult {
     pub default_prevented: bool,
 }
 
-/// Indicates which region of the window is visible. Content falling outside of this mask will not be
-/// rendered. Currently, only rectangular content masks are supported, but we give the mask its own type
-/// to leave room to support more complex shapes in the future. Edge fades are evaluated in
-/// window space against these axis-aligned bounds and are not transform-aware.
+/// The visible rectangular region of the window. Content outside it is not rendered.
+///
+/// A separate type leaves room for other shapes, though only rectangles are supported.
+/// Edge fades use these axis-aligned bounds in window space and ignore transforms.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
@@ -2687,10 +2659,8 @@ impl Window {
         self.invalidator.wake_platform();
     }
 
-    /// Schedule a frame to be drawn on the next animation frame.
-    ///
-    /// This is useful for elements that need to animate continuously, such as a video player or an animated GIF.
-    /// It will cause the window to redraw on the next frame, even if no other changes have occurred.
+    /// Redraw on the next animation frame even if nothing changes, for continuous
+    /// animation such as video or animated GIFs.
     ///
     /// If called from within a view, it will notify that view on the next frame. Otherwise, it will refresh the entire window.
     ///
@@ -2778,9 +2748,8 @@ impl Window {
         self.platform_window.bounds()
     }
 
-    /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
-    /// This does not present the frame to screen - useful for visual testing where we want
-    /// to capture what would be rendered without displaying it or requiring the window to be visible.
+    /// Renders the current scene to a texture and returns an RGBA image without
+    /// presenting it. The window need not be visible.
     #[cfg(any(test, feature = "test-support"))]
     pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
         self.platform_window
@@ -3029,8 +2998,7 @@ impl Window {
     /// Executes the provided function with the specified rem size.
     ///
     /// This method must only be called as part of element drawing.
-    // This function is called in a highly recursive manner in editor
-    // prepainting, make sure its inlined to reduce the stack burden
+    // Editor prepainting recurses deeply here. Inline to reduce stack use.
     #[inline]
     pub fn with_rem_size<F, R>(&mut self, rem_size: Option<impl Into<Pixels>>, f: F) -> R
     where
@@ -3223,8 +3191,8 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_draw();
 
-        // Set up the per-App arena for element allocation during this draw.
-        // This ensures that multiple test Apps have isolated arenas.
+        // Use the per-App arena for element allocations during this draw.
+        // This isolates arenas when tests create multiple Apps.
         let arena_scope = ElementArenaScope::enter(&cx.element_arena);
 
         self.invalidate_entities();
@@ -3530,7 +3498,6 @@ impl Window {
 
         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
 
-        // Now actually paint the elements.
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
 
@@ -3731,15 +3698,14 @@ impl Window {
     fn paint_deferred_draws(&mut self, cx: &mut App) {
         assert_eq!(self.element_id_stack.len(), 0);
 
-        // Paint all deferred draws in priority order.
-        // Since prepaint has already processed nested deferreds, we just paint them all.
+        // Paint deferred draws in priority order. Prepaint already processed nesting.
         if self.next_frame.deferred_draws.len() == 0 {
             return;
         }
 
-        // Deferred draws are overlays (tooltips, popovers, drag images) and must sort above the
-        // whole main scene. Raise the order floor so they do — this also keeps a deferred
-        // backdrop's order from falling inside a content-filter order range left by the main scene.
+        // Raise the order floor so deferred tooltips, popovers, and drag images sort
+        // above the main scene. This also keeps deferred backdrops outside its
+        // content-filter order ranges.
         self.next_frame.scene.raise_order_floor();
 
         let traversal_order = self.deferred_draw_traversal_order();
@@ -3944,10 +3910,9 @@ impl Window {
             });
     }
 
-    /// Updates the cursor style for the entire window at the platform level. A cursor
-    /// style using this method will have precedence over any cursor style set using
-    /// `set_cursor_style`. This method should only be called during the paint
-    /// phase of element drawing.
+    /// Sets the window-wide platform cursor, overriding `set_cursor_style`.
+    ///
+    /// Call only during element painting.
     pub fn set_window_cursor_style(&mut self, style: CursorStyle) {
         self.invalidator.debug_assert_paint();
         self.next_frame
@@ -3982,8 +3947,7 @@ impl Window {
 
     /// Invoke the given function with the given content mask after intersecting it
     /// with the current mask. This method should only be called during element drawing.
-    // This function is called in a highly recursive manner in editor
-    // prepainting, make sure its inlined to reduce the stack burden
+    // Editor prepainting recurses deeply here. Inline to reduce stack use.
     #[inline]
     pub fn with_content_mask<R>(
         &mut self,
@@ -4097,11 +4061,10 @@ impl Window {
         result
     }
 
-    /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
-    /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
-    /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
-    /// element offset and prepaint again. See [`crate::List`] for an example. This method should only be
-    /// called during the prepaint phase of element drawing.
+    /// Prepaint children with discardable side effects. Autoscroll uses this to
+    /// detect bounds, adjust the element offset, and prepaint again. See [`crate::List`].
+    ///
+    /// Call only during element prepaint.
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
@@ -4145,8 +4108,7 @@ impl Window {
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
     /// Your view will be re-drawn once the asset has finished loading.
     ///
-    /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
-    /// time.
+    /// Multiple calls share one in-flight `Asset::load` call.
     pub fn use_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
         let (task, is_first) = cx.fetch_asset::<A>(source);
         task.clone().now_or_never().or_else(|| {
@@ -4172,8 +4134,7 @@ impl Window {
     /// Asynchronously load an asset, if the asset hasn't finished loading or doesn't exist this will return None.
     /// Your view will not be re-drawn once the asset has finished loading.
     ///
-    /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
-    /// time.
+    /// Multiple calls share one in-flight `Asset::load` call.
     pub fn get_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
         let (task, _) = cx.fetch_asset::<A>(source);
         task.now_or_never()
@@ -4341,9 +4302,8 @@ impl Window {
         }
     }
 
-    /// A variant of `with_element_state` that allows the element's id to be optional. This is a convenience
-    /// method for elements where the element id may or may not be assigned. Prefer using `with_element_state`
-    /// when the element is guaranteed to have an id.
+    /// `with_element_state` with an optional element ID. Prefer `with_element_state`
+    /// when the element always has an ID.
     ///
     /// The first option means 'no ID provided'
     /// The second option means 'not yet initialized'
@@ -4394,10 +4354,8 @@ impl Window {
 
     /// Creates a new keyed transition with persistent state.
     ///
-    /// The state for this transition is associated with the provided key and will
-    /// persist across renders as long as the key remains the same. This is the
-    /// recommended method for most use cases where you want smooth, continuous
-    /// animations.
+    /// State persists across renders while the key stays the same. Prefer this
+    /// for continuous animations.
     ///
     /// This method should only be called during `Render::render`, `RenderOnce::render`, or the drawing functions of `Element`.
     pub fn use_keyed_transition<T: Lerp + Clone + PartialEq + 'static>(
@@ -4460,9 +4418,8 @@ impl Window {
         });
     }
 
-    /// Creates a new painting layer for the specified bounds. A "layer" is a batch
-    /// of geometry that are non-overlapping and have the same draw order. This is typically used
-    /// for performance reasons.
+    /// Creates a painting layer for the bounds, batching non-overlapping geometry
+    /// with the same draw order for performance.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_layer<R>(&mut self, bounds: Bounds<Pixels>, f: impl FnOnce(&mut Self) -> R) -> R {
@@ -4562,11 +4519,12 @@ impl Window {
         }
     }
 
-    /// Paint a backdrop filter into the scene for the next frame at the current z-index. The
-    /// renderer blurs the content already painted behind `bounds` and composites the result
-    /// into the rounded rectangle described by `bounds` and `corner_radii` — the CSS
-    /// `backdrop-filter` effect (frosted glass). Typically the element then paints a translucent
-    /// background quad on top so its color tints the blurred backdrop.
+    /// Paint a backdrop filter at the current z-index for the next frame.
+    ///
+    /// Blurs content already painted behind `bounds` and composites it into the
+    /// rounded rectangle defined by `bounds` and `corner_radii`, like CSS
+    /// `backdrop-filter`. Paint a translucent background quad on top to tint the result.
+    ///
     /// `corner_smoothing` ranges from circular corners at `0.0` to maximum smoothing at `1.0`.
     ///
     /// Does nothing when `filters` produce no visible blur.
@@ -4602,14 +4560,13 @@ impl Window {
         });
     }
 
-    /// Isolate the painting performed by `f` into a content-filter group: the renderer renders
-    /// everything `f` paints into an offscreen target, blurs it as a single layer, and
-    /// composites the result back into the rounded rectangle described by `bounds` and
-    /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
+    /// Paint `f` into an offscreen group, blur it as one layer, and composite it into
+    /// the rounded rectangle defined by `bounds` and `corner_radii`. Like CSS `filter`,
+    /// this blurs an element and its children together.
+    ///
     /// `corner_smoothing` ranges from circular corners at `0.0` to maximum smoothing at `1.0`.
     ///
-    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
-    /// indirection.
+    /// Runs `f` directly when `filters` produce no visible blur.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn with_filter_layer<R>(
@@ -5320,8 +5277,8 @@ impl Window {
         self.layout_engine = Some(layout_engine);
     }
 
-    /// Obtain the bounds computed for the given LayoutId relative to the window. This method will usually be invoked by
-    /// GPUI itself automatically in order to pass your element its `Bounds` automatically.
+    /// Returns window-relative bounds for a LayoutId. GPUI normally calls this
+    /// to pass an element its `Bounds`.
     ///
     /// This method should only be called as part of element drawing.
     pub fn layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
@@ -5632,10 +5589,10 @@ impl Window {
         }
     }
 
-    /// Sets an input handler, such as [`ElementInputHandler`][element_input_handler], which interfaces with the
-    /// platform to receive textual input with proper integration with concerns such
-    /// as IME interactions. This handler will be active for the upcoming frame until the following frame is
-    /// rendered.
+    /// Sets a platform text input handler, such as [`ElementInputHandler`][element_input_handler],
+    /// including IME support.
+    ///
+    /// The handler is active for the upcoming frame until the frame after it is rendered.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     ///
@@ -5726,8 +5683,7 @@ impl Window {
     /// is determined by the first parameter of the given listener. When the next frame is rendered
     /// the listener will be cleared.
     ///
-    /// This is a fairly low-level method, so prefer using event handlers on elements unless you have
-    /// a specific need to register a listener yourself.
+    /// Prefer element event handlers unless you need to register a listener directly.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn on_key_event<Event: KeyEvent>(
@@ -5747,8 +5703,7 @@ impl Window {
 
     /// Register a modifiers changed event listener on the window for the next frame.
     ///
-    /// This is a fairly low-level method, so prefer using event handlers on elements unless you have
-    /// a specific need to register a global listener.
+    /// Prefer element event handlers unless you need a global listener.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn on_modifiers_changed(
@@ -5872,9 +5827,8 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_input(event.kind_name());
         let update_count_before = self.invalidator.update_count();
-        // Track input modality for focus-visible styling and hover suppression.
-        // Hover is suppressed during keyboard modality so that keyboard navigation
-        // doesn't show hover highlights on the item under the mouse cursor.
+        // Track input modality for focus-visible styling and suppress hover
+        // highlights under the mouse during keyboard navigation.
         let old_modality = self.last_input_modality;
         self.last_input_modality = match &event {
             PlatformInput::KeyDown(_) => InputModality::Keyboard,
@@ -7053,8 +7007,7 @@ impl Window {
     /// is determined by the first parameter of the given listener. When the next frame is rendered
     /// the listener will be cleared.
     ///
-    /// This is a fairly low-level method, so prefer using action handlers on elements unless you have
-    /// a specific need to register a listener yourself.
+    /// Prefer element action handlers unless you need to register a listener directly.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn on_action(
@@ -7073,8 +7026,7 @@ impl Window {
     /// The type of action is determined by the first parameter of the given listener. When the next
     /// frame is rendered the listener will be cleared.
     ///
-    /// This is a fairly low-level method, so prefer using action handlers on elements unless you have
-    /// a specific need to register a listener yourself.
+    /// Prefer element action handlers unless you need to register a listener directly.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn on_action_when(
@@ -7576,7 +7528,8 @@ impl From<u64> for WindowId {
 }
 
 /// A handle to a window with a specific root view type.
-/// Note that this does not keep the window alive on its own.
+///
+/// Does not keep the window alive.
 #[derive(Deref, DerefMut)]
 pub struct WindowHandle<V> {
     #[deref]

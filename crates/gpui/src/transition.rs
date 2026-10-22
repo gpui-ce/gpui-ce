@@ -28,22 +28,11 @@ impl<T> TransitionCache<T> {
 
 /// An animated transition between values of type `T`.
 ///
-/// `Transition` manages the interpolation of a value from a start state to a goal
-/// state using the supplied motion. It supports customizable easing functions and
-/// can operate in continuous or non-continuous mode.
+/// Interpolates between a start value and goal using the supplied motion and easing.
+/// `T` must implement [`Lerp`], [`Clone`], and [`PartialEq`].
 ///
-/// # Type Parameters
-///
-/// * `T` - The type of value being transitioned. Must implement [`Lerp`], [`Clone`],
-///   and [`PartialEq`].
-///
-/// # Continuous vs Non-Continuous Mode
-///
-/// By default, transitions operate in continuous mode. When the goal is updated:
-/// - **Continuous mode** (`continuous = true`): The transition smoothly continues
-///   from the current interpolated value to the new goal.
-/// - **Non-continuous mode** (`continuous = false`): The transition restarts from
-///   the initial value to the new goal.
+/// Goal changes continue from the current interpolated value by default. With
+/// `continuous = false`, they restart from the initial value.
 ///
 /// # Example
 ///
@@ -69,9 +58,8 @@ pub struct Transition<T: Lerp + Clone + PartialEq + 'static> {
     /// The transition sample cached for this render.
     cache: RefCell<TransitionCache<T>>,
 
-    /// Whether to continue the transition from the current value when the goal changes.
-    /// If true, transitions smoothly from current animated value to new goal.
-    /// If false, restarts from the original start value.
+    /// Whether goal changes continue from the current animated value.
+    /// If false, they restart from the original start value.
     continuous: bool,
 }
 
@@ -124,15 +112,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.cache.borrow_mut().clear();
     }
 
-    /// Evaluates and returns the current interpolated value of the transition.
+    /// Returns the interpolated value using time since the last goal update and easing.
     ///
-    /// This method calculates the value based on the elapsed time since the last
-    /// goal update, applies the easing function, and caches the result. If the
-    /// transition is still in progress, it automatically requests an animation
-    /// frame to continue the animation.
-    ///
-    /// The returned value is cached for the duration of the current frame to avoid
-    /// redundant calculations when called multiple times.
+    /// Caches the result for this frame and requests another animation frame while active.
     pub fn evaluate(&self, window: &mut Window, cx: &mut App) -> Ref<'_, T> {
         let sample = self.sample(cx);
         if sample.is_active {
@@ -163,18 +145,11 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.state.read(cx).progress_at(Instant::now()).get()
     }
 
-    /// Updates the goal value for the transition.
+    /// Updates the goal through a closure with mutable access to it.
+    /// Returns `true` if the goal changed, or `false` if it stayed the same.
     ///
-    /// The provided closure receives a mutable reference to the current goal value
-    /// and can modify it. If the goal changes (and continuous mode is enabled),
-    /// a new animation will begin from the current interpolated value toward the
-    /// new goal.
-    ///
-    /// Returns `true` if the goal was actually updated (i.e., the new value differs
-    /// from the previous goal), `false` otherwise.
-    ///
-    /// Note: This method does not automatically notify GPUI of changes. You should
-    /// call `cx.notify()` within the closure if you want to trigger a re-render.
+    /// In continuous mode, a changed goal starts an animation from the current interpolated
+    /// value. This method does not notify GPUI. Call `cx.notify()` in the closure to re-render.
     pub fn update<R>(
         &self,
         cx: &mut App,
@@ -199,22 +174,15 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         was_updated
     }
 
-    /// Instantly set the transition to the given target value without animation.
-    ///
-    /// Sets both the start and end goals to `target` so that subsequent evaluations
-    /// return `target` immediately. This is useful for transitions that require a
-    /// different start value on each update.
+    /// Sets the start and end goals to `target` without animation, so subsequent evaluations
+    /// return it immediately. Use this to change the start value between updates.
     pub fn jump_to(&self, target: T, cx: &mut App) {
         self.state.update(cx, |state, _cx| state.jump_to(target));
         self.clear_cache();
     }
 
-    /// Scale the transition's start and end goals by the given ratio.
-    ///
-    /// This preserves the relative progress of an in-flight animation when the
-    /// coordinate space changes (e.g. on window resize).  Both the start and
-    /// end goal are multiplied by `ratio` so the interpolated value remains
-    /// proportionally correct.
+    /// Multiplies the start and end goals by `ratio`, preserving relative progress
+    /// when coordinates change, such as on window resize.
     pub fn scale_by(&self, ratio: f32, cx: &mut App)
     where
         T: std::ops::Mul<f32, Output = T>,
@@ -223,18 +191,12 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.clear_cache();
     }
 
-    /// Returns the entity ID associated with this transition's state.
-    ///
-    /// This can be useful for tracking or comparing transitions.
+    /// Returns the transition state's entity ID.
     pub fn entity_id(&self) -> EntityId {
         self.state.entity_id()
     }
 
-    /// Resets the transition to its initial state.
-    ///
-    /// This clears all progress and sets both the start and end goals back to
-    /// the initial value that was provided when the transition was created.
-    /// The cache is also cleared.
+    /// Clears progress and the cache, resetting both goals to the initial value.
     pub fn reset(&self, cx: &mut App) {
         self.state.update(cx, |state, _cx| state.reset());
         self.clear_cache();

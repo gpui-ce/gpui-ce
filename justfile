@@ -8,9 +8,6 @@ set allow-duplicate-variables := true
 project_root := justfile_directory()
 msrv := "1.95.0"
 
-# ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ #
-#      Recipes      #
-# ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ #
 
 [doc('List all available recipes')]
 default:
@@ -396,9 +393,8 @@ publish dry="false":
         error make {msg: "CARGO_REGISTRY_TOKEN is not set"}
     }
 
-    # Topological publish order. Vendored support crates first, then core,
-    # then renderers/platform leaves, with gpui_platform LAST (it has
-    # target-conditional deps on every platform crate).
+    # Publish dependencies first, then core and platform leaves.
+    # gpui_platform comes last because its target-conditional dependencies include every platform crate.
     let crates = [
         "crates/gpui_ce_util/Cargo.toml"
         "crates/gpui_collections/Cargo.toml"
@@ -430,14 +426,12 @@ publish dry="false":
 
     let dry_flag = if $dry_run { ["--dry-run"] } else { [] }
 
-    # A `cargo publish --dry-run` resolves dependencies from crates.io. That
-    # normally makes a dependency-ordered first release fail at the second
-    # crate: its newly-versioned predecessor has not actually been uploaded.
-    # Patch every release package into the temporary verification resolution so
-    # Cargo still packages and compiles each tarball with `cargo publish`, but
-    # validates the complete local release graph rather than stale registry
-    # versions. The patches are passed only to the dry run and are never part
-    # of the published manifests.
+    # Dry runs resolve from crates.io, where new dependency versions are not yet uploaded.
+    # A first release would otherwise fail when a crate needs its unpublished predecessor.
+    #
+    # Patch release packages locally so Cargo packages and compiles each tarball against
+    # the complete release graph. Pass these patches only to dry runs and keep them
+    # out of published manifests.
     for manifest in $crates {
         let name = ($manifest | path dirname | path basename)
         let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $manifest | from json)
@@ -446,9 +440,7 @@ publish dry="false":
         let package_name = ($package | get name)
         let package_version = ($package | get version)
 
-        # crates.io versions are immutable. A version-bump PR usually changes
-        # only the affected crates, so leave already-published packages alone
-        # instead of making a later stable release fail at the first one.
+        # Skip immutable versions already on crates.io so partial version bumps can publish.
         let already_published = if $dry_run {
             false
         } else {
@@ -487,12 +479,11 @@ publish dry="false":
         } else {
             []
         }
-        # `gpui-ce` has test/example-only edges to `gpui_ce_platform`, while the
-        # Windows platform implementation has the reciprocal `gpui-ce` edge.
-        # Cargo cannot represent the packaged crate and that local cycle in a
-        # single verification lockfile. The release CI builds every target in
-        # the workspace before this recipe; package the archive here and leave
-        # its all-target compilation to that complete workspace check.
+        # gpui-ce's test/example dependency on gpui_ce_platform cycles through Windows
+        # back to gpui-ce. Cargo cannot represent the packaged crate and the local cycle
+        # in one verification lockfile.
+        #
+        # Release CI already builds every workspace target, so only package the archive here.
         let no_verify = if $name == "gpui" { ["--no-verify"] } else { [] }
         run-external "cargo" "publish" "--manifest-path" $manifest "--allow-dirty" ...$dry_flag ...$no_verify ...$patch_flags
         if $env.LAST_EXIT_CODE != 0 {

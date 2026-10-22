@@ -1,14 +1,12 @@
 //! Post-hoc detection of foreground hangs from the journal's event stream.
 //!
-//! A hang is any single piece of foreground work — a task poll, an action
-//! handler, an input dispatch, a window draw, or platform presentation — that
-//! blocked the foreground thread for at least a threshold duration. An
-//! interval whose total foreground spend reached the frame budget also
-//! counts, even when no single event crossed the threshold: many small
-//! pieces of work can drop a frame — or starve a headless app — as
-//! thoroughly as one long stall. [`HangDetector`] drains the journal and
-//! reports each completed activity interval containing hangs as a
-//! [`HangIncident`].
+//! A hang is a task poll, action handler, input dispatch, draw, or presentation
+//! that blocks the foreground for at least a threshold duration.
+//!
+//! An interval whose total foreground time reaches the frame budget also counts,
+//! even if no event crosses the threshold. Many short events can drop a frame
+//! or starve a headless app. [`HangDetector`] drains the journal and reports
+//! completed intervals containing hangs as [`HangIncident`]s.
 
 use std::time::Duration;
 
@@ -133,8 +131,8 @@ pub struct SerializedHangIncident {
     /// For presentation-sealed incidents, how long the submitted frame had
     /// been dirty, in milliseconds.
     pub dirty_to_present_ms: Option<f64>,
-    /// What closed the incident: `"present"` or `"idle"`. This labels the
-    /// boundary, not the hang's cause — the cause is the first contributor.
+    /// The closing boundary, `"present"` or `"idle"`. The first contributor
+    /// identifies the hang's cause.
     pub sealed_by: &'static str,
     /// Fraction of the active window the foreground spent working,
     /// `0.0..=1.0`. Low values with a high `dirty_to_present_ms` indicate
@@ -162,10 +160,9 @@ pub struct SerializedHangIncident {
 
 /// One hang contributor in serialized form.
 ///
-/// Foreground work nests: an input dispatch can synchronously draw a window,
-/// a draw can poll a task. `depth` expresses that containment — a depth-1
-/// event's time is already inside some depth-0 event's duration, so summing
-/// sibling durations across depths double-counts.
+/// Foreground work can nest. An input dispatch can draw a window, and a draw can
+/// poll a task. `depth` records containment. A depth-1 event is already included
+/// in a depth-0 event's duration, so summing across depths double-counts work.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SerializedHangContributor {
@@ -388,12 +385,10 @@ impl SerializedHangContributor {
 }
 
 impl HangIncident {
-    /// The incident's reporting window: from its earliest cause — the
-    /// sealing frame's first invalidation, or the earliest contributor's
-    /// start when no repaint was pending — to the seal. This trims
-    /// foreground-idle time between the previous frame and the cause, and
-    /// may begin before the underlying snapshot when a contributor was
-    /// already running at the previous seal.
+    /// The reporting window runs from the sealing frame's first invalidation, or
+    /// the earliest contributor if no repaint was pending, to the seal. Excludes
+    /// preceding idle time and may start before the snapshot if a contributor
+    /// was already running at the previous seal.
     pub fn active_window(&self) -> (Instant, Instant) {
         let snapshot = &self.snapshot;
         let dirty_at = snapshot.boundary.dirty_at();
@@ -410,12 +405,12 @@ impl HangIncident {
         (start, snapshot.interval_end())
     }
 
-    /// Returns an incident when the snapshot contains at least one event
-    /// that blocked the foreground for `threshold` or longer, or when the
-    /// interval's total foreground spend — event time plus folded
-    /// small-poll time — reached `frame_budget` even though no single event
-    /// did. In the latter case every event in the interval becomes a
-    /// contributor, since no single stall explains the busy interval.
+    /// Returns an incident when an event blocks the foreground for at least
+    /// `threshold`, or total event and folded small-poll time reaches
+    /// `frame_budget`.
+    ///
+    /// If no event crosses the threshold, every event becomes a contributor
+    /// because no single stall explains the busy interval.
     pub fn detect(
         snapshot: FrameSnapshot,
         threshold: Duration,
@@ -743,11 +738,8 @@ mod tests {
         assert_eq!(serialized.busy_fraction, 0.5);
     }
 
-    /// Many sub-threshold pieces of work can drop a frame as thoroughly as
-    /// one long stall: an interval whose total foreground spend reaches the
-    /// budget is an incident even when no single event crosses the hang
-    /// threshold, and every event becomes a contributor so the report shows
-    /// what filled the interval.
+    /// Total foreground time reaching the budget triggers an incident even when
+    /// no event crosses the hang threshold. Every event becomes a contributor.
     #[test]
     fn an_interval_of_small_work_over_budget_is_an_incident() {
         let startup = scheduler::Instant::now();
@@ -831,9 +823,8 @@ mod tests {
         assert!(HangIncident::detect(clean.clone(), HANG_THRESHOLD, FRAME_BUDGET).is_some());
     }
 
-    /// A frame that reaches the screen late with almost no foreground work
-    /// behind it — pure scheduling or presentation delay — is not a hang:
-    /// the budget measures foreground spend, not dirty-to-present time.
+    /// Scheduling or presentation delay with little foreground work is not
+    /// a hang. The budget measures foreground work rather than dirty-to-present time.
     #[test]
     fn a_slow_frame_with_little_foreground_spend_is_not_an_incident() {
         let startup = scheduler::Instant::now();
@@ -945,9 +936,8 @@ mod tests {
         ));
     }
 
-    /// Folded small polls count toward foreground spend, so an interval can
-    /// reach the budget with no retained events at all. The incident then
-    /// has no contributors and the small-poll summary carries the story.
+    /// Folded polls can reach the budget without retained events. The incident
+    /// then has no contributors and reports its work through the small-poll summary.
     #[test]
     fn small_poll_spend_alone_can_reach_the_budget() {
         let startup = scheduler::Instant::now();

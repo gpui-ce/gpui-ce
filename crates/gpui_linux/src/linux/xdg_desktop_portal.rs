@@ -1,6 +1,4 @@
-//! Provides a [calloop] event source from [XDG Desktop Portal] events
-//!
-//! This module uses the [ashpd] crate
+//! A [calloop] event source for [XDG Desktop Portal] events, using [ashpd].
 
 use ashpd::desktop::settings::{ColorScheme, Settings};
 use calloop::channel::Channel;

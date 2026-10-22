@@ -300,8 +300,7 @@ impl MetalRenderer {
 
     /// Creates a new headless MetalRenderer for offscreen rendering without a window.
     ///
-    /// This renderer can render scenes to images without requiring a CAMetalLayer,
-    /// window, or AppKit. Use `render_scene_to_image()` to render scenes.
+    /// Use `render_scene_to_image()` to render without a CAMetalLayer, window, or AppKit.
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
     pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Self {
         let device = Self::create_device();
@@ -339,9 +338,8 @@ impl MetalRenderer {
         // Shared memory can be used only if CPU and GPU share the same memory space.
         // https://developer.apple.com/documentation/metal/setting-resource-storage-modes
         let is_unified_memory = device.has_unified_memory();
-        // Apple GPU families support memoryless textures, which can significantly reduce
-        // memory usage by keeping render targets in on-chip tile memory instead of
-        // allocating backing store in system memory.
+        // Apple GPUs support memoryless textures, keeping render targets in on-chip
+        // tile memory instead of allocating system memory.
         // https://developer.apple.com/documentation/metal/mtlgpufamily
         let is_apple_gpu = device.supports_family(MTLGPUFamily::Apple1);
 
@@ -461,8 +459,8 @@ impl MetalRenderer {
             blur_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
-        // Premultiplied blend (One / OneMinusSourceAlpha) — the composite outputs a premultiplied
-        // blurred sample; straight-alpha blending would darken the faded edges.
+        // The composite outputs premultiplied blurred samples. Blend with One /
+        // OneMinusSourceAlpha to avoid darkening faded edges.
         let (blur_composite_shader, blur_composite_library) = pipeline("blur_composite");
         let blur_composite_pipeline_state = build_path_sprite_pipeline_state(
             &device,
@@ -704,12 +702,9 @@ impl MetalRenderer {
         }
     }
 
-    /// Renders the scene to a texture and returns the pixel data as an RGBA image.
-    /// This does not present the frame to screen - useful for visual testing
-    /// where we want to capture what would be rendered without displaying it.
+    /// Renders to an RGBA image without presenting, for visual tests.
     ///
-    /// Note: This requires a layer-backed renderer. For headless rendering,
-    /// use `render_scene_to_image()` instead.
+    /// Requires a layer-backed renderer. Use `render_scene_to_image()` for headless rendering.
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
     pub fn render_to_image(&mut self, scene: &Scene) -> Result<RgbaImage> {
         let layer = self
@@ -760,10 +755,9 @@ impl MetalRenderer {
             .ok_or_else(|| anyhow::anyhow!("Failed to create RgbaImage from pixel data"))
     }
 
-    /// Renders a scene to an image without requiring a window or CAMetalLayer.
+    /// Renders headlessly to an offscreen texture and returns an RGBA image.
     ///
-    /// This is the primary method for headless rendering. It creates an offscreen
-    /// texture, renders the scene to it, and returns the pixel data as an RGBA image.
+    /// Requires no window or CAMetalLayer.
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
     pub fn render_scene_to_image(
         &mut self,
@@ -826,10 +820,9 @@ impl MetalRenderer {
     /// Renders a scene to a reused offscreen texture without reading pixels
     /// back or blocking on GPU completion.
     ///
-    /// This mirrors the CPU cost of presenting a frame to a window (scene
-    /// encoding, instance buffer writes, command submission) and is used by
-    /// headless benchmark rendering, where the produced pixels are never
-    /// inspected.
+    /// Headless benchmarks use this to measure the CPU cost of presenting a
+    /// window frame, including scene encoding, instance buffer writes, and
+    /// command submission, without inspecting pixels.
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
     pub fn render_scene(&mut self, scene: &Scene, size: Size<DevicePixels>) -> Result<()> {
         if size.width.0 <= 0 || size.height.0 <= 0 {
@@ -1648,13 +1641,12 @@ impl MetalRenderer {
             return false;
         };
 
-        // When copying paths from the intermediate texture to the drawable,
-        // each pixel must only be copied once, in case of transparent paths.
+        // Copy each pixel from the intermediate texture to the drawable only once
+        // to preserve transparent paths.
         //
-        // If all paths have the same draw order, then their bounds are all
-        // disjoint, so we can copy each path's bounds individually. If this
-        // batch combines different draw orders, we perform a single copy
-        // for a minimal spanning rect.
+        // Paths with the same draw order have disjoint bounds and can be copied
+        // individually. Mixed draw orders require one copy of their minimal
+        // spanning rectangle.
         align_offset(instance_offset);
         let sprite_bytes_len = mem::size_of::<path_types::PathSprite>() * sprite_count;
         let next_offset = *instance_offset + sprite_bytes_len;
@@ -2151,7 +2143,7 @@ fn required_instance_buffer_size(scene: &Scene) -> usize {
     required
 }
 
-// Align to multiples of 256 make Metal happy.
+// Metal requires 256-byte alignment.
 fn align_offset(offset: &mut usize) {
     *offset = (*offset).div_ceil(256) * 256;
 }

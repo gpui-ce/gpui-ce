@@ -1,6 +1,5 @@
-//! `TextArea` — a multi-line text box. Same `Editor` workhorse, taller chrome,
-//! and `Enter` inserts a newline instead of being ignored. Constructible from a
-//! string or an editor, exactly like [`Input`](crate::example_input::Input).
+//! `TextArea` wraps `Editor` in a multiline text box where Enter inserts a newline.
+//! Accepts a string or editor like [`Input`](crate::example_input::Input).
 
 use gpui::{
     App, BoxShadow, CursorStyle, Entity, EntityId, Hsla, IntoElement, StyleRefinement, Window, div,
@@ -104,9 +103,8 @@ impl gpui::View for TextArea {
             .line_height(row_height)
             .text_size(px(14.))
             .text_color(text_color)
-            // The cache style is computed from the `rows` prop: change `rows` and
-            // the editor's cached bounds change, busting its cache and re-laying
-            // out the text. (`Input` just uses `size_full()` — nothing to vary.)
+            // Changing `rows` changes cached bounds and triggers text layout.
+            // `Input` uses fixed `size_full()` styling.
             .child(
                 editor.cached(
                     StyleRefinement::default()

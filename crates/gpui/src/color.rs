@@ -174,12 +174,10 @@ pub trait ColorExt {
     /// Where 0.0 will leave the color unchanged, and 1.0 will completely fade out the color.
     fn fade_out(&mut self, factor: f32);
 
-    /// Multiplies the alpha value of the color by a given factor and returns a new color.
-    /// If the color was previously opaque, then this is equivalent to
-    /// [`with_alpha`](palette::WithAlpha::with_alpha).
+    /// Multiplies alpha by the factor, returning a new color.
     ///
-    /// Useful for transforming colors with dynamic opacity,
-    /// like a color from an external source.
+    /// Use to scale dynamic opacity without discarding the existing alpha.
+    /// For opaque colors, equivalent to [`with_alpha`](palette::WithAlpha::with_alpha).
     ///
     /// Example:
     /// ```
@@ -189,18 +187,13 @@ pub trait ColorExt {
     /// assert_eq!(faded_color.alpha, 0.5);
     /// ```
     ///
-    /// This will return a red color with half the opacity.
-    ///
-    /// Example:
+    /// A translucent color can be faded further for hover or selected states:
     /// ```
     /// use gpui::{hsla, ColorExt};
     /// let color = hsla(0.7, 1.0, 0.5, 0.7); // A saturated blue
     /// let faded_color = color.opacity(0.16);
     /// assert!((faded_color.alpha - 0.112).abs() < 1e-6);
     /// ```
-    ///
-    /// This will return a blue color with around ~10% opacity,
-    /// suitable for an element's hover or selected state.
     ///
     fn opacity(&self, factor: f32) -> Self
     where
@@ -367,9 +360,7 @@ pub fn solid_background(color: impl IntoColor<Hsla>) -> Background {
 
 /// Creates a LinearGradient background color.
 ///
-/// The gradient line's angle of direction. A value of `0.` is equivalent to top; increasing values rotate clockwise from there.
-///
-/// The `angle` is in degrees value in the range 0.0 to 360.0.
+/// `angle` ranges from 0.0 to 360.0 degrees clockwise, with `0.` pointing up.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient>
 pub fn linear_gradient(
@@ -609,7 +600,7 @@ mod tests {
         use palette::WithAlpha;
         let color = Rgba::<palette::Srgb>::new(0.2, 0.6, 1.0, 0.8);
         assert_eq!(color.with_alpha(0.25).alpha, 0.25);
-        // NOTE: diverging from upstream, where Rgba::alpha clamps. palette does not clamp alpha
+        // Unlike upstream Rgba::alpha, palette does not clamp alpha.
         assert_eq!(color.with_alpha(1.5).alpha, 1.5);
     }
 

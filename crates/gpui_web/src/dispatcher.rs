@@ -360,12 +360,12 @@ thread_local! {
     static IDLE_CALLBACK_SUPPORTED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-/// Registers one `requestIdleCallback` per runnable, mirroring how
-/// `dispatch_after` maps each timer to its own platform alarm. The browser
-/// already provides the queue semantics a central pump would rebuild: idle
-/// callbacks run in registration order, an idle period drains as many as its
-/// deadline allows, and a callback whose `timeout` expires is posted as an
-/// ordinary task instead.
+/// Registers one `requestIdleCallback` per runnable, as `dispatch_after` gives
+/// each timer its own platform alarm.
+///
+/// The browser supplies the queue a central pump would duplicate. It runs
+/// callbacks in registration order until the idle deadline, posting callbacks
+/// with expired timeouts as ordinary tasks.
 fn schedule_idle_runnable(
     window: &web_sys::Window,
     runnable: RunnableVariant,

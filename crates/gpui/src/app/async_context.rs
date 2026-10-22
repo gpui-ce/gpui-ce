@@ -15,9 +15,9 @@ use super::{Context, WeakEntity};
 /// An async-friendly version of [App] with a static lifetime so it can be held across `await` points in async code.
 /// You're provided with an instance when calling [App::spawn], and you can also create one with [App::to_async].
 ///
-/// Internally, this holds a weak reference to an `App`. Methods will panic if the app has been dropped,
-/// but this should not happen in practice when using foreground tasks spawned via `cx.spawn()`,
-/// as the executor checks if the app is alive before running each task.
+/// Holds a weak `App` reference. Methods panic after the app is dropped.
+/// The foreground executor checks that the app is alive before running each
+/// task spawned via `cx.spawn()`, so these tasks should not encounter that panic.
 #[derive(Clone)]
 pub struct AsyncApp {
     pub(crate) app: Weak<AppCell>,
@@ -291,8 +291,7 @@ impl AsyncApp {
         read(app.global(), &app)
     }
 
-    /// A convenience method for [`App::update_global`](BorrowAppContext::update_global)
-    /// for updating the global state of the specified type.
+    /// Updates global state through [`App::update_global`](BorrowAppContext::update_global).
     pub fn update_global<G: Global, R>(&self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
@@ -363,8 +362,7 @@ impl AsyncWindowContext {
             .update_window(self.window, |_, window, cx| read(cx.global(), window, cx))
     }
 
-    /// A convenience method for [`App::update_global`](BorrowAppContext::update_global).
-    /// for updating the global state of the specified type.
+    /// Updates global state through [`App::update_global`](BorrowAppContext::update_global).
     pub fn update_global<G, R>(
         &mut self,
         update: impl FnOnce(&mut G, &mut Window, &mut App) -> R,

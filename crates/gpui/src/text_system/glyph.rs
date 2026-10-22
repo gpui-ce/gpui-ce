@@ -12,9 +12,8 @@ pub struct GlyphId(pub u32);
 
 /// Parameters for rendering a glyph, used as cache keys for glyph atlas entries.
 ///
-/// This struct identifies a specific glyph rendering configuration including
-/// font, size, subpixel positioning, and scale factor. It's used to look up
-/// cached pixels, placement metadata, and sprite atlas entries.
+/// Includes font, size, subpixel position, and scale factor to look up cached
+/// pixels, placement metadata, and sprite atlas entries.
 #[derive(Clone, Debug, PartialEq)]
 #[expect(missing_docs)]
 pub struct RenderGlyphParams {

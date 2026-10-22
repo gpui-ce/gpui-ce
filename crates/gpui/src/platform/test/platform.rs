@@ -268,9 +268,8 @@ impl TestPlatform {
         rx
     }
 
-    /// Benchmarks have no API to answer a prompt, so this doesn't retain it
-    /// for later inspection; dropping the sender immediately cancels the
-    /// returned receiver instead of leaving it pending indefinitely.
+    /// Benchmarks cannot answer prompts, so the prompt is not retained for inspection.
+    /// Drops the sender immediately to cancel the receiver instead of leaving it pending.
     #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) fn prompt(
         &self,
@@ -478,10 +477,8 @@ impl Platform for TestPlatform {
         rx
     }
 
-    /// Benchmarks have no API to answer a path prompt, so this doesn't
-    /// retain it for later inspection; dropping the sender immediately
-    /// cancels the returned receiver instead of leaving it pending
-    /// indefinitely.
+    /// Benchmarks cannot answer path prompts, so the prompt is not retained for inspection.
+    /// Drops the sender immediately to cancel the receiver instead of leaving it pending.
     #[cfg(not(any(test, feature = "test-support")))]
     fn prompt_for_paths(
         &self,
@@ -506,10 +503,8 @@ impl Platform for TestPlatform {
         rx
     }
 
-    /// Benchmarks have no API to answer a new-path prompt, so this doesn't
-    /// retain it for later inspection; dropping the sender immediately
-    /// cancels the returned receiver instead of leaving it pending
-    /// indefinitely.
+    /// Benchmarks cannot answer new-path prompts, so the prompt is not retained for inspection.
+    /// Drops the sender immediately to cancel the receiver instead of leaving it pending.
     #[cfg(not(any(test, feature = "test-support")))]
     fn prompt_for_new_path(
         &self,

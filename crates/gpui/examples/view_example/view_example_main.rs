@@ -1,15 +1,12 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
-//! View example — composing a text input from the `View` primitives.
+//! Compose text inputs with `View`.
 //!
-//! The whole point: a text input is deceptively complicated, and `View` makes it
-//! easy to compose one. Three pieces, each shown in its own section:
+//! `Editor` manages cursor state, blinking, focus, keyboard input, and rendering.
+//! Read its shared string with `editor.text(cx)` or `value.read(cx)`.
 //!
-//!   * `Editor`  — the workhorse entity: cursor, blink, focus, keyboard, and a
-//!                 specialized text renderer. All the hard parts live here.
-//!   * `String`  — the data plane. `editor.text(cx)` / `value.read(cx)` get it out.
-//!   * `Input` / `TextArea` — the shaping layer. Each takes a `String` (and grows
-//!                 the editor internally) OR an `Editor` (so you can read the cursor).
+//! `Input` and `TextArea` accept a string and allocate an editor, or accept an
+//! existing editor to expose cursor state.
 //!
 //! Run: `cargo run -p gpui --example view_example`
 
@@ -38,8 +35,7 @@ actions!(
     [Backspace, Delete, Left, Right, Home, End, Enter, Quit]
 );
 
-/// A tiny stateless view that reads an editor's cursor and is composed *beside*
-/// the thing editing it — two views over one entity, zero wiring.
+/// Displays the cursor of the same editor used by the adjacent input.
 #[derive(IntoElement)]
 struct CursorReadout {
     editor: Entity<Editor>,
@@ -71,11 +67,11 @@ impl ViewExample {
 
 impl Render for ViewExample {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The data plane: plain strings, allocated at the top by the hook.
+        // Allocate shared strings with the hook.
         let name = window.use_state(cx, |_, _| String::new());
         let email = window.use_state(cx, |_, _| String::from("me@example.com"));
         let bio = window.use_state(cx, |_, _| String::new());
-        // Editors that own their own string internally — no extra wiring up top.
+        // These editors own their strings.
         let notes = window.use_state(cx, |window, cx| Editor::new("multi\nline", window, cx));
         let owned = window.use_state(cx, |window, cx| Editor::new("editable", window, cx));
 

@@ -10,9 +10,7 @@ use crate::{
 
 use super::Window;
 
-/// The event emitted when a prompt's option is selected.
-/// The usize is the index of the selected option, from the actions
-/// passed to the prompt.
+/// Emitted with the index of the selected option in the prompt's actions.
 pub struct PromptResponse(pub usize);
 
 /// A prompt that can be rendered in the window.

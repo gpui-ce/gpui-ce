@@ -73,8 +73,7 @@ pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
 /// Value for DeviceId parameters which selects all device groups. Events that
 /// occur within the group are emitted by the group itself.
 ///
-/// In XInput 2's interface, these are referred to as "master devices", but that
-/// terminology is both archaic and unclear.
+/// XInput 2 calls these "master devices".
 pub(crate) const XINPUT_ALL_DEVICE_GROUPS: xinput::DeviceId = 1;
 
 const GPUI_X11_SCALE_FACTOR_ENV: &str = "GPUI_X11_SCALE_FACTOR";
@@ -162,9 +161,8 @@ struct ScrollAxisState {
     multiplier: f32,
     /// Last scroll value for calculating scroll delta.
     ///
-    /// This gets set to `None` whenever it might be invalid - when devices change or when window focus changes.
-    /// The logic errs on the side of invalidating this, since the consequence is just skipping the delta of one scroll event.
-    /// The consequence of not invalidating it can be large invalid deltas, which are much more user visible.
+    /// Clear whenever the value may be invalid, including device or focus changes.
+    /// Skipping one scroll delta is preferable to emitting a large invalid delta.
     scroll_value: Option<f32>,
 }
 
@@ -319,9 +317,7 @@ impl X11Client {
                 let handle = handle.clone();
                 move |event, _, _: &mut X11Client| {
                     if let calloop::channel::Event::Msg(runnable) = event {
-                        // Insert the runnables as idle callbacks, so we make sure that user-input and X11
-                        // events have higher priority and runnables are only worked off after the event
-                        // callbacks.
+                        // Run tasks as idle callbacks so user input and X11 events take priority.
                         handle.insert_idle(|client| {
                             let location = runnable.metadata().location;
                             let spawned = runnable.metadata().spawned;

@@ -16,10 +16,9 @@ use palette::IntoColor;
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
-/// Creates a text input element.
-/// See [`EditableTextElement`] for usage.
+/// Creates a multiline input, equivalent to [`text_area`].
 ///
-/// By default it is multiline, and therefore this is semantically equivalent to [`text_area`].
+/// See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     let mut this = EditableTextElement {
@@ -60,15 +59,13 @@ pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
 #[setters(generate = false)]
 pub struct EditableTextElement {
     interactivity: Interactivity,
-    // Populated on first render with an entity stored/attached to the view.
-    // This reference is shared with the action handlers, which are processed between renders
-    // and therefore cannot otherwise access state attached to the view.
+    // Shared with action handlers between renders, when they cannot access view state.
+    // Populated on first render with an entity attached to the view.
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
-    /// Configures whether the field supports multiple lines of text.
-    /// Disabling this prevents actions like `enter` and navigating up and down.
+    /// Enables multiline text. Disabling it prevents Enter and vertical navigation.
     ///
-    /// Inputs containing newlines, such as pasted text, are not automatically sanitized.
-    /// This is a limitation of the current state of implementation and requires further iteration.
+    /// Single-line fields strip `\n` and `\r` from pasted or other incoming text.
+    /// Other configurable sanitation and validation remain unimplemented.
     #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
     /// Assigns the text that should be displayed when storage of the element is empty.
@@ -122,10 +119,11 @@ impl Default for EditableTextColors {
 }
 
 impl EditableTextElement {
-    /// Assigns the underlying state of this element, which should persist across multiple frames.
-    /// The user should either create the entity once or utilize `Window::use_keyed_state`
-    /// to create an entity intrinsicly linked to the element.
-    /// If no state is configured, one will be linked to this element on first render via `Window::use_keyed_state`.
+    /// Sets state that persists across frames. Create the entity once or use
+    /// `Window::use_keyed_state` to link it to the element.
+    ///
+    /// Without explicit state, the first render creates it through
+    /// `Window::use_keyed_state`.
     pub fn state(self, state: WeakEntity<EditableTextState>) -> Self {
         *self.state_entity.borrow_mut() = state;
         self
@@ -160,10 +158,11 @@ impl EditableTextElement {
         self
     }
 
-    /// Sets the color of the underlines rendered underneath text being editted/marked by InputMethodEditors
-    /// (for writing Chinese, Japanese, and Korean utf-16).
+    /// Sets the underline color for text marked by an IME, such as Chinese, Japanese,
+    /// or Korean input.
     ///
-    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
+    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement)
+    /// because [`Style`](gpui::Style) has no corresponding field.
     pub fn marked_color(mut self, color: Hsla) -> Self {
         self.colors.ime_underline = color;
         self
@@ -314,8 +313,7 @@ impl Element for EditableTextElement {
             caret.update(cx, |caret, _cx| caret.set_blink_interval(duration));
         }
 
-        // Read new state information from the underlying entity.
-        // Block-wrapped so that the state being read is dropped before continuing.
+        // Keep the state read in a block so its borrow ends before continuing.
         let (prelayout, next_scroll_offset, direction_text) = {
             let state = entity.read(cx);
             let show_placeholder = state.as_str().is_empty();
@@ -347,8 +345,8 @@ impl Element for EditableTextElement {
             self.interactivity
                 .set_scroll_offset(global_id, window, -scroll_offset);
 
-            // Clear scroll_layout here in the very likely event that we wont need to
-            // recompute layout, in which case the layout result isnt rebuilt during `perform_text_layout`.
+            // Clear `scroll_layout` here. `perform_text_layout` usually reuses the
+            // cached layout, so it will not rebuild this result.
             entity.update(cx, |state, _cx| {
                 state.layout_data.next_scroll_offset = None;
             });
@@ -427,8 +425,7 @@ impl Element for EditableTextElement {
                     bounds
                 };
                 request_layout.state.update(cx, |state, _cx| {
-                    // while gpui tracks scroll_offset with negative values,
-                    // this is converted into positive for usage with bounds
+                    // Convert GPUI's negative scroll offset to positive bounds coordinates.
                     state.layout_data.scroll_bounds =
                         Bounds::new(-scroll_offset, inner_bounds.size);
                 });
@@ -504,7 +501,6 @@ impl Element for EditableTextElement {
                 Self::process_frame_events(prepaint, bounds, &request_layout.state, window, cx);
             }
 
-            // Actually draw the elements we constructed during prepaint
             if let Some(document) = prepaint.elements.document.take() {
                 let _ = document.paint(
                     prepaint.interactivity.document_origin(),
@@ -660,8 +656,7 @@ impl PrelayoutState {
 
         window.request_measured_layout(
             Default::default(),
-            // This is invoked sometime in the near future (before prepaint but not immediately),
-            // so we avoid doing any pre-emptive work until the layout engine is ready.
+            // The layout engine calls this later, before prepaint. Defer work until then.
             move |known_dimensions, available_space, window, cx| {
                 let runs = vec![gpui::TextRun {
                     len: text.len(),
@@ -758,9 +753,8 @@ impl PrelayoutState {
                     next_scroll_offset: initial_scroll,
                 };
 
-                // Update the state for use in prepaint, paint, and action handlers.
-                // request_measured_layout caches this scope for processing later
-                // between layout and prepaint, so we cant just copy/move these values to the outer scope.
+                // Store state for prepaint, paint, and action handlers here. `request_measured_layout`
+                // runs this closure between layout and prepaint, so values cannot move to the outer scope.
                 self.state.update(cx, move |state, cx| {
                     state.layout_data = layout_data;
                     if state.layout_data.next_scroll_offset.is_some() {

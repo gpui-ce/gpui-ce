@@ -38,10 +38,8 @@ pub async fn capture(
     return capture_unix(shell_path.as_ref(), args, directory.as_ref()).await;
 }
 
-/// Try to parse the environment output before checking the exit status.
-/// The user's shell rc files may contain commands that fail (e.g. editor
-/// integrations that call posix_spawnp outside a real PTY), causing a
-/// non-zero exit status even though `zed --printenv` ran successfully and
+/// Parses output before checking exit status. Shell rc commands, such as editor
+/// integrations calling posix_spawnp without a PTY, can fail even when `zed --printenv`
 /// produced valid output on its separate fd.
 fn parse_env_output(
     env_output: &str,

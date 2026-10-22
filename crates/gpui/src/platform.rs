@@ -35,9 +35,8 @@ pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBu
     feature = "screen-capture",
     not(any(target_os = "macos", target_os = "windows"))
 ))]
-// Screen capture currently has native frame representations only on macOS and Windows. Keep the
-// cross-platform API well-formed for enabled-but-unsupported targets; source enumeration simply
-// yields no platform sources there.
+// Native screen-capture frames exist only on macOS and Windows. Other enabled
+// targets keep a valid API but enumerate no platform sources.
 pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::util::FluentBuilder;
@@ -198,10 +197,10 @@ pub trait Platform: 'static {
     /// of the OS-wide setting. Pass `None` to clear the override and follow the system
     /// again. The override is reflected by [`Platform::window_appearance`].
     ///
-    /// Currently only implemented on macOS, where it sets `NSApplication.appearance` so
-    /// the native window chrome (the window border and titlebar) of every window matches
-    /// a dark app theme even when the system is in light mode (or vice versa). A no-op on
-    /// other platforms.
+    /// On macOS, sets `NSApplication.appearance` so every window's border and
+    /// titlebar match the app theme, even when it differs from the system theme.
+    ///
+    /// No-op on other platforms.
     fn set_window_appearance(&self, _appearance: Option<WindowAppearance>) {}
 
     /// Returns the window button layout configuration when supported.
@@ -230,9 +229,7 @@ pub trait Platform: 'static {
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
     fn on_system_wake(&self, callback: Box<dyn FnMut()>);
 
-    // Mobile platform methods. On mobile the OS owns the application
-    // lifecycle: apps are backgrounded, foregrounded, and killed at the
-    // system's discretion, and must react rather than decide.
+    // Mobile lifecycle methods. The OS controls app visibility and termination.
 
     /// Registers a callback invoked whenever the application's lifecycle
     /// phase changes. See [`AppLifecyclePhase`] for the phase vocabulary and
@@ -472,12 +469,11 @@ pub enum ThermalState {
 /// values on macOS. On other platforms, all styles are no-ops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HapticFeedbackStyle {
-    /// A generic haptic tap — suitable for most interactions.
+    /// A generic haptic tap for most interactions.
     Generic,
-    /// A sharp snap — for alignment guides, detents, and snapping.
+    /// A sharp snap for alignment guides, detents, and snapping.
     Alignment,
-    /// A distinct level-change click — for slider steps, toggles, and
-    /// discrete state changes.
+    /// A level-change click for slider steps, toggles, and discrete state changes.
     LevelChange,
 }
 
@@ -845,10 +841,8 @@ pub enum AppLifecyclePhase {
 
 /// Regions of a window that are obscured or reserved by the system.
 ///
-/// Mobile applications often share space in their window with system-specific
-/// geometry, from keyboards to camera notches. In GPUI, all this is abstracted
-/// into a single "inset" which should be overlaid on the window's bounds.
-/// It is up to the application develop to determine how to handle these cases.
+/// Insets describe space occupied by system UI and hardware such as keyboards
+/// and camera notches. Apply them to the window bounds as appropriate for the app.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WindowInsets {
     /// Regions covered by system UI or hardware: status bar, display
@@ -1113,9 +1107,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         None
     }
 
-    /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
-    /// This does not present the frame to screen - useful for visual testing where we want
-    /// to capture what would be rendered without displaying it or requiring the window to be visible.
+    /// Renders the scene to a texture and returns an RGBA image without
+    /// presenting it. The window need not be visible.
     #[cfg(any(test, feature = "test-support"))]
     fn render_to_image(&self, _scene: &Scene) -> Result<RgbaImage> {
         anyhow::bail!("render_to_image not implemented for this platform")
@@ -1143,8 +1136,7 @@ pub trait PlatformHeadlessRenderer {
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
 }
 
-/// Type alias for runnables with metadata.
-/// Previously an enum with a single variant, now simplified to a direct type alias.
+/// A runnable with metadata.
 #[doc(hidden)]
 pub type RunnableVariant = Runnable<RunnableMeta>;
 
@@ -2229,7 +2221,7 @@ impl PlatformInputHandler {
             }
             bounds_for_range(line_start..line_start)
         } else {
-            // No active composition — use the selection endpoint.
+            // Without active composition, use the selection endpoint.
             let offset = if selection.reversed {
                 selection.range.start
             } else {
@@ -2334,8 +2326,7 @@ impl PlatformInputHandler {
     }
 }
 
-/// A struct representing a selection in a text buffer, in UTF16 characters.
-/// This is different from a range because the head may be before the tail.
+/// A UTF-16 text selection whose head may precede its tail.
 #[derive(Debug)]
 pub struct UTF16Selection {
     /// The range of text in the document this selection corresponds to
@@ -2446,11 +2437,12 @@ pub trait InputHandler: 'static {
 
     /// Set the range of the user's currently selected text.
     ///
-    /// This is the reverse data-flow direction from [`Self::selected_text_range`]:
-    /// platforms call it when the system text machinery moves the selection on the
-    /// application's behalf — e.g. the user drags a system selection handle or
-    /// invokes Select All from system UI (iOS `UITextInput setSelectedTextRange:`,
-    /// Android `InputConnection.setSelection`).
+    /// Platforms call this when system UI moves the app's selection, such as
+    /// dragging a selection handle or invoking Select All. Data flows into the
+    /// app, opposite to [`Self::selected_text_range`].
+    ///
+    /// The platform entry points are iOS `UITextInput setSelectedTextRange:` and
+    /// Android `InputConnection.setSelection`.
     ///
     /// range_utf16 is in terms of UTF-16 characters, from 0 to the length of the document
     fn set_selected_text_range(
@@ -3556,7 +3548,7 @@ impl From<Image> for ClipboardItem {
     }
 }
 
-/// One of the editor's supported image formats (e.g. PNG, JPEG) - used when dealing with images in the clipboard
+/// A supported clipboard image format, such as PNG or JPEG.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumIter, Hash)]
 pub enum ImageFormat {
     // Sorted from most to least likely to be pasted into an editor,
@@ -3621,9 +3613,7 @@ impl ImageFormat {
             .or_else(|| Self::from_mime_type_alias(mime_type))
     }
 
-    /// Non-canonical mime types that some producers use in the wild.
-    /// Unlike `mime_type()` which returns the single canonical form,
-    /// these are legacy or shortened variants we still need to recognize.
+    /// Legacy or shortened MIME types accepted alongside the canonical `mime_type()`.
     fn from_mime_type_alias(mime_type: &str) -> Option<Self> {
         match mime_type {
             "image/jpg" => Some(Self::Jpeg),

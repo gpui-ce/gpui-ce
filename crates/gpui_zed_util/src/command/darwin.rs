@@ -174,9 +174,8 @@ impl Command {
             .as_deref()
             .unwrap_or_else(|| Path::new("."));
 
-        // Optimization: if no environment modifications were requested, pass None
-        // to spawn_posix so it uses the `environ` global directly, avoiding a
-        // full copy of the environment. This matches std::process::Command behavior.
+        // With no environment changes, pass None to use `environ` without copying it,
+        // matching std::process::Command.
         let envs = if self.env_clear || !self.envs.is_empty() {
             let mut result = BTreeMap::<OsString, OsString>::new();
             if !self.env_clear {
@@ -543,13 +542,9 @@ fn create_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
             return Err(error);
         }
 
-        // Set close-on-exec on both ends of the pipe.
-        //
-        // Without this, unrelated spawns elsewhere in the process (e.g.
-        // `smol::process` or `async_process`, which on Apple platforms use
-        // `posix_spawn` *without* `POSIX_SPAWN_CLOEXEC_DEFAULT`) would inherit
-        // these file descriptors and keep the pipes open even after we drop our
-        // side.
+        // Set close-on-exec on both ends so unrelated spawns cannot keep the pipe open.
+        // On Apple platforms, smol::process and async_process use posix_spawn without
+        // POSIX_SPAWN_CLOEXEC_DEFAULT and would otherwise inherit these descriptors.
         for &fd in &fds {
             let result = libc::ioctl(fd, libc::FIOCLEX);
             if result == -1 {

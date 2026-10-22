@@ -8,7 +8,6 @@ description = "A tool for measuring GPUI test performance"
 
 [lib]
 
-# Some personal lint preferences :3
 [lints.rust]
 missing_docs = "warn"
 

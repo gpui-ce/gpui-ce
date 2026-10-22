@@ -1,8 +1,7 @@
-//! A scrollable list of elements with uniform height, optimized for large lists.
-//! Rather than use the full taffy layout system, uniform_list simply measures
-//! the first element and then lays out all remaining elements in a line based on that
-//! measurement. This is much faster than the full layout system, but only works for
-//! elements with uniform height.
+//! A scrollable list of equal-height elements, optimized for large lists.
+//!
+//! Measures the first element and uses its height to place the rest, avoiding full Taffy
+//! layout. This is faster but requires every item to have the same height.
 
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, Entity, GlobalElementId, Hitbox,
@@ -142,11 +141,8 @@ impl UniformListScrollHandle {
         })))
     }
 
-    /// Scroll the list so that the given item index is visible.
-    ///
-    /// This uses non-strict scrolling: if the item is already fully visible, no scrolling occurs.
-    /// If the item is out of view, it scrolls the minimum amount to bring it into view according
-    /// to the strategy.
+    /// Scrolls the minimum distance needed to reveal the item according to the strategy.
+    /// Does not scroll if the item is already fully visible.
     pub fn scroll_to_item(&self, ix: usize, strategy: ScrollStrategy) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -156,10 +152,7 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list so that the given item index is at scroll strategy position.
-    ///
-    /// This uses strict scrolling: the item will always be scrolled to match the strategy position,
-    /// even if it's already visible. Use this when you need precise positioning.
+    /// Scrolls the item to the strategy position even if already visible.
     pub fn scroll_to_item_strict(&self, ix: usize, strategy: ScrollStrategy) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -169,16 +162,12 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list to the given item index with an offset in number of items.
+    /// Reveals the item within a viewport reduced by `offset` items, without scrolling
+    /// if it is already visible there. Applies the strategy within the reduced viewport.
     ///
-    /// This uses non-strict scrolling: if the item is already visible within the offset region,
-    /// no scrolling occurs.
-    ///
-    /// The offset parameter shrinks the effective viewport by the specified number of items
-    /// from the corresponding edge, then applies the scroll strategy within that reduced viewport:
-    /// - `ScrollStrategy::Top`: Shrinks from top, positions item at the new top
-    /// - `ScrollStrategy::Center`: Shrinks from top, centers item in the reduced viewport
-    /// - `ScrollStrategy::Bottom`: Shrinks from bottom, positions item at the new bottom
+    /// - `Top` shrinks from the top and aligns there.
+    /// - `Center` shrinks from the top and centers in the remaining space.
+    /// - `Bottom` shrinks from the bottom and aligns there.
     pub fn scroll_to_item_with_offset(&self, ix: usize, strategy: ScrollStrategy, offset: usize) {
         self.0.borrow_mut().deferred_scroll_to_item = Some(DeferredScrollToItem {
             item_index: ix,
@@ -188,16 +177,12 @@ impl UniformListScrollHandle {
         });
     }
 
-    /// Scroll the list so that the given item index is at the exact scroll strategy position with an offset.
+    /// Scrolls the item to the strategy position even if already visible, within
+    /// a viewport reduced by `offset` items.
     ///
-    /// This uses strict scrolling: the item will always be scrolled to match the strategy position,
-    /// even if it's already visible.
-    ///
-    /// The offset parameter shrinks the effective viewport by the specified number of items
-    /// from the corresponding edge, then applies the scroll strategy within that reduced viewport:
-    /// - `ScrollStrategy::Top`: Shrinks from top, positions item at the new top
-    /// - `ScrollStrategy::Center`: Shrinks from top, centers item in the reduced viewport
-    /// - `ScrollStrategy::Bottom`: Shrinks from bottom, positions item at the new bottom
+    /// - `Top` shrinks from the top and aligns there.
+    /// - `Center` shrinks from the top and centers in the remaining space.
+    /// - `Bottom` shrinks from the bottom and aligns there.
     pub fn scroll_to_item_strict_with_offset(
         &self,
         ix: usize,

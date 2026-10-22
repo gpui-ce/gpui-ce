@@ -1,14 +1,11 @@
 use anyhow::{Context as _, Result};
 use std::process::Stdio;
 
-/// A wrapper around `smol::process::Child` that ensures all subprocesses
-/// are killed when the process is terminated: on Unix by using process
-/// groups, and on Windows by using job objects.
+/// Wraps `smol::process::Child` to kill subprocesses on termination using Unix
+/// process groups or Windows job objects.
 ///
-/// On Windows, dropping this struct closes the job object handle, which
-/// terminates all processes in the job. This also applies when the Zed
-/// process exits for any reason (including crashes), since the OS closes
-/// its handles, so spawned process trees can never outlive Zed.
+/// On Windows, dropping this struct closes the job handle and terminates its processes.
+/// The OS also closes handles when Zed exits or crashes, terminating the spawned process tree.
 pub struct Child {
     process: smol::process::Child,
     #[cfg(windows)]
@@ -73,21 +70,16 @@ impl Child {
                 )
             })?;
 
-        // Assign the child to a job object configured to kill the entire
-        // process tree when the last job handle is closed, so descendants
-        // (e.g. node workers and MCP servers spawned by agent servers) are
-        // reaped even if the direct child doesn't clean them up. Any process
-        // the child spawns after this assignment is automatically part of the
-        // job.
+        // Closing the last job handle kills the child and later descendants, including
+        // node workers and MCP servers that the child fails to clean up.
+        // Descendants spawned after assignment automatically join the job.
         //
-        // There is a small race: descendants the child spawns between the
-        // `spawn()` call returning and the assignment below escape the job.
-        // Closing it fully would require creating the process suspended
-        // (`CREATE_SUSPENDED`), assigning it, then resuming it, which the
-        // std/smol process APIs don't support without reimplementing process
-        // creation. The window is microseconds, and the children we care
-        // about (`npx`, `node`, etc.) take far longer to load their runtime
-        // and spawn anything, so in practice nothing escapes.
+        // Descendants spawned before assignment can escape. Avoiding this race requires
+        // CREATE_SUSPENDED, assignment, and resumption, unsupported by std/smol without
+        // reimplementing process creation.
+        //
+        // The window is only microseconds. Children such as npx and node take much longer
+        // to load their runtimes and spawn descendants, so escapes are unlikely in practice.
         let job = windows_job::JobObject::new()
             .and_then(|job| {
                 job.assign_process(process.id())?;
@@ -147,11 +139,9 @@ mod windows_job {
         },
     };
 
-    /// A Win32 job object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`:
-    /// all processes assigned to the job (and their descendants) are terminated
-    /// when the last handle to the job is closed, which happens when this struct
-    /// is dropped, or when the OS closes the owning process's handles after it
-    /// exits for any reason.
+    /// A Win32 job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Closing the last handle
+    /// kills assigned processes and descendants, including when this struct drops or
+    /// the owning process exits.
     pub(crate) struct JobObject(HANDLE);
 
     // SAFETY: Job object handles can be used from any thread.
@@ -226,9 +216,8 @@ mod windows_tests {
                  [System.IO.File]::WriteAllText('{pid_file_literal}', \"$($p.Id)\", [System.Text.Encoding]::ASCII); \
                  Wait-Process -Id $p.Id"
             ));
-        // Capture powershell's stderr so a startup failure (missing binary,
-        // policy violation, bad path quoting, ...) is visible in the panic
-        // below instead of vanishing into the null device.
+        // Include PowerShell startup failures in the panic, such as missing binaries,
+        // policy violations, or invalid path quoting.
         let stderr_log = std::fs::File::create(temp_dir.join("powershell-stderr.log"))
             .expect("failed to create powershell stderr log");
         let child = Child::spawn(
@@ -239,10 +228,8 @@ mod windows_tests {
         )
         .expect("failed to spawn powershell");
 
-        // PowerShell cold start (JIT + Defender scan) can take several seconds
-        // on CI, especially with sibling tests starting their own instances
-        // concurrently, so allow ample headroom before declaring the handoff
-        // lost.
+        // PowerShell cold starts can take several seconds on CI due to JIT and Defender scans.
+        // Allow extra time when sibling tests start their own instances concurrently.
         let deadline = Instant::now() + Duration::from_secs(20);
         let grandchild_pid = loop {
             if let Some(pid) = read_grandchild_pid(&pid_file) {

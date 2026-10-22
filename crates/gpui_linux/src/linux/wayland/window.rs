@@ -610,8 +610,7 @@ impl WaylandWindowState {
                 xdg_state.toplevel.set_app_id(app_id.clone());
             }
 
-            // Set max window size based on the GPU's maximum texture dimension.
-            // This prevents the window from being resized larger than what the GPU can render.
+            // Limit window size to the GPU's maximum texture dimension.
             let max_texture_size = renderer.max_texture_size() as i32;
             xdg_state
                 .toplevel
@@ -1928,8 +1927,8 @@ impl PlatformWindow for WaylandWindow {
             return true;
         }
 
-        // Try to request an activation token. Even though the activation is likely going to be rejected,
-        // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
+        // Activation will probably be rejected, but request a token anyway.
+        // KWin and Mutter can use app_id to indicate an attention request.
         if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
         {
             state.client.set_pending_activation(state.surface.id());
@@ -2316,8 +2315,8 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn gpu_device_lost(&self) -> Option<bool> {
-        // Only loads an atomic flag — safe even mid-recovery, when
-        // `gpu_context` would panic on the torn-down resources.
+        // Reads only an atomic flag, safe during recovery when `gpu_context`
+        // would panic on torn-down resources.
         Some(self.borrow().renderer.device_lost())
     }
 
@@ -2406,12 +2405,10 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         opaque_area.size.height,
     );
 
-    // Note that rounded corners make this rectangle API hard to work with.
-    // As this is common when using CSD, let's just disable this API.
+    // Disable the rectangle API for CSD because rounded corners make the opaque
+    // region hard to describe.
     if state.background_appearance.is_opaque() && state.decorations == WindowDecorations::Server {
-        // Promise the compositor that this region of the window surface
-        // contains no transparent pixels. This allows the compositor to skip
-        // updating whatever is behind the surface for better performance.
+        // Mark the region opaque so the compositor can skip updating content behind it.
         state.surface.set_opaque_region(Some(&region));
     } else {
         state.surface.set_opaque_region(None);
@@ -2468,9 +2465,8 @@ impl ResizeEdgeWaylandExt for ResizeEdge {
     }
 }
 
-/// The configuration event is in terms of the window geometry, which we are constantly
-/// updating to account for the client decorations. But that's not the area we want to render
-/// to, due to our intrusize CSD. So, here we calculate the 'actual' size, by adding back in the insets
+/// We update window geometry to account for client decorations. Configuration
+/// events use that geometry, so add the insets back to get the full render size.
 fn compute_outer_size(
     inset: Pixels,
     new_size: Option<Size<Pixels>>,

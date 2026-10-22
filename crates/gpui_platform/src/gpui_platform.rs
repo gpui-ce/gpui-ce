@@ -104,11 +104,10 @@ mod tests {
     use std::cell::RefCell;
     use std::time::Duration;
 
-    // Note: All VisualTestAppContext tests are ignored by default because they require
-    // the macOS main thread. Standard Rust tests run on worker threads, which causes
-    // SIGABRT when interacting with macOS AppKit/Cocoa APIs.
+    // VisualTestAppContext tests are ignored because AppKit requires the macOS main
+    // thread. Rust test worker threads cause SIGABRT.
     //
-    // To run these tests, use:
+    // Run with:
     // cargo test -p gpui visual_test_context -- --ignored --test-threads=1
 
     #[test]
@@ -118,8 +117,7 @@ mod tests {
 
         let task_ran = Rc::new(RefCell::new(false));
 
-        // Spawn a foreground task via the App's spawn method
-        // This should use our TestDispatcher, not the MacDispatcher
+        // App::spawn should use TestDispatcher rather than MacDispatcher.
         {
             let task_ran = task_ran.clone();
             cx.update(|cx| {
@@ -130,13 +128,10 @@ mod tests {
             });
         }
 
-        // The task should not have run yet
         assert!(!*task_ran.borrow());
 
-        // Run until parked should execute the foreground task
         cx.run_until_parked();
 
-        // Now the task should have run
         assert!(*task_ran.borrow());
     }
 
@@ -147,7 +142,6 @@ mod tests {
 
         let task_ran = Rc::new(RefCell::new(false));
 
-        // Spawn a task that waits for a timer
         {
             let task_ran = task_ran.clone();
             let executor = cx.background_executor.clone();
@@ -160,14 +154,11 @@ mod tests {
             });
         }
 
-        // Run until parked - the task should be waiting on the timer
         cx.run_until_parked();
         assert!(!*task_ran.borrow());
 
-        // Advance clock past the timer duration
         cx.advance_clock(Duration::from_millis(600));
 
-        // Now the task should have completed
         assert!(*task_ran.borrow());
     }
 
@@ -182,8 +173,7 @@ mod tests {
             .open_offscreen_window_default(|_, cx| cx.new(|_| Empty))
             .expect("Failed to open window");
 
-        // Spawn a task via window.spawn - this is the critical test case
-        // for tooltip behavior, as tooltips use window.spawn for delayed show
+        // Tooltips use window.spawn for delayed display.
         {
             let task_ran = task_ran.clone();
             cx.update_window(window.into(), |_, window, cx| {
@@ -196,13 +186,10 @@ mod tests {
             .ok();
         }
 
-        // The task should not have run yet
         assert!(!*task_ran.borrow());
 
-        // Run until parked should execute the foreground task spawned via window
         cx.run_until_parked();
 
-        // Now the task should have run
         assert!(*task_ran.borrow());
     }
 }

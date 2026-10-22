@@ -108,8 +108,8 @@
         packages.default = gpui;
 
         devShells.default = pkgs.mkShell {
-          # Provide rustup's cargo/rustc proxy (so `cargo +toolchain` works for
-          # the MSRV and WASM-atomics CI checks) plus all the native build deps.
+          # Rustup proxies support `cargo +toolchain` for MSRV and WASM-atomics CI checks.
+          # Include the native build dependencies in the same shell.
           packages = [
             pkgs.rustup
             pkgs.cargo-machete
@@ -132,13 +132,10 @@
           shellHook = ''
             export RUST_BACKTRACE=1
             ${lib.optionalString pkgs.stdenv.isDarwin ''
-              # Use the real Xcode SDK (not the nix apple-sdk stub) so that
-              # `xcrun` can find the system Metal toolchain used by gpui_macos
-              # to compile its .metal shaders.
+              # Use the real Xcode SDK rather than Nix's apple-sdk stub so xcrun
+              # finds the system Metal compiler for gpui_macos's .metal shaders.
               export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-              # The nix `apple-sdk`/xcbuild package installs a stub `xcrun`
-              # that doesn't know about the system Metal toolchain. Prefer the
-              # real /usr/bin/xcrun.
+              # Prefer /usr/bin/xcrun over Nix's stub, which cannot find the Metal toolchain.
               mkdir -p /tmp/gpui-ce-bin
               ln -sf /usr/bin/xcrun /tmp/gpui-ce-bin/xcrun
               export PATH="/tmp/gpui-ce-bin:$PATH"

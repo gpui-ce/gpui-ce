@@ -1,9 +1,8 @@
 //! Developer tooling for inspecting the accessibility tree.
 //!
-//! [`A11yDebug`] retains the last [`TreeUpdate`] sent to the platform adapter so
-//! it can be serialized on demand (see
-//! [`crate::Window::debug_a11y_tree_json`]). In `cfg(debug_assertions)` builds,
-//! we capture extra info.
+//! [`A11yDebug`] retains the last [`TreeUpdate`] sent to the platform adapter for
+//! serialization through [`crate::Window::debug_a11y_tree_json`]. Builds with
+//! `cfg(debug_assertions)` capture extra metadata.
 
 use accesskit::{Action, NodeId, TreeUpdate};
 use collections::FxHashMap;
@@ -58,8 +57,7 @@ pub(crate) struct A11yDebug {
     last_tree_update: Option<TreeUpdate>,
     last_gpui_focus: Option<NodeId>,
     last_active_descendant: Option<NodeId>,
-    /// Monotonic counter incremented on each captured frame, so a re-dump makes
-    /// it obvious whether the tree actually refreshed.
+    /// Increments on each captured frame so repeated dumps reveal tree refreshes.
     frame_number: u64,
     /// Metadata about the most recently captured frame.
     last_frame: Option<CapturedFrame>,
@@ -140,8 +138,7 @@ impl A11yDebug {
                     element_id: info.element_id.as_deref(),
                     view: info.view,
                     source_location: info.source_location.map(|loc| loc.to_string()),
-                    // Only surface synthetic nodes; `false` is the default and
-                    // would just be noise on every real node.
+                    // Omit the default `false` on real nodes.
                     synthetic: info.synthetic.then_some(true),
                 })
                 .unwrap_or_default();
@@ -252,11 +249,9 @@ fn node_to_json(
     let mut aria = serde_json::Map::new();
     aria.insert("role".into(), json!(format!("{:?}", node.role())));
 
-    // Which action types the node supports. AccessKit keeps these in a private
-    // bitset with no getter or iterator, so we probe each variant. `Action::n`
-    // (from AccessKit's `enumn` feature) maps a discriminant to its variant,
-    // returning `None` past the last one - so this can't drift out of sync with
-    // AccessKit's `Action` enum the way a hand-maintained list would.
+    // AccessKit stores supported actions in a private bitset without an iterator.
+    // Probe variants via `Action::n` from `enumn`, which returns `None` past the
+    // last variant and stays in sync with the enum.
     let mut next_action = 0u8;
     let on_action: Vec<String> = std::iter::from_fn(move || {
         let action = Action::n(next_action)?;

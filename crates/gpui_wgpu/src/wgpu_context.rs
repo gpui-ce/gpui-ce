@@ -13,10 +13,9 @@ pub const DISABLE_DIRECT_COMPOSITION_ENV: &str = "GPUI_DISABLE_DIRECT_COMPOSITIO
 
 /// A single native graphics API that can back a [`WgpuContext`].
 ///
-/// Keeping this as an enum, rather than passing a [`wgpu::Backends`] bit-set through the native
-/// initialization path, makes it impossible for the renderer to accidentally initialize a
-/// fallback API alongside the preferred one. In particular, constructing WGPU's GL backend
-/// creates and retains EGL state even when a Vulkan adapter is eventually selected.
+/// Using an enum instead of a [`wgpu::Backends`] bit set prevents initializing
+/// fallback APIs alongside the preferred one. Constructing WGPU's GL backend
+/// creates and retains EGL state even when a Vulkan adapter is selected.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[cfg(not(target_family = "wasm"))]
 pub(crate) enum NativeBackend {
@@ -30,10 +29,8 @@ pub(crate) enum NativeBackend {
     Gl,
 }
 
-/// A WGPU instance paired with the single native API it was created to load.
-///
-/// Keeping the backend token attached prevents later initialization stages from
-/// accidentally widening adapter discovery back to multiple APIs.
+/// A WGPU instance paired with its native API, keeping later adapter discovery
+/// restricted to that API.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) struct NativeInstance {
     pub(crate) backend: NativeBackend,
@@ -525,8 +522,7 @@ impl WgpuContext {
             }
         };
 
-        // Select an adapter by actually testing surface configuration with the real device.
-        // This is the only reliable way to determine compatibility on hybrid GPU systems.
+        // Test surface configuration with the real device to check hybrid-GPU compatibility.
         let selection = gpui::block_on(Self::select_adapter_and_device(
             &instance.raw,
             instance.backend,
@@ -711,11 +707,12 @@ impl WgpuContext {
         Ok(())
     }
 
-    /// Select an adapter and create a device, testing that the surface can actually be configured.
-    /// This is the only reliable way to determine compatibility on hybrid GPU systems, where
-    /// adapters may report surface compatibility via get_capabilities() but fail when actually
-    /// configuring (e.g., NVIDIA reporting Vulkan Wayland support but failing because the
-    /// Wayland compositor runs on the Intel GPU).
+    /// Select an adapter and create a device by testing surface configuration.
+    ///
+    /// Actually configuring the surface is the only reliable compatibility check
+    /// on hybrid-GPU systems.
+    /// Hybrid-GPU adapters can report support through get_capabilities() yet fail configuration,
+    /// for example when NVIDIA reports Vulkan Wayland support but the compositor runs on Intel.
     #[cfg(not(target_family = "wasm"))]
     async fn select_adapter_and_device(
         instance: &wgpu::Instance,
@@ -736,13 +733,13 @@ impl WgpuContext {
             log::info!("ZED_DEVICE_ID filter: {:#06x}", device_id);
         }
 
-        // Sort adapters into a single priority order. Tiers (from highest to lowest):
+        // Sort adapters by descending priority:
         //
-        // 1. ZED_DEVICE_ID match — explicit user override
-        // 2. Compositor GPU match — the GPU the display server is rendering on
-        // 3. Device type (Discrete > Integrated > Other > Virtual > Cpu).
-        //    "Other" ranks above "Virtual" because OpenGL seems to count as "Other".
-        // 4. Backend — prefer Vulkan/Metal/Dx12 over GL/etc.
+        // 1. ZED_DEVICE_ID override.
+        // 2. The compositor's GPU.
+        // 3. Device type: Discrete > Integrated > Other > Virtual > Cpu.
+        //    OpenGL appears to report Other, so it ranks above Virtual.
+        // 4. Backend: Vulkan/Metal/Dx12 before GL.
         adapters.sort_by_key(|adapter| {
             let info = adapter.get_info();
 

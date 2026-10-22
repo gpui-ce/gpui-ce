@@ -21,29 +21,20 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// An [`Element`] that renders text.
 ///
-/// In general, [`Text`] objects should be created via the [`text`] macro:
+/// Create [`Text`] through the [`text`] macro:
 /// ```rust
 /// # use gpui::*;
 /// # fn render() -> impl IntoElement {
 /// div().child(text!("hello"))
 /// # }
 /// ```
-/// ## IDs and Accessibility
+/// ## IDs and accessibility
 ///
-/// [`Text`] elements have an ID. This ID is primarily used to produce nodes in
-/// the accessibility tree, which allows the text to be visible to screen
-/// readers and other assistive technologies.
+/// A text id identifies its accessibility node across frames. Unchanged text and
+/// id produce no update. Changed text with the same id reports a content update.
+/// A changed id reports node removal and addition.
 ///
-/// This ID is stable across frames. If the same text, with the same ID, is
-/// present in two consecutive frames, no updates are reported to the screen
-/// reader. If the text changes, but the ID stays the same, then the screen
-/// reader will be notified that a text node's content has changed. **However**,
-/// if the ID changes, then the screen reader will be notified that a node has
-/// been removed, and a new node has been added.
-///
-/// When using the [`text`] macro, each invocation of the macro will get a
-/// unique ID, derived from its position in the source code (filename, line, and
-/// column). For example:
+/// The [`text`] macro derives ids from the source filename, line, and column:
 /// ```rust
 /// # use gpui::*;
 /// let x = text!("hello");
@@ -57,13 +48,8 @@ use unicode_segmentation::UnicodeSegmentation;
 /// // equal, because the same `text!` invocation produced them
 /// assert_eq!(x.id(), y.id());
 /// ```
-/// When the contents of an invocation of [`text`] do not change, this
-/// distinction is less relevant (with the caveat that you still need to take
-/// care to ensure that duplicate IDs do not appear).
-///
-/// However, when a [`text`] invocation's argument *does* change, you should
-/// consider whether this change should be reported as a node "updating its
-/// contents", or an old node being destroyed and a new node being created.
+/// Avoid duplicate ids, even for unchanged text. For changing text, choose an id
+/// that reports either a content update or replacement of the accessibility node.
 #[derive(Debug, Clone)]
 pub struct Text {
     id: Option<ElementId>,
@@ -80,15 +66,11 @@ impl Text {
         Self { id: Some(id), text }
     }
 
-    /// Create a new [`Text`] element that is inaccessible to screen readers.
+    /// Creates text inaccessible to screen readers.
     ///
-    /// In order for text to be accessible to screen readers, it must have an ID
-    /// provided. If you want text to be accessible, either use [`text`] to have
-    /// an ID automatically assigned, or use [`Text::new`] to manually assign an
-    /// ID.
-    ///
-    /// This function is intended for use inside custom UI components, where
-    /// accessible properties may be set on parent containers.
+    /// Use inside custom components whose parent supplies accessibility properties.
+    /// Accessible text needs an id, assigned automatically by [`text`] or explicitly
+    /// through [`Text::new`].
     #[inline]
     pub const fn new_inaccessible(text: SharedString) -> Self {
         Self { id: None, text }
@@ -154,9 +136,8 @@ pub const fn __hash_text_macro_location_unstable_do_not_use(s: &'static str) -> 
 ///
 /// ```
 ///
-/// Text created with this macro is *accessible*. The macro generates an ID
-/// based on the source location. See the docs for [`Text`] for a more in-depth
-/// explanation of the significance of the ID of a [`Text`] element.
+/// Creates accessible text with a source-location id.
+/// See [`Text`] for how ids affect accessibility updates.
 #[macro_export]
 macro_rules! text {
     (id = $id:expr, $text:expr) => {{ $crate::Text::new($id.into(), $text.into()) }};
@@ -477,14 +458,10 @@ impl StyledText {
         runs
     }
 
-    /// Override the font family for specific byte ranges of the text.
-    ///
-    /// This is resolved lazily at layout time, so the overrides are applied
-    /// on top of the inherited text style from the parent element.
+    /// Overrides fonts for byte ranges at layout time, on top of the inherited style.
     /// Can be combined with [`with_highlights`](Self::with_highlights).
     ///
-    /// The overrides must be sorted by range start and non-overlapping.
-    /// Each override range must fall on character boundaries.
+    /// Ranges must be sorted by start, non-overlapping, and on character boundaries.
     pub fn with_font_family_overrides(
         mut self,
         overrides: impl IntoIterator<Item = (Range<usize>, SharedString)>,
@@ -950,13 +927,12 @@ impl TextLayout {
                 );
                 let truncate_width = truncation.width;
 
-                // Only use cached layout if:
-                // 1. truncate_width is None (if truncate_width is Some, we need to re-layout
-                //    because the previous layout may have been computed without truncation)
-                // 2. the cached layout was not truncated (a truncated layout answers an
-                //    unconstrained probe with the truncated size, which poisons intrinsic
-                //    sizing with whatever width some earlier measure pass happened to use)
-                // 3. the complete layout options match.
+                // Reuse only an untruncated layout with no requested `truncate_width`
+                // and matching layout options.
+                //
+                // A requested width needs a fresh layout because the cache may lack truncation.
+                // A cached truncated layout would answer an unconstrained probe with a size
+                // determined by an earlier measurement, corrupting intrinsic sizing.
                 if let Some(text_layout) = element_state.0.layout.borrow().as_ref()
                     && truncate_width.is_none()
                     && text_layout.truncate_width.is_none()

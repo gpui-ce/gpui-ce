@@ -12,9 +12,8 @@ mod tests {
     use crate::example_input::Input;
     use crate::{Backspace, Delete, End, Home, Left, Right};
 
-    /// Two inputs, each backed by an editor we own (so the test can focus and
-    /// read them). Proves data flows through the shared `String` and that
-    /// sibling inputs stay isolated.
+    /// Tests shared string updates and sibling isolation through two owned,
+    /// focusable editors.
     struct Harness {
         a: Entity<Editor>,
         b: Entity<Editor>,

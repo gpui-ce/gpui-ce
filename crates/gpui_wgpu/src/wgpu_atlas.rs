@@ -104,8 +104,7 @@ impl WgpuAtlas {
         lock.pending_uploads.clear();
     }
 
-    /// Handles device lost by clearing all textures and cached tiles.
-    /// The atlas will lazily recreate textures as needed on subsequent frames.
+    /// Clears textures and cached tiles after device loss. Later frames recreate them as needed.
     pub fn handle_device_lost(&self, context: &WgpuContext) {
         let mut lock = self.0.lock();
         lock.device = context.device.clone();

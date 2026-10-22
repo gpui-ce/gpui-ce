@@ -244,11 +244,8 @@ impl<'a, T: 'static> Context<'a, T> {
         self.app.spawn(async move |cx| f(this, cx).await)
     }
 
-    /// Convenience method for accessing view state in an event callback.
-    ///
-    /// Many GPUI callbacks take the form of `Fn(&E, &mut Window, &mut App)`,
-    /// but it's often useful to be able to access view state in these
-    /// callbacks. This method provides a convenient way to do so.
+    /// Gives an event callback access to view state, adapting it to
+    /// `Fn(&E, &mut Window, &mut App)`.
     pub fn listener<E: ?Sized>(
         &self,
         f: impl Fn(&mut T, &E, &mut Window, &mut Context<T>) + 'static,
@@ -616,10 +613,11 @@ impl<'a, T: 'static> Context<'a, T> {
         subscription
     }
 
-    /// Register a listener to be called when nothing in the window has focus.
-    /// This typically happens when the node that was focused is removed from the tree,
-    /// and this callback lets you chose a default place to restore the users focus.
-    /// Returns a subscription and persists until the subscription is dropped.
+    /// Registers a listener called when nothing in the window has focus.
+    ///
+    /// This usually happens after the focused node is removed. Use the callback
+    /// to choose a default focus target. The listener persists until the returned
+    /// subscription is dropped.
     pub fn on_focus_lost(
         &mut self,
         window: &mut Window,

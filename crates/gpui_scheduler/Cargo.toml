@@ -13,15 +13,12 @@ doctest = false
 
 [features]
 test-support = []
-# Allows `spawn_dedicated` to create real threads on wasm targets by spawning
-# web workers. Off by default because it requires shared-memory threading
-# (atomics + bulk-memory); wasm consumers without those build flags keep
-# compiling, and `spawn_dedicated` panics at runtime instead.
+# Enables `spawn_dedicated` web workers on wasm. Requires shared-memory threading
+# with atomics and bulk-memory. Disabled by default so builds without those flags
+# compile, though `spawn_dedicated` then panics at runtime.
 #
-# `flume/spin` replaces flume's internal `std::sync::Mutex` with a spinlock:
-# a contended `std` lock parks with `Atomics.wait`, which the browser forbids
-# on the main thread, and the main thread sends on flume channels every time
-# it schedules work onto a dedicated thread.
+# `flume/spin` replaces its mutex with a spinlock because scheduling sends from the
+# browser main thread, where a contended mutex's `Atomics.wait` is forbidden.
 wasm-threads = ["dep:wasm_thread", "flume/spin"]
 
 [dependencies]

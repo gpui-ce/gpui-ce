@@ -32,17 +32,14 @@ pub(crate) const WM_GPUI_END_SESSION: u32 = WM_USER + 9;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
-/// Coordinates window draws on the UI thread. Owned by the platform and
-/// shared with every window (like `WindowsPlatformState::cursor_visible`),
-/// because the coordination is inherently cross-window: while window A is
-/// drawing, a re-entrant paint request for window B must be deferred.
+/// Coordinates draws across windows on the UI thread.
+///
+/// The platform owns this and shares it with every window. While one window
+/// draws, re-entrant paint requests for any other window must be deferred too.
 pub(crate) struct DrawCoordinator {
-    /// Whether some window is currently inside `draw_window`. Win32 can
-    /// re-enter the window procedure while a draw is in progress (e.g.
-    /// cross-thread `SendMessage` dispatch during message pumping, or modal
-    /// message loops entered by COM calls), and drawing re-entrantly would
-    /// nest GPUI draws. Nested draws are wasted work whose output is
-    /// immediately redrawn, so we defer them instead.
+    /// Whether a window is inside `draw_window`. Cross-thread `SendMessage`
+    /// or COM modal loops can re-enter the procedure during a draw. Defer
+    /// nested draws because their output would be redrawn immediately.
     drawing: Cell<bool>,
 }
 
@@ -87,12 +84,10 @@ impl WindowsWindowInner {
         lparam: LPARAM,
     ) -> LRESULT {
         let handled = match msg {
-            // `DefWindowProc` answers `MA_NOACTIVATE` for a left click on `HTCAPTION`.
-            // The activation is only triggered when `DefWindowProc` handles the following `WM_NCLBUTTONDOWN`.
-            // The GPUI event is dispatched in between, so a click handler runs while `active_window` is still
-            // whichever window was active before the click. If that handler consumes the
-            // press, `DefWindowProc` never sees it, so the window is never activated at all.
-            // So, let's eagerly activate the window.
+            // `DefWindowProc` returns `MA_NOACTIVATE` for an `HTCAPTION` left click,
+            // activating only on the following `WM_NCLBUTTONDOWN`. GPUI dispatches
+            // between them, so a consumed click would leave `active_window` stale and
+            // prevent activation. Activate before dispatching.
             WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_CREATE => self.handle_create_msg(handle),
@@ -822,10 +817,8 @@ impl WindowsWindowInner {
             this.state.cursor_visible.store(true, Ordering::Relaxed);
         }
 
-        // When the window is activated (gains focus), reset the modifier tracking state.
-        // This fixes the issue where Alt-Tab away and back leaves stale modifier state
-        // (especially the Alt key) because Windows doesn't always send key-up events to
-        // windows that have lost focus.
+        // Reset modifiers on activation because Windows can omit key-up events
+        // while unfocused, leaving stale Alt state after Alt-Tab.
         if activated {
             this.state.last_reported_modifiers.set(None);
             this.state.last_reported_capslock.set(None);
@@ -1286,10 +1279,8 @@ impl WindowsWindowInner {
         {
             panic!("Device lost: {err}");
         }
-        // Make sure the first `draw_window` after recovery (whether it comes
-        // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
-        // between) is treated as a forced render so it both clears
-        // `skip_draws` and bypasses the view cache.
+        // Force the first post-recovery draw, whether from WM_GPUI_FORCE_UPDATE_WINDOW
+        // or an intervening WM_PAINT, to clear `skip_draws` and bypass the view cache.
         self.state.force_render_pending.set(true);
         Some(0)
     }
@@ -1306,12 +1297,11 @@ impl WindowsWindowInner {
             if force_render {
                 self.state.force_render_pending.set(true);
             }
-            // Validate the region so a nested message pump doesn't keep
-            // re-dispatching WM_PAINT for the still-invalid region in a busy
-            // loop until the in-progress draw unwinds. The vsync thread
-            // re-invalidates every window on each vsync (see
-            // `begin_vsync_thread`), so the deferred frame still gets drawn,
-            // at most one vsync late.
+            // Validate to prevent nested message pumps from looping on WM_PAINT
+            // for the still-invalid region until the current draw unwinds.
+            //
+            // `begin_vsync_thread` invalidates every window each vsync, so the
+            // deferred frame is at most one vsync late.
             unsafe { ValidateRect(Some(handle), None).ok().log_err() };
             return Some(0);
         };

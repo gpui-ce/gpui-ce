@@ -1,11 +1,8 @@
-//! Creating Components Example
+//! Three ways to create components:
 //!
-//! This example demonstrates three different approaches to creating interactive
-//! stateful components in GPUI:
-//!
-//! 1. `use_state` - Hook-like state scoped to an element's lifetime
-//! 2. `RenderOnce` - Stateless component that receives state from parent
-//! 3. `Render` - Entity-backed view with persistent internal state
+//! - `use_state` keeps state for an element's lifetime.
+//! - `RenderOnce` renders a stateless component using state from its parent.
+//! - `Render` uses an entity with persistent internal state.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
@@ -17,22 +14,10 @@ use gpui::{
     WindowOptions, div, prelude::*, px, rgb, size,
 };
 
-// ============================================================================
-// Approach 1: use_state
-// ============================================================================
+// `use_state` persists state across renders for the element's lifetime,
+// using its caller location or a key as identity, like React's useState.
 //
-// `use_state` creates element-scoped state that persists across renders.
-// It's similar to React's useState hook. The state is automatically tied
-// to the element's identity via caller location or a provided key.
-//
-// Pros:
-// - Simple, hook-like API
-// - State is scoped to element lifetime
-// - No boilerplate for simple state
-//
-// Cons:
-// - Less explicit than Entity-backed state
-// - State is tied to call site location
+// It needs less setup than entity state, but its ownership is less explicit.
 
 struct UseStateCounter {
     count: i32,
@@ -115,23 +100,10 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
         )
 }
 
-// ============================================================================
-// Approach 2: RenderOnce
-// ============================================================================
+// Use `RenderOnce` for presentation. Rendering consumes the stateless component,
+// which allocates no entity.
 //
-// `RenderOnce` components are stateless and consumed when rendered.
-// They receive all data as props and delegate state management to the parent.
-// This is the recommended approach for presentational components.
-//
-// Pros:
-// - Clear data flow (props down, events up)
-// - Lightweight (no Entity allocation)
-// - Easy to test
-// - Highly composable
-//
-// Cons:
-// - Cannot maintain internal state
-// - Parent must manage all state
+// Props come from the parent, events go back to it, and the parent manages all state.
 
 #[derive(IntoElement)]
 struct RenderOnceCounter {
@@ -228,24 +200,11 @@ impl RenderOnce for RenderOnceCounter {
     }
 }
 
-// ============================================================================
-// Approach 3: Render (Entity-backed)
-// ============================================================================
+// Use `Render` with an `Entity<T>` for internal state, event subscriptions,
+// entity observations, and async tasks.
 //
-// `Render` components are backed by an `Entity<T>` and maintain their own
-// internal state. This is the recommended approach for complex components
-// that need to manage their own state, subscribe to events, or spawn tasks.
-//
-// Pros:
-// - Full control over internal state
-// - Can subscribe to events and observe other entities
-// - Can spawn async tasks
-// - Has identity (can be passed around as Entity<T>)
-//
-// Cons:
-// - More boilerplate
-// - Higher memory overhead
-// - More complex lifecycle
+// Entities retain identity when passed around, at the cost of more setup, memory,
+// and lifecycle management.
 
 struct RenderCounter {
     count: i32,
@@ -333,9 +292,7 @@ impl Render for RenderCounter {
     }
 }
 
-// ============================================================================
-// Main Application
-// ============================================================================
+// Main application
 
 struct CreatingComponentsExample {
     render_counter: Entity<RenderCounter>,

@@ -10,8 +10,7 @@ use refineable::Refineable;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, sync::Arc};
 
-/// An image cache element, all its child img elements will use the cache specified by this element.
-/// Note that this could as simple as passing an `Entity<T: ImageCache>`
+/// Sets the cache for descendant image elements. Accepts an `Entity<T: ImageCache>`.
 pub fn image_cache(image_cache_provider: impl ImageCacheProvider) -> ImageCacheElement {
     ImageCacheElement {
         image_cache_provider: Box::new(image_cache_provider),
@@ -42,8 +41,7 @@ impl<I: ImageCache> From<Entity<I>> for AnyImageCache {
 }
 
 impl AnyImageCache {
-    /// Load an image given a resource
-    /// returns the result of loading the image if it has finished loading, or None if it is still loading
+    /// Loads a resource, returning its result when ready or `None` while loading.
     pub fn load(
         &self,
         resource: &Resource,
@@ -201,8 +199,7 @@ impl ImageCacheItem {
 /// An object that can handle the caching and unloading of images.
 /// Implementations of this trait should ensure that images are removed from all windows when they are no longer needed.
 pub trait ImageCache: 'static {
-    /// Load an image given a resource
-    /// returns the result of loading the image if it has finished loading, or None if it is still loading
+    /// Loads a resource, returning its result when ready or `None` while loading.
     fn load(
         &mut self,
         resource: &Resource,

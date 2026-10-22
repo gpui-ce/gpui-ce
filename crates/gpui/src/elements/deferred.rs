@@ -12,12 +12,10 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
     }
 }
 
-/// An element which delays the painting of its child until after all of
-/// its ancestors, while keeping its layout as part of the current element tree.
+/// Delays painting a child until after its ancestors while keeping its layout in the tree.
 ///
-/// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
-/// should be constrained to limited circumstances and will stop processing after some depth
-/// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
+/// Limit cases where deferred elements produce more deferred elements.
+/// [`Window::prepaint_deferred_draws`] stops processing after a depth limit to avoid infinite loops.
 #[derive(derive_setters::Setters)]
 #[setters(generate = false)]
 pub struct Deferred {
@@ -92,9 +90,8 @@ impl IntoElement for Deferred {
 }
 
 impl Deferred {
-    /// Configures the priority of the deferred element to be 1 greater than the previous
-    /// deferred element (when this element is caused by another deferred element, even if indirectly).
-    /// Defaults to 1 when this is a deferred element caused by non-deferred elements.
+    /// Sets priority one above the deferred element that caused this one, even indirectly.
+    /// Defaults to 1 for elements caused by non-deferred elements.
     pub fn priority_auto(mut self) -> Self {
         self.priority = DeferredPriority::Auto;
         self
@@ -103,9 +100,8 @@ impl Deferred {
 
 /// Describes how the priority for a [`Deferred`] element is calculated.
 pub enum DeferredPriority {
-    /// The priority is calculated based on whether the deferred element is a by-product of another deferred element.
-    /// If this is the first deferred element in a rendering stack, priority is 1.
-    /// Otherwise the priority is the previous priority + 1 (so this element renders in front of the previous in the stack).
+    /// Returns priority 1 for the first deferred element in a rendering stack, or the
+    /// previous deferred priority plus 1, so nested deferred elements render in front.
     Auto,
     /// Takes an explicit priority value for the deferred element.
     Value(usize),
@@ -198,13 +194,9 @@ mod tests {
         }
     }
 
-    /// Regression test for a crash with nested deferred draws (e.g. a popover
-    /// menu inside a popover hosted by a cached dock panel). Prepaint indices
-    /// recorded during the deferred draw rounds must index the same
-    /// `deferred_draws` vector that `reuse_prepaint` slices on the next frame;
-    /// previously they were measured against a transient per-round vector, so
-    /// reusing the panel's subtree grafted the wrong deferred draws and
-    /// panicked in the dispatch tree.
+    /// Nested deferred draws in cached panels must retain indices into the same
+    /// `deferred_draws` vector that `reuse_prepaint` slices next frame. Indices into a
+    /// transient per-round vector previously grafted wrong draws and panicked.
     #[gpui::test]
     fn test_nested_deferred_draws_with_reused_views(cx: &mut TestAppContext) {
         let window = cx.open_window(size(px(800.), px(600.)), |_, cx| {

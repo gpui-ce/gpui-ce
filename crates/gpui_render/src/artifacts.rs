@@ -32,8 +32,8 @@ include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
 
 /// D3D11 bytecode generated from HLSL at build time.
 ///
-/// Keeping both stages together makes it impossible to pass textual HLSL to a
-/// D3D11 creation API by accident.
+/// Both compiled stages stay together to prevent passing textual HLSL to a
+/// D3D11 creation API.
 #[derive(Clone, Copy)]
 pub struct Dx11Bytecode {
     pub vertex: &'static [u8],
@@ -86,9 +86,8 @@ const _: () = assert!(std::mem::size_of::<Dx11DrawConstants>() == 16);
 
 /// The DX11 artifact state for this build host.
 ///
-/// `D3DCompile` exists only on Windows. A Windows-targeting cross-build from a
-/// non-Windows host is rejected by the build script, with no runtime-compiler
-/// escape hatch.
+/// `D3DCompile` exists only on Windows. The build script rejects Windows targets
+/// built on other hosts, with no runtime compilation fallback.
 #[derive(Clone, Copy)]
 pub enum Dx11Shader {
     Sm50(Dx11Bytecode),

@@ -6,9 +6,7 @@ use gpui::{
     px, rgb, size,
 };
 
-// ---------------------------------------------------------------------------
-// Prime counting (intentionally brute-force so it hammers the CPU)
-// ---------------------------------------------------------------------------
+// Count primes by brute force to stress the CPU.
 
 fn is_prime(n: u64) -> bool {
     if n < 2 {
@@ -40,9 +38,7 @@ fn count_primes_in_range(start: u64, end: u64) -> u64 {
     count
 }
 
-// ---------------------------------------------------------------------------
 // App state
-// ---------------------------------------------------------------------------
 
 const NUM_CHUNKS: u64 = 12;
 
@@ -179,9 +175,7 @@ fn format_number(n: u64) -> String {
     result.chars().rev().collect()
 }
 
-// ---------------------------------------------------------------------------
 // Render
-// ---------------------------------------------------------------------------
 
 const BG_BASE: u32 = 0x1e1e2e;
 const BG_SURFACE: u32 = 0x313244;
@@ -403,9 +397,7 @@ impl Render for HelloWeb {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Entry point
-// ---------------------------------------------------------------------------
 
 fn requested_backend() -> gpui_platform::WebBackendPreference {
     let search = web_sys::window()

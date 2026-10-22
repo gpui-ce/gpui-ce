@@ -1,22 +1,13 @@
-//! Blur Filters Example
+//! CSS-style backdrop and content blur.
 //!
-//! Demonstrates the two CSS-style blur filters:
+//! `backdrop_blur` samples behind a translucent panel and a `deferred()` popover,
+//! checking that overlays sort on top and include all content beneath them.
 //!
-//! 1. `backdrop_blur` — frosted glass: blurs whatever is rendered behind the element.
-//!    Shown as a translucent panel, and again inside a `deferred()` popover (to prove the
-//!    backdrop snapshot includes everything beneath an overlay, and that the overlay sorts on top).
-//! 2. `blur` — content blur: blurs the element and its own children as a group.
-//!    Shown with text and again with a row of colored chips.
+//! `blur` filters text and colored chips as a group. Nested blur filters the
+//! inner subtree twice, testing group textures at each nesting level.
 //!
-//! It also stresses two content-blur edge cases:
-//!
-//! 3. Nested content blur — a `blur()` element inside another `blur()` element, so the inner
-//!    subtree is blurred twice (its own filter, then again as part of the outer group). This
-//!    exercises the renderer's per-nesting-level group textures.
-//! 4. Adjacent blocks with no gap on a dark parent, shown two ways: `blur` on each block (every
-//!    block is its own group, so the parent shows through each seam — exactly like CSS `filter`
-//!    on each sibling) versus `blur` on the parent (one group covering all blocks, so the blur is
-//!    continuous and the seams are clean — the CSS "blur the wrapper" idiom).
+//! Gap-free adjacent blocks on a dark parent compare per-block blur, which exposes the
+//! parent at seams, with parent blur, which keeps the seams continuous.
 
 use gpui::{
     App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, deferred, div, point,
@@ -25,7 +16,7 @@ use gpui::{
 
 struct BlurExample;
 
-/// A vivid, gap-free background so blur is obvious: a grid of saturated tiles filling the window.
+/// Fills the window with saturated tiles to show blur.
 fn busy_background() -> impl IntoElement {
     let palette = [
         0xef4444, 0xf97316, 0xeab308, 0x22c55e, 0x06b6d4, 0x3b82f6, 0x8b5cf6, 0xec4899,
@@ -79,8 +70,7 @@ fn frosted_panel() -> impl IntoElement {
         .child("backdrop_blur(24px)")
 }
 
-/// A popover painted via `deferred()` so it sits above everything; its backdrop blur must
-/// still pick up the panel and background beneath it.
+/// A deferred popover whose backdrop blur must sample the panel and background below.
 fn deferred_popover() -> impl IntoElement {
     deferred(
         div()
@@ -103,7 +93,7 @@ fn deferred_popover() -> impl IntoElement {
     )
 }
 
-/// A self-blurred element (CSS `filter: blur`) — its own content is blurred as a group.
+/// Blurs the element and its contents as one group, like CSS `filter: blur`.
 fn content_blurred() -> impl IntoElement {
     div()
         .absolute()
@@ -122,8 +112,7 @@ fn content_blurred() -> impl IntoElement {
         .child("blur(5px) content")
 }
 
-/// A content-blurred element with richer content (a row of colored chips), so the `filter: blur`
-/// effect — the element and its children blurred as one group — is clearly visible.
+/// Blurs a row of colored chips as one group.
 fn content_blurred_rich() -> impl IntoElement {
     div()
         .absolute()
@@ -145,10 +134,8 @@ fn content_blurred_rich() -> impl IntoElement {
         )
 }
 
-/// Nested content blur: a `blur()` element inside another `blur()` element. The inner block is
-/// blurred by its own filter and then again as part of the outer group, exercising the renderer's
-/// per-nesting-level isolated group textures (up to `MAX_FILTER_DEPTH`). The inner content should
-/// read as markedly softer than the outer block's own text.
+/// Nested blur tests isolated group textures up to `MAX_FILTER_DEPTH`.
+/// The inner block is filtered twice and should look softer than the outer text.
 fn nested_content_blurred() -> impl IntoElement {
     div()
         .absolute()
@@ -185,11 +172,12 @@ fn nested_content_blurred() -> impl IntoElement {
 
 const SEAM_COLORS: [u32; 4] = [0xef4444, 0x22c55e, 0x3b82f6, 0xeab308];
 
-/// One numbered, brightly-coloured block of the seam row. With `blur_each` it becomes its own
-/// content-filter group; otherwise it is a plain block (relying on a blurred parent, if any).
-/// Square corners on purpose: gpui content masks are axis-aligned rectangles, so a *rounded*
-/// parent would not clip the blurred children to its radius and the busy background would leak
-/// through the corner triangles — a separate concern from the seam blending under test here.
+/// A numbered seam-test block. `blur_each` filters it independently. Otherwise,
+/// only a parent filter can blur it.
+///
+/// Use square corners because GPUI's axis-aligned rectangular content masks
+/// cannot clip blurred children to a rounded parent, which would
+/// expose the background at corners and obscure the seam test.
 fn seam_block(i: usize, hex: u32, blur_each: bool) -> impl IntoElement {
     let block = div().flex_1().h_full();
     let block = if blur_each { block.blur(px(5.)) } else { block };
@@ -203,10 +191,12 @@ fn seam_block(i: usize, hex: u32, blur_each: bool) -> impl IntoElement {
         .child(format!("{}", i + 1))
 }
 
-/// Adjacent blocks, each its OWN content-filter group (`blur` on every block), no gap, dark parent.
-/// This is CSS `filter: blur()` on each sibling: every block fades to transparent at its edges and
-/// composites independently, so the dark parent shows through each seam by roughly `α_left · α_right`
-/// (peaking at ~25% right on the seam). This matches the web — the clean alternative is the next panel.
+/// Gap-free adjacent blocks blurred independently over a dark parent, like CSS
+/// `filter: blur()` on each sibling.
+///
+/// Each block fades to transparent at its edges and composites independently.
+/// These edges expose the parent by roughly `α_left · α_right`,
+/// peaking at about 25% on the seam.
 fn adjacent_per_block_blur() -> impl IntoElement {
     div()
         .absolute()
@@ -224,10 +214,11 @@ fn adjacent_per_block_blur() -> impl IntoElement {
         )
 }
 
-/// The same adjacent blocks, but `blur` is on the PARENT — one content-filter group covering all
-/// four. The blocks are opaque and touching, so the group's interior has no transparency: the blur
-/// is continuous across the seams and only the group's outer edge fades. This is the CSS "blur the
-/// wrapper, not each child" idiom, and the seams come out clean.
+/// Blur the parent to filter all four adjacent opaque blocks as one group.
+///
+/// The blocks touch, so the group's interior has no transparency. The blur
+/// stays continuous across seams, and only the outer edge fades, like applying
+/// CSS blur to the wrapper.
 fn adjacent_group_blur() -> impl IntoElement {
     div()
         .absolute()
@@ -246,7 +237,7 @@ fn adjacent_group_blur() -> impl IntoElement {
         )
 }
 
-/// A small dark pill label so the two new test sections are identifiable over the busy background.
+/// Labels test sections against the tiled background.
 fn caption(text: &'static str, left: f32, top: f32) -> impl IntoElement {
     div()
         .absolute()

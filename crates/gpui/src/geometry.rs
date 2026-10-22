@@ -52,10 +52,7 @@ pub trait Along {
     fn apply_along(&self, axis: Axis, f: impl FnOnce(Self::Unit) -> Self::Unit) -> Self;
 }
 
-/// Describes a location in a 2D cartesian space.
-///
-/// It holds two public fields, `x` and `y`, which represent the coordinates in the space.
-/// The type `T` for the coordinates can be any type that implements `Default`, `Clone`, and `Debug`.
+/// A point in 2D Cartesian space with coordinates of type `T`.
 ///
 /// # Examples
 ///
@@ -90,16 +87,7 @@ pub struct Point<T: Clone + Debug + Default + PartialEq> {
     pub y: T,
 }
 
-/// Constructs a new `Point<T>` with the given x and y coordinates.
-///
-/// # Arguments
-///
-/// * `x` - The x coordinate of the point.
-/// * `y` - The y coordinate of the point.
-///
-/// # Returns
-///
-/// Returns a `Point<T>` with the specified coordinates.
+/// Constructs a `Point<T>` with the given x and y coordinates.
 ///
 /// # Examples
 ///
@@ -114,12 +102,7 @@ pub const fn point<T: Clone + Debug + Default + PartialEq>(x: T, y: T) -> Point<
 }
 
 impl<T: Clone + Debug + Default + PartialEq> Point<T> {
-    /// Creates a new `Point` with the specified `x` and `y` coordinates.
-    ///
-    /// # Arguments
-    ///
-    /// * `x` - The horizontal coordinate of the point.
-    /// * `y` - The vertical coordinate of the point.
+    /// Creates a point with horizontal coordinate `x` and vertical coordinate `y`.
     ///
     /// # Examples
     ///
@@ -133,15 +116,7 @@ impl<T: Clone + Debug + Default + PartialEq> Point<T> {
         Self { x, y }
     }
 
-    /// Transforms the point to a `Point<U>` by applying the given function to both coordinates.
-    ///
-    /// This method allows for converting a `Point<T>` to a `Point<U>` by specifying a closure
-    /// that defines how to convert between the two types. The closure is applied to both the `x`
-    /// and `y` coordinates, resulting in a new point of the desired type.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a value of type `T` and returns a value of type `U`.
+    /// Applies `f` to both coordinates, producing a `Point<U>`.
     ///
     /// # Examples
     ///
@@ -185,12 +160,7 @@ impl<T: Clone + Debug + Default + PartialEq> Along for Point<T> {
 }
 
 impl Point<Pixels> {
-    /// Scales the point by a given factor, which is typically derived from the resolution
-    /// of a target display to ensure proper sizing of UI elements.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scaling factor to apply to both the x and y coordinates.
+    /// Multiplies both coordinates by `factor`, usually the display scale factor.
     ///
     /// # Examples
     ///
@@ -294,11 +264,7 @@ impl<T> Point<T>
 where
     T: PartialOrd + Clone + Debug + Default + PartialEq,
 {
-    /// Returns a new point with the maximum values of each dimension from `self` and `other`.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Point` to compare with `self`.
+    /// Returns the maximum of `self` and `other` in each dimension.
     ///
     /// # Examples
     ///
@@ -324,11 +290,7 @@ where
         }
     }
 
-    /// Returns a new point with the minimum values of each dimension from `self` and `other`.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Point` to compare with `self`.
+    /// Returns the minimum of `self` and `other` in each dimension.
     ///
     /// # Examples
     ///
@@ -354,17 +316,7 @@ where
         }
     }
 
-    /// Clamps the point to a specified range.
-    ///
-    /// Given a minimum point and a maximum point, this method constrains the current point
-    /// such that its coordinates do not exceed the range defined by the minimum and maximum points.
-    /// If the current point's coordinates are less than the minimum, they are set to the minimum.
-    /// If they are greater than the maximum, they are set to the maximum.
-    ///
-    /// # Arguments
-    ///
-    /// * `min` - A reference to a `Point` representing the minimum allowable coordinates.
-    /// * `max` - A reference to a `Point` representing the maximum allowable coordinates.
+    /// Clamps each coordinate to the inclusive range defined by `min` and `max`.
     ///
     /// # Examples
     ///
@@ -400,10 +352,7 @@ impl<T: Clone + Debug + Default + PartialEq + Display> Display for Point<T> {
     }
 }
 
-/// A structure representing a two-dimensional size with width and height in a given unit.
-///
-/// This struct is generic over the type `T`, which can be any type that implements `Clone`, `Default`, and `Debug`.
-/// It is commonly used to specify dimensions for elements in a UI, such as a window or element.
+/// A two-dimensional size with width and height in units of type `T`.
 #[derive(
     Add, Clone, Copy, Default, Deserialize, Div, Hash, Neg, PartialEq, Refineable, Serialize, Sub,
 )]
@@ -423,12 +372,7 @@ impl<T: Clone + Debug + Default + PartialEq> Size<T> {
     }
 }
 
-/// Constructs a new `Size<T>` with the provided width and height.
-///
-/// # Arguments
-///
-/// * `width` - The width component of the `Size`.
-/// * `height` - The height component of the `Size`.
+/// Constructs a `Size<T>` with the given width and height.
 ///
 /// # Examples
 ///
@@ -449,15 +393,7 @@ impl<T> Size<T>
 where
     T: Clone + Debug + Default + PartialEq,
 {
-    /// Applies a function to the width and height of the size, producing a new `Size<U>`.
-    ///
-    /// This method allows for converting a `Size<T>` to a `Size<U>` by specifying a closure
-    /// that defines how to convert between the two types. The closure is applied to both the `width`
-    /// and `height`, resulting in a new size of the desired type.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a value of type `T` and returns a value of type `U`.
+    /// Applies `f` to the width and height, producing a `Size<U>`.
     ///
     /// # Examples
     ///
@@ -506,15 +442,7 @@ where
 }
 
 impl Size<Pixels> {
-    /// Scales the size by a given factor.
-    ///
-    /// This method multiplies both the width and height by the provided scaling factor,
-    /// resulting in a new `Size<ScaledPixels>` that is proportionally larger or smaller
-    /// depending on the factor.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scaling factor to apply to the width and height.
+    /// Multiplies the width and height by `factor`, producing a `Size<ScaledPixels>`.
     ///
     /// # Examples
     ///
@@ -564,11 +492,7 @@ impl<T> Size<T>
 where
     T: PartialOrd + Clone + Debug + Default + PartialEq,
 {
-    /// Returns a new `Size` with the maximum width and height from `self` and `other`.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Size` to compare with `self`.
+    /// Returns the maximum width and height from `self` and `other`.
     ///
     /// # Examples
     ///
@@ -594,11 +518,7 @@ where
         }
     }
 
-    /// Returns a new `Size` with the minimum width and height from `self` and `other`.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Size` to compare with `self`.
+    /// Returns the minimum width and height from `self` and `other`.
     ///
     /// # Examples
     ///
@@ -696,15 +616,7 @@ impl From<Size<Pixels>> for Size<AbsoluteLength> {
 }
 
 impl Size<Length> {
-    /// Returns a `Size` with both width and height set to fill the available space.
-    ///
-    /// This function creates a `Size` instance where both the width and height are set to
-    /// `Length::Definite(DefiniteLength::Relative(Relative(1.0)))`,
-    /// which represents 100% of the available space in both dimensions.
-    ///
-    /// # Returns
-    ///
-    /// A `Size<Length>` that will fill the available space when used in a layout.
+    /// Returns a `Size<Length>` with both dimensions set to 100% of the available space.
     pub fn full() -> Self {
         Self {
             width: relative(1.).into(),
@@ -714,15 +626,9 @@ impl Size<Length> {
 }
 
 impl Size<Length> {
-    /// Returns a `Size` with both width and height set to `auto`, which allows the layout engine to determine the size.
+    /// Returns a size with both dimensions set to `Length::Auto`.
     ///
-    /// This function creates a `Size` instance where both the width and height are set to `Length::Auto`,
-    /// indicating that their size should be computed based on the layout context, such as the content size or
-    /// available space.
-    ///
-    /// # Returns
-    ///
-    /// A `Size<Length>` with width and height set to `Length::Auto`.
+    /// Layout determines the size from content dimensions and available space.
     pub fn auto() -> Self {
         Self {
             width: Length::Auto,
@@ -731,11 +637,7 @@ impl Size<Length> {
     }
 }
 
-/// Represents a rectangular area in a 2D space with an origin point and a size.
-///
-/// The `Bounds` struct is generic over a type `T` which represents the type of the coordinate system.
-/// The origin is represented as a `Point<T>` which defines the top left corner of the rectangle,
-/// and the size is represented as a `Size<T>` which defines the width and height of the rectangle.
+/// A rectangle with a top left origin and a width and height in units of type `T`.
 ///
 /// # Examples
 ///
@@ -800,16 +702,7 @@ impl<T> Bounds<T>
 where
     T: Clone + Debug + Default + PartialEq,
 {
-    /// Creates a new `Bounds` with the specified origin and size.
-    ///
-    /// # Arguments
-    ///
-    /// * `origin` - A `Point<T>` representing the origin of the bounds.
-    /// * `size` - A `Size<T>` representing the size of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Bounds<T>` that has the given origin and size.
+    /// Creates bounds with the given origin and size.
     pub fn new(origin: Point<T>, size: Size<T>) -> Self {
         Bounds { origin, size }
     }
@@ -819,20 +712,7 @@ impl<T> Bounds<T>
 where
     T: Sub<Output = T> + Clone + Debug + Default + PartialEq,
 {
-    /// Constructs a `Bounds` from two corner points: the top left and bottom right corners.
-    ///
-    /// This function calculates the origin and size of the `Bounds` based on the provided corner points.
-    /// The origin is set to the top left corner, and the size is determined by the difference between
-    /// the x and y coordinates of the bottom right and top left points.
-    ///
-    /// # Arguments
-    ///
-    /// * `top_left` - A `Point<T>` representing the top left corner of the rectangle.
-    /// * `bottom_right` - A `Point<T>` representing the bottom right corner of the rectangle.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Bounds<T>` that encompasses the area defined by the two corner points.
+    /// Creates bounds with `top_left` as the origin and `bottom_right - top_left` as the size.
     ///
     /// # Examples
     ///
@@ -926,18 +806,7 @@ impl<T> Bounds<T>
 where
     T: PartialOrd + Add<T, Output = T> + Clone + Debug + Default + PartialEq,
 {
-    /// Checks if this `Bounds` intersects with another `Bounds`.
-    ///
-    /// Two `Bounds` instances intersect if they overlap in the 2D space they occupy.
-    /// This method checks if there is any overlapping area between the two bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Bounds` to check for intersection with.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if there is any intersection between the two bounds, `false` otherwise.
+    /// Returns whether these bounds overlap `other`.
     ///
     /// # Examples
     ///
@@ -974,15 +843,7 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + Half + Clone + Debug + Default + PartialEq,
 {
-    /// Returns the center point of the bounds.
-    ///
-    /// Calculates the center by taking the origin's x and y coordinates and adding half the width and height
-    /// of the bounds, respectively. The center is represented as a `Point<T>` where `T` is the type of the
-    /// coordinate system.
-    ///
-    /// # Returns
-    ///
-    /// A `Point<T>` representing the center of the bounds.
+    /// Returns the origin plus half the width and height.
     ///
     /// # Examples
     ///
@@ -1007,12 +868,7 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + Clone + Debug + Default + PartialEq,
 {
-    /// Calculates the half perimeter of a rectangle defined by the bounds.
-    ///
-    /// The half perimeter is calculated as the sum of the width and the height of the rectangle.
-    /// This method is generic over the type `T` which must implement the `Sub` trait to allow
-    /// calculation of the width and height from the bounds' origin and size, as well as the `Add` trait
-    /// to sum the width and height for the half perimeter.
+    /// Returns the half perimeter, the sum of the width and height.
     ///
     /// # Examples
     ///
@@ -1034,17 +890,8 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq,
 {
-    /// Dilates the bounds by a specified amount in all directions.
-    ///
-    /// This method expands the bounds by the given `amount`, increasing the size
-    /// and adjusting the origin so that the bounds grow outwards equally in all directions.
-    /// The resulting bounds will have its width and height increased by twice the `amount`
-    /// (since it grows in both directions), and the origin will be moved by `-amount`
-    /// in both the x and y directions.
-    ///
-    /// # Arguments
-    ///
-    /// * `amount` - The amount by which to dilate the bounds.
+    /// Expands the bounds by `amount` in every direction. Moves the origin by `-amount`
+    /// and increases the width and height by twice `amount`.
     ///
     /// # Examples
     ///
@@ -1093,9 +940,9 @@ where
         + Default
         + PartialEq,
 {
-    /// Inset the bounds by a specified amount. Equivalent to `dilate` with the amount negated.
+    /// Insets the bounds, equivalent to `dilate` with the amount negated.
     ///
-    /// Note that this may panic if T does not support negative values.
+    /// May panic if `T` does not support negative values.
     pub fn inset(&self, amount: T) -> Self {
         self.dilate(-amount)
     }
@@ -1104,19 +951,8 @@ where
 impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq>
     Bounds<T>
 {
-    /// Calculates the intersection of two `Bounds` objects.
-    ///
-    /// This method computes the overlapping region of two `Bounds`. If the bounds do not intersect,
-    /// the resulting `Bounds` will have a size with width and height of zero.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Bounds` to intersect with.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Bounds` representing the intersection area. If there is no intersection,
-    /// the returned `Bounds` will have a size with width and height of zero.
+    /// Returns the overlapping region of these bounds and `other`, with non-overlapping
+    /// dimensions clamped to zero.
     ///
     /// # Examples
     ///
@@ -1146,19 +982,7 @@ impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Defa
         Self::from_corners(upper_left, bottom_right)
     }
 
-    /// Computes the union of two `Bounds`.
-    ///
-    /// This method calculates the smallest `Bounds` that contains both the current `Bounds` and the `other` `Bounds`.
-    /// The resulting `Bounds` will have an origin that is the minimum of the origins of the two `Bounds`,
-    /// and a size that encompasses the furthest extents of both `Bounds`.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Bounds` to create a union with.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Bounds` representing the union of the two `Bounds`.
+    /// Returns the smallest bounds containing both `self` and `other`.
     ///
     /// # Examples
     ///
@@ -1285,47 +1109,27 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + Clone + Debug + Default + PartialEq,
 {
-    /// Returns the top edge of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A value of type `T` representing the y-coordinate of the top edge of the bounds.
+    /// Returns the y-coordinate of the top edge.
     pub fn top(&self) -> T {
         self.origin.y.clone()
     }
 
-    /// Returns the bottom edge of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A value of type `T` representing the y-coordinate of the bottom edge of the bounds.
+    /// Returns the y-coordinate of the bottom edge.
     pub fn bottom(&self) -> T {
         self.origin.y.clone() + self.size.height.clone()
     }
 
-    /// Returns the left edge of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A value of type `T` representing the x-coordinate of the left edge of the bounds.
+    /// Returns the x-coordinate of the left edge.
     pub fn left(&self) -> T {
         self.origin.x.clone()
     }
 
-    /// Returns the right edge of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A value of type `T` representing the x-coordinate of the right edge of the bounds.
+    /// Returns the x-coordinate of the right edge.
     pub fn right(&self) -> T {
         self.origin.x.clone() + self.size.width.clone()
     }
 
-    /// Returns the top right corner point of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A `Point<T>` representing the top right corner of the bounds.
+    /// Returns the top right corner.
     ///
     /// # Examples
     ///
@@ -1345,11 +1149,7 @@ where
         }
     }
 
-    /// Returns the bottom right corner point of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A `Point<T>` representing the bottom right corner of the bounds.
+    /// Returns the bottom right corner.
     ///
     /// # Examples
     ///
@@ -1369,11 +1169,7 @@ where
         }
     }
 
-    /// Returns the bottom left corner point of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A `Point<T>` representing the bottom left corner of the bounds.
+    /// Returns the bottom left corner.
     ///
     /// # Examples
     ///
@@ -1398,11 +1194,7 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + Half + Clone + Debug + Default + PartialEq,
 {
-    /// Returns the requested corner point of the bounds.
-    ///
-    /// # Returns
-    ///
-    /// A `Point<T>` representing the corner of the bounds requested by the parameter.
+    /// Returns the requested corner point.
     ///
     /// # Examples
     ///
@@ -1433,20 +1225,7 @@ impl<T> Bounds<T>
 where
     T: Add<T, Output = T> + PartialOrd + Clone + Debug + Default + PartialEq,
 {
-    /// Checks if the given point is within the bounds.
-    ///
-    /// This method determines whether a point lies inside the rectangle defined by the bounds,
-    /// including the edges. The point is considered inside if its x-coordinate is greater than
-    /// or equal to the left edge and less than or equal to the right edge, and its y-coordinate
-    /// is greater than or equal to the top edge and less than or equal to the bottom edge of the bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `point` - A reference to a `Point<T>` that represents the point to check.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the point is within the bounds, `false` otherwise.
+    /// Returns whether the point lies within the bounds, including the edges.
     ///
     /// # Examples
     ///
@@ -1469,19 +1248,7 @@ where
             && point.y < self.origin.y.clone() + self.size.height.clone()
     }
 
-    /// Checks if this bounds is completely contained within another bounds.
-    ///
-    /// This method determines whether the current bounds is entirely enclosed by the given bounds.
-    /// A bounds is considered to be contained within another if its origin (top-left corner) and
-    /// its bottom-right corner are both contained within the other bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - A reference to another `Bounds` that might contain this bounds.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if this bounds is completely inside the other bounds, `false` otherwise.
+    /// Returns whether `other` contains both the origin and bottom right corner of these bounds.
     ///
     /// # Examples
     ///
@@ -1507,19 +1274,7 @@ where
         other.contains(&self.origin) && other.contains(&self.bottom_right())
     }
 
-    /// Applies a function to the origin and size of the bounds, producing a new `Bounds<U>`.
-    ///
-    /// This method allows for converting a `Bounds<T>` to a `Bounds<U>` by specifying a closure
-    /// that defines how to convert between the two types. The closure is applied to the `origin` and
-    /// `size` fields, resulting in new bounds of the desired type.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a value of type `T` and returns a value of type `U`.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Bounds<U>` with the origin and size mapped by the provided function.
+    /// Applies `f` to each origin coordinate and size dimension, producing a `Bounds<U>`.
     ///
     /// # Examples
     ///
@@ -1606,17 +1361,8 @@ where
     }
 }
 
-/// Checks if the bounds represent an empty area.
-///
-/// # Returns
-///
-/// Returns `true` if either the width or the height of the bounds is less than or equal to zero, indicating an empty area.
 impl<T: PartialOrd + Clone + Debug + Default + PartialEq> Bounds<T> {
-    /// Checks if the bounds represent an empty area.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if either the width or the height of the bounds is less than or equal to zero, indicating an empty area.
+    /// Returns whether the width or height is zero or negative.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.size.width <= T::default() || self.size.height <= T::default()
@@ -1656,20 +1402,8 @@ impl Size<Pixels> {
 }
 
 impl Bounds<Pixels> {
-    /// Scales the bounds by a given factor, typically used to adjust for display scaling.
-    ///
-    /// This method multiplies the origin and size of the bounds by the provided scaling factor,
-    /// resulting in a new `Bounds<ScaledPixels>` that is proportionally larger or smaller
-    /// depending on the scaling factor. This can be used to ensure that the bounds are properly
-    /// scaled for different display densities.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scaling factor to apply to the origin and size, typically the display's scaling factor.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Bounds<ScaledPixels>` that represents the scaled bounds.
+    /// Multiplies the origin and size by `factor`, producing `Bounds<ScaledPixels>`.
+    /// Usually used with the display scale factor to account for pixel density.
     ///
     /// # Examples
     ///
@@ -1790,19 +1524,7 @@ where
 impl<T: Clone + Debug + Default + PartialEq + Copy> Copy for Edges<T> {}
 
 impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
-    /// Constructs `Edges` where all sides are set to the same specified value.
-    ///
-    /// This function creates an `Edges` instance with the `top`, `right`, `bottom`, and `left` fields all initialized
-    /// to the same value provided as an argument. This is useful when you want to have uniform edges around a box,
-    /// such as padding or margin with the same size on all sides.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The value to set for all four sides of the edges.
-    ///
-    /// # Returns
-    ///
-    /// An `Edges` instance with all sides set to the given value.
+    /// Creates edges with all four sides set to `value`, for uniform padding or margins.
     ///
     /// # Examples
     ///
@@ -1867,19 +1589,7 @@ impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
         }
     }
 
-    /// Applies a function to each field of the `Edges`, producing a new `Edges<U>`.
-    ///
-    /// This method allows for converting an `Edges<T>` to an `Edges<U>` by specifying a closure
-    /// that defines how to convert between the two types. The closure is applied to each field
-    /// (`top`, `right`, `bottom`, `left`), resulting in new edges of the desired type.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a reference to a value of type `T` and returns a value of type `U`.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Edges<U>` with each field mapped by the provided function.
+    /// Applies `f` to each edge by reference, producing `Edges<U>`.
     ///
     /// # Examples
     ///
@@ -1901,17 +1611,7 @@ impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
         }
     }
 
-    /// Checks if any of the edges satisfy a given predicate.
-    ///
-    /// This method applies a predicate function to each field of the `Edges` and returns `true` if any field satisfies the predicate.
-    ///
-    /// # Arguments
-    ///
-    /// * `predicate` - A closure that takes a reference to a value of type `T` and returns a `bool`.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the predicate returns `true` for any of the edge values, `false` otherwise.
+    /// Returns whether any edge satisfies `predicate`.
     ///
     /// # Examples
     ///
@@ -1937,13 +1637,7 @@ impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
 }
 
 impl Edges<Length> {
-    /// Sets the edges of the `Edges` struct to `auto`, which is a special value that allows the layout engine to automatically determine the size of the edges.
-    ///
-    /// This is typically used in layout contexts where the exact size of the edges is not important, or when the size should be calculated based on the content or container.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<Length>` with all edges set to `Length::Auto`.
+    /// Returns edges set to `Length::Auto`, letting the layout engine determine their sizes.
     ///
     /// # Examples
     ///
@@ -1964,14 +1658,7 @@ impl Edges<Length> {
         }
     }
 
-    /// Sets the edges of the `Edges` struct to zero, which means no size or thickness.
-    ///
-    /// This is typically used when you want to specify that a box (like a padding or margin area)
-    /// should have no edges, effectively making it non-existent or invisible in layout calculations.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<Length>` with all edges set to zero length.
+    /// Returns zero-length edges.
     ///
     /// # Examples
     ///
@@ -1994,14 +1681,7 @@ impl Edges<Length> {
 }
 
 impl Edges<DefiniteLength> {
-    /// Sets the edges of the `Edges` struct to zero, which means no size or thickness.
-    ///
-    /// This is typically used when you want to specify that a box (like a padding or margin area)
-    /// should have no edges, effectively making it non-existent or invisible in layout calculations.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<DefiniteLength>` with all edges set to zero length.
+    /// Returns zero-length edges.
     ///
     /// # Examples
     ///
@@ -2022,19 +1702,8 @@ impl Edges<DefiniteLength> {
         }
     }
 
-    /// Converts the `DefiniteLength` to `Pixels` based on the parent size and the REM size.
-    ///
-    /// This method allows for a `DefiniteLength` value to be converted into pixels, taking into account
-    /// the size of the parent element (for percentage-based lengths) and the size of a rem unit (for rem-based lengths).
-    ///
-    /// # Arguments
-    ///
-    /// * `parent_size` - `Size<AbsoluteLength>` representing the size of the parent element.
-    /// * `rem_size` - `Pixels` representing the size of one REM unit.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<Pixels>` representing the edges with lengths converted to pixels.
+    /// Converts each edge to pixels using `parent_size` for percentage lengths
+    /// and `rem_size` for rem lengths.
     ///
     /// # Examples
     ///
@@ -2069,14 +1738,7 @@ impl Edges<DefiniteLength> {
 }
 
 impl Edges<AbsoluteLength> {
-    /// Sets the edges of the `Edges` struct to zero, which means no size or thickness.
-    ///
-    /// This is typically used when you want to specify that a box (like a padding or margin area)
-    /// should have no edges, effectively making it non-existent or invisible in layout calculations.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<AbsoluteLength>` with all edges set to zero length.
+    /// Returns zero-length edges.
     ///
     /// # Examples
     ///
@@ -2097,18 +1759,8 @@ impl Edges<AbsoluteLength> {
         }
     }
 
-    /// Converts the `AbsoluteLength` to `Pixels` based on the `rem_size`.
-    ///
-    /// If the `AbsoluteLength` is already in pixels, it simply returns the corresponding `Pixels` value.
-    /// If the `AbsoluteLength` is in rems, it multiplies the number of rems by the `rem_size` to convert it to pixels.
-    ///
-    /// # Arguments
-    ///
-    /// * `rem_size` - The size of one rem unit in pixels.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Edges<Pixels>` representing the edges with lengths converted to pixels.
+    /// Converts each edge to pixels. Pixel lengths stay unchanged, and rem lengths
+    /// are multiplied by `rem_size`.
     ///
     /// # Examples
     ///
@@ -2139,17 +1791,7 @@ impl Edges<AbsoluteLength> {
 }
 
 impl Edges<Pixels> {
-    /// Scales the `Edges<Pixels>` by a given factor, returning `Edges<ScaledPixels>`.
-    ///
-    /// This method is typically used for adjusting the edge sizes for different display densities or scaling factors.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scaling factor to apply to each edge.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Edges<ScaledPixels>` where each edge is the result of scaling the original edge by the given factor.
+    /// Multiplies each edge by `factor`, producing `Edges<ScaledPixels>`.
     ///
     /// # Examples
     ///
@@ -2176,11 +1818,7 @@ impl Edges<Pixels> {
         }
     }
 
-    /// Returns the maximum value of any edge.
-    ///
-    /// # Returns
-    ///
-    /// The maximum `Pixels` value among all four edges.
+    /// Returns the maximum value among all four edges.
     pub fn max(&self) -> Pixels {
         self.top.max(self.right).max(self.bottom).max(self.left)
     }
@@ -2314,19 +1952,7 @@ impl<T> Corners<T>
 where
     T: Add<T, Output = T> + Half + Clone + Debug + Default + PartialEq,
 {
-    /// Constructs `Corners` where all sides are set to the same specified value.
-    ///
-    /// This function creates a `Corners` instance with the `top_left`, `top_right`, `bottom_right`, and `bottom_left` fields all initialized
-    /// to the same value provided as an argument. This is useful when you want to have uniform corners around a box,
-    /// such as a uniform border radius on a rectangle.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The value to set for all four corners.
-    ///
-    /// # Returns
-    ///
-    /// An `Corners` instance with all corners set to the given value.
+    /// Creates corners with all four values set to `value`, for a uniform border radius.
     ///
     /// # Examples
     ///
@@ -2347,17 +1973,10 @@ where
         }
     }
 
-    /// Returns the requested corner value, supporting all eight corner positions.
+    /// Returns the field value for a corner position.
     ///
-    /// For the four basic corners (TopLeft, TopRight, BottomLeft, BottomRight),
-    /// this returns the corresponding field value directly.
-    ///
-    /// For the center positions (TopCenter, BottomCenter, LeftCenter, RightCenter),
-    /// this calculates the average of the two adjacent corners.
-    ///
-    /// # Returns
-    ///
-    /// A value of type `T` representing the corner requested by the parameter.
+    /// For `TopCenter`, `BottomCenter`, `LeftCenter`, and `RightCenter`, returns
+    /// the average of the two adjacent corners, supporting all eight positions.
     ///
     /// # Examples
     ///
@@ -2406,15 +2025,7 @@ where
 }
 
 impl Corners<AbsoluteLength> {
-    /// Converts the `AbsoluteLength` to `Pixels` based on the provided rem size.
-    ///
-    /// # Arguments
-    ///
-    /// * `rem_size` - The size of one REM unit in pixels, used for conversion if the `AbsoluteLength` is in REMs.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Corners<Pixels>` instance with each corner's length converted to pixels.
+    /// Converts each corner to pixels, using `rem_size` as the pixel size of one rem.
     ///
     /// # Examples
     ///
@@ -2445,17 +2056,7 @@ impl Corners<AbsoluteLength> {
 }
 
 impl Corners<Pixels> {
-    /// Scales the `Corners<Pixels>` by a given factor, returning `Corners<ScaledPixels>`.
-    ///
-    /// This method is typically used for adjusting the corner sizes for different display densities or scaling factors.
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - The scaling factor to apply to each corner.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Corners<ScaledPixels>` where each corner is the result of scaling the original corner by the given factor.
+    /// Multiplies each corner by `factor`, producing `Corners<ScaledPixels>`.
     ///
     /// # Examples
     ///
@@ -2483,11 +2084,7 @@ impl Corners<Pixels> {
         }
     }
 
-    /// Returns the maximum value of any corner.
-    ///
-    /// # Returns
-    ///
-    /// The maximum `Pixels` value among all four corners.
+    /// Returns the maximum value among all four corners.
     #[must_use]
     pub fn max(&self) -> Pixels {
         self.top_left
@@ -2498,15 +2095,7 @@ impl Corners<Pixels> {
 }
 
 impl<T: Div<f32, Output = T> + Ord + Clone + Debug + Default + PartialEq> Corners<T> {
-    /// Clamps corner radii to be less than or equal to half the shortest side of a quad.
-    ///
-    /// # Arguments
-    ///
-    /// * `size` - The size of the quad which limits the size of the corner radii.
-    ///
-    /// # Returns
-    ///
-    /// Anchor radii values clamped to fit.
+    /// Clamps each corner radius to at most half the shortest side of `size`.
     #[must_use]
     pub fn clamp_radii_for_quad_size(self, size: Size<T>) -> Corners<T> {
         let max = cmp::min(size.width, size.height) / 2.;
@@ -2520,19 +2109,7 @@ impl<T: Div<f32, Output = T> + Ord + Clone + Debug + Default + PartialEq> Corner
 }
 
 impl<T: Clone + Debug + Default + PartialEq> Corners<T> {
-    /// Applies a function to each field of the `Corners`, producing a new `Corners<U>`.
-    ///
-    /// This method allows for converting a `Corners<T>` to a `Corners<U>` by specifying a closure
-    /// that defines how to convert between the two types. The closure is applied to each field
-    /// (`top_left`, `top_right`, `bottom_right`, `bottom_left`), resulting in new corners of the desired type.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a reference to a value of type `T` and returns a value of type `U`.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Corners<U>` with each field mapped by the provided function.
+    /// Applies `f` to each corner by reference, producing `Corners<U>`.
     ///
     /// # Examples
     ///
@@ -2679,15 +2256,8 @@ impl From<Percentage> for Radians {
     }
 }
 
-/// Represents a length in pixels, the base unit of measurement in the UI framework.
-///
-/// `Pixels` is a value type that represents an absolute length in pixels, which is used
-/// for specifying sizes, positions, and distances in the UI. It is the fundamental unit
-/// of measurement for all visual elements and layout calculations.
-///
-/// The inner value is an `f32`, allowing for sub-pixel precision which can be useful for
-/// anti-aliasing and animations. However, when applied to actual pixel grids, the value
-/// is typically rounded to the nearest integer.
+/// A logical pixel length stored as an `f32` for subpixel precision.
+/// Values are typically rounded when mapped to a physical pixel grid.
 ///
 /// # Examples
 ///
@@ -2835,84 +2405,44 @@ impl Pixels {
         self.0
     }
 
-    /// Floors the `Pixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Pixels` instance with the floored value.
+    /// Rounds down to the nearest whole pixel.
     pub fn floor(&self) -> Self {
         Self(self.0.floor())
     }
 
-    /// Rounds the `Pixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Pixels` instance with the rounded value.
+    /// Rounds to the nearest whole pixel.
     pub fn round(&self) -> Self {
         Self(self.0.round())
     }
 
-    /// Returns the ceiling of the `Pixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Pixels` instance with the ceiling value.
+    /// Rounds up to the nearest whole pixel.
     pub fn ceil(&self) -> Self {
         Self(self.0.ceil())
     }
 
-    /// Scales the `Pixels` value by a given factor, producing `ScaledPixels`.
-    ///
-    /// This method is used when adjusting pixel values for display scaling factors,
-    /// such as high DPI (dots per inch) or Retina displays, where the pixel density is higher and
-    /// thus requires scaling to maintain visual consistency and readability.
-    ///
-    /// The resulting `ScaledPixels` represent the scaled value which can be used for rendering
-    /// calculations where display scaling is considered.
+    /// Multiplies by `factor`, usually the display scale factor, producing `ScaledPixels`
+    /// for rendering on displays with different pixel densities.
     #[must_use]
     pub fn scale(&self, factor: f32) -> ScaledPixels {
         ScaledPixels(self.0 * factor)
     }
 
-    /// Raises the `Pixels` value to a given power.
-    ///
-    /// # Arguments
-    ///
-    /// * `exponent` - The exponent to raise the `Pixels` value by.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `Pixels` instance with the value raised to the given exponent.
+    /// Raises the pixel value to `exponent`.
     pub fn pow(&self, exponent: f32) -> Self {
         Self(self.0.powf(exponent))
     }
 
-    /// Returns the absolute value of the `Pixels`.
-    ///
-    /// # Returns
-    ///
-    /// A new `Pixels` instance with the absolute value of the original `Pixels`.
+    /// Returns the absolute pixel value.
     pub fn abs(&self) -> Self {
         Self(self.0.abs())
     }
 
-    /// Returns the sign of the `Pixels` value.
-    ///
-    /// # Returns
-    ///
-    /// Returns:
-    /// * `1.0` if the value is positive
-    /// * `-1.0` if the value is negative
+    /// Returns `1.0` for positive values and `-1.0` for negative values.
     pub fn signum(&self) -> f32 {
         self.0.signum()
     }
 
-    /// Returns the f64 value of `Pixels`.
-    ///
-    /// # Returns
-    ///
-    /// A f64 value of the `Pixels`.
+    /// Returns the pixel value as an `f64`.
     pub fn to_f64(self) -> f64 {
         self.0 as f64
     }
@@ -2998,13 +2528,7 @@ impl From<usize> for Pixels {
     }
 }
 
-/// Represents physical pixels on the display.
-///
-/// `DevicePixels` is a unit of measurement that refers to the actual pixels on a device's screen.
-/// This type is used when precise pixel manipulation is required, such as rendering graphics or
-/// interfacing with hardware that operates on the pixel level. Unlike logical pixels that may be
-/// affected by the device's scale factor, `DevicePixels` always correspond to real pixels on the
-/// display.
+/// A count of physical display pixels, independent of the logical scale factor.
 #[derive(
     Add,
     AddAssign,
@@ -3026,18 +2550,8 @@ impl From<usize> for Pixels {
 pub struct DevicePixels(pub i32);
 
 impl DevicePixels {
-    /// Converts the `DevicePixels` value to the number of bytes needed to represent it in memory.
-    ///
-    /// This function is useful when working with graphical data that needs to be stored in a buffer,
-    /// such as images or framebuffers, where each pixel may be represented by a specific number of bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes_per_pixel` - The number of bytes used to represent a single pixel.
-    ///
-    /// # Returns
-    ///
-    /// The number of bytes required to represent the `DevicePixels` value in memory.
+    /// Returns the byte count for this many pixels at `bytes_per_pixel` bytes each.
+    /// Use when sizing image or framebuffer storage.
     ///
     /// # Examples
     ///
@@ -3107,13 +2621,8 @@ impl From<usize> for DevicePixels {
     }
 }
 
-/// Represents scaled pixels that take into account the device's scale factor.
-///
-/// `ScaledPixels` are used to ensure that UI elements appear at the correct size on devices
-/// with different pixel densities. When a device has a higher scale factor (such as Retina displays),
-/// a single logical pixel may correspond to multiple physical pixels. By using `ScaledPixels`,
-/// dimensions and positions can be specified in a way that scales appropriately across different
-/// display resolutions.
+/// A pixel length multiplied by the device scale factor.
+/// One logical pixel may span multiple physical pixels on a high-density display.
 #[derive(Clone, Copy, Default, Add, AddAssign, Sub, SubAssign, Div, DivAssign, PartialEq)]
 #[repr(transparent)]
 pub struct ScaledPixels(pub f32);
@@ -3124,29 +2633,17 @@ impl ScaledPixels {
         self.0
     }
 
-    /// Floors the `ScaledPixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `ScaledPixels` instance with the floored value.
+    /// Rounds down to the nearest whole scaled pixel.
     pub fn floor(&self) -> Self {
         Self(self.0.floor())
     }
 
-    /// Rounds the `ScaledPixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `ScaledPixels` instance with the rounded value.
+    /// Rounds to the nearest whole scaled pixel.
     pub fn round(&self) -> Self {
         Self(self.0.round())
     }
 
-    /// Ceils the `ScaledPixels` value to the nearest whole number.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new `ScaledPixels` instance with the ceiled value.
+    /// Rounds up to the nearest whole scaled pixel.
     pub fn ceil(&self) -> Self {
         Self(self.0.ceil())
     }
@@ -3268,14 +2765,9 @@ impl MulAssign<f32> for ScaledPixels {
     }
 }
 
-/// Represents a length in rems, a unit based on the font-size of the window, which can be assigned with [`Window::set_rem_size`][set_rem_size].
+/// A length in units of the window font size, set with [`Window::set_rem_size`][set_rem_size].
 ///
-/// Rems are used for defining lengths that are scalable and consistent across different UI elements.
-/// The value of `1rem` is typically equal to the font-size of the root element (often the `<html>` element in browsers),
-/// making it a flexible unit that adapts to the user's text size preferences. In this framework, `rems` serve a similar
-/// purpose, allowing for scalable and accessible design that can adjust to different display settings or user preferences.
-///
-/// For example, if the root element's font-size is `16px`, then `1rem` equals `16px`. A length of `2rems` would then be `32px`.
+/// For a font size of `16px`, `1rem` is `16px` and `2rem` is `32px`.
 ///
 /// [set_rem_size]: crate::Window::set_rem_size
 #[derive(Clone, Copy, Default, Add, Sub, Mul, Div, Neg, PartialEq)]
@@ -3408,12 +2900,8 @@ impl TryFrom<&'_ str> for Relative {
     }
 }
 
-/// Represents an absolute length in pixels or rems.
-///
-/// `AbsoluteLength` can be either a fixed number of pixels, which is an absolute measurement not
-/// affected by the current font size, or a number of rems, which is relative to the font size of
-/// the root element. It is used for specifying dimensions that are either independent of or
-/// related to the typographic scale.
+/// An absolute length in pixels or rems. Pixels do not depend on font size,
+/// while rems scale with the root font size.
 #[derive(Clone, Copy, Neg, PartialEq)]
 pub enum AbsoluteLength {
     /// A length in pixels.
@@ -3445,15 +2933,7 @@ impl From<Rems> for AbsoluteLength {
 }
 
 impl AbsoluteLength {
-    /// Converts an `AbsoluteLength` to `Pixels` based on a given `rem_size`.
-    ///
-    /// # Arguments
-    ///
-    /// * `rem_size` - The size of one rem in pixels.
-    ///
-    /// # Returns
-    ///
-    /// Returns the `AbsoluteLength` as `Pixels`.
+    /// Converts to pixels, using `rem_size` as the pixel size of one rem.
     ///
     /// # Examples
     ///
@@ -3473,15 +2953,7 @@ impl AbsoluteLength {
         }
     }
 
-    /// Converts an `AbsoluteLength` to `Rems` based on a given `rem_size`.
-    ///
-    /// # Arguments
-    ///
-    /// * `rem_size` - The size of one rem in pixels.
-    ///
-    /// # Returns
-    ///
-    /// Returns the `AbsoluteLength` as `Pixels`.
+    /// Converts to rems, using `rem_size` as the pixel size of one rem.
     pub fn to_rems(self, rem_size: Pixels) -> Rems {
         match self {
             AbsoluteLength::Pixels(pixels) => Rems(pixels.0 / rem_size.0),
@@ -3571,11 +3043,7 @@ impl Serialize for AbsoluteLength {
     }
 }
 
-/// A non-auto length that can be defined in pixels, rems, or percent of parent.
-///
-/// This enum represents lengths that have a specific value, as opposed to lengths that are automatically
-/// determined by the context. It includes absolute lengths in pixels or rems, and relative lengths as a
-/// fraction of the parent's size.
+/// A non-auto length in pixels, rems, or a fraction of the parent size.
 #[derive(Clone, Copy, Neg, PartialEq)]
 pub enum DefiniteLength {
     /// An absolute length specified in pixels or rems.
@@ -3585,19 +3053,8 @@ pub enum DefiniteLength {
 }
 
 impl DefiniteLength {
-    /// Converts the `DefiniteLength` to `Pixels` based on a given `base_size` and `rem_size`.
-    ///
-    /// If the `DefiniteLength` is an absolute length, it will be directly converted to `Pixels`.
-    /// If it is a fraction, the fraction will be multiplied by the `base_size` to get the length in pixels.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_size` - The base size in `AbsoluteLength` to which the fraction will be applied.
-    /// * `rem_size` - The size of one rem in pixels, used to convert rems to pixels.
-    ///
-    /// # Returns
-    ///
-    /// Returns the `DefiniteLength` as `Pixels`.
+    /// Converts to pixels, multiplying fractions by `base_size` and using `rem_size`
+    /// as the pixel size of one rem.
     ///
     /// # Examples
     ///
@@ -3813,18 +3270,9 @@ impl Serialize for Length {
     }
 }
 
-/// Constructs a `Relative` value representing a fraction of another length.
+/// Creates a [`Relative`] length, convertible to [`DefiniteLength`] or [`Length`].
 ///
-/// A fraction of `1.0` represents the full reference length. Values outside the range from `0.0`
-/// to `1.0` represent lengths below zero or greater than the full reference length.
-///
-/// # Arguments
-///
-/// * `fraction` - The fraction of the reference length.
-///
-/// # Returns
-///
-/// A `Relative` value that can be converted into a [`DefiniteLength`] or [`Length`].
+/// A fraction of `1.0` uses the full reference length. Values may be negative or greater than `1.0`.
 pub const fn relative(fraction: f32) -> Relative {
     Relative(fraction)
 }
@@ -3834,43 +3282,20 @@ pub const fn phi() -> Relative {
     relative(GOLDEN_RATIO)
 }
 
-/// Constructs a `Rems` value representing a length in rems.
-///
-/// # Arguments
-///
-/// * `rems` - The number of rems for the length.
-///
-/// # Returns
-///
-/// A `Rems` representing the specified number of rems.
+/// Creates a length of `rems` rems.
 pub const fn rems(rems: f32) -> Rems {
     Rems(rems)
 }
 
-/// Constructs a `Pixels` value representing a length in pixels.
-///
-/// # Arguments
-///
-/// * `pixels` - The number of pixels for the length.
-///
-/// # Returns
-///
-/// A `Pixels` representing the specified number of pixels.
+/// Creates a length of `pixels` logical pixels.
 pub const fn px(pixels: f32) -> Pixels {
     Pixels(pixels)
 }
 
-/// Returns a `Length` representing an automatic length.
+/// Returns `Length::Auto`, letting layout determine the length.
 ///
-/// The `auto` length is often used in layout calculations where the length should be determined
-/// by the layout context itself rather than being explicitly set. This is commonly used in CSS
-/// for properties like `width`, `height`, `margin`, `padding`, etc., where `auto` can be used
-/// to instruct the layout engine to calculate the size based on other factors like the size of the
-/// container or the intrinsic size of the content.
-///
-/// # Returns
-///
-/// A `Length` variant set to `Auto`.
+/// Used when dimensions should follow the container size or intrinsic content size
+/// rather than an explicit length.
 pub const fn auto() -> Length {
     Length::Auto
 }
@@ -3948,17 +3373,9 @@ impl From<GridPlacement> for taffy::GridPlacement {
     }
 }
 
-/// Provides a trait for types that can calculate half of their value.
-///
-/// The `Half` trait is used for types that can be evenly divided, returning a new instance of the same type
-/// representing half of the original value. This is commonly used for types that represent measurements or sizes,
-/// such as lengths or pixels, where halving is a frequent operation during layout calculations or animations.
+/// Types that can return half their value.
 pub trait Half {
-    /// Returns half of the current value.
-    ///
-    /// # Returns
-    ///
-    /// A new instance of the implementing type, representing half of the original value.
+    /// Returns half the current value.
     fn half(&self) -> Self;
 }
 
@@ -4004,18 +3421,9 @@ impl Half for Relative {
     }
 }
 
-/// A trait for checking if a value is zero.
-///
-/// This trait provides a method to determine if a value is considered to be zero.
-/// It is implemented for various numeric and length-related types where the concept
-/// of zero is applicable. This can be useful for comparisons, optimizations, or
-/// determining if an operation has a neutral effect.
+/// Types that can be checked for zero.
 pub trait IsZero {
-    /// Determines if the value is zero.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the value is zero, `false` otherwise.
+    /// Returns whether the value is zero.
     fn is_zero(&self) -> bool;
 }
 

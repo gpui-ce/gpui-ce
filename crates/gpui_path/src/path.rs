@@ -1,8 +1,7 @@
 //! Relative path types for deltadb.
 //!
-//! Provides [`RelPath`] and [`RelPathBuf`] — path types that are guaranteed to be
-//! relative, normalized, and valid unicode. Internally stored in POSIX (`/`-delimited)
-//! format regardless of host platform.
+//! [`RelPath`] and [`RelPathBuf`] are relative, normalized Unicode paths,
+//! stored with POSIX `/` separators on every platform.
 //!
 //! Adapted from Zed's `util::rel_path` module.
 
@@ -341,7 +340,7 @@ impl PathStyle {
                     && path_bytes.get(drive_start + 1) == Some(&b':');
 
                 // A drive letter only counts as a prefix when followed by a separator or end
-                // of path; otherwise (e.g. `\\?\C:foo`) the whole first component is the prefix.
+                // of path. Otherwise, as in `\\?\C:foo`, the whole first component is the prefix.
                 if has_drive_prefix
                     && path_bytes
                         .get(drive_end)

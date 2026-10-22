@@ -22,9 +22,7 @@ const MIN_THREADS: usize = 2;
 /// creating thread drains them via [`Self::run_until_idle`], since there is no
 /// platform run loop pumping them.
 ///
-/// Unlike [`TestDispatcher`](crate::TestDispatcher), which runs everything on a
-/// single thread with a virtual clock, work dispatched through this dispatcher
-/// executes with production concurrency.
+/// [`TestDispatcher`](crate::TestDispatcher) instead uses one thread and a virtual clock.
 pub struct ThreadedDispatcher {
     background_sender: PriorityQueueSender<RunnableVariant>,
     main_sender: PriorityQueueSender<RunnableVariant>,
@@ -263,11 +261,10 @@ impl ThreadedDispatcher {
     /// This is required when completion can arrive from an external worker that
     /// is not represented in the dispatcher's in-flight count.
     ///
-    /// Readiness is checked before every main-thread runnable, so this returns
-    /// as soon as `ready` observes completion rather than after the queue
-    /// drains — deferred work that re-queues itself (idle sweeps, pollers)
-    /// must not extend a benchmark's measured interval past the completion it
-    /// awaits.
+    /// Checks readiness before each main-thread runnable and returns as soon
+    /// as `ready` observes completion, without waiting for the queue to drain.
+    /// Self-requeuing work, such as idle sweeps or pollers, must not extend a
+    /// benchmark's measured interval past completion.
     #[cfg(any(test, feature = "bench-support"))]
     pub(crate) fn run_until<R>(&self, mut ready: impl FnMut() -> Option<R>) -> R {
         assert!(
@@ -292,10 +289,8 @@ impl ThreadedDispatcher {
 
     /// Runs at most one queued main-thread task, returning whether one ran.
     ///
-    /// [`Self::run_until`] steps tasks one at a time so it can observe
-    /// readiness between them: a task that perpetually re-queues itself (like
-    /// an idle-time sweep) would otherwise keep [`Self::drain_main_queue`]
-    /// looping past the completion the caller is waiting for.
+    /// [`Self::run_until`] checks readiness between tasks so self-requeuing work
+    /// cannot keep [`Self::drain_main_queue`] looping past completion.
     #[cfg(any(test, feature = "bench-support"))]
     fn run_one_main_task(&self) -> bool {
         let runnable = self.main_receiver.lock().try_pop();

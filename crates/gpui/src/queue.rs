@@ -231,16 +231,12 @@ impl<T> PriorityQueueReceiver<T> {
         queues.high_priority.len() + queues.medium_priority.len() + queues.low_priority.len()
     }
 
-    /// Tries to pop one element from the priority queue without blocking.
-    ///
-    /// This will early return if there are no elements in the queue.
-    ///
-    /// This method is best suited if you only intend to pop one element, for better performance
-    /// on large queues see [`Self::try_iter`]
+    /// Tries to pop one element without blocking, returning immediately if empty.
+    /// Use [`Self::try_iter`] for better performance when consuming large queues.
     ///
     /// # Errors
     ///
-    /// If the sender was dropped
+    /// Returns an error if the sender was dropped.
     pub fn try_pop(&mut self) -> Result<Option<T>, RecvError> {
         self.pop_inner(false)
     }
@@ -283,14 +279,12 @@ impl<T> PriorityQueueReceiver<T> {
         Ok(None)
     }
 
-    /// Pops an element from the priority queue blocking if necessary.
-    ///
-    /// This method is best suited if you only intend to pop one element, for better performance
-    /// on large queues see [`Self::iter``]
+    /// Pops one element, blocking if needed.
+    /// Use [`Self::iter`] for better performance when consuming large queues.
     ///
     /// # Errors
     ///
-    /// If the sender was dropped
+    /// Returns an error if the sender was dropped.
     pub fn pop(&mut self) -> Result<T, RecvError> {
         self.pop_inner(true).map(|e| e.unwrap())
     }

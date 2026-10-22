@@ -1,9 +1,5 @@
-//! KeyDispatch is where GPUI deals with binding actions to key events.
-//!
-//! The key pieces to making a key binding work are to define an action,
-//! implement a method that takes that action as a type parameter,
-//! and then to register the action during render on a focused node
-//! with a keymap context:
+//! Binds actions to key events. Define an action and its handler, then register it
+//! during render on a focused node with a keymap context:
 //!
 //! ```ignore
 //! actions!(editor,[Undo, Redo]);
@@ -25,9 +21,8 @@
 //! }
 //!```
 //!
-//! The keybindings themselves are managed independently by calling cx.bind_keys().
-//! (Though mostly when developing Zed itself, you just need to add a new line to
-//!  assets/keymaps/default-{platform}.json).
+//! Set keybindings with `cx.bind_keys()`. In Zed, add them to
+//! `assets/keymaps/default-{platform}.json`.
 //!
 //! ```ignore
 //! cx.bind_keys([
@@ -36,16 +31,11 @@
 //! ])
 //! ```
 //!
-//! With all of this in place, GPUI will ensure that if you have an Editor that contains
-//! the focus, hitting cmd-z will Undo.
+//! With focus in the Editor, cmd-z invokes Undo. For nested views, action matching
+//! bubbles from the focused child upward. In Zed, Editor bindings take precedence
+//! over Pane bindings, then Workspace bindings.
 //!
-//! In real apps, it is a little more complicated than this, because typically you have
-//! several nested views that each register keyboard handlers. In this case action matching
-//! bubbles up from the bottom. For example in Zed, the Workspace is the top-level view, which contains Pane's, which contain Editors. If there are conflicting keybindings defined
-//! then the Editor's bindings take precedence over the Pane's bindings, which take precedence over the Workspace.
-//!
-//! In GPUI, keybindings are not limited to just single keystrokes, you can define
-//! sequences by separating the keys with a space:
+//! Separate keys with spaces to bind a sequence:
 //!
 //!  KeyBinding::new("cmd-k left", pane::SplitLeft, Some("Pane"))
 
@@ -63,8 +53,7 @@ use std::{
     rc::Rc,
 };
 
-/// ID of a node within `DispatchTree`. Note that these are **not** stable between frames, and so a
-/// `DispatchNodeId` should only be used with the `DispatchTree` that provided it.
+/// A node id valid only within the `DispatchTree` that created it, not across frames.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct DispatchNodeId(usize);
 
@@ -729,14 +718,9 @@ mod tests {
         assert!(highest.is_some_and(|binding| binding.action.partial_eq(&TestAction)));
     }
 
-    /// Models the picker preview footer scenario: a picker action is bound in
-    /// `Picker > Editor`, but a base keymap binds the same chord to an editor
-    /// action in `Editor`. `Picker > Editor` and `Editor` resolve at the same
-    /// context depth, so at equal depth precedence is decided purely by load
-    /// order (later wins). Because base keymaps load after the default keymap,
-    /// the picker binding is shadowed unless it is (re)bound by an overlay that
-    /// loads after the base keymap - which is exactly what
-    /// `keymaps/specific-overrides*.json` does.
+    /// A picker action in `Picker > Editor` competes with an editor action in `Editor`
+    /// at equal context depth, so later keymaps win. Base keymaps load after defaults.
+    /// The picker binding needs a later overlay, as in `keymaps/specific-overrides*.json`.
     #[test]
     fn test_overlay_after_base_restores_shadowed_picker_binding() {
         // SecondaryTestAction stands in for the editor/base action (e.g.
@@ -746,9 +730,8 @@ mod tests {
             KeyContext::parse("Editor").unwrap(),
         ];
 
-        // Default keymap (picker binding) followed by a base keymap that binds
-        // the same chord to an editor action: the base binding wins and the
-        // picker action is shadowed, so its footer tooltip renders no shortcut.
+        // A later base editor binding shadows the default picker binding at equal depth,
+        // so the picker footer tooltip has no shortcut.
         let shadowed = test_dispatch_tree(vec![
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),
             KeyBinding::new("ctrl-alt-down", SecondaryTestAction, Some("Editor")),
@@ -773,9 +756,8 @@ mod tests {
             "overlay loaded after base should restore the picker binding"
         );
 
-        // Conversely, putting the override in the default keymap (i.e. before the
-        // base keymap) does NOT help: the later base binding still wins at equal
-        // depth. This is why the overlay must be loaded after the base keymap.
+        // An override in the default keymap still loses to a later base binding
+        // at equal depth. The overlay must load after the base keymap.
         let override_before_base = test_dispatch_tree(vec![
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),

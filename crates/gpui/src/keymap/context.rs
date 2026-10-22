@@ -2,10 +2,8 @@ use crate::SharedString;
 use anyhow::{Context as _, Result};
 use std::fmt;
 
-/// A datastructure for resolving whether an action should be dispatched
-/// at this point in the element tree. Contains a set of identifiers
-/// and/or key value pairs representing the current context for the
-/// keymap.
+/// Identifiers and key-value pairs describing the current element context
+/// for keymap action dispatch.
 #[derive(Clone, Default, Eq, PartialEq, Hash)]
 pub struct KeyContext(Vec<ContextEntry>);
 
@@ -57,11 +55,8 @@ impl KeyContext {
         self.0.iter().filter(move |&p| Some(p) != primary)
     }
 
-    /// Parse a key context from a string.
-    /// The key context format is very simple:
-    /// - either a single identifier, such as `StatusBar`
-    /// - or a key value pair, such as `mode = visible`
-    /// - separated by whitespace, such as `StatusBar mode = visible`
+    /// Parses whitespace-separated identifiers and key-value pairs,
+    /// such as `StatusBar mode = visible`.
     pub fn parse(source: &str) -> Result<Self> {
         let mut context = Self::default();
         let source = skip_whitespace(source);
@@ -165,9 +160,7 @@ impl fmt::Debug for KeyContext {
     }
 }
 
-/// A datastructure for resolving whether an action should be dispatched
-/// Representing a small language for describing which contexts correspond
-/// to which actions.
+/// A predicate describing which keymap contexts match an action.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum KeyBindingContextPredicate {
     /// A predicate that will match a given identifier.
@@ -218,34 +211,15 @@ impl fmt::Display for KeyBindingContextPredicate {
 }
 
 impl KeyBindingContextPredicate {
-    /// Parse a string in the same format as the keymap's context field.
+    /// Parses the keymap context syntax.
     ///
-    /// A basic equivalence check against a set of identifiers can performed by
-    /// simply writing a string:
+    /// - `StatusBar` matches a context containing that identifier.
+    /// - `mode == visible` matches that key-value pair.
+    /// - `StatusBar && mode == visible` requires both.
+    /// - `StatusBar > mode == visible` matches `StatusBar` with a child context
+    ///   containing `mode = visible`.
     ///
-    /// `StatusBar` -> A predicate that will match a context with the identifier `StatusBar`
-    ///
-    /// You can also specify a key-value pair:
-    ///
-    /// `mode == visible` -> A predicate that will match a context with the key `mode`
-    ///                      with the value `visible`
-    ///
-    /// And a logical operations combining these two checks:
-    ///
-    /// `StatusBar && mode == visible` -> A predicate that will match a context with the
-    ///                                   identifier `StatusBar` and the key `mode`
-    ///                                   with the value `visible`
-    ///
-    ///
-    /// There is also a special child `>` operator that will match a predicate that is
-    /// below another predicate:
-    ///
-    /// `StatusBar > mode == visible` -> A predicate that will match a context identifier `StatusBar`
-    ///                                  and a child context that has the key `mode` with the
-    ///                                  value `visible`
-    ///
-    /// This syntax supports `!=`, `||` and `&&` as logical operators.
-    /// You can also preface an operation or check with a `!` to negate it.
+    /// Supports `!=`, `||`, and `&&`. Prefix a check or operation with `!` to negate it.
     pub fn parse(source: &str) -> Result<Self> {
         let source = skip_whitespace(source);
         let (predicate, rest) = Self::parse_expr(source, 0)?;

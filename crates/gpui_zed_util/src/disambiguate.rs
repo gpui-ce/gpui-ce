@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-/// Computes the minimum detail level needed for each item so that no two items
-/// share the same description. Items whose descriptions are unique at level 0
-/// stay at 0; items that collide get their detail level incremented until either
-/// the collision is resolved or increasing the level no longer changes the
-/// description (preventing infinite loops for truly identical items).
+/// Finds the minimum detail level that distinguishes each item's description.
+/// Unique descriptions stay at level 0. Collisions increase the level until
+/// resolved or the description stops changing, preventing loops for identical items.
 ///
-/// The `get_description` closure must return a sequence that eventually reaches
-/// a "fixed point" where increasing `detail` no longer changes the output. If
-/// an item reaches its fixed point, it is assumed it will no longer change and
-/// will no longer be checked for collisions.
+/// `get_description` must eventually stop changing as `detail` increases.
+/// Once two consecutive levels produce the same description, the function assumes
+/// later levels will also match and no longer checks that item for collisions.
 pub fn compute_disambiguation_details<T, D>(
     items: &[T],
     get_description: impl Fn(&T, usize) -> D,
@@ -154,19 +151,9 @@ mod tests {
     fn test_duplicate_paths_from_multiple_groups() {
         use std::path::Path;
 
-        // Simulates the sidebar scenario: a path like /Users/rtfeldman/code/zed
-        // appears in two project groups (e.g. "zed" alone and "zed, roc").
-        // After deduplication, only unique paths should be disambiguated.
-        //
-        // Paths:
-        //   /Users/rtfeldman/code/worktrees/zed/focal-arrow/zed  (group 1)
-        //   /Users/rtfeldman/code/zed                             (group 2)
-        //   /Users/rtfeldman/code/zed                             (group 3, same path as group 2)
-        //   /Users/rtfeldman/code/roc                             (group 3)
-        //
-        // A naive flat_map collects duplicates. The duplicate /code/zed entries
-        // collide with each other and drive the detail to the full path.
-        // The fix is to deduplicate before disambiguating.
+        // The sidebar can repeat /Users/rtfeldman/code/zed across project groups.
+        // Deduplicate before disambiguating, or identical paths collide and require
+        // full-path detail. Keep the worktree's distinct zed path and roc path.
 
         fn path_suffix(path: &Path, detail: usize) -> String {
             let mut components: Vec<_> = path

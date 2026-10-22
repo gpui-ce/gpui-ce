@@ -1,50 +1,42 @@
-//! Perf profiler for Zed tests. Outputs timings of tests marked with the `#[perf]`
-//! attribute to stdout in Markdown. See the documentation of `util_macros::perf`
-//! for usage details on the actual attribute.
+//! Profiles Zed tests marked `#[perf]` and prints timings as Markdown.
+//! See `util_macros::perf` for attribute usage.
 //!
 //! # Setup
 //! Make sure `hyperfine` is installed and in the shell path.
 //!
 //! # Usage
-//! Calling this tool rebuilds the targeted crate(s) with some cfg flags set for the
-//! perf proc macro *and* enables optimisations (`release-fast` profile), so expect
-//! it to take a little while.
+//! Rebuilds target crates with perf macro cfg flags and the optimized `release-fast` profile.
 //!
 //! To test an individual crate, run:
 //! ```sh
 //! cargo perf-test -p $CRATE
 //! ```
 //!
-//! To test everything (which will be **VERY SLOW**), run:
+//! To test the workspace, which is slow, run:
 //! ```sh
 //! cargo perf-test --workspace
 //! ```
 //!
-//! Some command-line parameters are also recognised by this profiler. To filter
-//! out all tests below a certain importance (e.g. `important`), run:
+//! To filter out tests below an importance level such as `important`, run:
 //! ```sh
 //! cargo perf-test $WHATEVER -- --important
 //! ```
 //!
-//! Similarly, to skip outputting progress to the command line, pass `-- --quiet`.
-//! These flags can be combined.
+//! Pass `-- --quiet` to hide progress. These flags can be combined.
 //!
 //! ## Comparing runs
-//! Passing `--json=ident` will save per-crate run files in `.perf-runs`, e.g.
-//! `cargo perf-test -p gpui -- --json=blah` will result in `.perf-runs/blah.gpui.json`
-//! being created (unless no tests were run). These results can be automatically
-//! compared. To do so, run `cargo perf-compare new-ident old-ident`.
+//! `--json=ident` saves per-crate results in `.perf-runs` unless no tests ran.
+//! For example, `cargo perf-test -p gpui -- --json=blah` creates `.perf-runs/blah.gpui.json`.
+//! Compare results with `cargo perf-compare new-ident old-ident`.
 //!
 //! To save the markdown output to a file instead, run `cargo perf-compare --save=$FILE
 //! new-ident old-ident`.
 //!
-//! NB: All files matching `.perf-runs/ident.*.json` will be considered when
-//! doing this comparison, so ensure there aren't leftover files in your `.perf-runs`
-//! directory that might match that!
+//! Comparisons include every `.perf-runs/ident.*.json` file. Remove stale matches first.
 //!
 //! # Notes
-//! This should probably not be called manually unless you're working on the profiler
-//! itself; use the `cargo perf-test` alias (after building this crate) instead.
+//! Build this crate, then use the `cargo perf-test` alias. Invoke the binary directly
+//! only when working on the profiler.
 
 mod implementation;
 
@@ -108,9 +100,7 @@ impl OutputKind<'_> {
                     !ident.to_string_lossy().is_empty(),
                     "FATAL: Empty filename specified!"
                 );
-                // Get the test binary's crate's name; a path like
-                // target/release-fast/deps/gpui-061ff76c9b7af5d7
-                // would be reduced to just "gpui".
+                // Extract the crate name, such as gpui from deps/gpui-061ff76c9b7af5d7.
                 let test_bin_stripped = Path::new(t_bin)
                     .file_name()
                     .unwrap()
@@ -209,9 +199,7 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
         version: version.ok_or(FailKind::BadMetadata)?,
         // Iterations may be determined by us and thus left unspecified.
         iterations,
-        // In principle this should always be set, but just for the sake of
-        // stability allow the potentially-breaking change of not reporting the
-        // importance without erroring. Maybe we want to change this.
+        // Importance should always be reported. Accept missing values for compatibility.
         importance,
         // Same with weight.
         weight,
@@ -259,8 +247,7 @@ fn compare_profiles(args: &[String]) {
                 continue;
             };
 
-            // A little helper to avoid code duplication. Reads the `output` from
-            // a json file, then merges it into what we have so far.
+            // Read and merge JSON output.
             let read_into = |output: &mut Output| {
                 let mut elems = name.split('.').skip(1);
                 let prefix = elems.next().unwrap();
@@ -299,10 +286,7 @@ fn compare_profiles(args: &[String]) {
     }
 }
 
-/// Runs a test binary, filtering out tests which aren't marked for perf triage
-/// and giving back the list of tests we care about.
-///
-/// The output of this is an iterator over `test_fn_name, test_mdata_name`.
+/// Lists tests marked for perf triage as `test_fn_name, test_mdata_name` pairs.
 fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
     let mut cmd = Command::new(t_bin);
     // --format=json is nightly-only :(
@@ -337,8 +321,7 @@ fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
         })
         .collect();
 
-    // Pulling itertools just for .dedup() would be quite a big dependency that's
-    // not used elsewhere, so do this on a vec instead.
+    // Deduplicate with Vec to avoid an itertools dependency for one operation.
     test_list.sort_unstable();
     test_list.dedup();
 
@@ -398,8 +381,7 @@ fn triage_test(
     mut step: impl FnMut(NonZero<usize>) -> Option<NonZero<usize>>,
 ) -> Option<NonZero<usize>> {
     let mut iter_count = DEFAULT_ITER_COUNT;
-    // It's possible that the first loop of a test might be an outlier (e.g. it's
-    // doing some caching), in which case we want to skip it.
+    // Skip the first run to exclude cache warmup outliers.
     let duration_once = spawn_and_iterate(t_bin, t_name, NonZero::new(1).unwrap())?;
     loop {
         let duration = spawn_and_iterate(t_bin, t_name, iter_count)?;
@@ -455,7 +437,7 @@ fn hyp_profile(t_bin: &str, t_name: &str, iterations: NonZero<usize>) -> Option<
     }
 
     let cmd_output = String::from_utf8_lossy(&p_out.stdout);
-    // Can't use .last() since we have a trailing newline. Sigh.
+    // Skip the trailing newline instead of using .last().
     let results_line = cmd_output.lines().nth(3).unwrap();
     // Grab the values out of the pretty-print.
     // TODO: Parse json instead.
@@ -508,9 +490,7 @@ fn main() {
 
     let mut output = Output::default();
 
-    // Spawn and profile an instance of each perf-sensitive test, via hyperfine.
-    // Each test is a pair of (test, metadata-returning-fn), so grab both. We also
-    // know the list is sorted.
+    // Profile sorted test/metadata-function pairs with hyperfine.
     let i = get_tests(t_bin);
     let len = i.len();
     for (idx, (ref t_name, ref t_mdata)) in i.enumerate() {
@@ -530,9 +510,7 @@ fn main() {
             fail!(output, t_name_pretty, t_mdata, FailKind::Skipped);
         }
 
-        // Time test execution to see how many iterations we need to do in order
-        // to account for random noise. This is skipped for tests with fixed
-        // iteration counts.
+        // Choose enough iterations to reduce random noise unless the count is fixed.
         let final_iter_count = t_mdata.iterations.or_else(|| {
             triage_test(t_bin, t_name, consts::NOISE_CUTOFF, |c| {
                 if let Some(c) = c.checked_mul(ITER_COUNT_MUL) {
@@ -552,7 +530,6 @@ fn main() {
             fail!(output, t_name_pretty, t_mdata, FailKind::Triage);
         };
 
-        // Now profile!
         if let Some(timings) = hyp_profile(t_bin, t_name, final_iter_count) {
             output.success(t_name_pretty, t_mdata, final_iter_count, timings);
         } else {

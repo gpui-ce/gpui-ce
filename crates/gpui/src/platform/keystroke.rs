@@ -7,7 +7,7 @@ use std::{
 
 use crate::PlatformKeyboardMapper;
 
-/// This is a helper trait so that we can simplify the implementation of some functions
+/// Provides access to a keystroke's GPUI representation.
 pub trait AsKeystroke {
     /// Returns the GPUI representation of the keystroke.
     fn as_keystroke(&self) -> &Keystroke;
@@ -181,15 +181,13 @@ impl Keystroke {
                 modifiers.shift = true;
                 key_str.make_ascii_lowercase();
             } else {
-                // convert ascii chars to lowercase so that named keys like "tab" and "enter"
-                // are accepted case insensitively and stored how we expect so they are matched properly
+                // Lowercase ASCII so named keys such as "tab" match regardless of case.
                 key_str.make_ascii_lowercase()
             }
             key = Some(key_str);
         }
 
-        // Allow for the user to specify a keystroke modifier as the key itself
-        // This sets the `key` to the modifier, and disables the modifier
+        // A modifier used as the key must be removed from the modifier flags.
         key = key.or_else(|| {
             use std::mem;
             // std::mem::take clears bool incase its true
@@ -224,8 +222,7 @@ impl Keystroke {
         unparse(&self.modifiers, &self.key)
     }
 
-    /// Returns true if this keystroke left
-    /// the ime system in an incomplete state.
+    /// Returns whether this keystroke left the IME in an incomplete state.
     pub fn is_ime_in_progress(&self) -> bool {
         self.key_char.is_none()
             && (is_printable_key(&self.key) || self.key.is_empty())
@@ -235,9 +232,7 @@ impl Keystroke {
                 || self.modifiers.alt)
     }
 
-    /// Returns a new keystroke with the key_char filled.
-    /// This is used for dispatch_keystroke where we want users to
-    /// be able to simulate typing "space", etc.
+    /// Fills `key_char` so `dispatch_keystroke` can simulate named keys such as "space".
     pub fn with_simulated_ime(mut self) -> Self {
         if self.key_char.is_none()
             && !self.modifiers.platform

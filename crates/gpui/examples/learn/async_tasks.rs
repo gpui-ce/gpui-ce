@@ -1,11 +1,7 @@
-//! Async Tasks Example
+//! Use `cx.spawn` for foreground UI updates and `cx.background_spawn` for
+//! computation.
 //!
-//! This example demonstrates different async patterns in GPUI:
-//!
-//! 1. `cx.spawn` - Foreground tasks for UI updates
-//! 2. `cx.background_spawn` - Background tasks for heavy computation
-//! 3. Task management - Storing, canceling, and detaching tasks
-//! 4. Progress updates - Communicating from background to UI
+//! Store, cancel, or detach tasks, and report progress from background tasks to the UI.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;

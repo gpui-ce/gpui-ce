@@ -56,8 +56,7 @@ impl Default for ActionStatistics {
 impl ActionStatistics {
     const fn new() -> Self {
         Self {
-            // This keeps more calls on the fast path by only tracking
-            // problematic polls
+            // Skip short actions to keep them on the fast path.
             runtime_to_beat: Duration::from_micros(100),
             longest_runtimes: heapless::Vec::new(),
             running: None,
@@ -86,12 +85,9 @@ impl ActionStatistics {
         let now = Instant::now();
 
         let Some((action, started)) = self.running.take() else {
-            // Actions are ran only on the foreground executor and therefore
-            // sequentially _except_ in tests where they can run concurrently.
-            //
-            // When ran sequentially self.running will always be Some. When ran
-            // concurrently that is no longer true. But that is fine, we do not
-            // need to track action timings in tests.
+            // Actions run sequentially on the foreground executor, so `self.running`
+            // is always `Some` in production. Tests can run actions concurrently,
+            // leaving it `None`, but do not need action timings.
             super::cold_path();
             return;
         };

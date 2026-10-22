@@ -1,8 +1,7 @@
 use collections::HashMap;
 use std::{cmp::Ordering, ops::Range};
 
-/// Construct a string and a list of offsets within that string using a single
-/// string containing embedded position markers.
+/// Extracts a string and offsets from text with embedded position markers.
 pub fn marked_text_offsets_by(
     marked_text: &str,
     markers: Vec<char>,
@@ -22,12 +21,8 @@ pub fn marked_text_offsets_by(
     (unmarked_text, extracted_markers)
 }
 
-/// Construct a string and a list of ranges within that string using a single
-/// string containing embedded range markers, using arbitrary characters as
-/// range markers. By using multiple different range markers, you can construct
-/// ranges that overlap each other.
-///
-/// The returned ranges will be grouped by their range marking characters.
+/// Extracts a string and ranges from text with arbitrary range markers.
+/// Different markers support overlapping ranges. Returns ranges grouped by marker.
 pub fn marked_text_ranges_by(
     marked_text: &str,
     markers: Vec<TextRangeMarker>,
@@ -81,9 +76,7 @@ pub fn marked_text_ranges_by(
     (unmarked_text, range_lookup)
 }
 
-/// Construct a string and a list of ranges within that string using a single
-/// string containing embedded range markers. The characters used to mark the
-/// ranges are as follows:
+/// Extracts a string and ranges from text with these markers:
 ///
 /// 1. To mark a range of text, surround it with the `«` and `»` angle brackets,
 ///    which can be typed on a US keyboard with the `alt-|` and `alt-shift-|` keys.
@@ -106,9 +99,7 @@ pub fn marked_text_ranges_by(
 ///    one «ˇreversed» selection and one «forwardˇ» selection
 ///    ```
 ///
-/// Any • characters in the input string will be replaced with spaces. This makes
-/// it easier to test cases with trailing spaces, which tend to get trimmed from the
-/// source code.
+/// Replaces • with spaces to preserve trailing spaces that source editors may trim.
 #[track_caller]
 pub fn marked_text_ranges(
     marked_text: &str,

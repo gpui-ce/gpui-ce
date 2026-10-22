@@ -21,8 +21,7 @@ pub struct ActionBindingCollection {
 struct ActionBindingEntry {
     // The action used to build Keybinding
     action: Box<dyn Action>,
-    // The keystrokes that trigger the action
-    // NOTE: could limit allocations by utilizing smallvec
+    // Triggering keystrokes. TODO: Use SmallVec to reduce allocations.
     keystrokes: Vec<SharedString>,
 }
 

@@ -119,10 +119,11 @@ impl Scene {
         self.paint_operations.push(PaintOperation::EndLayer);
     }
 
-    /// Raise the draw-order floor so every primitive inserted afterwards sorts above everything
-    /// inserted before. Called before painting deferred draws so overlays (tooltips, popovers,
-    /// drag images) sort above the main scene — and a deferred backdrop's order can't fall inside
-    /// a content-filter (`filter`) order range left behind by the main scene.
+    /// Makes subsequently inserted primitives sort above all previous primitives.
+    ///
+    /// Called before deferred draws so overlays, such as tooltips and popovers, sort above
+    /// the main scene. A deferred backdrop must also sort outside the main scene's
+    /// content-filter order ranges.
     pub fn raise_order_floor(&mut self) {
         self.is_finished = false;
         let floor = self.primitive_bounds.max_order() + 1;
@@ -263,10 +264,11 @@ impl Scene {
         self.surfaces.sort_by_key(|surface| surface.order);
         self.surface_opacities.resize(self.surfaces.len(), 1.0);
         self.backdrop_filters.sort_by_key(|filter| filter.order);
-        // Markers normally get distinct, monotonically-increasing orders (children overlap
-        // their group bounds and so sort strictly between the start and end). The `!is_start`
-        // tiebreak only matters for a degenerate empty group whose start and end tie: it keeps
-        // the start (false = 0) ahead of the end (true = 1) so the pair stays well-formed.
+        // Children overlap their group bounds, so they sort strictly between the start
+        // and end markers with distinct, increasing orders.
+        //
+        // For an empty group with tied orders, `!is_start` sorts the start before the end
+        // to keep the marker pair valid.
         self.filter_boundaries
             .sort_by_key(|boundary| (boundary.order, !boundary.is_start));
         let commands = std::mem::take(&mut self.render_plan.commands);
@@ -294,11 +296,10 @@ impl Scene {
         })
     }
 
-    /// Returns the backend-neutral sequence of work needed to render this scene.
+    /// Returns the backend-neutral rendering work in primitive batch order.
     ///
-    /// In addition to preserving primitive batch order, this pairs content-filter boundaries and
-    /// assigns the bounded offscreen target used by each isolated group. GPU backends only need to
-    /// manage their target handles; nesting and overflow behavior stay consistent everywhere.
+    /// Pairs content-filter boundaries and assigns a bounded offscreen target to each
+    /// isolated group. Backends manage target handles while sharing nesting and overflow behavior.
     pub fn render_commands(&self) -> &[RenderCommand] {
         self.render_plan().commands()
     }
@@ -543,9 +544,8 @@ impl<'a> Iterator for BatchIterator<'a> {
             ),
             (
                 self.filter_boundaries_iter.peek().map(|b| b.order),
-                // The same vec yields both start and end markers; the discriminant decides
-                // where the next marker sorts relative to draw batches at an equal order
-                // (start before content, end after).
+                // The same vector yields start and end markers. At equal orders, the discriminant
+                // sorts starts before content and ends after it.
                 match self.filter_boundaries_iter.peek() {
                     Some(boundary) if boundary.is_start => PrimitiveKind::FilterBoundaryStart,
                     _ => PrimitiveKind::FilterBoundaryEnd,
@@ -856,9 +856,8 @@ impl From<Shadow> for Primitive {
     }
 }
 
-/// A backdrop filter blurs (and may otherwise filter) the content already rendered behind
-/// `bounds`, compositing the result into a rounded rectangle — the frosted-glass effect.
-/// Emitted by [`crate::Window::paint_backdrop_filter`]; produces the CSS `backdrop-filter` effect.
+/// Filters content behind `bounds` and composites it into a rounded rectangle, as in
+/// CSS `backdrop-filter`. Emitted by [`crate::Window::paint_backdrop_filter`].
 #[derive(Default, Debug, Clone)]
 #[expect(missing_docs)]
 pub struct BackdropFilter {
@@ -867,12 +866,12 @@ pub struct BackdropFilter {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub corner_smoothing: f32,
-    /// The filter chain applied to the backdrop, in scene (device-pixel) space. Identity filters
-    /// are dropped at paint time, so a `BackdropFilter` is only emitted when this is non-empty.
+    /// The backdrop filter chain in device pixels. Paint drops identity filters and emits
+    /// a `BackdropFilter` only for a non-empty chain.
     ///
-    /// Inline capacity is 4: a `SmallVec<[ScaledFilter; 4]>` is the same size as capacity 1 here
-    /// (the heap repr already occupies that space), so chains up to 4 filters avoid allocating
-    /// at no extra struct size.
+    /// Inline capacity 4 has the same struct size as capacity 1 because the heap
+    /// representation already occupies that space. Up to four filters avoid heap allocation
+    /// without increasing the struct size.
     pub filters: SmallVec<[ScaledFilter; 4]>,
     /// Element opacity captured at paint time, multiplied into the composited result.
     pub opacity: f32,
@@ -891,10 +890,9 @@ impl From<BackdropFilter> for Primitive {
     }
 }
 
-/// The start or end marker of a content-filter or opacity isolation group. The element's
-/// subtree is painted between a matched start/end pair; the renderer redirects that span into
-/// an offscreen target, filters it, and composites it back at `bounds`. Produces the CSS
-/// `filter` effect (e.g. blurring the element and its children as a single group).
+/// A start or end marker for a content-filter or opacity isolation group. The renderer
+/// paints the subtree between the pair into an offscreen target, filters it, and composites
+/// it at `bounds`, as in CSS `filter`.
 #[derive(Debug, Clone)]
 #[expect(missing_docs)]
 pub struct FilterBoundary {
@@ -903,9 +901,10 @@ pub struct FilterBoundary {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub corner_smoothing: f32,
-    /// The filter chain applied to the isolated group, in scene (device-pixel) space. Identity
-    /// filters are dropped at paint time. An empty chain represents an opacity-only group.
-    /// Inline capacity 4 (same struct size as 1 here — see [`BackdropFilter::filters`]).
+    /// The isolated group filter chain in device pixels. Paint drops identity filters.
+    /// An empty chain represents an opacity-only group.
+    ///
+    /// Inline capacity 4 has the same struct size as 1, as explained in [`BackdropFilter::filters`].
     pub filters: SmallVec<[ScaledFilter; 4]>,
     /// Opacity applied once when compositing the completed group into its parent.
     pub opacity: f32,
@@ -922,8 +921,7 @@ impl FilterBoundary {
 
 /// Returns the largest blur radius in a scene-space filter chain.
 ///
-/// This match is deliberately exhaustive so adding a filter requires one shared scheduling
-/// decision instead of three backend-specific implementations that can drift.
+/// The exhaustive match forces new filters to share one scheduling decision across backends.
 fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
     filters.iter().fold(0.0, |radius, filter| match filter {
         ScaledFilter::Blur(filter_radius) => radius.max(filter_radius.0),
@@ -996,9 +994,7 @@ impl TransformationMatrix {
         })
     }
 
-    /// Perform matrix multiplication with another transformation
-    /// to produce a new transformation that is the result of
-    /// applying both transformations: first, `other`, then `self`.
+    /// Multiplies transformations, applying `other` first and then `self`.
     #[inline]
     pub fn compose(self, other: TransformationMatrix) -> TransformationMatrix {
         if other == Self::unit() {

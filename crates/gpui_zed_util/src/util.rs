@@ -65,12 +65,9 @@ pub fn truncate(s: &str, max_chars: usize) -> &str {
     }
 }
 
-/// Parses the contents of an `os-release` file (as found at `/etc/os-release`
-/// and described by the systemd spec) into a human-readable string such as
-/// `"ubuntu 24.04"`, combining the `ID` and `VERSION_ID` fields.
+/// Parses systemd's `/etc/os-release` format into `ID VERSION_ID`, such as `"ubuntu 24.04"`.
 ///
-/// Returns `None` if no `ID` field is present. When `VERSION_ID` is absent
-/// (e.g. on rolling releases), only the `ID` is returned.
+/// Returns `None` without `ID`, or only `ID` without `VERSION_ID`, as on rolling releases.
 pub fn parse_os_release(content: &str) -> Option<String> {
     let mut id = None;
     let mut version_id = None;
@@ -197,9 +194,9 @@ fn test_truncate_lines_to_byte_limit() {
     );
 }
 
-/// Extend a sorted vector with a sorted sequence of items, maintaining the vector's sort order and
-/// enforcing a maximum length. This also de-duplicates items. Sort the items according to the given callback. Before calling this,
-/// both `vec` and `new_items` should already be sorted according to the `cmp` comparator.
+/// Merges sorted items into a sorted vector, deduplicating and enforcing a maximum length.
+///
+/// Both `vec` and `new_items` must already be sorted by `cmp`.
 pub fn extend_sorted<T, I, F>(vec: &mut Vec<T>, new_items: I, limit: usize, mut cmp: F)
 where
     I: IntoIterator<Item = T>,
@@ -220,11 +217,7 @@ where
     }
 }
 
-/// Prevents execution of the application with root privileges on Unix systems.
-///
-/// This function checks if the current process is running with root privileges
-/// and terminates the program with an error message unless explicitly allowed via the
-/// `ZED_ALLOW_ROOT` environment variable.
+/// Exits with an error when running as root on Unix unless `ZED_ALLOW_ROOT` is set.
 #[cfg(unix)]
 pub fn prevent_root_execution() {
     let is_root = nix::unistd::geteuid().is_root();
@@ -368,19 +361,14 @@ pub async fn load_login_shell_environment() -> Result<()> {
 
     load_shell_from_passwd().log_err();
 
-    // If possible, we want to `cd` in the user's `$HOME` to trigger programs
-    // such as direnv, asdf, mise, ... to adjust the PATH. These tools often hook
-    // into shell's `cd` command (and hooks) to manipulate env.
-    // We do this so that we get the env a user would have when spawning a shell
-    // in home directory.
+    // Run `cd` in `$HOME` so hooks from direnv, asdf, and mise produce the
+    // environment a user gets when opening a shell there.
     for (name, value) in shell_env::capture(get_system_shell(), &[], paths::home_dir())
         .await
         .with_context(|| format!("capturing environment with {:?}", get_system_shell()))?
     {
-        // Skip SHLVL to prevent it from polluting Zed's process environment.
-        // The login shell used for env capture increments SHLVL, and if we propagate it,
-        // terminals spawned by Zed will inherit it and increment again, causing SHLVL
-        // to start at 2 instead of 1 (and increase by 2 on each reload).
+        // Skip SHLVL. The capture shell increments it, so propagating it makes terminals
+        // start at 2 instead of 1 and adds 2 on each reload.
         if name == "SHLVL" {
             continue;
         }
@@ -441,9 +429,8 @@ pub fn merge_json_lenient_value_into(
     }
 }
 
-/// Merges `source` into `target`: objects are merged recursively, key by key;
-/// any other colliding value in `target` — including arrays — is replaced by
-/// `source`'s value wholesale.
+/// Merges `source` into `target` recursively by object key. Replaces other colliding
+/// values, including arrays, with the source value.
 pub fn merge_json_value_into(source: serde_json::Value, target: &mut serde_json::Value) {
     use serde_json::Value;
 
@@ -635,22 +622,15 @@ pub fn asset_str<A: rust_embed::RustEmbed>(path: &str) -> Cow<'static, str> {
     }
 }
 
-/// The checkout that produced this binary, resolved at runtime by walking up to
-/// the first ancestor that contains a `.git` entry (a directory in a normal
-/// clone, a file in a git worktree or submodule). Cargo and corgi both place
-/// built binaries under `<repo>/target/<profile>/`, so the repository root is
-/// always an ancestor of the executable.
+/// Finds the checkout at runtime by searching ancestors for a `.git` directory
+/// or worktree/submodule file. Cargo and corgi put binaries under `<repo>/target/<profile>/`.
 ///
-/// Dev-only affordances use this instead of baking a build-time path into the
-/// artifact: such a path points at the wrong checkout from any other worktree
-/// and, under corgi, is rejected because artifacts must be checkout-independent
-/// to be shared across worktrees.
+/// Runtime lookup avoids build-time paths pointing to another worktree and meets
+/// corgi's requirement that shared artifacts be independent of the checkout.
 ///
-/// The executable's launch path is tried first, then its canonical form, then
-/// the working directory. In CI, `target/` (or the checkout root) can be a
-/// symlink onto another volume, so canonicalizing the executable alone can walk
-/// off the checkout and miss `.git`; the launch path and the test runner's cwd
-/// (a crate dir under the checkout) stay inside it.
+/// Tries the executable's launch path, canonical path, then working directory.
+/// In CI, target or checkout symlinks can put the canonical executable outside
+/// the checkout. The launch path and test runner's crate directory avoid that.
 pub fn dev_repo_root() -> Option<&'static std::path::Path> {
     use std::path::PathBuf;
     static ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -673,18 +653,14 @@ pub fn dev_repo_root() -> Option<&'static std::path::Path> {
     .as_deref()
 }
 
-/// Re-exports that back [`fs_embed!`] so a caller only needs to depend on `util`,
-/// not on `rust_embed` directly (the macro's dependency is an implementation
-/// detail). Hidden from the public API.
+/// Hidden re-exports for [`fs_embed!`], avoiding a direct `rust_embed` dependency for callers.
 #[doc(hidden)]
 pub mod __rust_embed {
     pub use rust_embed::{EmbeddedFile, Filenames, Metadata, RustEmbed, utils};
 }
 
-/// Backs the dev arm of [`fs_embed!`]'s `iter`: every file under the root-relative
-/// directory that passes the same rust_embed include/exclude globs the
-/// release derive uses, so the dev and release file sets are identical. Reuses
-/// rust_embed's own matcher rather than reimplementing glob semantics.
+/// Implements dev [`fs_embed!`] iteration under the root-relative directory.
+/// Uses rust_embed's include/exclude matcher to return the same files as release builds.
 #[cfg(all(debug_assertions, not(feature = "debug-embed")))]
 #[doc(hidden)]
 pub fn __fs_embed_iter(
@@ -708,9 +684,8 @@ fn fs_embed_file_names(root_relative: &str, includes: &[&str], excludes: &[&str]
         .collect()
 }
 
-/// Backs the dev arm of [`fs_embed!`]'s `get`: reads a single file from the
-/// checkout, returning `None` when the include/exclude globs filter it out so
-/// `get` matches release's embedded set exactly.
+/// Reads a dev [`fs_embed!`] file from the checkout. Returns `None` if include/exclude
+/// globs reject it, matching the release file set.
 #[cfg(all(debug_assertions, not(feature = "debug-embed")))]
 #[doc(hidden)]
 pub fn __fs_embed_get(
@@ -775,10 +750,9 @@ macro_rules! __fs_embed {
         #[cfg(debug_assertions)]
         $vis struct $name;
 
-        // Mirror the derive's public surface: inherent `get`/`iter` (callable
-        // without the trait in scope) plus the trait impl (for generic bounds
-        // like `util::asset_str` and `handlebars::register_embed_templates`), so
-        // the two arms are interchangeable at call sites.
+        // Match the derive's inherent get/iter methods and trait impl so both arms work
+        // without importing the trait and with generic bounds such as util::asset_str
+        // and handlebars::register_embed_templates.
         #[cfg(debug_assertions)]
         impl $name {
             pub fn get(
@@ -824,23 +798,14 @@ macro_rules! __fs_embed {
     };
 }
 
-/// A `rust_embed` asset source that embeds files in release builds. Dev builds
-/// read from the checkout at runtime unless the `debug-embed` feature is enabled,
-/// in which case they embed the files too.
+/// A `rust_embed` asset source with include/exclude globs. Release builds and
+/// dev builds with `debug-embed` use `#[derive(RustEmbed)]` to embed files at build time.
 ///
-/// It expands to one of these arms:
-/// * Release (`not(debug_assertions)`): `#[derive(RustEmbed)]` embedding
-///   `crate_relative` at build time, with the given `include`/`exclude` globs.
-/// * Dev with `debug-embed`: the same compile-time embedding as release.
-/// * Dev without `debug-embed`: a runtime filesystem source rooted at
-///   `root_relative`; edits appear on the next launch without a rebuild.
+/// Other dev builds read from the checkout, showing edits on the next launch without rebuilding.
 ///
-/// Two paths are required because the arms resolve from different bases: the
-/// derive reads `crate_relative` relative to the crate's `Cargo.toml`, while the
-/// runtime dev arm resolves `root_relative` relative to the repository root via
-/// [`dev_repo_root`]. Baking the build-time path into that arm would point at the
-/// wrong checkout from another worktree and is rejected by corgi, whose sandbox
-/// requires checkout-independent output.
+/// `crate_relative` is relative to the crate's `Cargo.toml` for build-time embedding.
+/// `root_relative` is relative to [`dev_repo_root`] for runtime reads. Separate paths
+/// avoid pointing at another worktree and satisfy corgi's checkout-independent output requirement.
 ///
 /// ```ignore
 /// util::fs_embed! {
@@ -901,11 +866,8 @@ impl<T: Ord + Clone> RangeExt<T> for RangeInclusive<T> {
     }
 }
 
-/// A way to sort strings with starting numbers numerically first, falling back to alphanumeric one,
-/// case-insensitive.
-///
-/// This is useful for turning regular alphanumerically sorted sequences as `1-abc, 10, 11-def, .., 2, 21-abc`
-/// into `1-abc, 2, 10, 11-def, .., 21-abc`
+/// Compares leading numbers numerically, then sorts alphanumerically without case.
+/// Orders `1-abc, 2, 10, 11-def, .., 21-abc` rather than `1-abc, 10, 11-def, .., 2, 21-abc`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct NumericPrefixWithSuffix<'a>(Option<u64>, &'a str);
 
@@ -919,8 +881,7 @@ impl<'a> NumericPrefixWithSuffix<'a> {
     }
 }
 
-/// When dealing with equality, we need to consider the case of the strings to achieve strict equality
-/// to handle cases like "a" < "A" instead of "a" == "A".
+/// Uses case to break ties, so `"a" < "A"` rather than `"a" == "A"`.
 impl Ord for NumericPrefixWithSuffix<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.0, other.0) {

@@ -367,13 +367,10 @@ impl WebWindow {
 }
 
 impl WebWindowInner {
-    /// Invokes a registered callback with take/call/restore semantics.
+    /// Takes, calls, and restores a callback without holding the `RefCell`
+    /// borrow, avoiding `BorrowMutError` if user code re-enters the window.
     ///
-    /// The callback is removed from the slot for the duration of the call, so
-    /// the `RefCell` is not borrowed while user code runs: a callback that
-    /// re-enters the platform window (dispatching input, registering
-    /// handlers) would otherwise panic with a `BorrowMutError`. A re-entrant
-    /// invocation of the same callback finds the slot empty and is a no-op.
+    /// Re-entrant calls to the same callback find an empty slot and do nothing.
     pub(crate) fn with_callback<C, R>(
         &self,
         select: impl Fn(&mut WebWindowCallbacks) -> &mut Option<C>,

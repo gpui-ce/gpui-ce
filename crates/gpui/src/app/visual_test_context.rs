@@ -9,14 +9,11 @@ use anyhow::anyhow;
 use image::RgbaImage;
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
-/// A test context that uses real macOS rendering instead of mocked rendering.
-/// This is used for visual tests that need to capture actual screenshots.
+/// A screenshot test context using real `MacPlatform` rendering.
 ///
-/// Unlike `TestAppContext` which uses `TestPlatform` with mocked rendering,
-/// `VisualTestAppContext` uses the real `MacPlatform` to produce actual rendered output.
-///
-/// Windows created through this context are positioned off-screen (at coordinates like -10000, -10000)
-/// so they are invisible to the user but still fully rendered by the compositor.
+/// `TestAppContext` uses mocked rendering. Here, windows are positioned off-screen
+/// at coordinates such as -10000, -10000, so they stay invisible while the
+/// compositor still renders them.
 #[derive(Clone)]
 pub struct VisualTestAppContext {
     /// The underlying app cell
@@ -32,24 +29,18 @@ pub struct VisualTestAppContext {
 }
 
 impl VisualTestAppContext {
-    /// Creates a new `VisualTestAppContext` with real macOS platform rendering
-    /// but deterministic task scheduling via TestDispatcher.
+    /// Uses real Metal/compositor rendering with deterministic `TestDispatcher`
+    /// scheduling and time controlled by `advance_clock`.
     ///
-    /// This provides:
-    /// - Real Metal/compositor rendering for accurate screenshots
-    /// - Deterministic task scheduling via TestDispatcher
-    /// - Controllable time via `advance_clock`
-    ///
-    /// Note: This uses a no-op asset source, so SVG icons won't render.
-    /// Use `with_asset_source` to provide real assets for icon rendering.
+    /// The no-op asset source cannot render SVG icons. Use `with_asset_source`
+    /// to provide them.
     pub fn new(platform: Rc<dyn Platform>) -> Self {
         Self::with_asset_source(platform, Arc::new(()))
     }
 
     /// Creates a new `VisualTestAppContext` with a custom asset source.
     ///
-    /// Use this when you need SVG icons to render properly in visual tests.
-    /// Pass the real `Assets` struct to enable icon rendering.
+    /// Pass the real `Assets` struct to render SVG icons.
     pub fn with_asset_source(
         platform: Rc<dyn Platform>,
         asset_source: Arc<dyn AssetSource>,
@@ -149,15 +140,12 @@ impl VisualTestAppContext {
         self.foreground_executor.clone()
     }
 
-    /// Runs all pending foreground and background tasks until there's nothing left to do.
-    /// This is essential for processing async operations like tooltip timers.
+    /// Runs pending foreground and background tasks, such as tooltip timers, until idle.
     pub fn run_until_parked(&self) {
         self.dispatcher.run_until_parked();
     }
 
-    /// Advances the simulated clock by the given duration and processes any tasks
-    /// that become ready. This is essential for testing time-based behaviors like
-    /// tooltip delays.
+    /// Advances the simulated clock and processes newly ready tasks, such as tooltip timers.
     pub fn advance_clock(&self, duration: Duration) {
         self.dispatcher.advance_clock(duration);
     }

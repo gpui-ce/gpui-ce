@@ -1,9 +1,7 @@
-//! Visual test platform that combines real rendering (macOs-only for now) with controllable TestDispatcher.
+//! Visual tests with real rendering, currently supported on macOS only.
 //!
-//! This platform is used for visual tests that need:
-//! - Real rendering (e.g. Metal/compositor) for accurate screenshots
-//! - Deterministic task scheduling via TestDispatcher
-//! - Controllable time via `advance_clock`
+//! Uses Metal/compositor output for screenshots, deterministic `TestDispatcher`
+//! scheduling, and time controlled through `advance_clock`.
 
 use crate::ScreenCaptureSource;
 use crate::{
@@ -22,12 +20,10 @@ use std::{
     sync::Arc,
 };
 
-/// A platform that combines real Mac rendering with controllable TestDispatcher.
+/// Real macOS Metal rendering for screenshot tests.
 ///
-/// This allows visual tests to:
-/// - Render real UI via Metal for accurate screenshots
-/// - Control task scheduling deterministically via TestDispatcher
-/// - Advance simulated time for testing time-based behaviors (tooltips, animations, etc.)
+/// Uses deterministic `TestDispatcher` scheduling and simulated time for
+/// testing tooltips and animations.
 pub struct VisualTestPlatform {
     dispatcher: TestDispatcher,
     background_executor: BackgroundExecutor,
