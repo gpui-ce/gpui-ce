@@ -296,6 +296,9 @@ fn begin_color_render_pass<'encoder>(
     })
 }
 
+#[cfg(all(test, feature = "test-support", not(target_family = "wasm")))]
+mod replay_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
