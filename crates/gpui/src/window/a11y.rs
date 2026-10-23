@@ -106,7 +106,9 @@ use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
 use accesskit::{Action, NodeId, TreeUpdate};
 use collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -153,6 +155,17 @@ pub(crate) struct A11y {
     pub(crate) nodes: A11yNodeBuilder,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+    /// The part of each node's bounds left visible by the content masks of
+    /// its ancestors (such as a scrolled container), used to aim clicks.
+    pub(crate) node_visible_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+    /// The scroll containers laid out this frame, used to scroll a node into
+    /// view.
+    pub(crate) scroll_containers: Vec<A11yScrollContainer>,
+    /// The scroll containers enclosing the element being prepainted, as
+    /// indices into [`Self::scroll_containers`], innermost last.
+    pub(crate) scroll_container_stack: Vec<usize>,
+    /// The innermost scroll container enclosing each node.
+    pub(crate) node_scroll_containers: FxHashMap<NodeId, usize>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
@@ -183,6 +196,10 @@ impl A11y {
             nodes: A11yNodeBuilder::new(),
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
+            node_visible_bounds: FxHashMap::default(),
+            scroll_containers: Vec::new(),
+            scroll_container_stack: Vec::new(),
+            node_scroll_containers: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
             window_title,
             last_focus_without_node: None,
@@ -285,6 +302,10 @@ impl A11y {
     pub(crate) fn begin_frame(&mut self) {
         self.focus_ids.clear();
         self.node_bounds.clear();
+        self.node_visible_bounds.clear();
+        self.scroll_containers.clear();
+        self.scroll_container_stack.clear();
+        self.node_scroll_containers.clear();
         self.action_listeners.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }
@@ -319,6 +340,88 @@ impl A11y {
 
     pub(crate) fn frame_number(&self) -> u64 {
         self.debug.frame_number()
+    }
+}
+
+/// A scroll container laid out during the frame, recorded so that
+/// [`accesskit::Action::ScrollIntoView`] can scroll the nodes inside it.
+pub(crate) struct A11yScrollContainer {
+    /// The part of the window the container shows its content in.
+    pub(crate) bounds: Bounds<Pixels>,
+    /// The container's scroll offset, shared with the element's state.
+    pub(crate) offset: Rc<RefCell<Point<Pixels>>>,
+    /// How far the content can scroll on each axis, zero on an axis that
+    /// does not scroll.
+    pub(crate) max_offset: Point<Pixels>,
+    /// The scroll container enclosing this one.
+    pub(crate) parent: Option<usize>,
+}
+
+impl A11y {
+    /// Records a scroll container for the elements prepainted inside `f`.
+    pub(crate) fn with_scroll_container<R>(
+        window: &mut Window,
+        bounds: Bounds<Pixels>,
+        offset: Rc<RefCell<Point<Pixels>>>,
+        max_offset: Point<Pixels>,
+        f: impl FnOnce(&mut Window) -> R,
+    ) -> R {
+        let a11y = &mut window.a11y;
+        let index = a11y.scroll_containers.len();
+        a11y.scroll_containers.push(A11yScrollContainer {
+            bounds,
+            offset,
+            max_offset,
+            parent: a11y.scroll_container_stack.last().copied(),
+        });
+        a11y.scroll_container_stack.push(index);
+        let result = f(window);
+        window.a11y.scroll_container_stack.pop();
+        result
+    }
+
+    /// Scrolls the containers enclosing `node`, innermost first, just enough
+    /// for its bounds to be visible, the way a browser scrolls an element into
+    /// the nearest edge of its scroll port. Returns whether anything scrolled.
+    pub(crate) fn scroll_into_view(&self, node: NodeId) -> bool {
+        let Some(mut target) = self.node_bounds.get(&node).copied() else {
+            return false;
+        };
+        let mut scrolled = false;
+        let mut container = self.node_scroll_containers.get(&node).copied();
+        while let Some(index) = container {
+            let container_state = &self.scroll_containers[index];
+            let bounds = container_state.bounds;
+            let mut offset = container_state.offset.borrow_mut();
+            let wanted = point(
+                scroll_delta(target.left(), target.right(), bounds.left(), bounds.right()),
+                scroll_delta(target.top(), target.bottom(), bounds.top(), bounds.bottom()),
+            );
+            let new_offset = point(
+                (offset.x + wanted.x).clamp(-container_state.max_offset.x, px(0.)),
+                (offset.y + wanted.y).clamp(-container_state.max_offset.y, px(0.)),
+            );
+            let applied = new_offset - *offset;
+            if applied != Point::default() {
+                *offset = new_offset;
+                target.origin += applied;
+                scrolled = true;
+            }
+            container = container_state.parent;
+        }
+        scrolled
+    }
+}
+
+/// How far to move content so that the span `start..end` lies within
+/// `view_start..view_end`, keeping its start visible when it is longer.
+fn scroll_delta(start: Pixels, end: Pixels, view_start: Pixels, view_end: Pixels) -> Pixels {
+    if start < view_start {
+        view_start - start
+    } else if end > view_end {
+        (view_end - end).max(view_start - start)
+    } else {
+        px(0.)
     }
 }
 
