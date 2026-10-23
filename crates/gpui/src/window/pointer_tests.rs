@@ -805,6 +805,7 @@ fn hover_regions_preserve_stationary_press_suppress_pressed_moves_and_resume_on_
         window.dispatch_event(
             MouseMoveEvent {
                 position: point(px(75.), px(25.)),
+                delta: Point::default(),
                 pressed_button: Some(MouseButton::Left),
                 modifiers: Modifiers::default(),
             }

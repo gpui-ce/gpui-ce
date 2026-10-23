@@ -1120,6 +1120,18 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn render_to_image(&self, _scene: &Scene) -> Result<RgbaImage> {
         anyhow::bail!("render_to_image not implemented for this platform")
     }
+
+    /// Sets whether the pointer is hidden.
+    fn set_pointer_hidden(&self, hidden: bool) {
+        let _ = hidden;
+        unimplemented!("set_pointer_hidden not implemented for this platform")
+    }
+
+    /// Sets whether the pointer is locked (cannot move but reports position changes to mouse move events).
+    fn set_pointer_locked(&self, locked: bool) {
+        let _ = locked;
+        unimplemented!("set_pointer_locked not implemented for this platform")
+    }
 }
 
 /// A renderer for headless windows that can produce real rendered output.

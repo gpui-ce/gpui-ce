@@ -5948,6 +5948,7 @@ impl Window {
                     }
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,
+                        delta: Point::default(),
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Modifiers::default(),
                     })
@@ -5956,6 +5957,7 @@ impl Window {
                     self.mouse_position = position;
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,
+                        delta: Point::default(),
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Modifiers::default(),
                     })
@@ -7549,10 +7551,21 @@ impl Window {
     pub fn simulate_mouse_move(&mut self, position: Point<Pixels>, cx: &mut App) {
         let event = PlatformInput::MouseMove(MouseMoveEvent {
             position,
+            delta: Point::default(),
             modifiers: self.modifiers,
             pressed_button: None,
         });
         let _ = self.dispatch_event(event, cx);
+    }
+
+    /// Sets whether the pointer is hidden.
+    pub fn set_pointer_hidden(&self, hidden: bool) {
+        self.platform_window.set_pointer_hidden(hidden);
+    }
+
+    /// Sets whether the pointer is locked (cannot move but reports position changes to mouse move events).
+    pub fn set_pointer_locked(&self, locked: bool) {
+        self.platform_window.set_pointer_locked(locked);
     }
 }
 
@@ -9043,6 +9056,7 @@ mod tests {
                 window.dispatch_event(
                     MouseMoveEvent {
                         position: point(px(20.), px(20.)),
+                        delta: Point::default(),
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Default::default(),
                     }
@@ -9071,6 +9085,7 @@ mod tests {
             window.dispatch_event(
                 MouseMoveEvent {
                     position: outside_position,
+                    delta: Point::default(),
                     pressed_button: Some(MouseButton::Left),
                     modifiers: Default::default(),
                 }
@@ -9199,6 +9214,7 @@ mod tests {
             window.dispatch_event(
                 MouseMoveEvent {
                     position: outside_position,
+                    delta: Point::default(),
                     pressed_button: Some(MouseButton::Left),
                     modifiers: Default::default(),
                 }
@@ -9236,6 +9252,7 @@ mod tests {
             window.dispatch_event(
                 MouseMoveEvent {
                     position: outside_position,
+                    delta: Point::default(),
                     pressed_button: Some(MouseButton::Left),
                     modifiers: Default::default(),
                 }
@@ -9258,6 +9275,7 @@ mod tests {
                 window.dispatch_event(
                     MouseMoveEvent {
                         position: point(px(x_position), px(20.)),
+                        delta: Point::default(),
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Default::default(),
                     }

@@ -495,6 +495,9 @@ pub struct MouseMoveEvent {
     /// The position of the mouse on the window.
     pub position: Point<Pixels>,
 
+    /// The change of the mouse position on the window since the last reported position.
+    pub delta: Point<Pixels>,
+
     /// The mouse button that was pressed, if any.
     pub pressed_button: Option<MouseButton>,
 
