@@ -238,7 +238,10 @@
 //!
 //! Note that some common actions are automatically registered. For example,
 //! [`.on_click()`][StatefulInteractiveElement::on_click] adds an
-//! [`AccessibleAction::Click`] handler that calls the click handler.
+//! [`AccessibleAction::Click`] handler that calls the click handler with a
+//! [`ClickEvent::Accessibility`], whether or not the element is scrolled into
+//! view. An element's own [`AccessibleAction::Click`] handler, registered with
+//! `on_a11y_action`, takes its place.
 //!
 //! ## Synthetic children
 //!
