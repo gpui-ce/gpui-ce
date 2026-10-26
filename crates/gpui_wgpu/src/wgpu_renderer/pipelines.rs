@@ -83,8 +83,8 @@ pub(super) struct WgpuRenderPipeline {
     specification: shader::Pipeline,
 }
 
-/// Everything a set of render pipelines depends on. Nothing here is per window, so
-/// windows on the same device that agree on these share one compiled set.
+/// Everything a set of render pipelines depends on. Nothing here is per window,
+/// so windows on the same device that agree on these share one compiled set.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct PipelineKey {
     pub(super) surface_format: wgpu::TextureFormat,
@@ -95,14 +95,14 @@ pub(super) struct PipelineKey {
 }
 
 /// Device-level pipeline state shared by every renderer on one [`crate::WgpuContext`].
-///
-/// Bind group layouts, shader modules and render pipelines are device objects, not
-/// window objects. Building them per window re-parses the WGSL and compiles and links
-/// every program again on each window open. On the GL backend each new shader module
-/// gets a fresh id, so wgpu-hal's program cache never hits across windows and drivers
-/// that retain memory per compiled program (Mesa virgl before 26.2) leak a few MB per
-/// window. The cache lives as long as the device: a lost device gets a fresh context and
-/// with it a fresh cache.
+/// Bind group layouts, shader modules and render pipelines are device objects, not window objects.
+/// Building them per window re-parses the WGSL and compiles and links
+/// every program again on each window open.
+/// On the GL backend each new shader module gets a fresh id,
+/// so wgpu-hal's program cache never hits across windows and drivers
+/// that retain memory per compiled program (Mesa virgl before 26.2) leak a few MB per window.
+/// The cache lives as long as the device: a lost device gets a fresh context
+/// and with it a fresh cache.
 #[derive(Default)]
 pub(crate) struct PipelineCache {
     layouts: Mutex<Option<Arc<WgpuBindGroupLayouts>>>,

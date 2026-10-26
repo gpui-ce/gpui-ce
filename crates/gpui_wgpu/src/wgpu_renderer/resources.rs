@@ -33,8 +33,8 @@ pub(super) struct WgpuResources {
     pub(super) queue: Arc<wgpu::Queue>,
     pub(super) renderer_tier: crate::RendererTier,
     pub(super) surface: Option<wgpu::Surface<'static>>,
-    /// The device's shared pipeline cache, so a surface reconfiguration picks up a
-    /// cached set instead of compiling a new one.
+    /// The device's shared pipeline cache, so a surface reconfiguration
+    /// picks up a cached set instead of compiling a new one.
     pub(super) pipeline_cache: Arc<PipelineCache>,
     pub(super) pipelines: Arc<WgpuPipelines>,
     pub(super) bind_group_layouts: Arc<WgpuBindGroupLayouts>,
