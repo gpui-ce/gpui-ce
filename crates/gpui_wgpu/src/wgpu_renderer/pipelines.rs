@@ -881,4 +881,45 @@ mod tests {
         let _commands = encoder.finish();
         Ok(())
     }
+
+    // Windows on a device share compiled pipelines when their key agree,
+    // and a key that differs in any field gets its own set without evecting the others.
+    #[test]
+    fn cache_shares_one_set_per_key() -> anyhow::Result<()> {
+        let context = WgpuContext::new_headless(None)?;
+        let tier = context.renderer_tier();
+        let device = &context.device;
+        let cache = PipelineCache::default();
+
+        let layouts_a = cache.layouts(device, tier);
+        let layouts_b = cache.layouts(device, tier);
+        assert!(Arc::ptr_eq(&layouts_a, &layouts_b));
+
+        let key = PipelineKey {
+            tier,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            surface_format: context.color_texture_format(),
+            path_sample_count: 1,
+            dual_source_blending: context.supports_dual_source_blending(),
+        };
+        let first = cache.pipelines(device, &layouts_a, key);
+        let second = cache.pipelines(device, &layouts_a, key);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let transparent = PipelineKey {
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+            ..key
+        };
+
+        // other was fetched with transparent, which differs in alpha mode.
+        // Opaque and premultiplied need different blend states,
+        // so the cache must compile a separate set rather than reuse first
+        let other = cache.pipelines(device, &layouts_a, transparent);
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        // again should stay un-negated, it goes back to the original key
+        let again = cache.pipelines(device, &layouts_a, key);
+        assert!(Arc::ptr_eq(&first, &again));
+        Ok(())
+    }
 }
