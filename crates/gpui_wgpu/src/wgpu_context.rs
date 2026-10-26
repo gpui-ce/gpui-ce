@@ -192,6 +192,9 @@ pub struct WgpuContext {
     renderer_tier: RendererTier,
     device_lost: Arc<AtomicBool>,
     uncaptured_error: Arc<Mutex<Option<String>>>,
+    /// Bind group layouts and render pipelines compiled once per device and shared by
+    /// every window's renderer.
+    pipeline_cache: Arc<crate::wgpu_renderer::PipelineCache>,
 }
 
 /// The resource transport selected for a device.
@@ -471,6 +474,10 @@ pub struct WgpuDeviceRequirements {
 }
 
 impl WgpuContext {
+    pub(crate) fn pipeline_cache(&self) -> &Arc<crate::wgpu_renderer::PipelineCache> {
+        &self.pipeline_cache
+    }
+
     pub(crate) fn handle(&self, texture_format: wgpu::TextureFormat) -> WgpuContextHandle {
         WgpuContextHandle::from_resources(
             Arc::clone(&self.device),
@@ -632,6 +639,7 @@ impl WgpuContext {
             renderer_tier: device.renderer_tier,
             device_lost,
             uncaptured_error,
+            pipeline_cache: Arc::default(),
         })
     }
 

@@ -32,7 +32,8 @@ mod target;
 
 #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
 pub use headless::WgpuHeadlessRenderer;
-use pipelines::WgpuPipelines as ShaderPipelines;
+pub(crate) use pipelines::PipelineCache;
+use pipelines::PipelineKey;
 use resources::{GlobalBufferLayout, ResourceMetadata, WgpuResources};
 use settings::RenderingParameters;
 pub use settings::{FontRasterizationSettings, SubpixelOrder, WgpuSurfaceConfig};
@@ -189,14 +190,16 @@ impl WgpuRenderer {
         let Some(resources) = self.resources.as_mut() else {
             return;
         };
-        resources.pipelines = ShaderPipelines::new(
+        resources.pipelines = resources.pipeline_cache.pipelines(
             &resources.device,
             &resources.bind_group_layouts,
-            config.format,
-            config.alpha_mode,
-            self.rendering_params.path_sample_count,
-            self.dual_source_blending,
-            resources.renderer_tier,
+            PipelineKey {
+                surface_format: config.format,
+                alpha_mode: config.alpha_mode,
+                path_sample_count: self.rendering_params.path_sample_count,
+                dual_source_blending: self.dual_source_blending,
+                tier: resources.renderer_tier,
+            },
         );
     }
 

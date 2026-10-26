@@ -11,6 +11,7 @@ use gpui_render::{
     shaders::interface as shader,
 };
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 
 /// Group-1 payload: a storage buffer on modern tiers, a data texture plus per-batch
 /// range uniform on downlevel.
@@ -80,6 +81,65 @@ pub(super) struct WgpuPipelines {
 pub(super) struct WgpuRenderPipeline {
     raw: wgpu::RenderPipeline,
     specification: shader::Pipeline,
+}
+
+/// Everything a set of render pipelines depends on. Nothing here is per window, so
+/// windows on the same device that agree on these share one compiled set.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct PipelineKey {
+    pub(super) surface_format: wgpu::TextureFormat,
+    pub(super) alpha_mode: wgpu::CompositeAlphaMode,
+    pub(super) path_sample_count: u32,
+    pub(super) dual_source_blending: bool,
+    pub(super) tier: RendererTier,
+}
+
+/// Device-level pipeline state shared by every renderer on one [`crate::WgpuContext`].
+///
+/// Bind group layouts, shader modules and render pipelines are device objects, not
+/// window objects. Building them per window re-parses the WGSL and compiles and links
+/// every program again on each window open. On the GL backend each new shader module
+/// gets a fresh id, so wgpu-hal's program cache never hits across windows and drivers
+/// that retain memory per compiled program (Mesa virgl before 26.2) leak a few MB per
+/// window. The cache lives as long as the device: a lost device gets a fresh context and
+/// with it a fresh cache.
+#[derive(Default)]
+pub(crate) struct PipelineCache {
+    layouts: Mutex<Option<Arc<WgpuBindGroupLayouts>>>,
+    pipelines: Mutex<collections::FxHashMap<PipelineKey, Arc<WgpuPipelines>>>,
+}
+
+impl PipelineCache {
+    /// Returns the device's bind group layouts, creating them on first use.
+    pub(super) fn layouts(
+        &self,
+        device: &wgpu::Device,
+        tier: RendererTier,
+    ) -> Arc<WgpuBindGroupLayouts> {
+        let mut slot = self.layouts.lock().unwrap_or_else(|p| p.into_inner());
+        Arc::clone(slot.get_or_insert_with(|| Arc::new(WgpuBindGroupLayouts::new(device, tier))))
+    }
+
+    /// Returns the pipeline set for `key`, compiling it on first use.
+    pub(super) fn pipelines(
+        &self,
+        device: &wgpu::Device,
+        layouts: &WgpuBindGroupLayouts,
+        key: PipelineKey,
+    ) -> Arc<WgpuPipelines> {
+        let mut map = self.pipelines.lock().unwrap_or_else(|p| p.into_inner());
+        Arc::clone(map.entry(key).or_insert_with(|| {
+            Arc::new(WgpuPipelines::new(
+                device,
+                layouts,
+                key.surface_format,
+                key.alpha_mode,
+                key.path_sample_count,
+                key.dual_source_blending,
+                key.tier,
+            ))
+        }))
+    }
 }
 
 impl WgpuRenderPipeline {

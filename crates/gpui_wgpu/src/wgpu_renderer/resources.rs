@@ -19,7 +19,7 @@ use super::{
     WgpuRenderer,
     buffers::{DynamicUniformBuffer, InstanceBufferArena},
     filters::FrameUniformRequirements,
-    pipelines::{WgpuBindGroupLayouts, WgpuPipelines},
+    pipelines::{PipelineCache, PipelineKey, WgpuBindGroupLayouts, WgpuPipelines},
     settings::RenderingParameters,
     surfaces::SurfaceCache,
 };
@@ -33,8 +33,11 @@ pub(super) struct WgpuResources {
     pub(super) queue: Arc<wgpu::Queue>,
     pub(super) renderer_tier: crate::RendererTier,
     pub(super) surface: Option<wgpu::Surface<'static>>,
-    pub(super) pipelines: WgpuPipelines,
-    pub(super) bind_group_layouts: WgpuBindGroupLayouts,
+    /// The device's shared pipeline cache, so a surface reconfiguration picks up a
+    /// cached set instead of compiling a new one.
+    pub(super) pipeline_cache: Arc<PipelineCache>,
+    pub(super) pipelines: Arc<WgpuPipelines>,
+    pub(super) bind_group_layouts: Arc<WgpuBindGroupLayouts>,
     pub(super) atlas_sampler: wgpu::Sampler,
     pub(super) surface_sampler: wgpu::Sampler,
     pub(super) surface_uniforms: DynamicUniformBuffer<SurfaceUniforms>,
@@ -99,15 +102,18 @@ impl WgpuResources {
         let device = Arc::clone(&context.device);
         let queue = Arc::clone(&context.queue);
         let renderer_tier = context.renderer_tier();
-        let bind_group_layouts = WgpuBindGroupLayouts::new(&device, renderer_tier);
-        let pipelines = WgpuPipelines::new(
+        let pipeline_cache = Arc::clone(context.pipeline_cache());
+        let bind_group_layouts = pipeline_cache.layouts(&device, renderer_tier);
+        let pipelines = pipeline_cache.pipelines(
             &device,
             &bind_group_layouts,
-            surface_config.format,
-            surface_config.alpha_mode,
-            rendering.path_sample_count,
-            dual_source_blending,
-            renderer_tier,
+            PipelineKey {
+                surface_format: surface_config.format,
+                alpha_mode: surface_config.alpha_mode,
+                path_sample_count: rendering.path_sample_count,
+                dual_source_blending,
+                tier: renderer_tier,
+            },
         );
         let linear_sampler = |label| {
             device.create_sampler(&wgpu::SamplerDescriptor {
@@ -179,6 +185,7 @@ impl WgpuResources {
             device,
             queue,
             surface,
+            pipeline_cache,
             pipelines,
             bind_group_layouts,
             atlas_sampler,
