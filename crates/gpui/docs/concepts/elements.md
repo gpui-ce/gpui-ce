@@ -8,11 +8,11 @@ simple:
 | --- | --- | --- |
 | A piece of interface with its own state | A **view**: a type that implements [`Render`] | An entity, kept between frames |
 | A reusable piece of interface without state | A **component**: a type that implements [`RenderOnce`] | A value, consumed when rendered |
-| Control over layout or painting | An **element**: a type that implements [`Element`] | A value, driven through the frame's phases |
+| Your own layout, or children that you lay out and paint yourself | An **element**: a type that implements [`Element`] | A value, driven through the frame's phases |
 
-Most code uses views and components built from [`div`]. Use a custom element
-when you need control over layout or painting, such as for a text editor or
-chart.
+*Most* code uses views and components built from [`div`]. For one-off drawing,
+like including a chart with its own hitboxes, [`canvas`] gives you paint access, simply. If you'd like a custom element, in the event canvas is not enough: you
+will then need to decide the element's size from its own content, or, going further, figuring out layout and paint, yourself.
 
 ## Views
 
@@ -170,7 +170,7 @@ little private state.
 ## Custom elements
 
 Implement [`Element`] when the built-in elements cannot express what you need:
-a custom layout algorithm, a canvas with thousands of hit-testable shapes, a
+a custom layout algorithm, a container that positions its own children, a
 text editor. The trait has one method per [phase of the frame](crate::_documentation::concepts::the_frame):
 
 * [`request_layout`](Element::request_layout) tells GPUI how big the element
@@ -182,5 +182,7 @@ text editor. The trait has one method per [phase of the frame](crate::_documenta
 
 The associated types carry data from one phase to the next. For one-off custom
 drawing, [`canvas`] is simpler: it gives you prepaint and paint callbacks
-without a new type. The [custom drawing guide](crate::_documentation::guides::custom_drawing)
-and the `custom_element` example walk through a complete element.
+without a new type, and it can insert hitboxes. What you'll miss is requesting
+your own layout, containing children, or carrying an id. The
+[custom drawing guide](crate::_documentation::guides::custom_drawing) and the
+`custom_element` example walk through a complete element.
