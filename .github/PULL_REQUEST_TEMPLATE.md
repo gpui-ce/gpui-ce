@@ -1,17 +1,13 @@
-<!--
-	Sources:
-	https://github.com/EFForg/rayhunter/blob/main/.github/pull_request_template.md
-	https://github.com/jj-vcs/jj/blob/main/.github/PULL_REQUEST_TEMPLATE.md
--->
+# Description
 
-# Overview
+<!-- Provide a clear summary of what this PR does and why. -->
 
-For author to fill out.
+# Related Issues & Discussions
 
-# Related Links
+<!-- Please replace this note with links to discussions (including vouching) and other issues or related pull requests. If there are no links, you can remove this section. -->
 
-> [!NOTE]
-> Please replace this note with links to discussions (including vouching) and other issues or related pull requests. If there are no links, you can remove this section.
+- Vouch Request #000 <!-- the vouch discussion for this feature -->
+- Closes #000 <!-- the issue bug/task this closes -->
 
 # Checklist
 
