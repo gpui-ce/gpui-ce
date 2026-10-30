@@ -8,16 +8,14 @@
 //! and screenshot capture via [`HeadlessAppContext::capture_screenshot`].
 
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, AssetRegistry, AssetSource,
-    BackgroundExecutor, Bounds, Context, Entity, EntityId, EventEmitter, ForegroundExecutor,
-    Global, Hsla, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation,
-    ScaledPixels, Size, Task, TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds,
-    WindowHandle, WindowOptions,
-    app::{GpuiBorrow, GpuiMode},
+    AnyView, AnyWindowHandle, App, AppCell, AssetRegistry, AssetSource, BackgroundExecutor, Bounds,
+    Entity, ForegroundExecutor, Hsla, Pixels, PlatformHeadlessRenderer, PlatformTextSystem, Render,
+    ScaledPixels, Size, TestDispatcher, TestPlatform, TextSystem, Window, WindowBounds,
+    WindowHandle, WindowOptions, app::GpuiMode, context::*,
 };
 use anyhow::Result;
 use image::RgbaImage;
-use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 /// A cross-platform headless app context for tests that need real text shaping.
 ///
@@ -46,6 +44,16 @@ pub struct HeadlessAppContext {
     pub foreground_executor: ForegroundExecutor,
     dispatcher: TestDispatcher,
     text_system: Arc<TextSystem>,
+}
+
+impl crate::app_borrow::UpgradeApp for HeadlessAppContext {
+    fn upgrade(&self) -> impl crate::app_borrow::BorrowApp {
+        self.app.clone()
+    }
+
+    fn upgrade_mut(&mut self) -> impl crate::app_borrow::BorrowAppMut {
+        self.app.clone()
+    }
 }
 
 impl HeadlessAppContext {
@@ -90,11 +98,7 @@ impl HeadlessAppContext {
 
         let text_system = Arc::new(TextSystem::new(platform_text_system));
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
-        let app = App::new_app(
-            platform,
-            AssetRegistry::from(asset_source).into(),
-            http_client,
-        );
+        let app = App::new_app(platform, AssetRegistry::from(asset_source), http_client);
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {
@@ -266,122 +270,8 @@ impl Drop for HeadlessAppContext {
     }
 }
 
-impl AppContext for HeadlessAppContext {
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
-        let mut app = self.app.borrow_mut();
-        app.new(build_entity)
-    }
-
-    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
-        let mut app = self.app.borrow_mut();
-        app.reserve_entity()
-    }
-
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T> {
-        let mut app = self.app.borrow_mut();
-        app.insert_entity(reservation, build_entity)
-    }
-
-    fn update_entity<T: 'static, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R {
-        let mut app = self.app.borrow_mut();
-        app.update_entity(handle, update)
-    }
-
-    fn as_mut<'a, T>(&'a mut self, _: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        panic!("Cannot use as_mut with HeadlessAppContext. Call update() instead.")
-    }
-
-    fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static,
-    {
-        let app = self.app.borrow();
-        app.read_entity(handle, read)
-    }
-
-    fn notify(&mut self, entity_id: EntityId) {
-        let mut app = self.app.borrow_mut();
-        app.notify(entity_id);
-    }
-
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        let mut app = self.app.borrow_mut();
-        app.emit(entity, event)
-    }
-
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        let mut lock = self.app.borrow_mut();
-        lock.update_window(window, f)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        let mut lock = self.app.borrow_mut();
-        lock.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        let app = self.app.borrow();
-        app.read_window(window, read)
-    }
-
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.background_executor.spawn(future)
-    }
-
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        let app = self.app.borrow();
-        app.read_global(callback)
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let mut app = self.app.borrow_mut();
-        app.insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        let mut app = self.app.borrow_mut();
-        app.remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let app = self.app.borrow();
-        let iter = app.global_entities();
-        // Cloning the iterator here so that lock can be released when function is going out of scope
-        iter.collect::<Vec<_>>().into_iter()
-    }
-}
+impl AppContext for HeadlessAppContext {}
+impl crate::context::ImpliedAppEntity for HeadlessAppContext {}
+impl crate::context::ImpliedAppWindow for HeadlessAppContext {}
+impl crate::context::ImpliedAppTask for HeadlessAppContext {}
+impl crate::context::ImpliedAppGlobals for HeadlessAppContext {}

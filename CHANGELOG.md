@@ -47,6 +47,8 @@ Items are sorted by issue or pull request number.
   - Removed `Window::with_filter_layer_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::with_filter_layer`
   - Removed `Window::paint_quad_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_quad`
   - Removed `Window::paint_image_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_image`
+- `AppContext` split into multiple traits: `AppContextEntity`, `AppContextBorrowEntity`, `AppContextWindow`, `AppContextTask`, `AppContextGlobal`. Each has been added to `gpui::prelude::*` and `gpui::context::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- `SvgRenderer::new` now takes `usvg::FontSelectionFn` instead of `gpui::AssetRegistry`, which can be built by `SvgRenderer::new_font_resolver`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Additions
 
@@ -186,6 +188,22 @@ Changelog established.
   - Added feature flags `gpui_apple/runtime_shaders`, `gpui_macos/runtime_shaders`, `gpui_platform/runtime_shaders`
   - Linux/FreeBSD screen capture was incorporated at some point.
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
+- Added `UpgradeApp` and `BorrowApp[Mut]` traits to support blanket implementation of `AppContext` traits. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Added `AsEntityId` trait which contains `fn entity_id(..) -> EntityId` for `EntityId`, `[Weak]Entity<T>`, `Any[Weak]Entity`, & `Any[Weak]View`. Added trait to `gpui::prelude::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Updated `AppContextEntity::notify` to take anything which impls `AsEntityId` (not just `EntityId` itself). [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Global entities api moved into `AppContextGlboal`: [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - implementable fns: `insert_global_by_id()`, `extract_globals()`, `has_globals_of()`, `drain_globals()`, `iter_globals()`
+  - provided fns: `remove_global_by_id()`, `get_global_by_id()`, `get_global_or_insert_default()`, `insert_global_by_type()`, `remove_global_by_type()`, `emplace_global_by_type()`, `extract_globals_of_type()`, `iter_globals_of_type()`, `get_global_by_type()`
+  - `App` has additional global entity fns: `try_read_global()`, `try_mut_global()` [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - Added enum `EntityBuilder<T>` and updated `AppContextGlobal::insert_global_by_id()` to take `Into<EntityBuilder<T>>` instead of `Entity<T>`, which allows callers to pass lazy entity constructor fns (thereby passing raw values). [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+- Asset management moved into global entities api. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - `AppContextGlobal`: provided methods `insert_asset()`, `extend_assets()`
+  - `App` additional global entity methods: `try_read_global()`, `try_mut_global()`
+  - `impl IntoIterator<Item=(SharedString, AssetEntry)> for AssetRegistry`
+  - `App::get_asset(SharedString)`
+- Color API extended from global entities. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - `App::missing_color()`
+  - `AppContextGlobal`: provided fns `insert_color()`, `get_color<T>()`, `get_color_defaulted<T>()`
 
 ### Removals
 
@@ -195,6 +213,7 @@ Changelog established.
   - `WindowOptions::linux_window_background: LinuxWindowBackground`
   - `WindowOptions::web_window_background: WebWindowBackground`
   - Added `WindowOptions::background_appearance()`
+- `App::assets()` [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Fixes
 
@@ -222,6 +241,13 @@ Changelog established.
   - `InteractiveElement::active()` -> `gpui::InteractiveElement::active_style()`
   - `InteractiveElement::group_active()` -> `gpui::InteractiveElement::group_active_style()`
 - `InteractiveElement::drag_over()` -> `InteractiveElement::on_drag_over()`. [#227](https://github.com/gpui-ce/gpui-ce/pull/227), [deprecation](https://github.com/gpui-ce/gpui-ce/commit/c818c3a1c0af68d1d45aa42654b5752903c7f51e)
+- Deprecating old globals API. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
+  - traits `BorrowAppContext`, `Global`, `ReadGlobal`, `UpdateGlobal`
+  - structs `Colors`, `GlobalColors`
+  - methods in `AppContextGlobal`: `read_global`, `insert_global_entity`, `remove_global_entity`, `global_entities`
+  - methods in `App`: `has_global`, `global`, `try_global`, `global_mut`, `default_global`, `set_global`, `clear_globals`, `remove_global`, `observe_global`, `init_colors`
+  - methods in `Context`: `observe_global_in`
+  - methods in `AsyncApp`: `has_global`, `read_global`, `try_read_global`, `read_default_global`, `update_global`
 
 ### Contributors
 

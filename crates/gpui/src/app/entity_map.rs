@@ -1,4 +1,4 @@
-use crate::{App, AppContext, GpuiBorrow, VisualContext, Window, seal::Sealed};
+use crate::{App, GpuiBorrow, VisualContext, Window, context::*, seal::Sealed};
 use anyhow::{Context as _, Result};
 use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
@@ -50,6 +50,19 @@ impl EntityId {
 impl Display for EntityId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_u64())
+    }
+}
+
+/// Exposes a consistent api for accessing an entity's id across raw valid, typed entity, anonymized any-entity.
+/// Primarily useful to allow any of the implementing types as inputs to functions that take an [`EntityId`].
+pub trait AsEntityId {
+    /// Returns the id associated with this entity.
+    fn entity_id(&self) -> EntityId;
+}
+
+impl AsEntityId for EntityId {
+    fn entity_id(&self) -> EntityId {
+        *self
     }
 }
 
@@ -242,6 +255,38 @@ impl<T> Drop for Lease<T> {
 #[derive(Deref, DerefMut)]
 pub(crate) struct Slot<T>(Entity<T>);
 
+/// Anonymizing enum which accepts a prebuilt/existing [`Entity`] or the context-parameterized constructor for one.
+pub enum EntityBuilder<T> {
+    /// An entity that has already been created.
+    Existing(Entity<T>),
+    /// The context-constructor to make an entity when the builder is collapsed.
+    Constructor(Box<dyn FnOnce(&mut Context<'_, T>) -> T>),
+}
+impl<T> From<Entity<T>> for EntityBuilder<T> {
+    fn from(value: Entity<T>) -> Self {
+        Self::Existing(value)
+    }
+}
+impl<T: Default + 'static> Default for EntityBuilder<T> {
+    fn default() -> Self {
+        Self::new(|_| T::default())
+    }
+}
+impl<T: 'static> EntityBuilder<T> {
+    /// Boxes the provided constructor for execution sometime later.
+    pub fn new(builder: impl FnOnce(&mut Context<'_, T>) -> T + 'static) -> Self {
+        Self::Constructor(Box::new(builder))
+    }
+
+    /// Collapses the builder into the existing entity or creating a new one.
+    pub fn build(self, cx: &mut App) -> Entity<T> {
+        match self {
+            Self::Existing(entity) => entity,
+            Self::Constructor(builder) => cx.new(builder),
+        }
+    }
+}
+
 /// A dynamically typed reference to a entity, which can be downcast into a `Entity<T>`.
 pub struct AnyEntity {
     pub(crate) entity_id: EntityId,
@@ -249,6 +294,13 @@ pub struct AnyEntity {
     entity_map: Weak<RwLock<EntityRefCounts>>,
     #[cfg(any(test, feature = "leak-detection"))]
     handle_id: HandleId,
+}
+
+impl AsEntityId for AnyEntity {
+    #[inline]
+    fn entity_id(&self) -> EntityId {
+        self.entity_id
+    }
 }
 
 impl AnyEntity {
@@ -271,12 +323,6 @@ impl AnyEntity {
                 .handle_created(id, Some(type_name)),
             entity_map,
         }
-    }
-
-    /// Returns the id associated with this entity.
-    #[inline]
-    pub fn entity_id(&self) -> EntityId {
-        self.entity_id
     }
 
     /// Returns the [TypeId] associated with this entity.
@@ -418,6 +464,12 @@ pub struct Entity<T> {
     pub(crate) entity_type: PhantomData<fn(T) -> T>,
 }
 
+impl<T> AsEntityId for Entity<T> {
+    fn entity_id(&self) -> EntityId {
+        self.any_entity.entity_id()
+    }
+}
+
 impl<T> Sealed for Entity<T> {}
 
 impl<T: 'static> Entity<T> {
@@ -467,13 +519,13 @@ impl<T: 'static> Entity<T> {
 
     /// Read the entity referenced by this handle with the given function.
     #[inline]
-    pub fn read_with<R, C: AppContext>(&self, cx: &C, f: impl FnOnce(&T, &App) -> R) -> R {
+    pub fn read_with<R, C: AppContextEntity>(&self, cx: &C, f: impl FnOnce(&T, &App) -> R) -> R {
         cx.read_entity(self, f)
     }
 
     /// Updates the entity referenced by this handle with the given function.
     #[inline]
-    pub fn update<R, C: AppContext>(
+    pub fn update<R, C: AppContextEntity>(
         &self,
         cx: &mut C,
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
@@ -483,12 +535,12 @@ impl<T: 'static> Entity<T> {
 
     /// Updates the entity referenced by this handle with the given function.
     #[inline]
-    pub fn as_mut<'a, C: AppContext>(&self, cx: &'a mut C) -> GpuiBorrow<'a, T> {
+    pub fn as_mut<'a, C: AppContextBorrowEntity>(&self, cx: &'a mut C) -> GpuiBorrow<'a, T> {
         cx.as_mut(self)
     }
 
     /// Updates the entity referenced by this handle with the given function.
-    pub fn write<C: AppContext>(&self, cx: &mut C, value: T) {
+    pub fn write<C: AppContextEntity>(&self, cx: &mut C, value: T) {
         self.update(cx, |entity, cx| {
             *entity = value;
             cx.notify();
@@ -572,13 +624,14 @@ pub struct AnyWeakEntity {
     entity_ref_counts: Weak<RwLock<EntityRefCounts>>,
 }
 
-impl AnyWeakEntity {
-    /// Get the entity ID associated with this weak reference.
+impl AsEntityId for AnyWeakEntity {
     #[inline]
-    pub fn entity_id(&self) -> EntityId {
+    fn entity_id(&self) -> EntityId {
         self.entity_id
     }
+}
 
+impl AnyWeakEntity {
     /// Check if this weak handle can be upgraded, or if the entity has already been dropped
     pub fn is_upgradable(&self) -> bool {
         let ref_count = self
@@ -744,6 +797,12 @@ pub struct WeakEntity<T> {
     entity_type: PhantomData<fn(T) -> T>,
 }
 
+impl<T> AsEntityId for WeakEntity<T> {
+    fn entity_id(&self) -> EntityId {
+        self.any_entity.entity_id()
+    }
+}
+
 impl<T> std::fmt::Debug for WeakEntity<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -780,7 +839,7 @@ impl<T: 'static> WeakEntity<T> {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity,
     {
         let entity = self.upgrade().context("entity released")?;
         Ok(cx.update_entity(&entity, update))
@@ -795,7 +854,7 @@ impl<T: 'static> WeakEntity<T> {
         update: impl FnOnce(&mut T, &mut Window, &mut Context<T>) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity + AppContextWindow,
     {
         let entity = self.upgrade().context("entity released")?;
         cx.with_window(entity.entity_id(), |window, app| {
@@ -809,7 +868,7 @@ impl<T: 'static> WeakEntity<T> {
     /// been released.
     pub fn read_with<C, R>(&self, cx: &C, read: impl FnOnce(&T, &App) -> R) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextEntity,
     {
         let entity = self.upgrade().context("entity released")?;
         Ok(cx.read_entity(&entity, read))

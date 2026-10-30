@@ -5,8 +5,8 @@ use gpui::VisualTestAppContext;
 #[cfg(target_family = "wasm")]
 use gpui::{App, ApplicationHandle, Bounds, WindowBounds, WindowOptions, size};
 use gpui::{
-    AppContext as _, Context, Div, FontWeight, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, px, rgb, white,
+    Context, Div, FontWeight, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
+    px, rgb, white,
 };
 use std::borrow::Cow;
 #[cfg(target_family = "wasm")]
@@ -159,6 +159,7 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         let window = cx
             .open_window(gpui::size(px(1280.0), px(800.0)), |_, cx| {
+                use gpui::context::AppContextEntity;
                 cx.new(|_| ParleyRenderingFixture)
             })
             .expect("failed to create the headless text window");

@@ -2480,7 +2480,7 @@ mod tests {
     use super::*;
     use crate::{FontSynthesis, FontVariation, RasterFace};
     use gpui::{
-        AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
+        CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
         FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode,
         HeadlessAppContext, HighlightStyle, Hsla, IntoElement, Point, RasterizedGlyphFormat,
         Render, ScaledPixels, StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle,

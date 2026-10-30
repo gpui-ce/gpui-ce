@@ -1,5 +1,5 @@
 use crate::{
-    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, Arena, Asset,
     AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds,
     BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
@@ -18,6 +18,7 @@ use crate::{
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
     Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    context::*,
     gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer},
     interactive::TouchEvent,
     point, px, rems, size, transparent_black,
@@ -1026,7 +1027,7 @@ pub enum HitboxBehavior {
     /// All hitboxes behind this hitbox will be ignored and so will have `hitbox.is_hovered() ==
     /// false` and `hitbox.should_handle_scroll() == false`. Typically for elements this causes
     /// skipping of all mouse events, hover styles, and tooltips. This flag is set by
-    /// [`InteractiveElement::occlude`].
+    /// [`InteractiveElement::occlude`](crate::InteractiveElement::occlude).
     ///
     /// For mouse handlers that check those hitboxes, this behaves the same as registering a
     /// bubble-phase handler for every mouse event type:
@@ -1050,7 +1051,7 @@ pub enum HitboxBehavior {
     /// `hitbox.should_handle_scroll() == true`. Typically for elements this causes all mouse
     /// interaction except scroll events to be ignored - see the documentation of
     /// [`Hitbox::is_hovered`] for details. This flag is set by
-    /// [`InteractiveElement::block_mouse_except_scroll`].
+    /// [`InteractiveElement::block_mouse_except_scroll`](crate::InteractiveElement::block_mouse_except_scroll).
     ///
     /// For mouse handlers that check those hitboxes, this behaves the same as registering a
     /// bubble-phase handler for every mouse event type **except** `ScrollWheelEvent`:
@@ -3213,7 +3214,7 @@ impl Window {
     }
 
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
-    /// the contents of the new [`Scene`], use [`Self::present`].
+    /// the contents of the new [`Scene`], use `present`.
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         // Drain every draw in profiler builds so a previous frame's
@@ -4125,9 +4126,9 @@ impl Window {
         result
     }
 
-    /// When you call this method during [`Element::prepaint`], containing elements will attempt to
+    /// When you call this method during [`crate::Element::prepaint`], containing elements will attempt to
     /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
-    /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
+    /// [`crate::Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
     /// that supports this method being called on the elements it contains. This method should only be
     /// called during the prepaint phase of element drawing.
     pub fn request_autoscroll(&mut self, bounds: Bounds<Pixels>) {
@@ -5052,7 +5053,8 @@ impl Window {
         let Some(tile) =
             self.sprite_atlas
                 .get_or_insert_with(&params.clone().into(), &mut || {
-                    let Some((size, bytes)) = cx.svg_renderer.render_alpha_mask(&params, data)?
+                    let Some((size, bytes)) =
+                        cx.svg_renderer.render_alpha_mask(&params, data, cx)?
                     else {
                         return Ok(None);
                     };
@@ -5248,7 +5250,7 @@ impl Window {
 
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
-    /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.
+    /// calls to the [`crate::Element::request_layout`] trait method and enables any element to participate in layout.
     ///
     /// This method should only be called as part of the request_layout or prepaint phase of element drawing.
     #[must_use]
@@ -7613,7 +7615,7 @@ impl<V: 'static + Render> WindowHandle<V> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn root<C>(&self, cx: &mut C) -> Result<Entity<V>>
     where
-        C: AppContext,
+        C: AppContextWindow,
     {
         cx.update_window(self.any_handle, |root_view, _, _| {
             root_view
@@ -7760,7 +7762,7 @@ impl AnyWindowHandle {
         update: impl FnOnce(AnyView, &mut Window, &mut App) -> R,
     ) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextWindow,
     {
         cx.update_window(self, update)
     }
@@ -7770,7 +7772,7 @@ impl AnyWindowHandle {
     /// This will fail if the window has been closed.
     pub fn read<T, C, R>(self, cx: &C, read: impl FnOnce(Entity<T>, &App) -> R) -> Result<R>
     where
-        C: AppContext,
+        C: AppContextWindow,
         T: 'static,
     {
         let view = self
@@ -7795,7 +7797,7 @@ impl HasDisplayHandle for Window {
     }
 }
 
-/// An identifier for an [`Element`].
+/// An identifier for an [`crate::Element`].
 ///
 /// Can be constructed with a string, a number, or both, as well
 /// as other internal representations.
@@ -8079,13 +8081,18 @@ mod tests {
     use super::*;
     use crate::util::FluentBuilder;
     use crate::{
-        ColorExt, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
-        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest, InputEvent,
-        InteractiveElement, LineLayout, LongPressEvent, MouseDownEvent, ParentElement,
-        PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterStyleRequest,
-        RasterizedGlyph, RequestFrameOptions, ShaderBool, StatefulInteractiveElement, Styled,
-        TestApp, TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchId,
-        TouchPhase, canvas, div, hsla, img, linear_color_stop, linear_gradient,
+        AnyWindowHandle, Background, Bounds, BoxShadow, ColorExt, Context, DispatchPhase,
+        DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
+        FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest,
+        InputEvent as _, InputEvent, InputEvent as _, InteractiveElement as _, InteractiveElement,
+        InteractiveElement as _, IntoElement, LineLayout, LongPressEvent, MouseButton,
+        MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, PlatformTextSystem, Point,
+        PreparedRasterStyle, RasterColorEffect, RasterStyleRequest, RasterizedGlyph, Render,
+        RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement,
+        StatefulInteractiveElement as _, Styled, TestApp, TestAppContext, TestTextSystem,
+        TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
+        WindowAppearance, WindowOptions, canvas, context::*, div, hsla, img, linear_color_stop,
+        linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use proptest::prelude::*;

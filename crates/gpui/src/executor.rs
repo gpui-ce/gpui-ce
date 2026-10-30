@@ -555,7 +555,7 @@ mod test {
         let platform = TestPlatform::new(background_executor.clone(), foreground_executor);
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
 
-        let app = App::new_app(platform, AssetRegistry::default().into(), http_client);
+        let app = App::new_app(platform, AssetRegistry::default(), http_client);
         (dispatcher, background_executor, app)
     }
 

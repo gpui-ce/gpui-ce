@@ -14,29 +14,17 @@
 //! as several associated traits. Together, these provide the full suite of Dom-like events
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
-
-#[cfg(debug_assertions)]
-use crate::{PaintQuad, TextAlign};
-
-#[cfg(test)]
 use crate::{
-    AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, StyledText, TestAppContext,
-    canvas, hsla, util::FluentBuilder,
-};
-
-#[cfg(test)]
-use std::{cell::Cell, rc::Weak};
-
-use crate::{
-    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Bounds, ClickEvent,
-    CursorStyle, DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload,
-    FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId,
-    IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
-    LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
-    PinchEvent, Pixels, Point, PointerChangeCause, Render, ScrollWheelEvent, SharedString, Size,
-    Style, StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled,
-    Task, TooltipId, Visibility, Window, WindowControlArea, point, px, size,
+    Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, CursorStyle,
+    DispatchPhase, Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, FocusHandle,
+    Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, ImageCacheProvider,
+    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
+    KeyboardClickEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
+    OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, PointerChangeCause, Render,
+    ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, StyleTransitionContext,
+    StyleTransitionState, StyleTransitions, Styled, Task, TooltipId, Visibility, Window,
+    WindowControlArea, context::*, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -54,8 +42,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
-use super::ImageCacheProvider;
 
 mod inline;
 pub(crate) use inline::InlineContent;
@@ -1072,7 +1058,7 @@ pub trait InteractiveElement: Sized {
 
     #[cfg(any(test, feature = "test-support"))]
     /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
+    /// in the `crate::VisualTestContext::debug_bounds` map
     /// This is a noop in release builds
     fn debug_selector(mut self, f: impl FnOnce() -> String) -> Self {
         self.interactivity().debug_selector = Some(f());
@@ -1081,7 +1067,7 @@ pub trait InteractiveElement: Sized {
 
     #[cfg(not(any(test, feature = "test-support")))]
     /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
+    /// in the `crate::VisualTestContext::debug_bounds` map
     /// This is a noop in release builds
     #[inline]
     fn debug_selector(self, _: impl FnOnce() -> String) -> Self {
@@ -2223,7 +2209,7 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// If a value of type [`T`] is dragged over the owning element,
+    /// If a value of type `T` is dragged over the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to provide style changes to apply to the owning element.
     pub fn on_drag_over(
@@ -2236,7 +2222,7 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// If a value of type [`T`] is dropped on the owning element,
+    /// If a value of type `T` is dropped on the owning element,
     /// [`Interactivity::can_drop`] is none or returns true, and [`can_drop`](Self::can_drop) is None or returns true,
     /// then this is called to process the dropped value.
     pub fn on_drop(
@@ -3362,8 +3348,11 @@ impl Interactivity {
         window: &mut Window,
         cx: &mut App,
     ) {
+        use crate::{PaintQuad, TextAlign};
         if let Some(global_id) = global_id
-            && (style.debug || style.debug_below || cx.has_global::<crate::DebugBelow>())
+            && (style.debug
+                || style.debug_below
+                || cx.has_globals_of(TypeId::of::<crate::DebugBelow>()))
             && hitbox.is_hovered(window)
         {
             const FONT_SIZE: crate::Pixels = crate::Pixels(10.);
@@ -4839,23 +4828,23 @@ impl Global for GroupHitboxes {}
 
 impl GroupHitboxes {
     pub fn get(name: &SharedString, cx: &mut App) -> Option<HitboxId> {
-        cx.default_global::<Self>()
-            .0
-            .get(name)
-            .and_then(|bounds_stack| bounds_stack.last())
-            .cloned()
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let group = entity.read(cx);
+        let hitboxes = group.0.get(name);
+        let last_hitbox = hitboxes.and_then(|bounds_stack| bounds_stack.last());
+        last_hitbox.cloned()
     }
 
     pub fn push(name: SharedString, hitbox_id: HitboxId, cx: &mut App) {
-        cx.default_global::<Self>()
-            .0
-            .entry(name)
-            .or_default()
-            .push(hitbox_id);
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let mut group = entity.as_mut(cx);
+        group.0.entry(name).or_default().push(hitbox_id);
     }
 
     pub fn pop(name: &SharedString, cx: &mut App) {
-        cx.default_global::<Self>().0.get_mut(name).unwrap().pop();
+        let entity = cx.get_global_or_insert_default::<Self>();
+        let mut group = entity.as_mut(cx);
+        group.0.get_mut(name).unwrap().pop();
     }
 }
 
@@ -4982,7 +4971,7 @@ where
 }
 
 /// Represents an element that can be scrolled *to* in its parent element.
-/// Contrary to [ScrollHandle::scroll_to_active_item], an anchored element does not have to be an immediate child of the parent.
+/// Contrary to `ScrollHandle::scroll_to_active_item`, an anchored element does not have to be an immediate child of the parent.
 #[derive(Clone)]
 pub struct ScrollAnchor {
     handle: ScrollHandle,
@@ -5110,7 +5099,7 @@ impl ScrollHandle {
         self.0.borrow().child_bounds.get(ix).cloned()
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
+    /// Update the active item of `ScrollHandleState` for scrolling to in prepaint
     pub fn scroll_to_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {
@@ -5119,7 +5108,7 @@ impl ScrollHandle {
         });
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
+    /// Update the active item of `ScrollHandleState` for scrolling to in prepaint
     /// This scrolls the minimal amount to ensure that the child is the first visible element
     pub fn scroll_to_top_of_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
@@ -5233,6 +5222,11 @@ impl ScrollHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        AnyWindowHandle, Context, HighlightStyle, InputEvent, Keystroke, MouseMoveEvent,
+        StyledText, TestAppContext, canvas, context::AppContextWindow, hsla, util::FluentBuilder,
+    };
+    use std::{cell::Cell, rc::Weak};
 
     #[gpui::test]
     fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {

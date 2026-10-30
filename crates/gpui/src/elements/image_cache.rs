@@ -1,10 +1,9 @@
 use crate::{
-    AnyElement, AnyEntity, App, AppContext, Asset, AssetLogger, Bounds, Element, ElementId, Entity,
+    AnyElement, AnyEntity, App, Asset, AssetLogger, Bounds, Element, ElementId, Entity,
     GlobalElementId, ImageAssetLoader, ImageCacheError, InspectorElementId, IntoElement, LayoutId,
     ParentElement, Pixels, RenderImage, Resource, Style, StyleRefinement, Styled, Task, Window,
-    hash,
+    context::AppContextEntity, hash,
 };
-
 use futures::{FutureExt, future::Shared};
 use refineable::Refineable;
 use smallvec::SmallVec;

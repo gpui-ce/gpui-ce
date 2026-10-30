@@ -1,9 +1,9 @@
 use crate::{
-    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
-    ArenaBox, Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
+    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, Arena, ArenaBox,
+    Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
     CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
-    FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
-    Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+    FocusMap, ForegroundExecutor, Global, GlobalId, HapticFeedbackStyle, KeyBinding, KeyContext,
+    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
     PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
     RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
@@ -11,6 +11,7 @@ use crate::{
     TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
     WindowHandle, WindowId, WindowInvalidator,
     colors::{Colors, GlobalColors},
+    context::*,
     hash,
     http_client::{HttpClient, NullHttpClient},
     init_app_menus,
@@ -25,6 +26,7 @@ use futures::{
 };
 use gpui_util::{ResultExt, debug_panic};
 use itertools::Itertools;
+use palette::IntoColor;
 use parking_lot::RwLock;
 use scheduler::Instant;
 use slotmap::SlotMap;
@@ -79,9 +81,8 @@ use crate::MacActivationPolicy;
 /// [Context::on_app_quit] before fully quitting.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Temporary(?) wrapper around [`RefCell<App>`] to help us debug any double borrows.
+/// Wrapper around [`RefCell<App>`] to help us debug any double borrows.
 /// Strongly consider removing after stabilization.
-#[doc(hidden)]
 pub struct AppCell {
     app: RefCell<App>,
 }
@@ -118,8 +119,10 @@ impl AppCell {
     }
 }
 
-#[doc(hidden)]
+/// Internally wrapped reference to [`App`] for usage with [`Rc<AppCell>`].
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRef<'a>(Ref<'a, App>);
 
 impl Drop for AppRef<'_> {
@@ -133,6 +136,8 @@ impl Drop for AppRef<'_> {
 
 #[doc(hidden)]
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRefMut<'a>(RefMut<'a, App>);
 
 impl Drop for AppRefMut<'_> {
@@ -180,7 +185,7 @@ impl Application {
     pub fn with_platform(platform: Rc<dyn Platform>) -> Self {
         Self(App::new_app(
             platform,
-            AssetRegistry::default().into(),
+            AssetRegistry::default(),
             Arc::new(NullHttpClient),
         ))
     }
@@ -214,9 +219,11 @@ impl Application {
     /// Assigns the source of assets for the application.
     pub fn with_assets(self, assets: impl Into<AssetRegistry>) -> Self {
         let mut context_lock = self.0.borrow_mut();
-        let asset_registry = Arc::new(assets.into());
-        context_lock.asset_registry = asset_registry.clone();
-        context_lock.svg_renderer = SvgRenderer::new(asset_registry);
+        // load the assets into global_entities
+        context_lock.extend_assets(assets.into());
+        // construct the svg renderer with bundled fonts, loaded from global_entities
+        context_lock.svg_renderer =
+            SvgRenderer::new(SvgRenderer::new_font_resolver(&context_lock.0));
         drop(context_lock);
         self
     }
@@ -763,14 +770,9 @@ pub struct App {
     // the tokio runtime. As any task attempting to spawn a blocking tokio task,
     // might panic.
     pub(crate) globals_by_type: TypeIdHashMap<Box<dyn Any>>,
-    // Entities which are retained until explicitly removed from the app or dropped at end of life-cycle.
-    // This is an alternative way to define "global" data which uses entities.
-    // There can be multiple entities of a given type & each `Entity<T>` is stored as `Box<dyn Any>`.
-    global_entities: Vec<AnyEntity>,
+    globals_by_id: HashMap<GlobalId, Vec<AnyEntity>>,
 
-    // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
-    asset_registry: Arc<AssetRegistry>,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
 
@@ -809,7 +811,7 @@ pub struct App {
     flushing_effects: bool,
     pending_updates: usize,
     quit_mode: QuitMode,
-    quitting: bool,
+    pub(crate) quitting: bool,
 
     // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
     // Otherwise it may report false positives.
@@ -821,7 +823,7 @@ impl App {
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(
         platform: Rc<dyn Platform>,
-        asset_registry: Arc<AssetRegistry>,
+        asset_registry: AssetRegistry,
         http_client: Arc<dyn HttpClient>,
     ) -> Rc<AppCell> {
         let background_executor = platform.background_executor();
@@ -858,12 +860,11 @@ impl App {
                 foreground_executor,
                 #[cfg(feature = "profiler")]
                 foreground_journal,
-                svg_renderer: SvgRenderer::new(asset_registry.clone()),
+                svg_renderer: SvgRenderer::default(),
                 loading_assets: Default::default(),
-                asset_registry,
                 http_client,
                 globals_by_type: Default::default(),
-                global_entities: Default::default(),
+                globals_by_id: Default::default(),
                 entities,
                 new_entity_observers: SubscriberSet::new(),
                 windows: SlotMap::with_key(),
@@ -918,6 +919,11 @@ impl App {
                 _ref_counts,
             }),
         });
+
+        app.borrow_mut().extend_assets(asset_registry);
+
+        let font_resolver = SvgRenderer::new_font_resolver(&app.borrow());
+        app.borrow_mut().svg_renderer = SvgRenderer::new(font_resolver);
 
         init_app_menus(platform.as_ref(), &app.borrow());
         SystemWindowTabController::init(&mut app.borrow_mut());
@@ -2076,23 +2082,20 @@ impl App {
         });
     }
 
-    /// Accessor for the application's asset source, which is provided when constructing the `App`.
-    pub fn assets(&self) -> &Arc<AssetRegistry> {
-        &self.asset_registry
-    }
-
     /// Accessor for the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system
     }
 
     /// Check whether a global of the given type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
     pub fn has_global<G: Global>(&self) -> bool {
         self.globals_by_type.contains_key(&TypeId::of::<G>())
     }
 
     /// Access the global of the given type. Panics if a global for that type has not been assigned.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn global<G: Global>(&self) -> &G {
         self.globals_by_type
             .get(&TypeId::of::<G>())
@@ -2101,6 +2104,7 @@ impl App {
     }
 
     /// Access the global of the given type if a value has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn try_global<G: Global>(&self) -> Option<&G> {
         self.globals_by_type
             .get(&TypeId::of::<G>())
@@ -2109,6 +2113,7 @@ impl App {
 
     /// Access the global of the given type mutably. Panics if a global for that type has not been assigned.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_mut_global")]
     pub fn global_mut<G: Global>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2120,6 +2125,9 @@ impl App {
 
     /// Access the global of the given type mutably. A default value is assigned if a global of this type has not
     /// yet been assigned.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
     pub fn default_global<G: Global + Default>(&mut self) -> &mut G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2131,6 +2139,9 @@ impl App {
     }
 
     /// Sets the value of the global of the given type.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by replaced by App::drain_globals + App::insert_global"
+    )]
     pub fn set_global<G: Global>(&mut self, global: G) {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2140,10 +2151,14 @@ impl App {
     /// Clear all stored globals. Does not notify global observers.
     #[cfg(any(test, feature = "test-support"))]
     pub fn clear_globals(&mut self) {
+        if !cfg!(test) {
+            log::warn!("Executing clear_globals outside of tests");
+        }
         self.globals_by_type.drain();
     }
 
     /// Remove the global of the given type from the app context. Does not notify global observers.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::drain_globals")]
     pub fn remove_global<G: Global>(&mut self) -> G {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
@@ -2156,6 +2171,7 @@ impl App {
     }
 
     /// Register a callback to be invoked when a global of the given type is updated.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn observe_global<G: Global>(
         &mut self,
         mut f: impl FnMut(&mut Self) + 'static,
@@ -2173,6 +2189,7 @@ impl App {
 
     /// Move the global of the given type to the stack.
     #[track_caller]
+    #[deprecated(note = "migrating to entity-based globals")]
     pub(crate) fn lease_global<G: Global>(&mut self) -> GlobalLease<G> {
         GlobalLease::new(
             self.globals_by_type
@@ -2183,6 +2200,7 @@ impl App {
     }
 
     /// Restore the global of the given type after it is moved to the stack.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub(crate) fn end_global_lease<G: Global>(&mut self, lease: GlobalLease<G>) {
         let global_type = TypeId::of::<G>();
 
@@ -2826,12 +2844,22 @@ impl App {
     /// Initializes gpui's default colors for the application.
     ///
     /// These colors can be accessed through `cx.default_colors()`.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn init_colors(&mut self) {
         self.set_global(GlobalColors(Arc::new(Colors::default())));
     }
 }
 
-impl AppContext for App {
+impl AppContext for App {}
+impl AppContextBorrowEntity for App {
+    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
+    where
+        T: 'static,
+    {
+        GpuiBorrow::new(handle.clone(), self)
+    }
+}
+impl AppContextEntity for App {
     /// Builds an entity that is owned by the application.
     ///
     /// The given function will be invoked with a [`Context`] and must return an object representing the entity. An
@@ -2886,13 +2914,6 @@ impl AppContext for App {
         })
     }
 
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        GpuiBorrow::new(handle.clone(), self)
-    }
-
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
     where
         T: 'static,
@@ -2901,7 +2922,8 @@ impl AppContext for App {
         read(entity, self)
     }
 
-    fn notify(&mut self, entity_id: EntityId) {
+    fn notify(&mut self, entity_id: impl AsEntityId) {
+        let entity_id = entity_id.entity_id();
         let window_invalidators = mem::take(
             self.window_invalidators_by_entity
                 .entry(entity_id)
@@ -2952,7 +2974,16 @@ impl AppContext for App {
             event,
         });
     }
-
+}
+impl AppContextTask for App {
+    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
+    where
+        R: Send + 'static,
+    {
+        self.background_executor.spawn(future)
+    }
+}
+impl AppContextWindow for App {
     fn update_window<T, F>(&mut self, handle: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -2990,14 +3021,8 @@ impl AppContext for App {
 
         Ok(read(view, self))
     }
-
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.background_executor.spawn(future)
-    }
-
+}
+impl AppContextGlobal for App {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global,
@@ -3007,20 +3032,103 @@ impl AppContext for App {
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let any = entity.into_any();
-        if !self.global_entities.contains(&any) {
-            self.global_entities.push(any);
-        }
+        self.insert_global_by_type::<T>(entity);
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.global_entities
-            .retain(|any| any.entity_id() != entity.entity_id());
+        self.remove_global_by_type(entity);
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let mut iter = self.global_entities.iter();
+        self.iter_globals(TypeId::of::<T>())
+    }
+
+    fn insert_global_by_id<T: 'static>(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        entity: impl Into<EntityBuilder<T>>,
+    ) -> Entity<T> {
+        let entity = entity.into().build(self);
+        self.global_entry_mut(GlobalId::new(id))
+            .or_default()
+            .push(entity.clone().into_any());
+        entity
+    }
+
+    fn extract_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+        should_extract: impl Fn(AnyEntity, &App) -> bool,
+    ) -> Option<Vec<AnyEntity>> {
+        let id = GlobalId::new(id);
+        let Some(mut globals) = self.globals_by_id.remove(&id) else {
+            return None;
+        };
+
+        let out_iter = globals.extract_if(.., |entity| should_extract(entity.clone(), self));
+        let out_vec = out_iter.collect();
+
+        self.globals_by_id.insert(id, globals);
+        Some(out_vec)
+    }
+
+    fn has_globals_of(&self, id: impl collections::any::AnyHash) -> bool {
+        self.globals_by_id.contains_key(&GlobalId::new(id))
+    }
+
+    fn drain_globals(
+        &mut self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = AnyEntity> + '_ {
+        let either = match self.globals_by_id.get_mut(&GlobalId::new(id)) {
+            Some(mut entry) => itertools::Either::Right(entry.drain(..)),
+            None => itertools::Either::Left(std::iter::empty()),
+        };
+        either.factor_into_iter().map(|either| either.into_inner())
+    }
+
+    fn iter_globals<T: 'static>(
+        &self,
+        id: impl collections::any::AnyHash,
+    ) -> impl Iterator<Item = crate::Entity<T>> + '_ {
+        let entries_by_id = self.globals_by_id.get(&GlobalId::new(id));
+        let iter = entries_by_id.into_iter().flatten();
         iter.filter_map(|any| any.clone().downcast::<T>().ok())
+    }
+}
+
+impl App {
+    fn global_entry_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> std::collections::hash_map::Entry<'_, GlobalId, Vec<AnyEntity>> {
+        self.globals_by_id.entry(id)
+    }
+
+    /// Tries to find the global stored by the type id of `T`, returning an immutable borrow of the value at the entity.
+    #[track_caller]
+    pub fn try_read_global<T: 'static>(&self) -> Option<&T> {
+        let entity = self.iter_globals(TypeId::of::<T>()).next()?;
+        Some(entity.read(self))
+    }
+
+    /// Tries to find the global stored by the type id of `T`, returning a mutable borrow of the value at the entity.
+    /// Automatically pre-notifies the entity that it is being mutated.
+    #[track_caller]
+    pub fn try_mut_global<T: 'static>(&mut self) -> Option<GpuiBorrow<'_, T>> {
+        let entity = self.iter_globals::<T>(TypeId::of::<T>()).next()?;
+        self.notify(entity.entity_id());
+        Some(entity.as_mut(self))
+    }
+
+    /// Returns an asset stored as a global entity at the provided path.
+    pub fn get_asset(&self, path: SharedString) -> Option<&crate::AssetEntry> {
+        Some(self.get_global_by_id(path)?.read(self))
+    }
+
+    /// Defines the color returned when a color is requested via a global-entity's id and is missing.
+    pub const fn missing_color() -> palette::rgb::Rgba {
+        palette::rgb::Rgba::new(1f32, 0f32, 1f32, 1f32)
     }
 }
 
@@ -3232,6 +3340,10 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 #[cfg(test)]
 mod test {
     use super::{Application, CursorHideMode};
+    use crate::{
+        BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
+        TestAppContext, TestDispatcher, TestPlatform, Window, context::*,
+    };
     use std::{
         cell::{Cell, RefCell},
         ffi::OsString,
@@ -3242,11 +3354,6 @@ mod test {
 
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
-
-    use crate::{
-        AppContext, BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
-        TestAppContext, TestDispatcher, TestPlatform, Window,
-    };
 
     fn test_application() -> (Application, TestDispatcher) {
         let dispatcher = TestDispatcher::new(0);

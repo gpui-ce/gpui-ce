@@ -1,9 +1,8 @@
 use crate::{
-    AnyView, AnyWindowHandle, AppContext, AsyncApp, DispatchPhase, EntityId, EventEmitter,
-    FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeObserver, Priority, Reservation,
-    SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, WindowHandle,
+    App, AppContext, AsEntityId, AsyncApp, AsyncWindowContext, DispatchPhase, Entity, EntityId,
+    EventEmitter, FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeEvent, KeystrokeObserver,
+    Priority, SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, context::*,
 };
-use anyhow::Result;
 use futures::FutureExt;
 use gpui_util::Deferred;
 use std::{
@@ -14,11 +13,9 @@ use std::{
     sync::Arc,
 };
 
-use super::{App, AsyncWindowContext, Entity, KeystrokeEvent};
-
 /// The app context, with specialized behavior for the given entity.
 pub struct Context<'a, T> {
-    app: &'a mut App,
+    pub(crate) app: &'a mut App,
     entity_state: WeakEntity<T>,
 }
 
@@ -702,6 +699,7 @@ impl<'a, T: 'static> Context<'a, T> {
     }
 
     /// Register a callback to be invoked when the given global state changes.
+    #[deprecated(note = "migrating to entity-based globals")]
     pub fn observe_global_in<G: Global>(
         &mut self,
         window: &Window,
@@ -771,125 +769,11 @@ impl<T> Context<'_, T> {
     }
 }
 
-impl<T> AppContext for Context<'_, T> {
-    #[inline]
-    fn new<U: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<U>) -> U) -> Entity<U> {
-        self.app.new(build_entity)
-    }
-
-    #[inline]
-    fn reserve_entity<U: 'static>(&mut self) -> Reservation<U> {
-        self.app.reserve_entity()
-    }
-
-    #[inline]
-    fn insert_entity<U: 'static>(
-        &mut self,
-        reservation: Reservation<U>,
-        build_entity: impl FnOnce(&mut Context<U>) -> U,
-    ) -> Entity<U> {
-        self.app.insert_entity(reservation, build_entity)
-    }
-
-    #[inline]
-    fn update_entity<U: 'static, R>(
-        &mut self,
-        handle: &Entity<U>,
-        update: impl FnOnce(&mut U, &mut Context<U>) -> R,
-    ) -> R {
-        self.app.update_entity(handle, update)
-    }
-
-    #[inline]
-    fn as_mut<'a, E>(&'a mut self, handle: &Entity<E>) -> super::GpuiBorrow<'a, E>
-    where
-        E: 'static,
-    {
-        self.app.as_mut(handle)
-    }
-
-    #[inline]
-    fn read_entity<U, R>(&self, handle: &Entity<U>, read: impl FnOnce(&U, &App) -> R) -> R
-    where
-        U: 'static,
-    {
-        self.app.read_entity(handle, read)
-    }
-
-    #[inline]
-    fn notify(&mut self, entity_id: EntityId) {
-        self.app.notify(entity_id)
-    }
-
-    #[inline]
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        self.app.emit(entity, event)
-    }
-
-    #[inline]
-    fn update_window<R, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<R>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> R,
-    {
-        self.app.update_window(window, update)
-    }
-
-    #[inline]
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        self.app.with_window(entity_id, f)
-    }
-
-    #[inline]
-    fn read_window<U, R>(
-        &self,
-        window: &WindowHandle<U>,
-        read: impl FnOnce(Entity<U>, &App) -> R,
-    ) -> Result<R>
-    where
-        U: 'static,
-    {
-        self.app.read_window(window, read)
-    }
-
-    #[inline]
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.app.background_executor.spawn(future)
-    }
-
-    #[inline]
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        self.app.read_global(callback)
-    }
-
-    #[inline]
-    fn insert_global_entity<E: 'static>(&mut self, entity: Entity<E>) {
-        self.app.insert_global_entity(entity)
-    }
-
-    #[inline]
-    fn remove_global_entity<E: 'static>(&mut self, entity: &Entity<E>) {
-        self.app.remove_global_entity(entity)
-    }
-
-    #[inline]
-    fn global_entities<E: 'static>(&self) -> impl Iterator<Item = Entity<E>> {
-        self.app.global_entities()
-    }
-}
+impl<T: 'static> AppContext for Context<'_, T> {}
+impl<T> ImpliedAppEntity for Context<'_, T> {}
+impl<T> ImpliedAppWindow for Context<'_, T> {}
+impl<T> ImpliedAppTask for Context<'_, T> {}
+impl<T> ImpliedAppGlobals for Context<'_, T> {}
 
 impl<T> Borrow<App> for Context<'_, T> {
     fn borrow(&self) -> &App {

@@ -1,16 +1,16 @@
 use crate::{
-    AnyView, AnyWindowHandle, App, AppCell, AppContext, BackgroundExecutor, BorrowAppContext,
-    Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, GpuiBorrow,
-    PromptButton, PromptLevel, Render, Reservation, Result, Subscription, Task, VisualContext,
-    Window, WindowHandle,
+    AnyView, AnyWindowHandle, App, AppCell, AsEntityId, BackgroundExecutor, BorrowAppContext,
+    Context, Entity, EntityId, EventEmitter, Focusable, ForegroundExecutor, Global, PromptButton,
+    PromptLevel, Render, Reservation, Result, Subscription, Task, VisualContext, WeakEntity,
+    Window, WindowHandle, context::*,
 };
 use anyhow::{Context as _, bail};
 use derive_more::{Deref, DerefMut};
-use futures::channel::oneshot;
-use futures::future::FutureExt;
-use std::{future::Future, rc::Weak};
-
-use super::{Context, WeakEntity};
+use futures::{channel::oneshot, future::FutureExt};
+use std::{
+    future::Future,
+    rc::{Rc, Weak},
+};
 
 /// An async-friendly version of [App] with a static lifetime so it can be held across `await` points in async code.
 /// You're provided with an instance when calling [App::spawn], and you can also create one with [App::to_async].
@@ -26,154 +26,24 @@ pub struct AsyncApp {
 }
 
 impl AsyncApp {
-    fn app(&self) -> std::rc::Rc<AppCell> {
+    pub(crate) fn app(&self) -> Rc<AppCell> {
         self.app
             .upgrade()
             .expect("app was released before async operation completed")
     }
 }
 
-impl AppContext for AsyncApp {
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
-        let app = self.app();
-        let mut app = app.borrow_mut();
-        app.new(build_entity)
-    }
-
-    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
-        let app = self.app();
-        let mut app = app.borrow_mut();
-        app.reserve_entity()
-    }
-
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T> {
-        let app = self.app();
-        let mut app = app.borrow_mut();
-        app.insert_entity(reservation, build_entity)
-    }
-
-    fn update_entity<T: 'static, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R {
-        let app = self.app();
-        let mut app = app.borrow_mut();
-        app.update_entity(handle, update)
-    }
-
-    fn as_mut<'a, T>(&'a mut self, _handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        panic!("Cannot as_mut with an async context. Try calling update() first")
-    }
-
-    fn read_entity<T, R>(&self, handle: &Entity<T>, callback: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static,
-    {
-        let app = self.app();
-        let lock = app.borrow();
-        lock.read_entity(handle, callback)
-    }
-
-    fn notify(&mut self, entity_id: EntityId) {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        lock.notify(entity_id);
-    }
-
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static,
-    {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        lock.emit(entity, event)
-    }
-
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.try_borrow_mut()?;
-        if lock.quitting {
-            bail!("app is quitting");
-        }
-        lock.update_window(window, f)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        let app = self.app.upgrade()?;
-        let mut lock = app.try_borrow_mut().ok()?;
-        if lock.quitting {
-            return None;
-        }
-        lock.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        let app = self.app.upgrade().context("app was released")?;
-        let lock = app.borrow();
-        if lock.quitting {
-            bail!("app is quitting");
-        }
-        lock.read_window(window, read)
-    }
-
+impl AppContext for AsyncApp {}
+impl ImpliedAppEntity for AsyncApp {}
+impl ImpliedAppWindow for AsyncApp {}
+impl ImpliedAppGlobals for AsyncApp {}
+impl AppContextTask for AsyncApp {
     #[track_caller]
     fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
     where
         R: Send + 'static,
     {
         self.background_executor.spawn(future)
-    }
-
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        lock.update(|this| this.read_global(callback))
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        lock.insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        lock.remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        let app = self.app();
-        let mut lock = app.borrow_mut();
-        let iter = lock.global_entities();
-        // Cloning the iterator here so that lock can be released when function is going out of scope
-        iter.collect::<Vec<_>>().into_iter()
     }
 }
 
@@ -250,6 +120,7 @@ impl AsyncApp {
     }
 
     /// Determine whether global state of the specified type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::has_globals_of")]
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app();
         let app = app.borrow_mut();
@@ -259,6 +130,7 @@ impl AsyncApp {
     /// Reads the global state of the specified type, passing it to the given callback.
     ///
     /// Panics if no global state of the specified type has been assigned.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app();
         let app = app.borrow_mut();
@@ -268,6 +140,7 @@ impl AsyncApp {
     /// Reads the global state of the specified type, passing it to the given callback.
     ///
     /// Similar to [`AsyncApp::read_global`], but returns an error instead of panicking
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let app = self.app();
         let app = app.borrow_mut();
@@ -279,6 +152,9 @@ impl AsyncApp {
 
     /// Reads the global state of the specified type, passing it to the given callback.
     /// A default value is assigned if a global of this type has not yet been assigned.
+    #[deprecated(
+        note = "migrating to entity-based globals. replaced by App::get_global_or_insert_default"
+    )]
     pub fn read_default_global<G: Global + Default, R>(
         &self,
         read: impl FnOnce(&G, &App) -> R,
@@ -293,6 +169,7 @@ impl AsyncApp {
 
     /// A convenience method for [`App::update_global`](BorrowAppContext::update_global)
     /// for updating the global state of the specified type.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
     pub fn update_global<G: Global, R>(&self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
@@ -355,6 +232,7 @@ impl AsyncWindowContext {
     }
 
     /// A convenience method for [`App::global`].
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::try_read_global")]
     pub fn read_global<G: Global, R>(
         &mut self,
         read: impl FnOnce(&G, &Window, &App) -> R,
@@ -365,6 +243,7 @@ impl AsyncWindowContext {
 
     /// A convenience method for [`App::update_global`](BorrowAppContext::update_global).
     /// for updating the global state of the specified type.
+    #[deprecated(note = "migrating to entity-based globals. replaced by App::get_global")]
     pub fn update_global<G, R>(
         &mut self,
         update: impl FnOnce(&mut G, &mut Window, &mut App) -> R,
@@ -411,7 +290,11 @@ impl AsyncWindowContext {
     }
 }
 
-impl AppContext for AsyncWindowContext {
+impl AppContext for AsyncWindowContext {}
+impl crate::context::ImpliedAppWindow for AsyncWindowContext {}
+impl crate::context::ImpliedAppTask for AsyncWindowContext {}
+impl crate::context::ImpliedAppGlobals for AsyncWindowContext {}
+impl AppContextEntity for AsyncWindowContext {
     fn new<T>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T>
     where
         T: 'static,
@@ -465,13 +348,6 @@ impl AppContext for AsyncWindowContext {
         self.app.update_entity(handle, update)
     }
 
-    fn as_mut<'a, T>(&'a mut self, _: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        panic!("Cannot use as_mut() from an async context, call `update`")
-    }
-
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
     where
         T: 'static,
@@ -479,7 +355,7 @@ impl AppContext for AsyncWindowContext {
         self.app.read_entity(handle, read)
     }
 
-    fn notify(&mut self, entity_id: EntityId) {
+    fn notify(&mut self, entity_id: impl AsEntityId) {
         self.app.notify(entity_id);
     }
 
@@ -489,59 +365,6 @@ impl AppContext for AsyncWindowContext {
         EventType: 'static,
     {
         self.app.emit(entity, event)
-    }
-
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, update: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T,
-    {
-        self.app.update_window(window, update)
-    }
-
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R> {
-        self.app.with_window(entity_id, f)
-    }
-
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static,
-    {
-        self.app.read_window(window, read)
-    }
-
-    #[track_caller]
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.app.background_executor.spawn(future)
-    }
-
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global,
-    {
-        self.app.read_global(callback)
-    }
-
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
-        self.app.insert_global_entity(entity)
-    }
-
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.app.remove_global_entity(entity)
-    }
-
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
-        self.app.global_entities()
     }
 }
 

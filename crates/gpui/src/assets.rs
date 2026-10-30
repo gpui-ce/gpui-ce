@@ -27,7 +27,7 @@ pub trait AssetSource: 'static + Send + Sync {
     /// List the assets at the given path.
     fn list(&self, path: &str) -> Result<Vec<SharedString>>;
 
-    /// Iterates over all paths (via [`list`]) and loads each asset in turn (via [`load`]),
+    /// Iterates over all paths (via [`list`](Self::list)) and loads each asset in turn (via [`load`](Self::load)),
     /// yielding an iterator over all assets that were loaded successfully.
     /// Output can be provided directly to [`AssetRegistry::extend`].
     fn iter_preloaded(&self) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)> + '_> {
@@ -39,8 +39,8 @@ pub trait AssetSource: 'static + Send + Sync {
         Box::new(iter)
     }
 
-    /// Iterates over all paths (via [`list`]) and constructs an [`AssetEntry::OnDemand`],
-    /// which will call [`load`] on this `Arc<AssetSource>` when the path is requested, yielding the resulting iterator.
+    /// Iterates over all paths (via [`list`](Self::list)) and constructs an [`AssetEntry::OnDemand`],
+    /// which will call [`load`](Self::load) on this `Arc<AssetSource>` when the path is requested, yielding the resulting iterator.
     /// Output can be provided directly to [`AssetRegistry::extend`].
     fn iter_ondemand(self: Arc<Self>) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)>> {
         use gpui_util::ResultExt;
@@ -73,6 +73,7 @@ pub type AssetData = Cow<'static, [u8]>;
 /// A thread-safe callback to load an asset, possibly from disk.
 pub type FnAssetLoader = Arc<dyn Fn() -> Option<AssetData> + 'static + Send + Sync>;
 /// The entry stored in the [`AssetRegistry`].
+#[derive(Clone)]
 pub enum AssetEntry {
     /// The asset is pre-loaded. It may be stored staticlly/embedded, or has already been loaded from disk.
     PreLoaded(AssetData),
@@ -90,6 +91,18 @@ where
 {
     fn from(value: F) -> Self {
         Self::OnDemand(Arc::new(value))
+    }
+}
+impl AssetEntry {
+    /// Returns the asset data. If the asset is static/embedded or pre-loaded,
+    /// this will return `Cow::Borrowed(&'this [u8])` (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
+    /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as `Cow::Owned(Vec<u8>)`.
+    pub fn load<'this>(&'this self) -> Option<Cow<'this, [u8]>> {
+        match self {
+            AssetEntry::PreLoaded(Cow::Borrowed(data)) => Some(Cow::Borrowed(data)),
+            AssetEntry::PreLoaded(Cow::Owned(data)) => Some(Cow::Borrowed(data.as_bytes())),
+            AssetEntry::OnDemand(loader) => loader(),
+        }
     }
 }
 
@@ -137,6 +150,15 @@ where
     }
 }
 
+impl IntoIterator for AssetRegistry {
+    type Item = (SharedString, AssetEntry);
+    type IntoIter = <BTreeMap<SharedString, AssetEntry> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
 impl AssetRegistry {
     /// Inserts a single asset into the registry. The asset can be static (embedded/bundled, `&'static [u8]`), pre-loaded ([`Vec<u8>`]), or loaded-on-demand ([`FnAssetLoader`]).
     /// If there is already an entry at the provided key/path, an error is returned.
@@ -153,15 +175,16 @@ impl AssetRegistry {
         Ok(())
     }
 
+    /// Returns the asset entry for a given path/key.
+    pub fn get(&self, path: impl AsRef<str>) -> Option<&AssetEntry> {
+        self.entries.get(path.as_ref())
+    }
+
     /// Returns the asset data for a given path/key. If the asset is static/embedded or pre-loaded,
-    /// this will return [`Cow::Borrowed(&'this [u8])`] (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
-    /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as [`Cow::Owned(Vec<u8>)`].
+    /// this will return `Cow::Borrowed(&'this [u8])` (the data may be 'static lifetime aka embedded/bundled or simply owned by the registry).
+    /// If the asset mapped to the path is load-on-demand, the loader is queried and its result returned as `Cow::Owned(Vec<u8>)`.
     pub fn load<'this>(&'this self, path: impl AsRef<str>) -> Option<Cow<'this, [u8]>> {
-        match self.entries.get(path.as_ref())? {
-            AssetEntry::PreLoaded(Cow::Borrowed(data)) => Some(Cow::Borrowed(data)),
-            AssetEntry::PreLoaded(Cow::Owned(data)) => Some(Cow::Borrowed(data.as_bytes())),
-            AssetEntry::OnDemand(loader) => loader(),
-        }
+        self.get(path)?.load()
     }
 
     /// Iterates over the provided and inserts each entry using the provided path in the item tuple.
