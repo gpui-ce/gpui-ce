@@ -1,6 +1,6 @@
 use crate::{
-    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
-    ArenaBox, Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
+    Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, Arena, ArenaBox,
+    Asset, AssetRegistry, BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError,
     CursorStyle, DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle,
     FocusMap, ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap,
     Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
@@ -11,6 +11,7 @@ use crate::{
     TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
     WindowHandle, WindowId, WindowInvalidator,
     colors::{Colors, GlobalColors},
+    context::*,
     hash,
     http_client::{HttpClient, NullHttpClient},
     init_app_menus,
@@ -79,9 +80,8 @@ use crate::MacActivationPolicy;
 /// [Context::on_app_quit] before fully quitting.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Temporary(?) wrapper around [`RefCell<App>`] to help us debug any double borrows.
+/// Wrapper around [`RefCell<App>`] to help us debug any double borrows.
 /// Strongly consider removing after stabilization.
-#[doc(hidden)]
 pub struct AppCell {
     app: RefCell<App>,
 }
@@ -118,8 +118,10 @@ impl AppCell {
     }
 }
 
-#[doc(hidden)]
+/// Internally wrapped reference to [`App`] for usage with [`Rc<AppCell>`].
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRef<'a>(Ref<'a, App>);
 
 impl Drop for AppRef<'_> {
@@ -133,6 +135,8 @@ impl Drop for AppRef<'_> {
 
 #[doc(hidden)]
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
+#[deref_mut(forward)]
 pub struct AppRefMut<'a>(RefMut<'a, App>);
 
 impl Drop for AppRefMut<'_> {
@@ -809,7 +813,7 @@ pub struct App {
     flushing_effects: bool,
     pending_updates: usize,
     quit_mode: QuitMode,
-    quitting: bool,
+    pub(crate) quitting: bool,
 
     // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
     // Otherwise it may report false positives.
@@ -2831,7 +2835,16 @@ impl App {
     }
 }
 
-impl AppContext for App {
+impl AppContext for App {}
+impl AppContextBorrowEntity for App {
+    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
+    where
+        T: 'static,
+    {
+        GpuiBorrow::new(handle.clone(), self)
+    }
+}
+impl AppContextEntity for App {
     /// Builds an entity that is owned by the application.
     ///
     /// The given function will be invoked with a [`Context`] and must return an object representing the entity. An
@@ -2884,13 +2897,6 @@ impl AppContext for App {
             cx.entities.end_lease(entity);
             result
         })
-    }
-
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static,
-    {
-        GpuiBorrow::new(handle.clone(), self)
     }
 
     fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
@@ -2952,7 +2958,16 @@ impl AppContext for App {
             event,
         });
     }
-
+}
+impl AppContextTask for App {
+    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
+    where
+        R: Send + 'static,
+    {
+        self.background_executor.spawn(future)
+    }
+}
+impl AppContextWindow for App {
     fn update_window<T, F>(&mut self, handle: AnyWindowHandle, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -2990,14 +3005,8 @@ impl AppContext for App {
 
         Ok(read(view, self))
     }
-
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static,
-    {
-        self.background_executor.spawn(future)
-    }
-
+}
+impl AppContextGlobal for App {
     fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
     where
         G: Global,
@@ -3232,6 +3241,10 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 #[cfg(test)]
 mod test {
     use super::{Application, CursorHideMode};
+    use crate::{
+        BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
+        TestAppContext, TestDispatcher, TestPlatform, Window, context::*,
+    };
     use std::{
         cell::{Cell, RefCell},
         ffi::OsString,
@@ -3242,11 +3255,6 @@ mod test {
 
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
-
-    use crate::{
-        AppContext, BackgroundExecutor, Context, Empty, ForegroundExecutor, IntoElement, Render,
-        TestAppContext, TestDispatcher, TestPlatform, Window,
-    };
 
     fn test_application() -> (Application, TestDispatcher) {
         let dispatcher = TestDispatcher::new(0);

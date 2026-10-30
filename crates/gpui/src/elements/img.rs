@@ -1,12 +1,11 @@
 use crate::{
-    AnyElement, AnyImageCache, App, AppContext, Asset, AssetLogger, Bounds, DefiniteLength,
-    Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
-    RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task, Window,
+    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, Element, ElementId,
+    Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
+    Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
+    SharedString, SharedUri, StyleRefinement, Styled, Task, Window, context::AppContextEntity,
     decode_static_image, decode_static_image_from_decoder, px,
 };
 use anyhow::Result;
-
 use futures::Future;
 use gpui_util::ResultExt;
 use image::{

@@ -3,15 +3,14 @@
 //! Run with `cargo run -p gpui-ce --example motion_showcase --locked`.
 //! Each panel names the API that drives its animation. No network or service is used.
 
+use gpui::{
+    App, Bounds, Context, FontWeight, Motion, MotionPass, MotionSample, Window, WindowBounds,
+    WindowOptions, div, ease_in_out, millis, prelude::*, px, relative, rgb, size,
+};
 use std::time::{Duration, Instant};
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
-
-use gpui::{
-    App, AppContext, Bounds, Context, FontWeight, Motion, MotionPass, MotionSample, Window,
-    WindowBounds, WindowOptions, div, ease_in_out, millis, prelude::*, px, relative, rgb, size,
-};
 
 const BACKGROUND: u32 = 0x141a26;
 const SURFACE: u32 = 0x1e293b;
