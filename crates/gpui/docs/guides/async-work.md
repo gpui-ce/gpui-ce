@@ -291,12 +291,14 @@ so that dropping the view stops the clock.
 
 ## Use tokio libraries through `gpui_tokio`
 
-Some libraries, such as networking crates, expect a [tokio](https://tokio.rs) runtime.
-The `gpui_ce_tokio` crate, which the workspace depends on as `gpui_tokio`, runs one for
-you and returns each future as a GPUI task. Call `gpui_tokio::init(cx)` once at startup. It
-creates a runtime with two worker threads. To share a runtime you already have, call
-`gpui_tokio::init_from_handle` instead. Calling either before the first use is required:
-the functions below read the runtime from the app and panic if it's missing.
+Some networking libraries require a [tokio](https://tokio.rs) runtime. Use
+`gpui_ce_tokio`, imported as `gpui_tokio` in this workspace, to run their
+futures and await the results as GPUI tasks.
+
+At startup, call `gpui_tokio::init(cx)` to create a runtime with two worker
+threads, or `gpui_tokio::init_from_handle` to use an existing runtime.
+Initialize it before calling the functions below; they panic if no runtime is
+registered.
 
 * `Tokio::spawn(cx, future)` runs a `Send` future on tokio and returns a
   `Task<Result<R, JoinError>>`.
@@ -305,10 +307,11 @@ the functions below read the runtime from the app and panic if it's missing.
 * `Tokio::handle(cx)` returns the runtime's `tokio::runtime::Handle`, for code that needs
   one directly.
 
-Dropping the GPUI task aborts the tokio task. Await the GPUI task, or detach it, the same
-way as any other task. The futures you pass to tokio can't use entities or windows, so
-move results back with `Context::spawn` as in the first section. This crate has no
-doctests, so this page describes its API rather than running an example.
+Dropping the GPUI task aborts the tokio task. Await the GPUI task, or detach it,
+the same way as any other task. The futures you pass to tokio can't use entities
+or windows, so move results back with `Context::spawn` as in the first section.
+This crate has no doctests, so this page describes its API rather than running
+an example.
 
 ## Test async code deterministically
 
