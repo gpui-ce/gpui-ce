@@ -226,12 +226,16 @@ struct Panel {
 # });
 ```
 
-Storing the subscription in a field ties it to the lifetime of the entity that
-owns the field, which is usually what you want. If the listening entity should
-outlive the local subscription handle, call [`detach`](crate::Subscription::detach)
-instead. GPUI-owned subscriptions may still remove themselves when an entity
-they depend on is released; detaching does not make a callback independent of
-those entities.
+Storing the subscription in a field cancels the callback when the listening
+entity is dropped. Call [`detach`](crate::Subscription::detach) to leave the
+callback registered without keeping its cancellation handle.
+
+For entity `observe` and `subscribe` callbacks, releasing the observed entity
+removes its callbacks, including detached ones. Callbacks registered through
+`Context` hold a weak handle to the listening entity. If that listener is
+released first, the callback cannot call it; the registration is removed the
+next time it would run, or when the observed entity is released. Keeping the
+subscription in a field cancels it as soon as the listener is dropped.
 
 ## Lifetimes and weak handles
 
