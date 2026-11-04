@@ -14,8 +14,8 @@ updates, events, and lifetimes fit together.
 
 ## Entities
 
-You give a value to the app with [`new`](crate::AppContext::new). The app
-stores it and hands back an [`Entity<T>`](crate::Entity):
+You give a value to the app with [`new`](crate::AppContext::new). The app stores
+it and hands back an [`Entity<T>`](crate::Entity):
 
 ```
 # use gpui::{AppContext, Entity, TestApp};
@@ -245,8 +245,8 @@ dropped, GPUI releases the value at the end of the current update, after running
 any callbacks registered with
 [`Context::on_release`](crate::Context::on_release).
 
-That makes cycles a leak, as with `Rc`: if a parent view holds its child
-and the child holds its parent, neither is ever released. Use a
+That makes cycles a leak, as with `Rc`: if a parent view holds its child and the
+child holds its parent, neither is ever released. Use a
 [`WeakEntity<T>`](crate::WeakEntity) for back-references and for long-lived
 callbacks. A weak handle does not keep the value alive, and reaching the value
 through it returns a `Result` because the value may be gone:
@@ -277,10 +277,10 @@ for the same reason.
 
 ## Views are entities too
 
-A *view* is an entity whose type implements [`Render`](crate::Render). There is
-nothing else to it: a view is created with `cx.new`, held by an `Entity`, and
-updated and notified like any other entity. A window holds its root view, and a
-view shows another view by passing a handle as a child:
+A *view* is an entity whose type implements [`Render`](crate::Render). Create it
+with `cx.new`, hold it with an `Entity`, and update and notify it like any other
+entity. A window holds its root view, and a view shows another view by passing a
+handle as a child:
 
 ```
 # use gpui::{AppContext, Context, Entity, Window, div, prelude::*};
@@ -303,14 +303,15 @@ impl Render for Workspace {
 }
 ```
 
-When `Sidebar` notifies, its window is redrawn. By default a redraw renders
-the window's whole tree again, starting from the root view, because building
-elements is cheap. A view that is expensive to render can opt out: embed it
-with [`Entity::cached`](crate::Entity::cached) and GPUI reuses its previous
-output until the view is notified, or its bounds, content mask, text style, text direction or
-Unicode bidirectional text mode changes. If the cached view reads another entity, observe that
-entity and notify the cached view when its value changes. [The frame](crate::_documentation::concepts::the_frame)
-explains the rendering side of this in detail.
+When `Sidebar` notifies, its window is redrawn. By default a redraw renders the
+window's whole tree again, starting from the root view, because building
+elements is cheap. A view that is expensive to render can opt out: embed it with
+[`Entity::cached`](crate::Entity::cached) and GPUI reuses its previous output
+until the view is notified, or its bounds, content mask, text style, text
+direction or Unicode bidirectional text mode changes. If the cached view reads
+another entity, observe that entity and notify the cached view when its value
+changes. [The frame](crate::_documentation::concepts::the_frame) explains the
+rendering side of this in detail.
 
 ## Globals
 
@@ -392,5 +393,5 @@ global storage are released when the app is dropped.
 * Strong handles keep entities alive. Use `WeakEntity` to break cycles.
 * A view is an entity that implements `Render`.
 
-Next, [contexts](crate::_documentation::concepts::contexts) explains the different context types you'll
-meet and when you have each one.
+Next, [contexts](crate::_documentation::concepts::contexts) explains the
+different context types you'll meet and when you have each one.
