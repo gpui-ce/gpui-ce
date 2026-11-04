@@ -239,9 +239,10 @@ subscription in a field cancels it as soon as the listener is dropped.
 
 ## Lifetimes and weak handles
 
-An entity lives as long as any strong handle to it exists. When the last
-`Entity<T>` is dropped, GPUI releases the value at the end of the current
-update, after running any callbacks registered with
+An entity lives as long as any strong handle to it exists, including handles
+kept in [global entity storage](#global-entities). When the last `Entity<T>` is
+dropped, GPUI releases the value at the end of the current update, after running
+any callbacks registered with
 [`Context::on_release`](crate::Context::on_release).
 
 That makes cycles a leak, as with `Rc`: if a parent view holds its child
@@ -313,6 +314,11 @@ explains the rendering side of this in detail.
 
 ## Globals
 
+GPUI offers two ways to keep application-wide state: one `Global` value per
+type, or global entity storage that retains ordinary entities.
+
+### One global value per type
+
 Some state belongs to the whole application: settings, a theme, a connection
 pool. Implement [`Global`](crate::Global) for the type and store one value of it
 in the app:
@@ -333,9 +339,46 @@ assert!(cx.global::<Theme>().dark);
 ```
 
 [`App::observe_global`](crate::App::observe_global) lets entities react when a
-global is updated. Prefer entities for state that more than one part of your
-program owns or that can have more than one instance. Globals are for things
-there is exactly one of.
+global is updated. A `Global` slot holds one value of each type. Use an entity
+when you need entity events, weak handles, or multiple instances of one type.
+
+### Global entities
+
+[`AppContext::insert_global_entity`](crate::AppContext::insert_global_entity)
+stores a strong handle in the app. This keeps the entity alive even after the
+caller's last handle is dropped, without requiring it to implement `Global`.
+[`AppContext::global_entities`](crate::AppContext::global_entities) iterates
+over all stored entities of a type; several instances of that type can coexist.
+
+```
+# use gpui::{AppContext, TestApp};
+struct Document {
+    title: String,
+}
+
+let mut app = TestApp::new();
+let weak = app.update(|cx| {
+    let document = cx.new(|_| Document { title: "Notes".into() });
+    let weak = document.downgrade();
+    cx.insert_global_entity(document);
+    weak
+});
+
+app.update(|cx| {
+    let document = cx.global_entities::<Document>().next().unwrap();
+    assert_eq!(document.read(cx).title, "Notes");
+    assert!(weak.upgrade().is_some());
+    cx.remove_global_entity(&document);
+});
+
+// The app's handle and the local handle have both been dropped.
+app.update(|_cx| assert!(weak.upgrade().is_none()));
+```
+
+[`AppContext::remove_global_entity`](crate::AppContext::remove_global_entity)
+drops the app's retained handle. Other strong handles still keep the entity
+alive; otherwise, GPUI releases it at the end of the update. Entities left in
+global storage are released when the app is dropped.
 
 ## Summary
 
