@@ -111,30 +111,31 @@ application state.
 
 ## Elements are values
 
-In every case, `render` returns values that GPUI consumes during the frame and
-then drops. The next frame calls `render` again and receives new values. Build
-those values from current state; keep state in views or entities, not in the
-elements being rebuilt.
+Views and components produce elements through their render methods; custom
+elements implement the frame phases directly. GPUI consumes the resulting
+element values during the frame. Build new elements from current state when
+rendering again. Keep persistent state in entities or window-managed element
+state rather than fields of the element values being rebuilt.
+
+A function must return one concrete type. When branches produce different
+element types, use [`into_any_element`](IntoElement::into_any_element) to
+convert them to the type-erased [`AnyElement`].
 
 Because elements are ordinary values, normal Rust tools work for building them.
-Child lists can come from iterators, and [`FluentBuilder`](prelude::FluentBuilder)
-adds `when`, `when_some`, and `map` for conditional styling without breaking a
-builder chain:
+Child lists can come from iterators, and
+[`FluentBuilder`](prelude::FluentBuilder) adds `when`, `when_some`, and `map`
+for conditional styling without breaking a builder chain:
 
 ```
 # use gpui::{IntoElement, div, prelude::*, rgb};
-fn row(name: &str, selected: bool, note: Option<&str>) -> impl IntoElement {
+fn row(name: &str, selected: bool, note: Option<&str>, tags: &[&str]) -> impl IntoElement {
     div()
         .child(name.to_string())
+        .children(tags.iter().map(|tag| div().child((*tag).to_string())))
         .when(selected, |row| row.bg(rgb(0xdbeafe)))
         .when_some(note, |row, note| row.child(note.to_string()))
 }
 ```
-
-A function must return one concrete type. When branches produce different
-element types, convert them with
-[`into_any_element`](IntoElement::into_any_element) to the type-erased
-[`AnyElement`].
 
 ## Identity and element state
 
