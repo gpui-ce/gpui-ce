@@ -1,24 +1,27 @@
 # Contexts
 
 Most GPUI callbacks receive a `cx` argument. It is a *context*: access to the
-application, sometimes paired with information about the entity or window
-being processed. The context type tells you which state and services the
-callback may use.
+application, sometimes paired with the identity of the entity being processed.
+The context type tells you which state and services the callback may use. Entity
+operations come from the [`AppContext`](crate::AppContext) trait, which these
+contexts implement.
 
 | Context | You have it… | It adds… |
 | --- | --- | --- |
 | [`&mut App`](crate::App) | In the [`Application::run`](crate::Application::run) callback and in element event handlers | Everything application-wide: entities, windows, globals, key bindings, platform services |
 | [`&mut Context<T>`](crate::Context) | While creating, updating or rendering the entity `T` | `notify`, `emit`, `observe`, `subscribe`, `listener` and `spawn` for that entity |
-| [`&mut Window`](crate::Window) | Next to the app context in render functions, event handlers and window updates | The window's focus, size, scale factor, input state and paint methods |
 | [`&mut AsyncApp`](crate::AsyncApp) | Inside futures started with `spawn` | Access to the app across `.await` points |
 | [`&mut AsyncWindowContext`](crate::AsyncWindowContext) | Inside futures started with `spawn_in` | The same, plus one window |
+
+A separate [`&mut Window`](crate::Window) often accompanies the context. It
+provides access to one window's focus, size, input state, and painting; it does
+not replace the app context.
 
 ## `App`: the application
 
 [`App`](crate::App) is the application-wide context. It owns entities and
-windows, key bindings, global values and the connection to the operating
-system. A function that takes `&mut App` can use those application-wide
-services:
+windows, key bindings, global values and the connection to the operating system.
+A function that takes `&mut App` can use those application-wide services:
 
 ```standalone_crate,no_run
 use gpui::{App, KeyBinding, actions};
@@ -42,9 +45,9 @@ window](crate::_documentation::tutorial::ch1_hello_window).
 ## `Context<T>`: working on one entity
 
 When you create or update an entity, GPUI gives you a
-[`Context<T>`](crate::Context). It dereferences to `App`, so it can do
-everything `App` can, and it knows which entity it belongs to. That knowledge
-is what lets it offer methods like these without naming the entity again:
+[`Context<T>`](crate::Context). It implements `AppContext` for entity access and
+also dereferences to `App` for application-wide services. It knows which entity
+it belongs to, so these methods do not need an entity argument:
 
 * [`notify`](crate::Context::notify) marks this entity as changed.
 * [`emit`](crate::Context::emit) sends an event from this entity.
@@ -76,34 +79,36 @@ assert_eq!(clock.read(cx).ticks, 1);
 # });
 ```
 
-Methods that change an entity's state and need GPUI services conventionally
-take `&mut self` and `cx: &mut Context<Self>`, as `tick` does. Call them inside
-an entity update.
+Methods that change an entity's state and need GPUI services conventionally take
+`&mut self` and `cx: &mut Context<Self>`, as `tick` does. Call them inside an
+entity update.
 
 ## `Window`: one window
 
-A [`Window`](crate::Window) is *not* a context of its own, yet typically travels by
-one: render methods receive `(&mut self, &mut Window, &mut Context<Self>)`, and
-element event handlers receive `(&Event, &mut Window, &mut App)`.
+A [`Window`](crate::Window) is *not* a context of its own, yet you'll see it traveling
+through one, as render methods receive `(&mut self, &mut Window, &mut Context<Self>)`,
+and element event handlers receive `(&Event, &mut Window, &mut App)`.
 
 Keeping the window separate from the app lets one callback use both. You can
 move focus with [`Window::focus`](crate::Window::focus) while updating an entity
 through `cx`; neither operation has to hide behind the other context.
 
-Use the window for things that only make sense in one window: its size and
-scale factor, the focused element, the current modifier keys, the mouse
-position, painting, and starting work which will end when the window closes.
-To update an entity *and* get the window, use
-[`Entity::update_in`](crate::Entity::update_in).
+Use the window for things that only make sense in one window: its size and scale
+factor, the focused element, the current modifier keys, the mouse position,
+painting, and scheduling work associated with the window. With a
+[`VisualContext`](crate::VisualContext),
+[`Entity::update_in`](crate::Entity::update_in) updates an entity with access to
+the window too. The trait also provides entity creation with window access,
+root-view replacement, and focus changes; see
+[Writing code for any context](#writing-code-for-any-context).
 
 ## Async contexts
 
 A future cannot hold `&mut App` across an `.await`: while it waits, the rest of
 the application must keep running and needs that access. Futures started with
-[`App::spawn`](crate::App::spawn) or
-[`Context::spawn`](crate::Context::spawn) receive an
-[`AsyncApp`](crate::AsyncApp) instead. It refers to the app weakly and borrows
-it only for the duration of each call you make through it:
+[`App::spawn`](crate::App::spawn) or [`Context::spawn`](crate::Context::spawn)
+receive an [`AsyncApp`](crate::AsyncApp) instead. It refers to the app weakly
+and borrows it only for the duration of each call you make through it:
 
 ```
 # use gpui::{AppContext, Context, Task};
@@ -134,11 +139,11 @@ Two details in this example come from the async setting:
 
 [`Context::spawn_in`](crate::Context::spawn_in) gives you an
 [`AsyncWindowContext`](crate::AsyncWindowContext) instead, for work that needs
-to reach the window after it awaits. Window operations through it return
-errors once the window has closed.
+to reach the window after it awaits. Window operations through it return errors
+once the window has closed.
 
-An `AsyncApp` refers to the application weakly, like a [`WeakEntity`] does to
-an entity. Using it after the application itself has been dropped panics.
+An `AsyncApp` refers to the application weakly, like a [`WeakEntity`] does to an
+entity. Using it after the application itself has been dropped panics.
 
 ## Writing code for any context
 
@@ -186,5 +191,5 @@ Copy what you need out of the entity first, or do the work inside a single
 update. This rule is what makes entity access safe without locks: there is only
 ever one `&mut App`, so only one piece of code can be changing state at a time.
 
-Next, [the frame](crate::_documentation::concepts::the_frame) follows a change from `notify` to the
-pixels on screen.
+Next, [the frame](crate::_documentation::concepts::the_frame) follows a change
+from `notify` to the pixels on screen.
