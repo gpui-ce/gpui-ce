@@ -1,24 +1,38 @@
 # Run work in the background
 
-Long computations—parsing a large file or searching an index—belong on a background
-executor. Waiting on a network call or timer belongs in an async foreground task, which
-gives other work a chance to run whenever an `.await` returns `Pending`. An await that is
-already ready does not yield. This guide shows how to return results
-to an entity, decide who owns a task, debounce input, and impose a timeout. The
-[executors concept](crate::_documentation::concepts::executors) explains scheduling;
-the patterns here connect those executors to entities and windows.
+It's frequent that an application will need to load data, or compute a result,
+while its window is responsible for working with input. The preferred way of handling this
+is through starting such work as a task, and then later updating the entity
+when the result is ready. 
+
+The examples use Rust's `async` blocks and `.await`. If these are new to you,
+start with [the Rust Book's introduction to
+async](https://doc.rust-lang.org/book/ch17-01-futures-and-syntax.html). A future
+describes work that an executor advances by polling it. When an awaited future
+is not ready, the task yields so other work can run; awaiting an already-ready
+future does not yield.
+
+## Choose an executor
+
+GPUI presents consumers with TWO consumers. The foreground executor runs tasks on the main thread
+and gives them access to entities through an async context. This is preferred for say, waiting on a
+timer or an asynchronous network response, then updating the interface. The
+background executor runs tasks on native worker threads. Use it for synchronous
+work such as parsing a large file, passing owned input and returning an owned
+result. Marking a computation `async` does not move it off the main thread.
+
+In a single-threaded web build, background futures also run on the browser's
+main thread. Split long computations into short polls to let input and drawing
+progress. [Executors and tasks](crate::_documentation::concepts::executors)
+explains scheduling and how a threaded web build differs.
 
 ## Compute in the background and update the entity
 
-Start with [`Context::spawn`], then move the computation to
-[`AppContext::background_spawn`]. The background future cannot touch an entity;
-give it owned data and return an owned result. After the await, the foreground
-task updates the entity through its weak handle.
-
-Native backends run background futures on worker threads. A single-threaded
-web build runs them on the browser's main thread, so it still needs computation
-split into short polls. [Executors](crate::_documentation::concepts::executors)
-explains when an await yields and how a threaded web build differs.
+As an example, to count the words in the document is one you'll want to clone its text while the entity is available.
+Start a foreground task with [`Context::spawn`], and have it await the count
+from [`AppContext::background_spawn`]. The background computation uses the
+cloned text without borrowing the entity. Once the count is ready, the
+foreground task updates the document and notifies GPUI to redraw it.
 
 ```rust
 use gpui::{AppContext, Context, Task, TestApp};
@@ -61,10 +75,9 @@ app.run_until_parked();
 app.update(|cx| assert_eq!(document.read(cx).word_count, Some(3)));
 ```
 
-The update through `document` returns a `Result`. It fails if the entity was released
-while the work ran, which is why the example ignores that expected shutdown case with
-`.ok()`. The
-[`WeakEntity`] handle is what makes this safe: the task never keeps the document alive.
+The `document` argument is a [`WeakEntity`], so the task does not keep the
+document alive. Its `update` returns an error if the document was released while
+the work ran. The example uses `.ok()` to discard that shutdown error.
 
 ## Store tasks to own and cancel work
 
