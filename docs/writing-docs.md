@@ -82,6 +82,11 @@ visible:
   /// ```
   ````
 
+In a Rust code block, rustdoc hides lines beginning with `# ` (a hash followed
+by a space), and a line containing only `#`, while still compiling them. This
+does not hide attributes such as `#[derive(IntoElement)]`, which remain visible.
+Use `##` at the start of a line to display a literal leading hash.
+
 Setup can be hidden when it teaches nothing, but the complete example must
 contain everything needed to run. Use `no_run` for a display or external
 service, such as `gpui_platform::application().run(...)`; that code still
