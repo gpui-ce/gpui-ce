@@ -240,11 +240,12 @@ app.update(|cx| assert_eq!(status.read(cx).message, "timed out"));
 
 ## Work with a window from async code
 
-[`Context::spawn`] gives you an [`AsyncApp`], which can update the app but knows nothing
-about windows. When the work needs a window, such as to set its title or to read focus,
-use [`Context::spawn_in`]. It takes the window you pass in and gives the closure an
-[`AsyncWindowContext`]. Call [`AsyncWindowContext::update`] to run code with the window,
-which returns a `Result` that fails once the window has closed.
+Use [`Context::spawn_in`] when a task needs to return to a particular window,
+such as to change its title. Pass that window when spawning; the task receives
+an [`AsyncWindowContext`] instead of the [`AsyncApp`] supplied by
+[`Context::spawn`]. Its [`update`](AsyncWindowContext::update) method provides
+`&mut Window` and `&mut App` while the closure runs, and returns an error if the
+window has closed.
 
 ```rust
 use std::time::Duration;
@@ -285,8 +286,8 @@ impl Render for Clock {
 }
 ```
 
-`start` takes the window and passes it to `spawn_in`. Keep the task in a field so that
-dropping the view stops the clock.
+`start` takes the window and passes it to `spawn_in`. Keep the task in a field
+so that dropping the view stops the clock.
 
 ## Use tokio libraries through `gpui_tokio`
 
