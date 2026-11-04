@@ -315,10 +315,11 @@ an example.
 
 ## Test async code deterministically
 
-In tests, both executors run on a single simulated scheduler, and time only moves when
-the test moves it. [`TestApp::run_until_parked`] runs all work that can make progress.
-[`TestApp::advance_clock`] moves the simulated time forward and wakes any timers that are
-due. Together they make the timers in this guide run instantly and repeatably.
+In tests, both executors run on a single simulated scheduler, and time only
+moves when the test moves it. [`TestApp::run_until_parked`] runs all work that
+can make progress. [`TestApp::advance_clock`] moves the simulated time forward
+and wakes any timers that are due. Together they make the timers in this guide
+run instantly and repeatably.
 
 ```rust
 use std::time::Duration;
@@ -359,9 +360,10 @@ for _ in 0..3 {
 app.update(|cx| assert_eq!(ticker.read(cx).ticks, 3));
 ```
 
-Each test with [`TestApp`] is one turn of the event loop, so run the work and then assert in
-a later update. The [testing guide](crate::_documentation::guides::testing) covers seeds
-and `#[gpui::test]`, which runs a test with many random task orderings.
+Each [`TestApp::update`] flushes queued effects before returning. Run the
+scheduled work, then check the result in a later update. The [testing
+guide](crate::_documentation::guides::testing) covers seeds and `#[gpui::test]`,
+which runs a test with many random task orderings.
 
 ## See also
 
