@@ -6,9 +6,9 @@ simple:
 
 | You want… | Write | It is |
 | --- | --- | --- |
-| A piece of interface with its own state | A **view**: a type that implements [`Render`] | An entity, kept between frames |
-| A reusable piece of interface without state | A **component**: a type that implements [`RenderOnce`] | A value, consumed when rendered |
-| Control over layout or painting | An **element**: a type that implements [`Element`] | A value, driven through the frame's phases |
+| Interface state that other code can access through a handle | A **view**: a type that implements [`Render`] | An entity, kept between frames |
+| Reusable presentation with inputs, callbacks, and optional private state | A **component**: a type that implements [`RenderOnce`] | A value, consumed when rendered |
+| Direct control over layout, prepaint, and paint phases | An **element**: a type that implements [`Element`] | A value, driven through the frame's phases |
 
 Most code uses views and components built from [`div`]. For custom drawing,
 [`canvas`] provides prepaint and paint callbacks, including hitbox insertion. A
@@ -41,9 +41,11 @@ impl Render for Toggle {
 }
 ```
 
-Use a view when interface state must survive between frames, or when other code
-needs to hold a handle to it. A view shows another view by passing its
-[`Entity`] as a child, as in `div().child(self.sidebar.clone())`.
+Use a view when other code needs a handle to its state, methods, or events. A
+parent view can store `toggle: Entity<Toggle>` and show it with
+`div().child(self.toggle.clone())`. Private state can also survive between
+frames in a component through [`Window::use_state`] or
+[`Window::use_keyed_state`]; persistence alone does not require a view.
 
 ## Components
 
@@ -52,7 +54,7 @@ A component is a plain value that describes some elements. Implement
 anywhere an element can:
 
 ```
-# use gpui::{App, ClickEvent, SharedString, Window, div, prelude::*};
+# use gpui::{App, SharedString, Window, div, prelude::*};
 #[derive(IntoElement)]
 struct Badge {
     label: SharedString,
@@ -74,10 +76,12 @@ fn inbox(unread: usize) -> impl IntoElement {
 }
 ```
 
-`RenderOnce::render` takes `self` by value: GPUI builds, renders and drops the
-component on every frame. It has no `Context` of its own, so it cannot
-update itself. To report events, give the component callbacks and let the view
-that uses it decide what to do:
+`RenderOnce::render` takes `self` by value, so the component value is consumed
+when rendered. It has no entity-specific `Context` of its own. For private
+state, use [`Window::use_state`] or [`Window::use_keyed_state`], which return
+state entities retained by the window across consecutive frames. To expose
+changes to the caller, accept callbacks and let the owning view update its
+state:
 
 ```
 # use gpui::{App, ClickEvent, ElementId, SharedString, Window, div, prelude::*};
@@ -102,8 +106,8 @@ impl RenderOnce for Button {
 ```
 
 A view passes `Box::new(cx.listener(...))` as `on_click`, and the handler
-updates the view. This separates a component library's presentation from its
-state: components own their look, while views own the state.
+updates the view. Callbacks let the same button presentation work with different
+application state.
 
 ## Elements are values
 
@@ -134,10 +138,15 @@ element types, convert them with
 
 ## Identity and element state
 
-Some state belongs to an element rather than to your program: whether it is
-being pressed, how far it is scrolled, where an animation is. GPUI keeps this
-state for you between frames. To find it again on the next frame it needs to
-recognize the element, and for that the element needs an [`ElementId`]:
+GPUI retains interaction state, such as pressed state and scroll offsets, by an
+element's identity. Your own code can retain private state through
+[`Window::use_keyed_state`], using an explicit key, or [`Window::use_state`],
+using the caller's source location as the key. Both return an entity and reuse
+it while the same identity is rendered in consecutive frames. Notifying that
+entity redraws the view that uses it. Inside a loop, use a different stable key
+for each item; repeated calls to `use_state` at one source location share a key.
+
+An [`ElementId`] lets GPUI find an element's retained state on the next frame:
 
 ```
 # use gpui::{IntoElement, div, prelude::*};
@@ -151,10 +160,16 @@ div()
 # }
 ```
 
-An element's identity is the path of ids from the window down to it, so an id
-only has to be unique among the elements that share its nearest identified
-ancestor. Ids can be strings, numbers, or a `(name, number)` pair as above. Two
-rules follow:
+An element's identity is a path within its window. It includes explicit ancestor
+IDs, view entity IDs for `Render` views, and a type-name namespace for
+`RenderOnce` components. Multiple components of the same type still need
+distinct IDs for their state when they share a parent namespace. Custom
+elements can add namespaces with [`Window::with_element_namespace`].
+
+IDs can represent entity IDs, integers, strings, UUIDs, focus handles,
+`(name, number)` pairs, file-system paths, source locations, named children of
+other IDs, or opaque byte IDs; [`ElementId`] lists the variants. An ID only
+needs to be unique within its parent namespace. Two rules follow:
 
 * **Interactive elements need an id.** Calling [`id`](InteractiveElement::id)
   on a [`Div`] turns it into a [`Stateful<Div>`](Stateful), which unlocks
@@ -163,11 +178,6 @@ rules follow:
 * **Ids must be stable.** If a row's id changes from one frame to the next, its
   state is lost. Use something that identifies the row's *content*, such as a
   database id, rather than its position, when rows can move.
-
-Your own code can keep state per element too.
-[`Window::use_keyed_state`] returns an entity that lives as long as an element
-with that id keeps being rendered, which is handy for components that need a
-little private state.
 
 ## Custom elements
 
