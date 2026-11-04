@@ -20,8 +20,8 @@ windows, key bindings, global values and the connection to the operating
 system. A function that takes `&mut App` can use those application-wide
 services:
 
-```standalone_crate
-use gpui::{App, AppContext, KeyBinding, actions};
+```standalone_crate,no_run
+use gpui::{App, KeyBinding, actions};
 
 actions!(app, [Quit]);
 
@@ -29,8 +29,15 @@ fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     cx.on_action(|_: &Quit, cx| cx.quit());
 }
-# gpui::TestApp::new().update(init);
+
+fn main() {
+    gpui_platform::application().run(init);
+}
 ```
+
+This starts the platform event loop and registers a quit action. To open a
+window too, follow [Hello,
+window](crate::_documentation::tutorial::ch1_hello_window).
 
 ## `Context<T>`: working on one entity
 
