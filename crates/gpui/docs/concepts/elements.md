@@ -10,9 +10,11 @@ simple:
 | A reusable piece of interface without state | A **component**: a type that implements [`RenderOnce`] | A value, consumed when rendered |
 | Control over layout or painting | An **element**: a type that implements [`Element`] | A value, driven through the frame's phases |
 
-Most code uses views and components built from [`div`]. Use a custom element
-when you need control over layout or painting, such as for a text editor or
-chart.
+Most code uses views and components built from [`div`]. For custom drawing,
+[`canvas`] provides prepaint and paint callbacks, including hitbox insertion. A
+chart can use a canvas even when its shapes need hit testing. Implement
+[`Element`] when you also need to define layout or carry your own data between
+the layout, prepaint, and paint phases.
 
 ## Views
 
@@ -169,9 +171,9 @@ little private state.
 
 ## Custom elements
 
-Implement [`Element`] when the built-in elements cannot express what you need:
-a custom layout algorithm, a canvas with thousands of hit-testable shapes, a
-text editor. The trait has one method per [phase of the frame](crate::_documentation::concepts::the_frame):
+Implement [`Element`] to define layout and pass your own state between frame
+phases, as in a text editor or a custom layout container. The trait has one
+method per [phase of the frame](crate::_documentation::concepts::the_frame):
 
 * [`request_layout`](Element::request_layout) tells GPUI how big the element
   wants to be.
@@ -182,5 +184,6 @@ text editor. The trait has one method per [phase of the frame](crate::_documenta
 
 The associated types carry data from one phase to the next. For one-off custom
 drawing, [`canvas`] is simpler: it gives you prepaint and paint callbacks
-without a new type. The [custom drawing guide](crate::_documentation::guides::custom_drawing)
-and the `custom_element` example walk through a complete element.
+without a new type. The [custom drawing
+guide](crate::_documentation::guides::custom_drawing) and the `custom_element`
+example walk through a complete element.
