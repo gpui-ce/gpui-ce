@@ -52,14 +52,20 @@ closure, or an async task without holding a borrow of the stored value.
 
 [`Entity::update`](crate::Entity::update) gives your closure a `&mut T` and a
 [`Context<T>`](crate::Context). That context has the app's services plus the
-identity of the entity being updated, so the closure can notify its observers
-or emit an event without passing the entity handle separately.
+identity of the entity being updated, so the closure can notify its observers or
+emit an event without passing the entity handle separately.
 
-While the closure runs, GPUI has lent the value to you. Reading or updating the
-*same* entity again from inside the closure is an error, and GPUI panics with
-`cannot update Counter while it is already being updated`. Updating *other*
-entities is fine. If you need the same value again, use the `&mut T` you were
-given.
+While the closure runs, the entity is *leased*: GPUI temporarily removes its
+value from storage and gives you true, exclusive, access. Reading or updating the
+*same* entity through another handle during that lease, will panic. Use the `&mut T`
+you were given!
+
+You can update a different entity through the supplied context, provided you do
+not hold another borrow from that context. Copy or clone any needed data before
+starting the next update. Rust's borrow checker still rejects a mutable context
+borrow while a reference obtained from `Entity::read` is in use; see [borrowing
+through a
+context](crate::_documentation::concepts::contexts#borrowing-through-a-context).
 
 ## Telling GPUI what changed
 
