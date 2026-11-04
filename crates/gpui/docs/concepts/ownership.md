@@ -85,7 +85,20 @@ counter.update(cx, |counter, cx| {
 # });
 ```
 
-Notifying schedules two effects that run after the current update:
+When you have an entity handle rather than its `Context<T>`, call
+[`AppContext::notify`](crate::AppContext::notify) with its
+[`EntityId`](crate::EntityId):
+
+```
+# use gpui::{AppContext, TestApp};
+# TestApp::new().update(|cx| {
+# let counter = cx.new(|_| 0_usize);
+counter.update(cx, |count, _cx| *count += 1);
+cx.notify(counter.entity_id());
+# });
+```
+
+Both forms schedule two effects that run after the current update:
 
 * Every window that read `counter` while rendering its last frame is marked for
   redraw. GPUI tracks those reads for you, so a view that displays the count is
@@ -97,7 +110,7 @@ GPUI queues these effects until the outermost update finishes, in queue order.
 In a running app, every event handler, timer, and frame runs inside one update,
 so the effects run after the handler returns. Three notifications in one update
 cost the same as one, and observers never run while the notifying entity is
-still lent out.
+still leased.
 
 [`TestApp`](crate::TestApp) makes this visible, because each call to its
 `update` is one turn of the event loop:
