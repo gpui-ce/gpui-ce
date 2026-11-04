@@ -81,14 +81,17 @@ the work ran. The example uses `.ok()` to discard that shutdown error.
 
 ## Store tasks to own and cancel work
 
-Every spawn returns a [`Task`]. A task runs only while it exists, so decide who owns it:
+Every spawn returns a [`Task`] handle. Keeping the handle keeps the work alive;
+dropping it cancels the future. Choose an owner based on when the work should
+stop:
 
-* **Store it in a field** when the work belongs to the entity. Dropping the entity drops
-  the task. Assigning a new task to the field drops the old one, which cancels it.
-* **Detach it** with [`Task::detach`] when the work should keep running after the initiating
-  code no longer owns the handle, such as saving a file. Detaching leaves the task with its
-  executor; it does not make shutdown or executor failure impossible. For a task that returns a `Result`, call
-  [`TaskExt::detach_and_log_err`] instead. It logs the error if the work fails.
+* **Store it in an entity field** when the work belongs to that entity.
+  Dropping the entity drops the task. Assigning a new task to the field cancels
+  the old one.
+* **Detach it** with [`Task::detach`] when the work should continue after the
+  caller drops its handle, such as saving a file. The executor then owns the
+  task until completion or shutdown. For work that returns a `Result`, use
+  [`TaskExt::detach_and_log_err`] to log failures.
 
 ```rust
 use gpui::{AppContext, Context, TaskExt};
@@ -111,16 +114,18 @@ fn write_draft(text: &str) -> Result<usize, String> {
 }
 ```
 
-Dropping a task cancels its future. The future stops at its current `.await` and is not
-polled again. A task that you neither await, store nor detach is dropped at the end of
-the statement and is cancelled immediately.
+Cancellation prevents further polls of the future; it cannot interrupt
+synchronous code already running inside a poll. If a task is doing a long
+computation, that computation can continue until the poll returns. A spawned
+task that you neither await, store, nor detach is dropped when it leaves scope.
 
 ## Debounce by replacing a stored task
 
-To wait until the user stops typing before searching, store the search task and replace
-it on every change. Replacing the field drops the previous task, so an old query is
-cancelled before it searches. Await a [`BackgroundExecutor::timer`] first, then run the
-search.
+Debouncing delays a search until the user pauses typing. Store the task in a
+field and replace it on every change. Each task first awaits a
+[`BackgroundExecutor::timer`]; replacing it before the timer fires cancels that
+search. A background computation that has already started may finish its current
+poll, but the cancelled foreground task will not apply its result.
 
 ```rust
 use std::time::Duration;
@@ -181,14 +186,18 @@ app.update(|cx| assert_eq!(search.read(cx).results, vec!["banana".to_string()]))
 ```
 
 The timer starts when the task is first polled, which is why the example calls
-`run_until_parked` after each change. In an app, the event loop does that for you.
+`run_until_parked` after each change. In an app, the event loop does that for
+you.
 
 ## Set a timeout on a future
 
-[`FutureExt::with_timeout`] wraps any future. It resolves to `Ok` with the future's output,
-or to `Err(Timeout)` if the duration passes first. When the timeout wins, the wrapped
-future is dropped, so its work stops. Pass the executor whose timers should count, which
-you get from `cx.background_executor()`.
+Use [`FutureExt::with_timeout`] to stop waiting after a deadline. It returns
+`Ok(output)` if the future completes first, or `Err(Timeout)` if the timer wins.
+Pass `cx.background_executor()` to use GPUI's timers.
+
+When the timeout wins, the wrapped future is dropped. As with task cancellation,
+this does not interrupt synchronous code already running in a poll or cancel
+work that was detached separately.
 
 ```rust
 use std::time::Duration;
