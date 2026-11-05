@@ -92,7 +92,11 @@ pub struct ForegroundWorkSummary {
     pub frame_budget_overruns_max: u64,
 }
 
-/// A small report produced by GPUI benchmarks.
+/// Frame and foreground timings collected from benchmarks, which it can print.
+///
+/// Each [`BenchAppContext`] measurement adds to the report it was created with.
+/// Times are kept in histograms, so a report can cover many iterations and
+/// Criterion's warm-up runs. [`BenchReport::print`] says so in its output.
 #[derive(Clone)]
 pub struct BenchReport {
     frame_snapshot: Rc<RefCell<WindowFrameSnapshot>>,
@@ -106,15 +110,20 @@ impl Default for BenchReport {
 }
 
 impl BenchReport {
-    /// Creates a report whose per-frame budget is one frame at `fps` when
-    /// counting frame budget overruns.
+    /// Creates a report whose frame budget is one frame at `fps`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `fps` is `0`.
     pub fn with_fps(fps: u64) -> Self {
         assert!(fps > 0, "frame rate must be greater than zero");
         Self::with_frame_budget_nanos(NANOS_PER_SECOND / fps as u128)
     }
 
-    /// Creates a report that treats `frame_budget_nanos` as the per-frame budget
-    /// when counting frame budget overruns.
+    /// Creates a report that counts frame budget overruns against `frame_budget_nanos`.
+    ///
+    /// Don't pass `0`. [`BenchReport::foreground_work`] and [`BenchReport::print`] divide by
+    /// this value when they have samples to report, so they panic with `0`.
     pub fn with_frame_budget_nanos(frame_budget_nanos: u128) -> Self {
         Self {
             frame_snapshot: Rc::new(RefCell::new(WindowFrameSnapshot::new())),
@@ -229,7 +238,9 @@ impl BenchReport {
         })
     }
 
-    /// Prints this report to stderr.
+    /// Prints the report to stderr, with the name of the benchmark it belongs to.
+    ///
+    /// This prints nothing when no frames or foreground work were recorded.
     pub fn print(&self, benchmark_name: Option<&'static str>) {
         let frame_snapshot = self.frame_snapshot.borrow();
         if frame_snapshot.is_empty() {
@@ -466,12 +477,16 @@ where
         .run_until(|| output.borrow_mut().take())
 }
 
-/// A GPUI app context for Criterion benchmarks.
+/// A GPUI app for Criterion benchmarks.
 ///
 /// `BenchAppContext` is intentionally separate from `TestAppContext`: it owns a
 /// benchmark app instance and exposes only the app/window operations needed by
 /// benchmark setup. Criterion remains responsible for the measured loop via its
 /// `Bencher` API.
+///
+/// Create one inside a Criterion benchmark closure, with a platform from
+/// [`bench_platform`], and call [`BenchAppContext::teardown`] when you're done.
+/// The `#[gpui::bench]` macro does this for you.
 #[derive(Clone)]
 pub struct BenchAppContext<'a, 'measurement> {
     app: Rc<AppCell>,
@@ -483,11 +498,15 @@ pub struct BenchAppContext<'a, 'measurement> {
 }
 
 impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
-    /// Creates a new benchmark app context backed by the provided platform.
+    /// Creates a benchmark context on `platform` for the measurement `bencher` runs.
     ///
-    /// The platform's executors must be backed by a [`ThreadedDispatcher`]
-    /// (see [`bench_platform`]) so the context can drain foreground work via
-    /// [`Self::run_until_idle`]; panics otherwise.
+    /// Build `platform` with [`bench_platform`]. Panics if the platform's executors
+    /// aren't backed by a [`ThreadedDispatcher`], since the context drains foreground
+    /// work with [`BenchAppContext::run_until_idle`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform isn't built with [`bench_platform`].
     pub fn new(
         platform: Rc<dyn Platform>,
         benchmark_name: Option<&'static str>,
@@ -496,11 +515,14 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         Self::build(platform, benchmark_name, bencher, BenchReport::default())
     }
 
-    /// Creates a new benchmark app context backed by the provided platform.
+    /// Like [`BenchAppContext::new`], but records measurements into `report`.
     ///
-    /// The platform's executors must be backed by a [`ThreadedDispatcher`]
-    /// (see [`bench_platform`]) so the context can drain foreground work via
-    /// [`Self::run_until_idle`]; panics otherwise.
+    /// This is used by the `#[gpui::bench]` macro, so that several benchmarks can share one report.
+    /// Most code should use [`BenchAppContext::new`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform isn't built with [`bench_platform`].
     #[doc(hidden)]
     pub fn new_with_platform_and_report(
         platform: Rc<dyn Platform>,
@@ -526,7 +548,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
              ThreadedDispatcher; construct one with gpui::bench_platform"
         );
         let foreground_executor = platform.foreground_executor();
-        let asset_source = Arc::new(());
+        let asset_source = Arc::new(crate::AssetRegistry::default());
         // Benchmark setup must not make accidental network requests. The
         // production `BlockedHttpClient` reports them without enabling a
         // configurable test double through `test-support`.
@@ -544,36 +566,38 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         }
     }
 
-    /// The benchmark function name that created this context.
+    /// Returns the name of the benchmark that created this context, if it has one.
     pub fn benchmark_name(&self) -> Option<&'static str> {
         self.benchmark_name
     }
 
-    /// Returns the background executor used by this benchmark app.
+    /// Returns the background executor.
     pub fn background_executor(&self) -> &BackgroundExecutor {
         &self.background_executor
     }
 
-    /// Returns the foreground executor used by this benchmark app.
+    /// Returns the foreground executor.
     pub fn foreground_executor(&self) -> &ForegroundExecutor {
         &self.foreground_executor
     }
 
-    /// Updates the app and flushes synchronous GPUI effects afterward.
+    /// Runs `update` with mutable access to the [`App`], then flushes its effects.
+    ///
+    /// This doesn't run queued foreground tasks. Call [`BenchAppContext::run_until_idle`] for those.
     pub fn update<R>(&mut self, update: impl FnOnce(&mut App) -> R) -> R {
         let mut app = self.app.borrow_mut();
         app.update(update)
     }
 
-    /// Reads app state.
+    /// Runs `read` with read-only access to the [`App`].
     pub fn read<R>(&self, read: impl FnOnce(&App) -> R) -> R {
         let app = self.app.borrow();
         read(&app)
     }
 
-    /// Runs queued foreground tasks on this thread and waits for in flight
-    /// background work to finish. Timers that aren't due yet are not waited
-    /// for (see [`ThreadedDispatcher::run_until_idle`]).
+    /// Runs queued foreground tasks on this thread, and waits for background work in flight to finish.
+    ///
+    /// Timers that aren't due yet are not waited for. See [`ThreadedDispatcher::run_until_idle`].
     pub fn run_until_idle(&self) {
         self.background_executor
             .dispatcher()
@@ -582,16 +606,11 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
             .run_until_idle();
     }
 
-    /// Alternates draining queued work with GPUI update cycles until neither
-    /// makes progress, so state dropped by benchmark code is fully released.
+    /// Runs queued work and update cycles until neither makes progress.
     ///
-    /// Dropped entities are released only inside an update's effect flush, and
-    /// releases cascade: one flush drops the entities whose handles are gone,
-    /// their drops release further handles and can queue foreground work, and
-    /// a later flush collects those. Executor pumping alone never runs a
-    /// flush, so without this dropped state would linger in the entity map
-    /// until some woken task happened to run an update. Production gets this
-    /// cadence for free from frames and input events.
+    /// Entities are released only during an update's effect flush, and releasing one
+    /// can queue more work that releases more. `settle` alternates the two until nothing
+    /// is left, so state the benchmark dropped is gone before the next measurement.
     pub fn settle(&mut self) {
         let dispatcher = self.background_executor.dispatcher().clone();
         let dispatcher = dispatcher
@@ -606,10 +625,10 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         }
     }
 
-    /// Runs main-thread tasks until `ready` returns a value.
+    /// Runs main-thread tasks until `ready` returns `Some`, and returns that value.
     ///
-    /// Unlike [`Self::run_until_idle`], this returns as soon as `ready`
-    /// reports completion, leaving any remaining queued work pending.
+    /// Unlike [`BenchAppContext::run_until_idle`], this stops as soon as `ready` is
+    /// satisfied, leaving other queued work pending.
     pub fn run_until<R>(&self, ready: impl FnMut() -> Option<R>) -> R {
         self.background_executor
             .dispatcher()
@@ -624,13 +643,15 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         self.read(|app| app.foreground_journal().collector())
     }
 
-    /// Measures a generic benchmark workload using Criterion's iteration loop.
+    /// Measures `benchmark` with Criterion's iteration loop.
     ///
-    /// The closure is invoked once per Criterion iteration with this
-    /// benchmark app context so it can update GPUI state.
+    /// `benchmark` runs once per Criterion iteration and receives this context, so it
+    /// can update GPUI state. Window draws it triggers are recorded in the report.
     ///
-    /// Any window draws triggered by the workload are recorded into the
-    /// benchmark's frame report through the GPUI frame profiler.
+    /// # Panics
+    ///
+    /// Panics if a measurement is already running on this context, for example if
+    /// `bench_iter` is called from inside another measurement.
     pub fn bench_iter(&mut self, mut benchmark: impl FnMut(&mut Self)) {
         let bencher = self.take_bencher("bench_iter");
         let collector = TraceScope::start(self.foreground_journal_collector());
@@ -645,13 +666,17 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
     /// Measures a GPUI task to completion using Criterion's iteration loop.
     ///
-    /// The closure is invoked once per Criterion iteration. The returned task
-    /// may depend on foreground work, background work, timers, or external
-    /// workers that wake GPUI tasks. Its output is dropped after the timed
-    /// interval.
+    /// Each iteration calls `benchmark`, which returns the task to time. The task runs
+    /// to completion on the foreground thread inside the timed interval, and its output
+    /// is dropped after the interval ends. The task may depend on foreground work,
+    /// background work, timers, or external workers that wake GPUI tasks.
     ///
-    /// Any window draws triggered by the task are recorded into the benchmark's
-    /// frame report through the GPUI frame profiler.
+    /// Any window draws triggered by the task are recorded into the benchmark's frame
+    /// report through the GPUI frame profiler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a measurement is already running on this context.
     pub fn bench_task<Output>(&mut self, mut benchmark: impl FnMut(&mut Self) -> Task<Output>)
     where
         Output: 'static,
@@ -661,13 +686,17 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
     /// Measures a GPUI task with per-iteration setup outside the timed interval.
     ///
-    /// `setup` runs before timing starts. The returned input is passed by mutable
-    /// reference to `benchmark`, which returns the task whose completion is
-    /// measured. Both the setup input and task output are dropped after timing
-    /// stops.
+    /// Before each iteration, the context settles, so state from the previous iteration
+    /// is released, then `setup` runs untimed. `benchmark` receives the setup input by
+    /// mutable reference and returns the task to time. Both the input and the task's
+    /// output are dropped after timing stops.
     ///
-    /// Each iteration is kept in its own Criterion batch so profiler tracing and
-    /// destruction cannot overlap adjacent measurements.
+    /// Each iteration is its own Criterion batch, so profiler tracing and drops can't
+    /// overlap adjacent measurements.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a measurement is already running on this context.
     pub fn bench_batched_task<Input, Output>(
         &mut self,
         setup: impl FnMut(&mut Self) -> Input,
@@ -720,16 +749,19 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         self.replace_bencher(bencher);
     }
 
-    /// Measures frame latency after updating a GPUI entity in its current window.
+    /// Measures how long one update of `view` takes to produce a presented frame.
     ///
-    /// Each iteration runs `update` against the entity in its current window. In
-    /// bench builds, flushing the update's effects synchronously draws dirty
-    /// windows. The entity should be part of the window's render tree, such as the
-    /// root view or a child of it.
+    /// Each iteration runs `update` on `view` inside the window that holds it. Flushing
+    /// the update's effects draws the window, and the frame is then presented, which
+    /// includes submitting it to the GPU when a renderer is configured. The entity must
+    /// be in the window's render tree, such as the root view or one of its children.
     ///
-    /// Frame events are collected through the GPUI frame profiler
-    /// ([`crate::profiler::record_frame_event`]), which is enabled for the
-    /// duration of the measurement.
+    /// Frame events come from the GPUI frame profiler
+    /// ([`crate::profiler::record_frame_event`]), which is enabled for the duration of the measurement.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `view` has no current window, or if a measurement is already running.
     pub fn bench_renderer<V>(
         &mut self,
         view: Entity<V>,
@@ -783,7 +815,13 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         self.replace_bencher(bencher);
     }
 
-    /// Adds a window with an empty root view for benchmark setup.
+    /// Opens a window with an empty root view, runs queued work, and returns a [`BenchWindowContext`] for it.
+    ///
+    /// The window is sized to the test display, like [`TestAppContext::add_window`](crate::TestAppContext::add_window).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the window can't be opened.
     pub fn add_empty_window(&mut self) -> BenchWindowContext<'a, 'measurement> {
         let bounds = {
             let app = self.app.borrow();
@@ -822,11 +860,14 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         );
     }
 
-    /// Runs GPUI benchmark teardown.
+    /// Shuts down the benchmark app and cancels the timers it left armed.
     ///
-    /// Cancels any timers still armed on the shared dispatcher and drains the
-    /// work that cancellation unblocks so they can't fire during a later
-    /// benchmark; assumes no other `BenchAppContext` is live on this thread.
+    /// Call this at the end of each benchmark closure. Assumes no other
+    /// [`BenchAppContext`] is live on this thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if timers keep being scheduled after 100 rounds of cancellation.
     pub fn teardown(mut self) {
         self.run_until_idle();
         self.update(|cx| {
@@ -983,12 +1024,12 @@ pub struct BenchWindowContext<'a, 'measurement> {
 }
 
 impl<'a, 'measurement> BenchWindowContext<'a, 'measurement> {
-    /// Returns the underlying benchmark app context.
+    /// Returns the [`BenchAppContext`] this window belongs to.
     pub fn app_context(&mut self) -> &mut BenchAppContext<'a, 'measurement> {
         &mut self.cx
     }
 
-    /// Returns the window associated with this context.
+    /// Returns the window's handle.
     pub fn window_handle(&self) -> AnyWindowHandle {
         self.window
     }
@@ -999,7 +1040,11 @@ impl<'a, 'measurement> BenchWindowContext<'a, 'measurement> {
         self.cx.run_until_idle();
     }
 
-    /// Updates the benchmark window.
+    /// Runs `update` with the window and the app.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the window has been closed.
     pub fn update<R>(&mut self, update: impl FnOnce(&mut Window, &mut App) -> R) -> R {
         self.cx
             .update_window(self.window, |_, window, cx| update(window, cx))
@@ -1267,7 +1312,7 @@ mod tests {
 
     #[test]
     fn bench_task_reports_long_task_without_window() {
-        let platform = bench_platform(None, Arc::new(crate::NoopTextSystem::new()));
+        let platform = bench_platform(None, Arc::new(crate::TestTextSystem::new()));
         let report = BenchReport::default();
         let name = "bench_task_reports_long_task_without_window";
 
@@ -1306,7 +1351,7 @@ mod tests {
     fn benchmark_contexts_forward_global_entity_operations() {
         struct GlobalEntity;
 
-        let platform = bench_platform(None, Arc::new(crate::NoopTextSystem::new()));
+        let platform = bench_platform(None, Arc::new(crate::TestTextSystem::new()));
         let name = "benchmark_contexts_forward_global_entity_operations";
         let mut criterion = criterion::Criterion::default()
             .without_plots()
