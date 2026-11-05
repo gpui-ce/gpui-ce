@@ -63,9 +63,8 @@ you were given!
 You can update a different entity through the supplied context, provided you do
 not hold another borrow from that context. Copy or clone any needed data before
 starting the next update. Rust's borrow checker still rejects a mutable context
-borrow while a reference obtained from `Entity::read` is in use; see [borrowing
-through a
-context](crate::_documentation::concepts::contexts#borrowing-through-a-context).
+borrow while a reference obtained from `Entity::read` is in use; see
+[borrowing through a context](crate::_documentation::concepts::contexts#borrowing-through-a-context).
 
 ## Telling GPUI what changed
 
@@ -226,16 +225,20 @@ struct Panel {
 # });
 ```
 
-Storing the subscription in a field cancels the callback when the listening
-entity is dropped. Call [`detach`](crate::Subscription::detach) to leave the
-callback registered without keeping its cancellation handle.
+Store the handle for as long as you want to listen. Dropping the handle cancels
+the subscription, even if the observed entity is still alive. In this example,
+the `Panel` owns the handle, so dropping the panel drops the handle. Call
+[`detach`](crate::Subscription::detach) to keep the registration without its
+cancellation handle.
 
 For entity `observe` and `subscribe` callbacks, releasing the observed entity
-removes its callbacks, including detached ones. Callbacks registered through
-`Context` hold a weak handle to the listening entity. If that listener is
-released first, the callback cannot call it; the registration is removed the
-next time it would run, or when the observed entity is released. Keeping the
-subscription in a field cancels it as soon as the listener is dropped.
+removes its callbacks, including detached ones. An `App` callback need not have
+a listening entity. A callback registered through `Context` holds a weak handle
+to the entity that context represents. When the callback runs, it upgrades that
+handle to access the listener. If the listener is released first, the upgrade
+fails and the registration is removed, or it is removed when the observed
+entity is released. Storing the subscription in the listener cancels it as soon
+as the listener is dropped instead.
 
 ## Lifetimes and weak handles
 
@@ -278,9 +281,9 @@ for the same reason.
 ## Views are entities too
 
 A *view* is an entity whose type implements [`Render`](crate::Render). Create it
-with `cx.new`, hold it with an `Entity`, and update and notify it like any other
-entity. A window holds its root view, and a view shows another view by passing a
-handle as a child:
+with `cx.new`, keep its `Entity` handle for as long as it should live, and
+update and notify it like any other entity. A window holds its root view, and a
+view shows another view by passing a handle as a child:
 
 ```
 # use gpui::{AppContext, Context, Entity, Window, div, prelude::*};
@@ -346,8 +349,9 @@ when you need entity events, weak handles, or multiple instances of one type.
 ### Global entities
 
 [`AppContext::insert_global_entity`](crate::AppContext::insert_global_entity)
-stores a strong handle in the app. This keeps the entity alive even after the
-caller's last handle is dropped, without requiring it to implement `Global`.
+stores a strong handle in the app. This keeps the entity alive regardless of
+what the caller does with its handle, without requiring the entity to implement
+`Global`.
 [`AppContext::global_entities`](crate::AppContext::global_entities) iterates
 over all stored entities of a type; several instances of that type can coexist.
 
