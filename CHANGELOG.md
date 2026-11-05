@@ -208,6 +208,8 @@ Changelog established.
 
 ### Security Changes
 
+- Update Linux portal and credential dependencies to ashpd 0.14 and oo7 0.7, using zbus 6.
+
 ### Deprecations
 
 - [`quad() -> PaintQuad`, `fill() -> PaintQuad`, `outline() -> PaintQuad`] -> `PaintQuad::new` builder api. [#338](https://github.com/gpui-ce/gpui-ce/pull/338), [restore to deprecation](https://github.com/gpui-ce/gpui-ce/commit/e41c444fcb288f537ef9968fefcb4c0f9be68330)
