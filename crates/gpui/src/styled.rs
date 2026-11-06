@@ -972,6 +972,22 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Uniformly scales this element's painted contents around its center.
+    /// Layout and hit testing are unchanged. This can be animated with
+    /// [`AnimationExt::with_animation`](crate::AnimationExt::with_animation) or
+    /// [`StyleTransitions::scale`](crate::StyleTransitions::scale).
+    fn scale(self, scale: f32) -> Self {
+        self.scale_xy(scale, scale)
+    }
+
+    /// Scales this element's painted contents independently on each axis around its center.
+    /// Layout and hit testing are unchanged.
+    fn scale_xy(mut self, x: f32, y: f32) -> Self {
+        self.style().scale.width = Some(x);
+        self.style().scale.height = Some(y);
+        self
+    }
+
     /// Sets the grid columns of this element.
     fn grid_cols(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {

@@ -199,6 +199,7 @@ pub(crate) struct StyleTransitionState {
     inset_ring: RingStyleTransitionState,
     text: TextStyleTransitionState,
     opacity: Option<StyleTransitionPropertyState<f32>>,
+    scale: Option<StyleTransitionPropertyState<crate::Size<f32>>>,
 }
 
 fn apply_auto_size(
@@ -1095,6 +1096,29 @@ mod tests {
             style.ring.color,
             RingColor::Color(red().lerp(&blue(), 0.5).into())
         );
+    }
+
+    #[test]
+    fn scale_style_transitions_interpolate_both_axes() {
+        let started_at = Instant::now();
+        let duration = Duration::from_secs(1);
+        let transitions = StyleTransitions::new().scale(duration);
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+        style.scale = size(0.8, 0.9);
+        assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration / 2,
+            false,
+        ));
+        assert!((style.scale.width - 0.9).abs() < 0.001);
+        assert!((style.scale.height - 0.95).abs() < 0.001);
     }
 
     #[test]
