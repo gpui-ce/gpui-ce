@@ -168,7 +168,7 @@ heck = "0.5"
 proc-macro2 = "1.0.93"
 syn = { version = "2.0.101", features = ["full", "extra-traits", "visit-mut"] }
 quote = "1.0.9"
-ashpd = { version = "0.13", default-features = false, features = [
+ashpd = { version = "0.14", default-features = false, features = [
   "async-io",
   "notification",
   "open_uri",
@@ -242,7 +242,7 @@ gpui_util = { path = "crates/gpui_ce_util", version = "0.2.6", package = "gpui_c
 gpui = { path = "./crates/gpui/", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_render = { path = "./crates/gpui_render/", version = "0.1.0", package = "gpui_ce_render" }
 gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0", package = "gpui_ce_platform" }
-gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0", package = "gpui_ce_linux" }
+gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0", package = "gpui_ce_linux", default-features = false }
 gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0", package = "gpui_ce_macos" }
 gpui_apple = { path = "./crates/gpui_apple/", version = "0.1.0", package = "gpui_ce_apple" }
 gpui_windows = { path = "./crates/gpui_windows/", version = "0.1.0", package = "gpui_ce_windows" }

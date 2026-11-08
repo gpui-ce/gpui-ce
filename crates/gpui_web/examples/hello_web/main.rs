@@ -1,10 +1,14 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::RefCell};
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, ElementId, SharedString, Task, Window, WindowBounds, WindowOptions, div,
-    px, rgb, size,
+    App, ApplicationHandle, Bounds, Context, ElementId, SharedString, Task, Window, WindowBounds,
+    WindowOptions, div, px, rgb, size,
 };
+
+thread_local! {
+    static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
+}
 
 // ---------------------------------------------------------------------------
 // Prime counting (intentionally brute-force so it hammers the CPU)
@@ -430,7 +434,8 @@ fn requested_backend() -> gpui_platform::WebBackendPreference {
 
 fn main() {
     gpui_platform::web_init();
-    gpui_platform::application_with_web_backend(requested_backend()).run(|cx: &mut App| {
+    let application = gpui_platform::application_with_web_backend(requested_backend());
+    let application_handle = application.run(|cx: &mut App| {
         if let Err(error) = cx
             .text_system()
             .add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])
@@ -442,11 +447,12 @@ fn main() {
         }
         let bounds = Bounds::centered(None, size(px(640.), px(560.)), cx);
         cx.open_window(
-            WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds))),
+            WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(HelloWeb::new),
         )
         .expect("failed to open window");
         cx.activate(true);
     });
+
+    APPLICATION.set(Some(application_handle));
 }

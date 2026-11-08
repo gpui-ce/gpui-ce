@@ -5,7 +5,10 @@ for Rust, designed to support a wide variety of applications.
 
 ## Getting Started
 
-GPUI is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions. You'll also need to use the latest version of stable Rust. Add `gpui`, and optionally `gpui_platform`, to your `Cargo.toml`:
+GPUI CE is an independent, community-maintained fork of GPUI and is still pre-1.0.
+There will often be breaking changes between versions. You'll also need to use
+the latest version of stable Rust. Add `gpui`, and optionally `gpui_platform`, to
+your `Cargo.toml`:
 
 ```toml
 gpui = { version = "*" }

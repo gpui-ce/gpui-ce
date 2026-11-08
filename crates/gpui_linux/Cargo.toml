@@ -70,7 +70,7 @@ url.workspace = true
 uuid.workspace = true
 
 # Always used
-oo7 = { version = "0.6", default-features = false, features = [
+oo7 = { version = "0.7", default-features = false, features = [
   "async-std",
   "native_crypto",
 ] }

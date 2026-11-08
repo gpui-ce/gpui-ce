@@ -15,8 +15,15 @@ use std::{
     cell::RefCell, future::Future, ops::Deref, path::PathBuf, rc::Rc, sync::Arc, time::Duration,
 };
 
-/// A TestAppContext is provided to tests created with `#[gpui::test]`, it provides
-/// an implementation of `Context` with additional methods that are useful in tests.
+/// The test version of [`App`], passed to `#[gpui::test]` functions.
+///
+/// `TestAppContext` implements [`AppContext`] and adds helpers for windows, input,
+/// prompts and executors. Unlike [`TestApp`](crate::TestApp), its methods don't
+/// run pending tasks unless the method says so. Call [`TestAppContext::run_until_parked`]
+/// to run them. See the [testing guide](crate::_documentation::guides::testing).
+///
+/// Create one directly with [`TestAppContext::single`] when you don't need the
+/// macro.
 #[derive(Clone)]
 pub struct TestAppContext {
     #[doc(hidden)]
@@ -154,7 +161,9 @@ impl AppContext for TestAppContext {
 }
 
 impl TestAppContext {
-    /// Creates a new `TestAppContext`. Usually you can rely on `#[gpui::test]` to do this for you.
+    /// Creates a context that runs on `dispatcher`.
+    ///
+    /// `#[gpui::test]` calls this for you.
     pub fn build(dispatcher: TestDispatcher, fn_name: Option<&'static str>) -> Self {
         let arc_dispatcher = Arc::new(dispatcher.clone());
         let background_executor = BackgroundExecutor::new(arc_dispatcher.clone());
@@ -182,75 +191,107 @@ impl TestAppContext {
         }
     }
 
-    /// Skip all drawing operations for the duration of this test.
+    /// Turns off drawing for this app for the rest of the test.
     pub fn skip_drawing(&mut self) {
         self.app.borrow_mut().mode = GpuiMode::Test { skip_drawing: true };
     }
 
-    /// Create a single TestAppContext, for non-multi-client tests
+    /// Creates a context with seed `0` that isn't tied to a test function.
+    ///
+    /// Use this in doctests and in code that runs outside `#[gpui::test]`.
     pub fn single() -> Self {
         let dispatcher = TestDispatcher::new(0);
         Self::build(dispatcher, None)
     }
 
-    /// The name of the test function that created this `TestAppContext`
+    /// Returns the name of the test function that created this context, if known.
     pub fn test_function_name(&self) -> Option<&'static str> {
         self.fn_name
     }
 
-    /// Checks whether there have been any new path prompts received by the platform.
+    /// Returns whether a new-path prompt is waiting for [`TestAppContext::simulate_new_path_selection`].
     pub fn did_prompt_for_new_path(&self) -> bool {
         self.test_platform.did_prompt_for_new_path()
     }
 
-    /// returns a new `TestAppContext` re-using the same executors to interleave tasks.
+    /// Creates another app that shares this context's scheduler, so tasks from both apps interleave deterministically.
+    ///
+    /// The new app has its own state, windows and globals.
     pub fn new_app(&self) -> TestAppContext {
         Self::build(self.dispatcher.clone(), self.fn_name)
     }
 
-    /// Called by the test helper to end the test.
-    /// public so the macro can call it.
+    /// Runs the cleanup registered with [`TestAppContext::on_quit`], then shuts the app down.
+    ///
+    /// `#[gpui::test]` calls this when the test ends.
     pub fn quit(&self) {
         self.on_quit.borrow_mut().drain(..).for_each(|f| f());
         self.app.borrow_mut().shutdown();
     }
 
-    /// Register cleanup to run when the test ends.
+    /// Registers `f` to run when the test ends, before the app shuts down.
     pub fn on_quit(&mut self, f: impl FnOnce() + 'static) {
         self.on_quit.borrow_mut().push(Box::new(f));
     }
 
-    /// Schedules all windows to be redrawn on the next effect cycle.
+    /// Marks every window for redraw on the next effect cycle. Always returns `Ok(())`.
     pub fn refresh(&mut self) -> Result<()> {
         let mut app = self.app.borrow_mut();
         app.refresh_windows();
         Ok(())
     }
 
-    /// Returns an executor (for running tasks in the background)
+    /// Returns a clone of the background executor.
     pub fn executor(&self) -> BackgroundExecutor {
         self.background_executor.clone()
     }
 
-    /// Returns an executor (for running tasks on the main thread)
+    /// Returns the foreground executor.
     pub fn foreground_executor(&self) -> &ForegroundExecutor {
         &self.foreground_executor
     }
 
-    /// Gives you an `&mut App` for the duration of the closure
+    /// Runs `f` with mutable access to the [`App`].
+    ///
+    /// Unlike [`TestApp::update`](crate::TestApp::update), this doesn't run pending
+    /// tasks. Call [`TestAppContext::run_until_parked`] afterward if you need them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use gpui::TestAppContext;
+    /// # use std::{cell::Cell, rc::Rc};
+    /// let cx = TestAppContext::single();
+    /// let finished = Rc::new(Cell::new(false));
+    ///
+    /// let flag = finished.clone();
+    /// cx.foreground_executor().spawn(async move { flag.set(true) }).detach();
+    ///
+    /// cx.update(|_| ());
+    /// assert!(!finished.get(), "update doesn't run pending tasks");
+    ///
+    /// cx.run_until_parked();
+    /// assert!(finished.get());
+    /// ```
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut cx = self.app.borrow_mut();
         cx.update(f)
     }
 
-    /// Gives you an `&App` for the duration of the closure
+    /// Runs `f` with read-only access to the [`App`].
     pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let cx = self.app.borrow();
         f(&cx)
     }
 
-    /// Adds a new window. The Window will always be backed by a `TestWindow` which
-    /// can be retrieved with `self.test_window(handle)`
+    /// Opens a window with maximized bounds and returns its handle.
+    ///
+    /// The window is backed by a test platform window, so input and resize helpers
+    /// work on it. This doesn't run pending tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the window can't be opened.
     pub fn add_window<F, V>(&mut self, build_window: F) -> WindowHandle<V>
     where
         F: FnOnce(&mut Window, &mut Context<V>) -> V,
@@ -267,10 +308,14 @@ impl TestAppContext {
         .unwrap()
     }
 
-    /// Opens a new window with a specific size.
+    /// Opens a window of `window_size` at the origin and returns its handle.
     ///
-    /// Unlike `add_window` which uses maximized bounds, this allows controlling
-    /// the window dimensions, which is important for layout-sensitive tests.
+    /// Use this when a layout test needs a known size. [`TestAppContext::add_window`]
+    /// uses the size of the test display instead. This doesn't run pending tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the window can't be opened.
     pub fn open_window<F, V>(
         &mut self,
         window_size: Size<Pixels>,
@@ -291,7 +336,9 @@ impl TestAppContext {
         .unwrap()
     }
 
-    /// Adds a new window with no content.
+    /// Opens a window with an empty root view and returns a [`VisualTestContext`] for it.
+    ///
+    /// Runs pending tasks before it returns.
     pub fn add_empty_window(&mut self) -> &mut VisualTestContext {
         let mut cx = self.app.borrow_mut();
         let bounds = Bounds::maximized(None, &cx);
@@ -307,9 +354,12 @@ impl TestAppContext {
         cx
     }
 
-    /// Adds a new window, and returns its root view and a `VisualTestContext` which can be used
-    /// as a `Window` and `App` for the rest of the test. Typically you would shadow this context with
-    /// the returned one. `let (view, cx) = cx.add_window_view(...);`
+    /// Opens a window whose root view `build_root_view` builds.
+    ///
+    /// Returns the root view's entity and a [`VisualTestContext`] for the window. Use
+    /// the returned context from then on, which is the usual pattern:
+    /// `let (view, cx) = cx.add_window_view(...);`. Runs pending tasks before it returns.
+    /// See [testing a window](crate::_documentation::guides::testing) for an example.
     pub fn add_window_view<F, V>(
         &mut self,
         build_root_view: F,
@@ -335,7 +385,7 @@ impl TestAppContext {
         (view, cx)
     }
 
-    /// returns the TextSystem
+    /// Returns the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system
     }
@@ -345,18 +395,24 @@ impl TestAppContext {
         self.test_platform.cursor_style()
     }
 
-    /// Simulates writing to the platform clipboard
+    /// Writes `item` to the test clipboard.
     pub fn write_to_clipboard(&self, item: ClipboardItem) {
         self.test_platform.write_to_clipboard(item)
     }
 
-    /// Simulates reading from the platform clipboard.
-    /// This will return the most recent value from `write_to_clipboard`.
+    /// Returns the item most recently written to the test clipboard, or `None`.
     pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
         self.test_platform.read_from_clipboard()
     }
 
-    /// Simulates choosing a File in the platform's "Open" dialog.
+    /// Answers the oldest pending new-path prompt.
+    ///
+    /// `select_path` receives the directory the app asked about and returns the chosen
+    /// path, or `None` to cancel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no new-path prompt is pending.
     pub fn simulate_new_path_selection(
         &self,
         select_path: impl FnOnce(&std::path::Path) -> Option<std::path::PathBuf>,
@@ -364,7 +420,15 @@ impl TestAppContext {
         self.test_platform.simulate_new_path_selection(select_path);
     }
 
-    /// Simulates responding to a `prompt_for_paths` ("Open") dialog.
+    /// Answers the oldest pending `prompt_for_paths` request.
+    ///
+    /// `select_paths` receives the prompt's options and returns the chosen paths, or
+    /// `None` to cancel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no paths prompt is pending. Also panics if `select_paths` returns more
+    /// than one path for a prompt that doesn't allow multiple selection.
     pub fn simulate_path_prompt_response(
         &self,
         select_paths: impl FnOnce(&crate::PathPromptOptions) -> Option<Vec<std::path::PathBuf>>,
@@ -373,82 +437,100 @@ impl TestAppContext {
             .simulate_path_prompt_response(select_paths);
     }
 
-    /// Returns true if there's a path selection dialog pending.
+    /// Returns whether a `prompt_for_paths` request is waiting for [`TestAppContext::simulate_path_prompt_response`].
     pub fn did_prompt_for_paths(&self) -> bool {
         self.test_platform.did_prompt_for_paths()
     }
 
-    /// Simulates clicking a button in an platform-level alert dialog.
+    /// Presses the button labelled `button` on the oldest pending prompt.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no prompt is pending, or if no button on the prompt has the label `button`.
     #[track_caller]
     pub fn simulate_prompt_answer(&self, button: &str) {
         self.test_platform.simulate_prompt_answer(button);
     }
 
-    /// Returns true if there's an alert dialog open.
+    /// Returns whether a prompt is waiting for an answer.
     pub fn has_pending_prompt(&self) -> bool {
         self.test_platform.has_pending_prompt()
     }
 
-    /// Returns true if there's an alert dialog open.
+    /// Returns the message and detail of the oldest pending prompt, or `None`.
+    ///
+    /// The detail is an empty string when the prompt has none.
     pub fn pending_prompt(&self) -> Option<(String, String)> {
         self.test_platform.pending_prompt()
     }
 
-    /// All the urls that have been opened with cx.open_url() during this test.
+    /// Returns the URL most recently passed to `open_url`, or `None`.
+    ///
+    /// Only the last URL is kept.
     pub fn opened_url(&self) -> Option<String> {
         self.test_platform.opened_url.borrow().clone()
     }
 
-    /// Returns the application identity configured during this test.
+    /// Returns the identifier and name set with `set_app_identity`, or `None` if none was set.
     pub fn app_identity(&self) -> Option<(SharedString, SharedString)> {
         self.test_platform.app_identity()
     }
 
-    /// Returns all system notifications shown during this test, in order.
+    /// Returns every system notification shown during the test, in order.
+    ///
+    /// A notification shown before the app has an identity is dropped and doesn't
+    /// appear here.
     pub fn shown_system_notifications(&self) -> Vec<SystemNotification> {
         self.test_platform.shown_system_notifications()
     }
 
-    /// Returns the system notifications currently delivered by the test platform.
+    /// Returns the notifications that are shown and not yet dismissed.
+    ///
+    /// A notification with the same tag as an earlier one replaces it.
     pub fn delivered_system_notifications(&self) -> Vec<SystemNotification> {
         self.test_platform.delivered_system_notifications()
     }
 
-    /// Returns the tags of all system notifications dismissed during this test, in order.
+    /// Returns the tags of the notifications dismissed during the test, in order.
     pub fn dismissed_system_notifications(&self) -> Vec<SharedString> {
         self.test_platform.dismissed_system_notifications()
     }
 
-    /// Simulates the user activating a system notification.
+    /// Delivers `response` to the response handlers, as if the user had activated the notification.
     pub fn simulate_system_notification_response(&self, response: SystemNotificationResponse) {
         self.test_platform
             .simulate_system_notification_response(response);
     }
 
-    /// Simulates the user resizing the window to the new size.
+    /// Resizes `window_handle` to `size`. See [`VisualTestContext::simulate_resize`].
     pub fn simulate_window_resize(&self, window_handle: AnyWindowHandle, size: Size<Pixels>) {
         self.test_window(window_handle).simulate_resize(size);
     }
 
-    /// Returns true if there's an alert dialog open.
+    /// Returns a receiver that gets the path and arguments of the next restart request.
+    ///
+    /// The app doesn't restart in a test. Calling this again replaces the previous
+    /// sender, so the previous receiver is cancelled.
     pub fn expect_restart(&self) -> oneshot::Receiver<(Option<PathBuf>, Vec<std::ffi::OsString>)> {
         let (tx, rx) = futures::channel::oneshot::channel();
         self.test_platform.expect_restart.borrow_mut().replace(tx);
         rx
     }
 
-    /// Causes the given sources to be returned if the application queries for screen
-    /// capture sources.
+    /// Sets the sources that screen capture queries return.
     pub fn set_screen_capture_sources(&self, sources: Vec<TestScreenCaptureSource>) {
         self.test_platform.set_screen_capture_sources(sources);
     }
 
-    /// Returns all windows open in the test.
+    /// Returns the handles of all open windows.
     pub fn windows(&self) -> Vec<AnyWindowHandle> {
         self.app.borrow().windows()
     }
 
-    /// Run the given task on the main thread.
+    /// Spawns a future on the foreground executor, with an [`AsyncApp`] for this app.
+    ///
+    /// The future runs when tasks run, such as during [`TestAppContext::run_until_parked`]
+    /// or a `simulate_*` method. A plain `update` doesn't run it.
     #[track_caller]
     pub fn spawn<Fut, R>(&self, f: impl FnOnce(AsyncApp) -> Fut) -> Task<R>
     where
@@ -458,39 +540,47 @@ impl TestAppContext {
         self.foreground_executor.spawn(f(self.to_async()))
     }
 
-    /// true if the given global is defined
+    /// Returns whether a global of type `G` is set.
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app.borrow();
         app.has_global::<G>()
     }
 
-    /// runs the given closure with a reference to the global
-    /// panics if `has_global` would return false.
+    /// Runs `read` with the global of type `G`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no global of type `G` is set. Use [`TestAppContext::try_read_global`] when it might not be.
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app.borrow();
         read(app.global(), &app)
     }
 
-    /// runs the given closure with a reference to the global (if set)
+    /// Runs `read` with the global of type `G` if it is set, and returns `None` otherwise.
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let lock = self.app.borrow();
         Some(read(lock.try_global()?, &lock))
     }
 
-    /// sets the global in this context.
+    /// Sets the global of type `G`, replacing any previous value.
     pub fn set_global<G: Global>(&mut self, global: G) {
         let mut lock = self.app.borrow_mut();
         lock.update(|cx| cx.set_global(global))
     }
 
-    /// updates the global in this context. (panics if `has_global` would return false)
+    /// Runs `update` with mutable access to the global of type `G`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no global of type `G` is set.
     pub fn update_global<G: Global, R>(&mut self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let mut lock = self.app.borrow_mut();
         lock.update(|cx| cx.update_global(update))
     }
 
-    /// Returns an `AsyncApp` which can be used to run tasks that expect to be on a background
-    /// thread on the current thread in tests.
+    /// Returns an [`AsyncApp`] for this app.
+    ///
+    /// The handle holds a weak reference, so it can't keep the app alive.
     pub fn to_async(&self) -> AsyncApp {
         AsyncApp {
             app: Rc::downgrade(&self.app),
@@ -499,12 +589,19 @@ impl TestAppContext {
         }
     }
 
-    /// Wait until there are no more pending tasks.
+    /// Runs pending tasks until none can make progress.
+    ///
+    /// This doesn't move the simulated clock. Use `executor().advance_clock` for that.
+    /// Timers that haven't expired stay pending.
     pub fn run_until_parked(&self) {
         self.dispatcher.run_until_parked();
     }
 
-    /// Simulate dispatching an action to the currently focused node in the window.
+    /// Dispatches `action` to the focused element in `window`, then runs pending tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `window` has been closed.
     pub fn dispatch_action<A>(&mut self, window: AnyWindowHandle, action: A)
     where
         A: Action,
@@ -518,10 +615,15 @@ impl TestAppContext {
         self.background_executor.run_until_parked()
     }
 
-    /// simulate_keystrokes takes a space-separated list of keys to type.
-    /// cx.simulate_keystrokes("cmd-shift-p b k s p enter")
-    /// in Zed, this will run backspace on the current editor through the command palette.
-    /// This will also run the background executor until it's parked.
+    /// Sends each keystroke in a space-separated list to `window`, then runs pending tasks.
+    ///
+    /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`](crate::TestAppWindow::simulate_keystroke).
+    /// The space bar is the key `"space"`, which can't appear in this list, because
+    /// a space separates keystrokes. Two spaces in a row send an empty keystroke.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any part isn't a valid keystroke.
     pub fn simulate_keystrokes(&mut self, window: AnyWindowHandle, keystrokes: &str) {
         for keystroke in keystrokes
             .split(' ')
@@ -534,10 +636,13 @@ impl TestAppContext {
         self.background_executor.run_until_parked()
     }
 
-    /// simulate_input takes a string of text to type.
-    /// cx.simulate_input("abc")
-    /// will type abc into your current editor
-    /// This will also run the background executor until it's parked.
+    /// Types `input` into `window` by sending one keystroke per character, then runs pending tasks.
+    ///
+    /// Each character is parsed as a keystroke, so the text reaches text inputs. A
+    /// space is sent with the key `" "`, not `"space"`.
+    ///
+    /// Splitting on an empty string also sends an empty keystroke before the first
+    /// character and after the last. Don't rely on those.
     pub fn simulate_input(&mut self, window: AnyWindowHandle, input: &str) {
         for keystroke in input.split("").map(Keystroke::parse).map(Result::unwrap) {
             self.dispatch_keystroke(window, keystroke);
@@ -546,7 +651,9 @@ impl TestAppContext {
         self.background_executor.run_until_parked()
     }
 
-    /// dispatches a single Keystroke (see also `simulate_keystrokes` and `simulate_input`)
+    /// Dispatches one keystroke to the focused element in `window`.
+    ///
+    /// This doesn't run pending tasks. [`TestAppContext::simulate_keystrokes`] does.
     pub fn dispatch_keystroke(&mut self, window: AnyWindowHandle, keystroke: Keystroke) {
         self.update_window(window, |_, window, cx| {
             window.dispatch_keystroke(keystroke, cx)
@@ -569,7 +676,9 @@ impl TestAppContext {
             .clone()
     }
 
-    /// Returns a stream of notifications whenever the Entity is updated.
+    /// Returns a stream that yields `()` each time `entity` notifies.
+    ///
+    /// The stream ends when the entity is released.
     pub fn notifications<T: 'static>(
         &mut self,
         entity: &Entity<T>,
@@ -589,7 +698,7 @@ impl TestAppContext {
         rx
     }
 
-    /// Returns a stream of events emitted by the given Entity.
+    /// Returns a stream of the events `entity` emits, cloned, in order.
     pub fn events<Evt, T: 'static + EventEmitter<Evt>>(
         &mut self,
         entity: &Entity<T>,
@@ -608,8 +717,12 @@ impl TestAppContext {
         rx
     }
 
-    /// Runs until the given condition becomes true. (Prefer `run_until_parked` if you
-    /// don't need to jump in at a specific time).
+    /// Waits until `predicate` returns `true` for `entity`, checking after each notification.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the predicate isn't true within 3 seconds of simulated time, or if
+    /// the entity is released while waiting.
     pub async fn condition<T: 'static>(
         &mut self,
         entity: &Entity<T>,
@@ -640,7 +753,7 @@ impl TestAppContext {
             .unwrap();
     }
 
-    /// Set a name for this App.
+    /// Sets this app's name.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_name(&mut self, name: &'static str) {
         self.update(|cx| cx.name = Some(name))
@@ -648,7 +761,14 @@ impl TestAppContext {
 }
 
 impl<T: 'static> Entity<T> {
-    /// Block until the next event is emitted by the entity, then return it.
+    /// Returns a future that resolves with the next event `self` emits.
+    ///
+    /// The subscription is made when you call this, not when you await the future, so
+    /// an event emitted in between is still received.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is released before it emits an event.
     pub fn next_event<Event>(&self, cx: &mut TestAppContext) -> impl Future<Output = Event>
     where
         Event: Send + Clone + 'static,
@@ -673,7 +793,15 @@ impl<T: 'static> Entity<T> {
 }
 
 impl<V: 'static> Entity<V> {
-    /// Returns a future that resolves when the view is next updated.
+    /// Returns a future that resolves on the entity's next notification.
+    ///
+    /// This advances the simulated clock by `advance_clock_by` as soon as you call it,
+    /// before the future is awaited. Use it when the notification comes from a timer
+    /// that the advance will fire.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is released while the future waits.
     pub fn next_notification(
         &self,
         advance_clock_by: Duration,
@@ -698,7 +826,14 @@ impl<V: 'static> Entity<V> {
 }
 
 impl<V> Entity<V> {
-    /// Returns a future that resolves when the condition becomes true.
+    /// Returns a future that resolves when `predicate` returns `true` for this entity.
+    ///
+    /// The predicate is checked when the future is first polled, then again after
+    /// each notification or event from the entity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is released while the future waits.
     pub fn condition<Evt>(
         &self,
         cx: &TestAppContext,
@@ -760,27 +895,30 @@ use derive_more::{Deref, DerefMut};
 
 use super::{Context, Entity};
 #[derive(Deref, DerefMut, Clone)]
-/// A VisualTestContext is the test-equivalent of a `Window` and `App`. It allows you to
-/// run window-specific test code. It can be dereferenced to a `TextAppContext`.
+/// A [`TestAppContext`] bound to one window, the test equivalent of a [`Window`] and [`App`].
+///
+/// Use it to run window-specific test code. It implements [`VisualContext`] and
+/// dereferences to the [`TestAppContext`] it wraps. Clones refer to the same window.
 pub struct VisualTestContext {
     #[deref]
     #[deref_mut]
-    /// cx is the original TestAppContext (you can more easily access this using Deref)
+    /// The underlying [`TestAppContext`]. Methods on it are also available through deref.
     pub cx: TestAppContext,
     window: AnyWindowHandle,
 }
 
 impl VisualTestContext {
-    /// Provides a `Window` and `App` for the duration of the closure.
+    /// Runs `f` with the window and the app. This doesn't run pending tasks.
     pub fn update<R>(&mut self, f: impl FnOnce(&mut Window, &mut App) -> R) -> R {
         self.cx
             .update_window(self.window, |_, window, cx| f(window, cx))
             .unwrap()
     }
 
-    /// Creates a new VisualTestContext. You would typically shadow the passed in
-    /// TestAppContext with this, as this is typically more useful.
-    /// `let cx = VisualTestContext::from_window(window, cx);`
+    /// Creates a context for `window` that shares `cx`'s app.
+    ///
+    /// Shadow the [`TestAppContext`] with the result, which is usually what you want:
+    /// `let cx = VisualTestContext::from_window(window, cx);`.
     pub fn from_window(window: AnyWindowHandle, cx: &TestAppContext) -> Self {
         Self {
             cx: cx.clone(),
@@ -788,12 +926,14 @@ impl VisualTestContext {
         }
     }
 
-    /// Wait until there are no more pending tasks.
+    /// Runs pending tasks until none can make progress.
+    ///
+    /// This runs the same scheduler as [`TestAppContext::run_until_parked`]. It doesn't move the simulated clock.
     pub fn run_until_parked(&self) {
         self.cx.background_executor.run_until_parked();
     }
 
-    /// Dispatch the action to the currently focused node.
+    /// Dispatches `action` to the focused element in this window, then runs pending tasks.
     pub fn dispatch_action<A>(&mut self, action: A)
     where
         A: Action,
@@ -801,12 +941,12 @@ impl VisualTestContext {
         self.cx.dispatch_action(self.window, action)
     }
 
-    /// Read the title off the window (set by `Window#set_window_title`)
+    /// Returns the title set with [`Window::set_window_title`], or `None` if none was set.
     pub fn window_title(&mut self) -> Option<String> {
         self.cx.test_window(self.window).0.lock().title.clone()
     }
 
-    /// Read the document path off the window (set by `Window#set_document_path`)
+    /// Returns the document path set with [`Window::set_document_path`], or `None` if none was set.
     pub fn document_path(&mut self) -> Option<std::path::PathBuf> {
         self.cx
             .test_window(self.window)
@@ -816,19 +956,23 @@ impl VisualTestContext {
             .clone()
     }
 
-    /// Simulate a sequence of keystrokes `cx.simulate_keystrokes("cmd-p escape")`
-    /// Automatically runs until parked.
+    /// Sends a space-separated list of keystrokes to this window, then runs pending tasks.
+    ///
+    /// This is [`TestAppContext::simulate_keystrokes`] for this window. The same rules
+    /// apply: a space separates keystrokes, so use the key name `"space"` only as one
+    /// keystroke.
     pub fn simulate_keystrokes(&mut self, keystrokes: &str) {
         self.cx.simulate_keystrokes(self.window, keystrokes)
     }
 
-    /// Simulate typing text `cx.simulate_input("hello")`
-    /// Automatically runs until parked.
+    /// Types `input` into this window, one keystroke per character, then runs pending tasks.
+    ///
+    /// See [`TestAppContext::simulate_input`] for how characters are sent.
     pub fn simulate_input(&mut self, input: &str) {
         self.cx.simulate_input(self.window, input)
     }
 
-    /// Simulate a mouse move event to the given point
+    /// Moves the pointer to `position`, with `button` held if it's `Some`.
     pub fn simulate_mouse_move(
         &mut self,
         position: Point<Pixels>,
@@ -842,7 +986,7 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulate a mouse down event to the given point
+    /// Presses `button` at `position` with `modifiers` held. The click count is always `1`.
     pub fn simulate_mouse_down(
         &mut self,
         position: Point<Pixels>,
@@ -858,7 +1002,7 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulate a mouse up event to the given point
+    /// Releases `button` at `position` with `modifiers` held. The click count is always `1`.
     pub fn simulate_mouse_up(
         &mut self,
         position: Point<Pixels>,
@@ -873,7 +1017,7 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulate a primary mouse click at the given point
+    /// Presses and releases the left button at `position`, with click count `1` on both events.
     pub fn simulate_click(&mut self, position: Point<Pixels>, modifiers: Modifiers) {
         self.simulate_event(MouseDownEvent {
             position,
@@ -890,7 +1034,7 @@ impl VisualTestContext {
         });
     }
 
-    /// Simulate a modifiers changed event
+    /// Sends a modifiers-changed event with `modifiers`. Caps lock is reported as off.
     pub fn simulate_modifiers_change(&mut self, modifiers: Modifiers) {
         self.simulate_event(ModifiersChangedEvent {
             modifiers,
@@ -898,7 +1042,7 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulate a capslock changed event
+    /// Sends a modifiers-changed event with no modifiers and caps lock set to `on`.
     pub fn simulate_capslock_change(&mut self, on: bool) {
         self.simulate_event(ModifiersChangedEvent {
             modifiers: Modifiers::none(),
@@ -906,17 +1050,25 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulates the user resizing the window to the new size.
+    /// Resizes the window to `size`. See [`TestAppContext::simulate_window_resize`].
+    ///
+    /// This doesn't paint the window. Call [`VisualTestContext::draw`] to paint at the new size.
     pub fn simulate_resize(&self, size: Size<Pixels>) {
         self.simulate_window_resize(self.window, size)
     }
 
-    /// debug_bounds returns the bounds of the element with the given selector.
+    /// Returns the bounds of the element with `debug_selector(selector)` in the last painted frame, or `None`.
+    ///
+    /// Draw the view first, so that the frame contains the element. Use this to click
+    /// an element without guessing its position.
     pub fn debug_bounds(&mut self, selector: &'static str) -> Option<Bounds<Pixels>> {
         self.update(|window, _| window.rendered_frame.debug_bounds.get(selector).copied())
     }
 
-    /// Draw an element to the window. Useful for simulating events or actions
+    /// Lays out and paints `f`'s element as a root at `origin`, within `space`.
+    ///
+    /// Use this to paint an element on its own, without a root view. It returns the
+    /// element's request-layout and prepaint state. The window is refreshed afterward.
     pub fn draw<E>(
         &mut self,
         origin: Point<Pixels>,
@@ -947,15 +1099,18 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulate an event from the platform, e.g. a ScrollWheelEvent
-    /// Make sure you've called [VisualTestContext::draw] first!
+    /// Sends `event` to the window as platform input, then runs pending tasks.
+    ///
+    /// Call [`VisualTestContext::draw`] first, so that hit tests see the current layout.
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         self.test_window(self.window)
             .simulate_input(event.to_platform_input());
         self.background_executor.run_until_parked();
     }
 
-    /// Simulates the user blurring the window.
+    /// Makes this window inactive, as if the user had switched to another window.
+    ///
+    /// Does nothing if the window isn't active. Runs pending tasks.
     pub fn deactivate_window(&mut self) {
         if Some(self.window) == self.test_platform.active_window() {
             self.test_platform.set_active_window(None)
@@ -963,8 +1118,10 @@ impl VisualTestContext {
         self.background_executor.run_until_parked();
     }
 
-    /// Simulates the user closing the window.
-    /// Returns true if the window was closed.
+    /// Runs the window's should-close callback and returns its result.
+    ///
+    /// Returns `false` if the window has no callback. This doesn't remove the window
+    /// from the app, even when the callback returns `true`.
     pub fn simulate_close(&mut self) -> bool {
         let handler = self
             .cx
@@ -992,8 +1149,11 @@ impl VisualTestContext {
         }
     }
 
-    /// Get an &mut VisualTestContext (which is mostly what you need to pass to other methods).
-    /// This method internally retains the VisualTestContext until the end of the test.
+    /// Leaks this context and returns a mutable reference that stays valid until the test ends.
+    ///
+    /// [`TestAppContext::add_window_view`] and [`TestAppContext::add_empty_window`] use
+    /// this to return a context that borrows from the test. The memory is freed when
+    /// the test quits.
     pub fn into_mut(self) -> &'static mut Self {
         let ptr = Box::into_raw(Box::new(self));
         // safety: on_quit will be called after the test has finished.
@@ -1180,7 +1340,11 @@ impl VisualContext for VisualTestContext {
 }
 
 impl AnyWindowHandle {
-    /// Creates the given view in this window.
+    /// Creates an entity with `build_view` in this window.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the window has been closed.
     pub fn build_entity<V: Render + 'static>(
         &self,
         cx: &mut TestAppContext,
