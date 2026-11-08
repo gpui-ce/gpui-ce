@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "test-support"))]
+use crate::px;
 use crate::{Pixels, ResolvedDirection, TextAlign, TextRun, UnicodeBidi};
 
 /// The paragraph base-direction policy supplied to a text backend.
@@ -51,4 +53,54 @@ pub struct TextLayoutRequest<'a> {
     pub runs: &'a [TextRun],
     /// Wrapping, alignment, and bidirectional layout options.
     pub options: TextLayoutOptions,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl TextLayoutRequest<'_> {
+    pub(crate) fn letter_spacing_advance(&self) -> Pixels {
+        let mut tracking = px(0.);
+        let mut tracking_covered = 0usize;
+
+        for run in self.runs {
+            let start = tracking_covered.min(self.text.len());
+            let end = start
+                .saturating_add(run.len)
+                .min(self.text.len())
+                .max(start);
+            let slice = self.text.get(start..end).unwrap_or("");
+            let character_count = slice.chars().count();
+
+            if character_count > 1 {
+                if let Some(spacing) = run.letter_spacing {
+                    tracking += spacing * (character_count - 1) as f32;
+                }
+            }
+
+            tracking_covered = end;
+        }
+
+        tracking
+    }
+
+    pub(crate) fn resolved_direction(&self) -> ResolvedDirection {
+        match self.options.direction {
+            ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
+            ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
+            ParagraphDirection::Auto => {
+                ResolvedDirection::from_first_strong(self.text).unwrap_or_default()
+            }
+        }
+    }
+
+    pub(crate) fn alignment_offset(&self, advance: Pixels, direction: ResolvedDirection) -> Pixels {
+        let alignment_width = self.options.alignment_width.unwrap_or(advance);
+
+        match self.options.text_align {
+            TextAlign::Start if direction.is_rtl() => alignment_width - advance,
+            TextAlign::Start | TextAlign::Left => Pixels::ZERO,
+            TextAlign::Center => (alignment_width - advance) / 2.0,
+            TextAlign::End if direction.is_rtl() => Pixels::ZERO,
+            TextAlign::End | TextAlign::Right => alignment_width - advance,
+        }
+    }
 }

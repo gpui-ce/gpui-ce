@@ -1,21 +1,22 @@
 # Future work
 
-Verified against Parley 0.11.1, upstream `main`, and PR #766 on 2026-09-15.
+Parley 0.12.0 integration is split across the migration stack.
 
 ## Vertical alignment
 
-GPUI handles `baseline`, `middle`, `top`, `bottom`, and their line metrics itself.
-
-- Parley 0.11.1 supports bottom-to-baseline alignment only.
-- [PR #639](https://github.com/linebender/parley/pull/639) added custom box baselines and matching line-height calculation to `main`, but not the other modes.
-- [PR #766](https://github.com/linebender/parley/pull/766) implements and tests all four modes for spans and inline boxes, including line-height calculation. It is open and unmerged.
-
-Keep `align_inline_boxes` until #766 ships and passes GPUI's inline-layout tests, especially `middle` alignment and line metrics.
+GPUI delegates `baseline`, `middle`, `top`, `bottom`, and line metrics to Parley.
+The inline container supplies its font for alignment and the line strut. The
+manual `align_inline_boxes` pass and caller-provided inline metrics are removed.
+Child-provided baselines are part of the atomic sizing layer.
 
 ## Whitespace at wrapped line starts
 
-Extend GPUI's existing whitespace behavior once Parley implements the necessary support tracked in [issue #619](https://github.com/linebender/parley/issues/619).
+Parley 0.12.0 provides CSS whitespace processing through `TreeBuilder`. The CSS
+formatting layer connects this to nested GPUI spans while preserving source byte
+indices. This first layer retains the existing flat input and whitespace behavior.
 
 ## Out-of-flow boxes
 
-[`InlineBoxKind::OutOfFlow`](https://docs.rs/parley/0.11.1/parley/enum.InlineBoxKind.html#variant.OutOfFlow) already exists in 0.11.1. It can provide an absolute inline child's static position without affecting text flow. Taffy must still handle sizing, insets, and final placement.
+[`InlineBoxKind::OutOfFlow`](https://docs.rs/parley/0.12.0/parley/enum.InlineBoxKind.html#variant.OutOfFlow)
+provides static positions without affecting text flow. The absolute positioning
+layer connects these anchors to Taffy's sizing, insets, and final placement.

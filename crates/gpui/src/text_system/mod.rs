@@ -113,6 +113,7 @@ mod layout_cache_tests {
             len: text.len(),
             ..Default::default()
         }];
+        let base_font = Font::default();
         let request = |wrap_width| InlineLayoutRequest {
             text,
             runs: &runs,
@@ -120,7 +121,7 @@ mod layout_cache_tests {
             boxes: &[],
             font_size: px(16.0),
             line_height: px(20.0),
-            text_metrics: InlineTextMetrics::default(),
+            base_font: &base_font,
             options: TextLayoutOptions {
                 wrap_width: Some(wrap_width),
                 text_align: TextAlign::Left,
@@ -145,6 +146,11 @@ mod layout_cache_tests {
             font_size: px(18.0),
             ..request(px(200.0))
         });
+        let changed_font = system.layout_inline(InlineLayoutRequest {
+            base_font: &crate::font("another parent font"),
+            ..request(px(200.0))
+        });
+        assert!(!Arc::ptr_eq(&wide, &changed_font));
         assert!(!Arc::ptr_eq(&wide, &changed_paint));
         assert!(!Arc::ptr_eq(&wide, &changed_size));
         assert!(Arc::ptr_eq(

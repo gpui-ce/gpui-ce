@@ -51,7 +51,7 @@ impl WindowTextSystem {
             "text argument should not contain newlines"
         );
 
-        let layout = self.layout_line(&text, font_size, runs);
+        let layout = self.line_layout_cache.layout_line(&text, font_size, runs);
 
         ShapedLine { layout, text }
     }
@@ -112,8 +112,7 @@ impl WindowTextSystem {
     /// Generally, you should prefer to use [`Self::shape_line`] instead, which
     /// can be painted directly.
     pub fn layout_line(&self, text: &str, font_size: Pixels, runs: &[TextRun]) -> Arc<LineLayout> {
-        self.line_layout_cache
-            .layout_line(&SharedString::new(text), font_size, runs)
+        self.line_layout_cache.layout_line(text, font_size, runs)
     }
 
     pub(crate) fn finish_frame(&self) {

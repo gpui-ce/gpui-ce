@@ -661,17 +661,29 @@ fn block_ellipsis_preserves_span_metrics_and_only_places_display_ranges() {
         assert_paragraph_fits(text, layout, width, 1);
         assert!(text.contains('…') && text.ends_with("end"));
         let spans = quads(&mut cx, window.into(), first_group_color());
-        assert_eq!(spans.len(), 1);
+        let union = spans
+            .iter()
+            .copied()
+            .reduce(|left, right| left.union(&right))
+            .unwrap();
         assert_close(
-            spans[0].size.width,
+            union.size.width,
             px((f32::from(layout.size.width) * SCALE_FACTOR).round() / SCALE_FACTOR),
             "outer span covers the displayed prefix and suffix",
         );
-        assert_close(
-            spans[0].size.height,
-            px((f32::from(layout.size.height) * SCALE_FACTOR).round() / SCALE_FACTOR),
-            "outer span uses the displayed line height",
-        );
+        let geometry = layout
+            .layout
+            .platform_layout
+            .inline_geometry(0..text.len())
+            .unwrap();
+
+        for fragment in geometry {
+            assert!(
+                spans
+                    .iter()
+                    .any(|bounds| bounds.contains(&fragment.bounds.center()))
+            );
+        }
 
         if width == 100. {
             assert!(!text.contains('W'));
@@ -916,6 +928,9 @@ impl Render for ContextView {
 #[test]
 fn inline_sizing_depends_on_parent_context() {
     let mut cx = headless();
+    let system = cx.text_system();
+    let font_id = system.resolve_font(&font(IBM_PLEX.family));
+    let content_height = system.ascent(font_id, px(16.)) + system.descent(font_id, px(16.));
 
     for parent_context in [
         ParentContext::Block,
@@ -945,7 +960,7 @@ fn inline_sizing_depends_on_parent_context() {
         match parent_context {
             ParentContext::Block | ParentContext::Default => {
                 assert!(span.size.width > px(80.));
-                assert!(span.size.height >= px(48.));
+                assert!(span.size.height >= px(24.) + content_height - px(1.));
                 assert!(badge.origin.y > span.origin.y);
             }
 
@@ -1029,17 +1044,14 @@ fn blocks_split_nested_spans_and_hidden_absolute_empty_children_add_no_rows() {
         .unwrap()
         .unwrap();
 
+    assert!(block.origin.y >= fragments[0].bottom());
+    assert!(fragments[1].origin.y >= block.bottom());
+    assert!(following.origin.y >= fragments[1].bottom());
     assert_close(
-        block.origin.y,
-        fragments[0].bottom(),
-        "block follows first run",
+        following.origin.y,
+        block.bottom() + px(24.),
+        "no phantom rows",
     );
-    assert_close(
-        fragments[1].origin.y,
-        block.bottom(),
-        "span resumes after block",
-    );
-    assert_close(following.origin.y, fragments[1].bottom(), "no phantom rows");
 
     let paragraph = cx.debug_bounds(window.into(), "mixed").unwrap().unwrap();
     assert_close(
@@ -1441,7 +1453,16 @@ fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle(
 
     let resized = quads(&mut cx, window.into(), first_group_color());
     assert_ne!(resized, regions);
-    assert!(resized.iter().any(|right| right.size.height >= px(34.)));
+
+    let system = cx.text_system();
+    let font_id = system.resolve_font(&font(IBM_PLEX.family));
+    let content_height = system.ascent(font_id, px(24.)) + system.descent(font_id, px(24.));
+
+    assert!(
+        resized
+            .iter()
+            .any(|right| (right.size.height - content_height).abs() < px(1.))
+    );
 
     click(&mut cx, window.into(), resized[1].center());
     assert_eq!(clicks.get(), 3);

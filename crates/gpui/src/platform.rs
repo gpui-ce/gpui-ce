@@ -1249,10 +1249,9 @@ mod tests {
         Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
         InlineLayout, InlineLayoutRequest, InlineVisualLine, LineLayout, PaintFragment, PaintStyle,
         Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
-        RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, ResolvedDirection, ShapedGlyph,
-        Size, TextAlign, TextBoundary, TextDirection, TextLayoutRequest, TextMovement,
-        TextRenderingMode, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
-        point, px, size,
+        RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, ShapedGlyph, Size, TextBoundary,
+        TextDirection, TextLayoutRequest, TextMovement, TextRenderingMode, TextSelectionKind,
+        VisualDirection, VisualLine, point, px, size,
     };
     use anyhow::Result;
     use std::{borrow::Cow, ops::Range, sync::Arc};
@@ -1279,6 +1278,28 @@ mod tests {
                 .saturating_sub(1);
 
             self.stops[stop_index]
+        }
+
+        fn previous_word_start(&self, index: usize) -> usize {
+            let prefix = &self.text[..index.min(self.text.len())];
+            let trimmed = prefix.trim_end_matches(char::is_whitespace);
+
+            trimmed.rfind(char::is_whitespace).map_or(0, |index| {
+                index + trimmed[index..].chars().next().unwrap().len_utf8()
+            })
+        }
+
+        fn next_word_start(&self, index: usize) -> usize {
+            let start = index.min(self.text.len());
+            let suffix = &self.text[start..];
+            let word_end = suffix.find(char::is_whitespace).unwrap_or(suffix.len());
+            let rest = &suffix[word_end..];
+
+            start
+                + word_end
+                + rest
+                    .find(|character: char| !character.is_whitespace())
+                    .unwrap_or(rest.len())
         }
     }
 
@@ -1450,24 +1471,8 @@ mod tests {
                         .unwrap_or(caret)
                         .index
                 }
-                (Left, Word) => {
-                    let prefix = &self.text[..caret.index.min(self.text.len())];
-                    let trimmed = prefix.trim_end_matches(char::is_whitespace);
-                    trimmed.rfind(char::is_whitespace).map_or(0, |index| {
-                        index + trimmed[index..].chars().next().unwrap().len_utf8()
-                    })
-                }
-                (Right, Word) => {
-                    let start = caret.index.min(self.text.len());
-                    let suffix = &self.text[start..];
-                    let word_end = suffix.find(char::is_whitespace).unwrap_or(suffix.len());
-                    let rest = &suffix[word_end..];
-                    start
-                        + word_end
-                        + rest
-                            .find(|character: char| !character.is_whitespace())
-                            .unwrap_or(rest.len())
-                }
+                (Left, Word) => self.previous_word_start(caret.index),
+                (Right, Word) => self.next_word_start(caret.index),
                 // This test layout has one visual and hard line. Without wrapping or
                 // additional hard lines, these movements resolve to the document endpoints.
                 (Up | Start, VisualLine) | (Start, HardLine | Document) => 0,
@@ -1540,6 +1545,8 @@ mod tests {
         request: InlineLayoutRequest<'_>,
         em_width: Pixels,
         baseline: Pixels,
+        line_height: Pixels,
+        x_height: Pixels,
     ) -> Vec<PositionedInlineBox> {
         let mut preceding_width = Pixels::ZERO;
         request
@@ -1557,7 +1564,7 @@ mod tests {
                     bounds: Bounds::new(
                         point(
                             text_width + preceding_width,
-                            baseline - inline_box.size.height,
+                            inline_box.y_offset(baseline, line_height, x_height),
                         ),
                         inline_box.size,
                     ),
@@ -1684,37 +1691,9 @@ mod tests {
                 stops.push((idx + character.len_utf8(), position));
             }
 
-            let mut tracking = px(0.);
-            let mut tracking_covered = 0usize;
-            for run in shaping_runs {
-                let start = tracking_covered.min(text.len());
-                let end = start.saturating_add(run.len).min(text.len()).max(start);
-                let slice = text.get(start..end).unwrap_or("");
-                let n = slice.chars().count();
-                if n > 1 {
-                    if let Some(spacing) = run.letter_spacing {
-                        tracking += spacing * (n - 1) as f32;
-                    }
-                }
-                tracking_covered = end;
-            }
-
-            let direction = match request.options.direction {
-                crate::ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
-                crate::ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
-                crate::ParagraphDirection::Auto => {
-                    ResolvedDirection::from_first_strong(text).unwrap_or_default()
-                }
-            };
-            let advance = position + tracking;
-            let alignment_width = request.options.alignment_width.unwrap_or(advance);
-            let offset = match request.options.text_align {
-                TextAlign::Start if direction.is_rtl() => alignment_width - advance,
-                TextAlign::Start | TextAlign::Left => Pixels::ZERO,
-                TextAlign::Center => (alignment_width - advance) / 2.0,
-                TextAlign::End if direction.is_rtl() => Pixels::ZERO,
-                TextAlign::End | TextAlign::Right => alignment_width - advance,
-            };
+            let direction = request.resolved_direction();
+            let advance = position + request.letter_spacing_advance();
+            let offset = request.alignment_offset(advance, direction);
 
             for (_idx, position) in &mut stops {
                 *position += offset;
@@ -1731,6 +1710,8 @@ mod tests {
             .collect();
             let paint_fragments = (!glyphs.is_empty())
                 .then(|| PaintFragment {
+                    baseline_offset: Pixels::ZERO,
+                    background_range: None,
                     source_run: 0,
                     font_id: FontId(0),
                     font_size,
@@ -1769,44 +1750,40 @@ mod tests {
             });
 
             let em_width = self.em_width(request.font_size);
-            let baseline = request
-                .boxes
-                .iter()
-                .map(|inline_box| inline_box.size.height)
-                .fold(request.line_height, Pixels::max);
-            let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
+
+            // This deterministic backend models one row using its fixed font metrics.
+            let metrics = self.font_metrics(self.font_id(request.base_font).unwrap());
+            let ascent = metrics.ascent(request.font_size);
+            let descent = metrics.descent(request.font_size);
+            let x_height = metrics.x_height(request.font_size);
+
+            let (top, bottom) = request.line_extents(ascent, descent, x_height);
+            let baseline = -top;
+            let line_height = bottom - top;
+            let positioned_boxes =
+                position_test_inline_boxes(request, em_width, baseline, line_height, x_height);
             add_test_inline_box_advances(&mut layout, request);
+
             let line_width = request
                 .options
                 .wrap_width
                 .unwrap_or(Pixels::MAX)
                 .min(layout.width);
             let line_offset = layout.visual_lines[0].offset;
-            let mut inline = InlineLayout {
-                size: size(layout.width, baseline),
+
+            InlineLayout {
+                size: size(layout.width, line_height),
                 layout: Arc::new(layout),
                 lines: [InlineVisualLine {
                     origin: point(line_offset, Pixels::ZERO),
-                    size: size(line_width, baseline),
+                    size: size(line_width, line_height),
                     baseline,
                 }]
                 .into_iter()
                 .collect(),
                 boxes: positioned_boxes,
                 alignment_offset: Pixels::ZERO,
-            };
-
-            align_inline_boxes(
-                &mut inline.lines,
-                &mut inline.boxes,
-                &mut inline.size,
-                request.boxes,
-                &[request.text_metrics],
-                &[],
-                request.text_metrics,
-                request.line_height,
-            );
-            inline
+            }
         }
 
         fn recommended_rendering_mode(
@@ -3734,31 +3711,7 @@ impl Image {
     /// Convert the clipboard image to an `ImageData` object.
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
         let frames = match self.format {
-            ImageFormat::Gif => {
-                let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
-                let mut frames = SmallVec::new();
-
-                for frame in decoder.into_frames() {
-                    match frame {
-                        Ok(mut frame) => {
-                            // Convert from RGBA to BGRA.
-                            for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
-                            frames.push(frame);
-                        }
-                        Err(err) => {
-                            log::debug!("Skipping GIF frame due to decode error: {err}");
-                        }
-                    }
-                }
-
-                if frames.is_empty() {
-                    anyhow::bail!("GIF could not be decoded: all frames failed");
-                }
-
-                frames
-            }
+            ImageFormat::Gif => self.decode_gif_frames()?,
             ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
             ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
             ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,
@@ -3774,6 +3727,33 @@ impl Image {
         };
 
         Ok(Arc::new(RenderImage::new(frames)))
+    }
+
+    fn decode_gif_frames(&self) -> Result<SmallVec<[Frame; 1]>> {
+        let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
+        let mut frames = SmallVec::new();
+
+        for frame in decoder.into_frames() {
+            match frame {
+                Ok(mut frame) => {
+                    // Convert from RGBA to BGRA.
+                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                    }
+
+                    frames.push(frame);
+                }
+                Err(err) => {
+                    log::debug!("Skipping GIF frame due to decode error: {err}");
+                }
+            }
+        }
+
+        if frames.is_empty() {
+            anyhow::bail!("GIF could not be decoded: all frames failed");
+        }
+
+        Ok(frames)
     }
 
     /// Get the format of the clipboard image

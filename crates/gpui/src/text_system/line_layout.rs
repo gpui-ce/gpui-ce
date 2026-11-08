@@ -1,8 +1,7 @@
 use crate::{
-    Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
-    InlineTextMetrics, InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point,
-    SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
-    UnderlineStyle, VerticalAlign,
+    Bounds, Font, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
+    InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point, SharedString, Size,
+    StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -74,130 +73,10 @@ pub struct InlineLayout {
     pub size: Size<Pixels>,
 }
 
-fn base_inline_line_bounds(metrics: InlineTextMetrics, line_height: Pixels) -> (Pixels, Pixels) {
-    let half_leading = ((line_height - metrics.ascent - metrics.descent) / 2.).max(Pixels::ZERO);
-
-    (
-        -metrics.ascent - half_leading,
-        metrics.descent + half_leading,
-    )
-}
-
-fn expand_inline_line_for_box(
-    top: &mut Pixels,
-    bottom: &mut Pixels,
-    top_box_height: &mut Pixels,
-    bottom_box_height: &mut Pixels,
-    height: Pixels,
-    metrics: InlineTextMetrics,
-    align: VerticalAlign,
-) {
-    match align {
-        VerticalAlign::Baseline => *top = (*top).min(-height),
-        VerticalAlign::Middle => {
-            let middle = -metrics.x_height / 2.;
-            *top = (*top).min(middle - height / 2.);
-            *bottom = (*bottom).max(middle + height / 2.);
-        }
-        VerticalAlign::Top => *top_box_height = (*top_box_height).max(height),
-        VerticalAlign::Bottom => *bottom_box_height = (*bottom_box_height).max(height),
-    }
-}
-
-fn aligned_inline_box_y(
-    line: InlineVisualLine,
-    metrics: InlineTextMetrics,
-    height: Pixels,
-    align: VerticalAlign,
-) -> Pixels {
-    match align {
-        VerticalAlign::Baseline => line.baseline - height,
-        VerticalAlign::Middle => line.baseline - metrics.x_height / 2. - height / 2.,
-        VerticalAlign::Top => Pixels::ZERO,
-        VerticalAlign::Bottom => line.size.height - height,
-    }
-}
-
-/// Applies CSS-like vertical alignment to boxes after a text backend assigns them to lines.
-pub fn align_inline_boxes(
-    lines: &mut [InlineVisualLine],
-    boxes: &mut [PositionedInlineBox],
-    size: &mut Size<Pixels>,
-    requests: &[InlineBoxRequest],
-    line_metrics: &[InlineTextMetrics],
-    text_bounds: &[(Pixels, Pixels)],
-    fallback_metrics: InlineTextMetrics,
-    line_height: Pixels,
-) {
-    let request_alignments = requests
-        .iter()
-        .map(|request| (request.id, request.vertical_align))
-        .collect::<FxHashMap<_, _>>();
-    let mut boxes_by_line: FxHashMap<_, Vec<_>> = FxHashMap::default();
-
-    for inline_box in boxes
-        .iter_mut()
-        .filter(|inline_box| inline_box.line_index < lines.len())
-    {
-        let align = request_alignments
-            .get(&inline_box.id)
-            .copied()
-            .unwrap_or(VerticalAlign::Baseline);
-
-        boxes_by_line
-            .entry(inline_box.line_index)
-            .or_default()
-            .push((inline_box, align));
-    }
-
-    let mut line_y = Pixels::ZERO;
-
-    for (line_index, line) in lines.iter_mut().enumerate() {
-        let line_boxes = boxes_by_line.remove(&line_index).unwrap_or_default();
-        let metrics = line_metrics
-            .get(line_index)
-            .copied()
-            .unwrap_or(fallback_metrics);
-        let (mut top, mut bottom) = text_bounds
-            .get(line_index)
-            .copied()
-            .unwrap_or_else(|| base_inline_line_bounds(metrics, line_height));
-        let mut top_box_height = Pixels::ZERO;
-        let mut bottom_box_height = Pixels::ZERO;
-
-        for (inline_box, align) in &line_boxes {
-            expand_inline_line_for_box(
-                &mut top,
-                &mut bottom,
-                &mut top_box_height,
-                &mut bottom_box_height,
-                inline_box.bounds.size.height,
-                metrics,
-                *align,
-            );
-        }
-
-        bottom = bottom.max(top + top_box_height);
-        top = top.min(bottom - bottom_box_height);
-        line.origin.y = line_y;
-        line.size.height = bottom - top;
-        line.baseline = -top;
-
-        for (inline_box, align) in line_boxes {
-            inline_box.bounds.origin.y =
-                line_y + aligned_inline_box_y(*line, metrics, inline_box.bounds.size.height, align);
-        }
-
-        line_y += line.size.height;
-    }
-
-    size.height = line_y;
-}
-
 /// Backend-owned text interaction for a laid-out string.
 ///
-/// Byte positions are UTF-8 boundaries. Geometry is in GPUI layout coordinates, using the
-/// caller-provided line height. Implementations must preserve visual order and caret affinity.
+/// Byte positions are UTF-8 boundaries. Inline layouts use native line geometry, while raw
+/// text documents may use caller-sized rows. Implementations preserve visual order and caret affinity.
 ///
 /// A cluster is one backend-defined caret step. It may contain several Unicode scalar values, such
 /// as a combining sequence or an emoji ZWJ sequence. Logical clusters are independent of visual
@@ -211,6 +90,17 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
     /// Natural layout size reported by the backend.
     fn size(&self) -> Size<Pixels>;
+
+    /// Native line geometry for inline layout. Raw text documents may use caller-sized rows.
+    fn native_lines(&self) -> Option<&[InlineVisualLine]> {
+        None
+    }
+
+    /// The visual line owning this caret, including its affinity at a soft wrap.
+    fn visual_line_index(&self, caret: CaretPosition) -> usize {
+        self.caret_bounds(caret, crate::px(1.))
+            .map_or(0, |bounds| bounds.origin.y.0.max(0.) as usize)
+    }
 
     /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
     fn byte_index_from_pixel_point(
@@ -443,6 +333,10 @@ pub struct PaintFragment {
     pub underline_offset: Option<Pixels>,
     /// Resolved strikethrough offset from the baseline.
     pub strikethrough_offset: Option<Pixels>,
+    /// Run baseline relative to the line baseline.
+    pub baseline_offset: Pixels,
+    /// Content area relative to the line baseline, when supplied by the backend.
+    pub background_range: Option<Range<Pixels>>,
 }
 
 /// A single glyph, ready to paint.
@@ -664,6 +558,10 @@ impl ShapedTextLayout {
 
     /// The document width, capped by the wrapping constraint.
     pub fn width(&self) -> Pixels {
+        if self.layout.platform_layout.native_lines().is_some() {
+            return self.layout.platform_layout.size().width;
+        }
+
         self.wrap_width
             .unwrap_or(Pixels::MAX)
             .min(self.layout.width)
@@ -671,6 +569,10 @@ impl ShapedTextLayout {
 
     /// The size of the complete text for the given line height.
     pub fn size(&self, line_height: Pixels) -> Size<Pixels> {
+        if self.layout.platform_layout.native_lines().is_some() {
+            return self.layout.platform_layout.size();
+        }
+
         Size {
             width: self.width(),
             height: line_height * self.line_count(),
@@ -1282,7 +1184,7 @@ struct InlineCacheKey {
     boxes: Vec<InlineBoxRequest>,
     font_size: Pixels,
     line_height: Pixels,
-    text_metrics: InlineTextMetrics,
+    base_font: Font,
     options: TextLayoutOptions,
     bidi_scopes: Vec<InlineBidiScope>,
 }
@@ -1296,7 +1198,7 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
             boxes: request.boxes.to_vec(),
             font_size: request.font_size,
             line_height: request.line_height,
-            text_metrics: request.text_metrics,
+            base_font: request.base_font.clone(),
             options: request.options,
             bidi_scopes: request.bidi_scopes.to_vec(),
         }
@@ -1312,7 +1214,7 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
             boxes: &self.boxes,
             font_size: self.font_size,
             line_height: self.line_height,
-            text_metrics: self.text_metrics,
+            base_font: &self.base_font,
             options: self.options,
             bidi_scopes: &self.bidi_scopes,
         }
@@ -1422,7 +1324,6 @@ impl AsCacheKeyRef for CacheKeyRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{point, px, size};
 
     #[test]
     fn caret_selection_endpoint_ordering_uses_byte_indices() {
@@ -1483,64 +1384,5 @@ mod tests {
                 "for_inserted_text({text:?})"
             );
         }
-    }
-
-    #[test]
-    fn inline_box_alignment_preserves_unsorted_boxes_and_empty_lines() {
-        let mut lines = [InlineVisualLine::default(); 3];
-        let mut boxes =
-            [(20, 2, 14.), (10, 0, 18.), (90, 3, 100.)].map(|(id, line_index, height)| {
-                PositionedInlineBox {
-                    id,
-                    line_index,
-                    bounds: Bounds::new(point(px(7.), px(99.)), size(px(5.), px(height))),
-                }
-            });
-        let mut layout_size = size(px(100.), px(999.));
-        let original_lines = lines;
-        let original_boxes = boxes;
-
-        let requests = [InlineBoxRequest {
-            id: 20,
-            index: 0,
-            size: boxes[0].bounds.size,
-            vertical_align: VerticalAlign::Top,
-        }];
-        let metrics = InlineTextMetrics {
-            ascent: px(8.),
-            descent: px(2.),
-            x_height: px(4.),
-        };
-
-        align_inline_boxes(
-            &mut lines,
-            &mut boxes,
-            &mut layout_size,
-            &requests,
-            &[metrics],
-            &[(px(-7.), px(3.)), (px(-11.), px(4.))],
-            metrics,
-            px(12.),
-        );
-
-        for ((line, mut expected_line), (origin_y, height, baseline)) in lines
-            .iter()
-            .zip(original_lines)
-            .zip([(0., 21., 18.), (21., 15., 11.), (36., 14., 9.)])
-        {
-            expected_line.origin.y = px(origin_y);
-            expected_line.size.height = px(height);
-            expected_line.baseline = px(baseline);
-            assert_eq!(*line, expected_line);
-        }
-
-        for ((inline_box, mut expected_box), origin_y) in
-            boxes.iter().zip(original_boxes).zip([36., 0., 99.])
-        {
-            expected_box.bounds.origin.y = px(origin_y);
-            assert_eq!(*inline_box, expected_box);
-        }
-
-        assert_eq!(layout_size, size(px(100.), px(50.)));
     }
 }

@@ -14,16 +14,26 @@ Items are sorted by issue or pull request number.
 
 ### Breaking Changes
 
+- Replaced `InlineLayoutRequest::text_metrics: InlineTextMetrics` with `InlineLayoutRequest::base_font: &Font`. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Removed `InlineTextMetrics` and `align_inline_boxes`. Parley now handles inline box alignment and line metrics. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Added required fields `PaintFragment::baseline_offset: Pixels` and `PaintFragment::background_range: Option<Range<Pixels>>`. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+
 ### Additions
 
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
+- Added `PlatformTextLayout::native_lines()` and `PlatformTextLayout::visual_line_index()`, both with default implementations. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
 
 ### Removals
 
 ### Fixes
 
 - `ColorExt::blend` diverged from upstream/original behavior [#327](https://github.com/gpui-ce/gpui-ce/issues/327), [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
+- Improved Parley caret lookup performance and cached inline cluster geometry for repeated range queries. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Inline box alignment and line heights now use Parley's native geometry and the container's font. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Corrected glyph, background, underline, and strikethrough placement for mixed font sizes using run baselines and content bounds. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Caret hit testing, selections, and vertical navigation now respect actual inline line heights. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Fixed cached paint styles using the wrong source run when input contains empty text runs. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
 
 ### Security Changes
 

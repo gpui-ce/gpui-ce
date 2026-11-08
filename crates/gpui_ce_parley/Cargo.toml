@@ -33,3 +33,7 @@ gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-
 [[bench]]
 name = "text_pipeline"
 harness = false
+
+[[bench]]
+name = "inline_layout"
+harness = false

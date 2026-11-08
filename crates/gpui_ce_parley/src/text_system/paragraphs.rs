@@ -1,7 +1,7 @@
 use gpui::{
-    Bounds, CaretMovement, CaretPosition, InlineRangeGeometry, Pixels, PlatformTextLayout, Point,
-    Size, TextBoundary as Boundary, TextDirection as Direction, TextMovement, TextSelectionKind,
-    VisualDirection, is_paragraph_separator, point, px,
+    Bounds, CaretMovement, CaretPosition, InlineRangeGeometry, InlineVisualLine, Pixels,
+    PlatformTextLayout, Point, Size, TextBoundary as Boundary, TextDirection as Direction,
+    TextMovement, TextSelectionKind, VisualDirection, is_paragraph_separator, point, px,
 };
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -12,39 +12,50 @@ pub(super) struct ParagraphRange {
     pub separator: Range<usize>,
 }
 
-pub(super) fn paragraph_ranges(text: &str) -> Vec<ParagraphRange> {
-    let mut paragraphs = Vec::new();
-    let mut start = 0;
-    let mut characters = text.char_indices().peekable();
+impl ParagraphRange {
+    pub(super) fn split(text: &str) -> Vec<Self> {
+        let mut paragraphs = Vec::new();
+        let mut start = 0;
+        let mut characters = text.char_indices().peekable();
 
-    while let Some((idx, character)) = characters.next() {
-        if !is_paragraph_separator(character) {
-            continue;
+        while let Some((idx, character)) = characters.next() {
+            if !is_paragraph_separator(character) {
+                continue;
+            }
+
+            let mut end = idx + character.len_utf8();
+
+            if character == '\r' && characters.peek().is_some_and(|(_idx, next)| *next == '\n') {
+                characters.next();
+                end += 1;
+            }
+
+            paragraphs.push(Self {
+                content: start..idx,
+                separator: idx..end,
+            });
+
+            start = end;
         }
 
-        let mut end = idx + character.len_utf8();
-
-        if character == '\r' && characters.peek().is_some_and(|(_idx, next)| *next == '\n') {
-            characters.next();
-            end += 1;
-        }
-
-        paragraphs.push(ParagraphRange {
-            content: start..idx,
-            separator: idx..end,
+        paragraphs.push(Self {
+            content: start..text.len(),
+            separator: text.len()..text.len(),
         });
-        start = end;
+
+        paragraphs
     }
 
-    paragraphs.push(ParagraphRange {
-        content: start..text.len(),
-        separator: text.len()..text.len(),
-    });
+    pub(super) fn local_content_range(&self, source: &Range<usize>) -> Option<Range<usize>> {
+        local_range(source, &self.content)
+    }
 
-    paragraphs
+    fn intersects_separator(&self, source: &Range<usize>) -> bool {
+        local_range(source, &self.separator).is_some()
+    }
 }
 
-pub(super) fn local_range(source: &Range<usize>, content: &Range<usize>) -> Option<Range<usize>> {
+fn local_range(source: &Range<usize>, content: &Range<usize>) -> Option<Range<usize>> {
     let start = source.start.max(content.start);
     let end = source.end.min(content.end);
 
@@ -82,16 +93,21 @@ impl ParagraphLayout {
         }
     }
 
-    fn local_point(&self, mut position: Point<Pixels>, line_height: Pixels) -> Point<Pixels> {
-        position.y -= line_height * self.first_line;
-
-        position
-    }
-
     fn edge(&self, direction: VisualDirection) -> CaretPosition {
+        let vertical = self
+            .native
+            .native_lines()
+            .map(|lines| match direction {
+                VisualDirection::Left => lines.last().unwrap(),
+                VisualDirection::Right => lines.first().unwrap(),
+            })
+            .map(|line| line.origin.y + line.size.height / 2.);
         let position = match direction {
-            VisualDirection::Left => point(px(f32::MAX), px(self.native.line_count() as f32 - 0.5)),
-            VisualDirection::Right => point(px(-f32::MAX), px(0.5)),
+            VisualDirection::Left => point(
+                px(f32::MAX),
+                vertical.unwrap_or(px(self.native.line_count() as f32 - 0.5)),
+            ),
+            VisualDirection::Right => point(px(-f32::MAX), vertical.unwrap_or(px(0.5))),
         };
         let caret = self
             .native
@@ -106,11 +122,17 @@ impl ParagraphLayout {
 pub(super) struct ParleyDocumentLayout {
     paragraphs: Vec<ParagraphLayout>,
     size: Size<Pixels>,
+    native_lines: Option<Vec<InlineVisualLine>>,
     graphemes: Vec<Range<usize>>,
 }
 
 impl ParleyDocumentLayout {
-    pub fn new(paragraphs: Vec<ParagraphLayout>, text: &str, size: Size<Pixels>) -> Self {
+    pub fn new(
+        paragraphs: Vec<ParagraphLayout>,
+        text: &str,
+        size: Size<Pixels>,
+        native_lines: Option<Vec<InlineVisualLine>>,
+    ) -> Self {
         let graphemes = text
             .grapheme_indices(true)
             .map(|(start, grapheme)| start..start + grapheme.len())
@@ -119,6 +141,7 @@ impl ParleyDocumentLayout {
         Self {
             paragraphs,
             size,
+            native_lines,
             graphemes,
         }
     }
@@ -131,20 +154,36 @@ impl ParleyDocumentLayout {
 
     fn paragraph_for_point(
         &self,
-        position: Point<Pixels>,
+        mut position: Point<Pixels>,
         line_height: Pixels,
-    ) -> &ParagraphLayout {
-        let line_index = if line_height > Pixels::ZERO && position.y >= Pixels::ZERO {
-            (position.y / line_height) as usize
+    ) -> (&ParagraphLayout, Point<Pixels>) {
+        let paragraph_idx = if self.native_lines.is_some() {
+            self.paragraphs
+                .partition_point(|paragraph| paragraph.block_offset <= position.y)
         } else {
-            0
-        };
-        let paragraph_idx = self
-            .paragraphs
-            .partition_point(|paragraph| paragraph.first_line <= line_index)
-            .saturating_sub(1);
+            let line_index = if line_height > Pixels::ZERO && position.y >= Pixels::ZERO {
+                (position.y / line_height) as usize
+            } else {
+                0
+            };
 
-        &self.paragraphs[paragraph_idx]
+            self.paragraphs
+                .partition_point(|paragraph| paragraph.first_line <= line_index)
+        }
+        .saturating_sub(1);
+
+        let paragraph = &self.paragraphs[paragraph_idx];
+        position.y -= self.block_origin(paragraph, line_height);
+
+        (paragraph, position)
+    }
+
+    fn block_origin(&self, paragraph: &ParagraphLayout, line_height: Pixels) -> Pixels {
+        if self.native_lines.is_some() {
+            paragraph.block_offset
+        } else {
+            line_height * paragraph.first_line
+        }
     }
 
     fn adjacent_edge(
@@ -162,6 +201,19 @@ impl ParleyDocumentLayout {
 }
 
 impl PlatformTextLayout for ParleyDocumentLayout {
+    fn visual_line_index(&self, caret: CaretPosition) -> usize {
+        let paragraph = &self.paragraphs[self.paragraph_for_index(caret.index)];
+
+        paragraph.first_line
+            + paragraph
+                .native
+                .visual_line_index(paragraph.local_caret(caret))
+    }
+
+    fn native_lines(&self) -> Option<&[InlineVisualLine]> {
+        self.native_lines.as_deref()
+    }
+
     fn len(&self) -> usize {
         self.paragraphs.last().unwrap().source.separator.end
     }
@@ -181,14 +233,11 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<usize, usize> {
-        let paragraph = self.paragraph_for_point(pixel_point, line_height);
+        let (paragraph, position) = self.paragraph_for_point(pixel_point, line_height);
 
         paragraph
             .native
-            .byte_index_from_pixel_point(
-                paragraph.local_point(pixel_point, line_height),
-                line_height,
-            )
+            .byte_index_from_pixel_point(position, line_height)
             .map(|idx| idx + paragraph.source.content.start)
             .map_err(|idx| idx + paragraph.source.content.start)
     }
@@ -198,11 +247,11 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         pixel_point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition> {
-        let paragraph = self.paragraph_for_point(pixel_point, line_height);
+        let (paragraph, position) = self.paragraph_for_point(pixel_point, line_height);
 
         paragraph
             .native
-            .caret_from_pixel_point(paragraph.local_point(pixel_point, line_height), line_height)
+            .caret_from_pixel_point(position, line_height)
             .map(|caret| paragraph.global_caret(caret))
             .map_err(|caret| paragraph.global_caret(caret))
     }
@@ -216,7 +265,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         let mut bounds = paragraph
             .native
             .caret_bounds(paragraph.local_caret(caret), line_height)?;
-        bounds.origin.y += line_height * paragraph.first_line;
+        bounds.origin.y += self.block_origin(paragraph, line_height);
 
         Some(bounds)
     }
@@ -254,21 +303,30 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         let mut regions = Vec::new();
 
         for paragraph in &self.paragraphs {
-            if let Some(local) = local_range(&byte_range, &paragraph.source.content) {
+            if let Some(local) = paragraph.source.local_content_range(&byte_range) {
                 for mut bounds in paragraph.native.selection_bounds(local, line_height) {
-                    bounds.origin.y += line_height * paragraph.first_line;
+                    bounds.origin.y += self.block_origin(paragraph, line_height);
                     regions.push(bounds);
                 }
             }
 
-            if local_range(&byte_range, &paragraph.source.separator).is_none() {
+            if !paragraph.source.intersects_separator(&byte_range) {
                 continue;
             }
 
             let line_index = paragraph.first_line + paragraph.native.line_count() - 1;
+            let (top, bottom) = self
+                .native_lines
+                .as_ref()
+                .map(|lines| {
+                    let line = lines[line_index];
+
+                    (line.origin.y, line.origin.y + line.size.height)
+                })
+                .unwrap_or((line_height * line_index, line_height * (line_index + 1)));
             regions.push(Bounds::from_corners(
-                point(paragraph.newline.start, line_height * line_index),
-                point(paragraph.newline.end, line_height * (line_index + 1)),
+                point(paragraph.newline.start, top),
+                point(paragraph.newline.end, bottom),
             ));
         }
 
@@ -304,7 +362,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
                     break;
                 }
 
-                if let Some(local) = local_range(range, &paragraph.source.content) {
+                if let Some(local) = paragraph.source.local_content_range(range) {
                     paragraph_requests[paragraph_idx].push((range_idx, local));
                 }
             }
@@ -397,7 +455,8 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             } else {
                 1
             };
-            let target_index = (f32::from(geometry.origin.y) as usize)
+            let current_index = self.visual_line_index(caret);
+            let target_index = current_index
                 .checked_add_signed(delta)
                 .filter(|index| *index < self.line_count());
             let Some(target_index) = target_index else {
@@ -413,7 +472,18 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             };
             let x = vertical_navigation_x.unwrap_or(geometry.origin.x);
             let moved = self
-                .caret_from_pixel_point(point(x, px(target_index as f32 + 0.5)), px(1.0))
+                .caret_from_pixel_point(
+                    point(
+                        x,
+                        self.native_lines
+                            .as_ref()
+                            .map(|lines| {
+                                lines[target_index].origin.y + lines[target_index].size.height / 2.
+                            })
+                            .unwrap_or(px(target_index as f32 + 0.5)),
+                    ),
+                    px(1.0),
+                )
                 .unwrap_or_else(|caret| caret);
 
             return CaretMovement {
@@ -455,12 +525,12 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> Range<usize> {
-        let paragraph = self.paragraph_for_point(pixel_point, line_height);
-        let local = paragraph.native.selection_from_pixel_point(
-            paragraph.local_point(pixel_point, line_height),
-            line_height,
-            kind,
-        );
+        let (paragraph, position) = self.paragraph_for_point(pixel_point, line_height);
+
+        let local = paragraph
+            .native
+            .selection_from_pixel_point(position, line_height, kind);
+
         let start = local.start + paragraph.source.content.start;
         let mut end = local.end + paragraph.source.content.start;
 
@@ -506,7 +576,7 @@ mod tests {
                 ],
             ),
         ] {
-            let actual = paragraph_ranges(text)
+            let actual = ParagraphRange::split(text)
                 .into_iter()
                 .map(|paragraph| (paragraph.content, paragraph.separator))
                 .collect::<Vec<_>>();
