@@ -12,6 +12,30 @@ Items are sorted by issue or pull request number.
 
 (only filled out when preparing the release)
 
+### Breaking Changes
+
+### Additions
+
+- `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
+
+### Removals
+
+### Fixes
+
+- `ColorExt::blend` diverged from upstream/original behavior [#327](https://github.com/gpui-ce/gpui-ce/issues/327), [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
+
+### Security Changes
+
+- Update Linux portal and credential dependencies to ashpd 0.14 and oo7 0.7, using zbus 6.
+
+### Deprecations
+
+- `Application::run_embedded` -> (existing) `Application::run`. [#364](https://github.com/gpui-ce/gpui-ce/pull/364)
+
+## [0.3.0] - 2026-10-20
+
+### Highlights
+
 - MSRV bumped from `1.92.0` to `1.95.0`
 
 ### Breaking Changes
@@ -185,7 +209,6 @@ Changelog established.
 - Rendering rehauled to support WGPU/WGSL renderer. [#215](https://github.com/gpui-ce/gpui-ce/pull/215)
   - Added feature flags `gpui_apple/runtime_shaders`, `gpui_macos/runtime_shaders`, `gpui_platform/runtime_shaders`
   - Linux/FreeBSD screen capture was incorporated at some point.
-- `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 
 ### Removals
 
@@ -204,16 +227,12 @@ Changelog established.
 - Duplicate characters during web IME composition. [#236](https://github.com/gpui-ce/gpui-ce/pull/236)
 - Element opacity now applies to all descendants as one group. [#330](https://github.com/gpui-ce/gpui-ce/pull/330)
 - Incorrect RTL glyph ordering in `EditableText`. [#267](https://github.com/gpui-ce/gpui-ce/pull/267)
-- `ColorExt::blend` diverged from upstream/original behavior [#327](https://github.com/gpui-ce/gpui-ce/issues/327), [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
 
 ### Security Changes
-
-- Update Linux portal and credential dependencies to ashpd 0.14 and oo7 0.7, using zbus 6.
 
 ### Deprecations
 
 - [`quad() -> PaintQuad`, `fill() -> PaintQuad`, `outline() -> PaintQuad`] -> `PaintQuad::new` builder api. [#338](https://github.com/gpui-ce/gpui-ce/pull/338), [restore to deprecation](https://github.com/gpui-ce/gpui-ce/commit/e41c444fcb288f537ef9968fefcb4c0f9be68330)
-- `Application::run_embedded` -> (existing) `Application::run`. [#364](https://github.com/gpui-ce/gpui-ce/pull/364)
 - `InteractiveElement` functions suffixed with `_style` [#339](https://github.com/gpui-ce/gpui-ce/pull/339)
   - `InteractiveElement::hover()` -> `gpui::InteractiveElement::hover_style()`
   - `InteractiveElement::group_hover()` -> `gpui::InteractiveElement::group_hover_style()`
