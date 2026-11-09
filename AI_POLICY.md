@@ -63,7 +63,7 @@ People who violate this policy (e.g. by providing bad contributions that are cle
 
 We deeply value helping junior developers or peers new to the project learn and grow; if you're interested in aiding the project, then don't use genAI/LLMs in ways that violate this policy.
 
-If you are an avid LLM user, and are made uncomfortable by these policies, we're not sorry. Reinvest the time you believe you have saved through using them into work you are proud of, that you can defend as your own. Saving you a few hours could cost real users collectively, thousands. We will help you grow, and work with your abilities, just be humble, and stop papering over your weaknesses with tokens.
+If you are an avid LLM user, and are made uncomfortable by these policies, we're not sorry. Reinvest the time you believe you have saved through using them into work you are proud of, that you can defend as your own. Saving you a few hours could cost real users collectively, thousands. We will help you grow, and work with your abilities, just be humble :)
 
 ## There are Humans Here
 
