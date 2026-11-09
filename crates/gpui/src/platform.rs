@@ -1246,18 +1246,16 @@ pub trait PlatformTextSystem: Send + Sync {
 #[cfg(any(test, feature = "test-support"))]
 mod tests {
     use crate::{
-        Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
-        InlineLayout, InlineLayoutRequest, InlineVisualLine, LineLayout, PaintFragment, PaintStyle,
-        Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
+        Bounds, CaretAffinity, CaretMovement, CaretPosition, ColorGlyphKind, Font, FontId,
+        FontMetrics, GlyphId, GlyphRasterizer, InlineLayout, InlineLayoutRequest, InlineVisualLine,
+        LineLayout, PaintFragment, PaintStyle, Pixels, PlatformTextLayout, PlatformTextSystem,
+        Point, PositionedInlineBox, PreparedRasterStyle, RasterFace, RasterStyleRequest,
         RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, ShapedGlyph, Size, TextBoundary,
         TextDirection, TextLayoutRequest, TextMovement, TextRenderingMode, TextSelectionKind,
         VisualDirection, VisualLine, point, px, size,
     };
     use anyhow::Result;
     use std::{borrow::Cow, ops::Range, sync::Arc};
-
-    #[expect(missing_docs)]
-    pub struct TestTextSystem;
 
     #[derive(Debug)]
     /// A deterministic test layout with exactly one visual and hard line.
@@ -1524,23 +1522,6 @@ mod tests {
         }
     }
 
-    #[expect(missing_docs)]
-    impl TestTextSystem {
-        #[allow(dead_code)]
-        pub fn new() -> Self {
-            Self
-        }
-
-        fn em_width(&self, font_size: Pixels) -> Pixels {
-            let metrics = self.font_metrics(FontId(0));
-            let advance = self
-                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
-                .unwrap();
-
-            font_size * advance.width / metrics.units_per_em as f32
-        }
-    }
-
     fn position_test_inline_boxes(
         request: InlineLayoutRequest<'_>,
         em_width: Pixels,
@@ -1606,6 +1587,46 @@ mod tests {
 
         if let Some(line) = layout.visual_lines.first_mut() {
             line.advance_width += box_width;
+        }
+    }
+
+    #[expect(missing_docs)]
+    pub struct TestTextSystem;
+
+    #[expect(missing_docs)]
+    impl TestTextSystem {
+        #[allow(dead_code)]
+        pub fn new() -> Self {
+            Self
+        }
+
+        fn em_width(&self, font_size: Pixels) -> Pixels {
+            let metrics = self.font_metrics(FontId(0));
+            let advance = self
+                .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
+                .unwrap();
+
+            font_size * advance.width / metrics.units_per_em as f32
+        }
+    }
+
+    impl GlyphRasterizer for TestTextSystem {
+        fn supports_color_glyph(&self, _kind: ColorGlyphKind) -> bool {
+            true
+        }
+
+        fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
+            PreparedRasterStyle::independent(request.requested_mode)
+        }
+
+        fn rasterize(
+            &mut self,
+            _face: RasterFace<'_>,
+            params: &RenderGlyphParams,
+        ) -> Result<RasterizedGlyph> {
+            Ok(RasterizedGlyph::empty(
+                params.raster_style.mode.rasterized_format(),
+            ))
         }
     }
 

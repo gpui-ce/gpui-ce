@@ -20,6 +20,7 @@ palette.workspace = true
 smallvec.workspace = true
 
 [dev-dependencies]
+gpui_render = { workspace = true, features = ["swash"] }
 gpui_parley.workspace = true
 gpui = { path = "../gpui", package = "gpui-ce", features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }

@@ -12,7 +12,14 @@ workspace = true
 [lib]
 path = "src/gpui_render.rs"
 
+[features]
+default = []
+swash = ["dep:anyhow", "dep:skrifa", "dep:swash"]
+
 [dependencies]
+anyhow = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true, features = ["std"] }
+swash = { workspace = true, optional = true }
 gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 smallvec.workspace = true
 wgsl-rs.workspace = true
@@ -35,4 +42,14 @@ gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-featu
 wgsl-rs.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
+unicode-segmentation.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+gpui_parley.workspace = true
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
+
+[[bench]]
+name = "glyph_rasterization"
+harness = false
+required-features = ["swash"]

@@ -21,7 +21,6 @@ gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-featu
 parking_lot.workspace = true
 parley = { workspace = true, features = ["complex-scripts"] }
 skrifa = { workspace = true, features = ["std"] }
-swash.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]

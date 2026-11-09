@@ -17,14 +17,19 @@ Items are sorted by issue or pull request number.
 - Replaced `InlineLayoutRequest::text_metrics: InlineTextMetrics` with `InlineLayoutRequest::base_font: &Font`. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
 - Removed `InlineTextMetrics` and `align_inline_boxes`. Parley now handles inline box alignment and line metrics. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
 - Added required fields `PaintFragment::baseline_offset: Pixels` and `PaintFragment::background_range: Option<Range<Pixels>>`. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- `ParleyTextSystem::new` now requires a system-font fallback family and a glyph rasterizer, replacing `new_with_rasterizer`. [#395](https://github.com/gpui-ce/gpui-ce/pull/395)
 
 ### Additions
 
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
 - Added `PlatformTextLayout::native_lines()` and `PlatformTextLayout::visual_line_index()`, both with default implementations. [#390](https://github.com/gpui-ce/gpui-ce/pull/390)
+- Moved `GlyphRasterizer`, `RasterFace`, `FontDataBlob`, `FontVariation`, `FontSynthesis`, and `ColorGlyphKind` from `gpui_parley` to `gpui`. [#395](https://github.com/gpui-ce/gpui-ce/pull/395)
+- Moved `SwashGlyphRasterizer` and `BitmapFallbackGlyphRasterizer` from `gpui_parley` to `gpui_render`, behind a new `swash` feature. [#395](https://github.com/gpui-ce/gpui-ce/pull/395)
 
 ### Removals
+
+- Removed `ParleyTextSystem::new_with_system_font` and `ParleyTextSystem::without_system_fonts`. [#395](https://github.com/gpui-ce/gpui-ce/pull/395)
 
 ### Fixes
 
