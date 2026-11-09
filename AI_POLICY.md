@@ -43,6 +43,8 @@ It is expected that Pull Requests containing genAI/LLM assisted changes will tak
 
 These higher standards aren't because we see LLM-generated content as de-facto lower quality than human contributions, in fact, sometimes the opposite can be true; but they are machines of probability, while humans are not. This inconsistency in intelligence is far more dangerous of a collaborator than a human, who we can expect to be predictable in understanding across their change-set. As LLM-assisted contributions are used to accelerate development, their usage is also correlated with fewer interactions with the code being edited, decreasing the chances of noticing when the model has entered into these intelligence cliffs.
 
+Furthermore, models cannot grow, while humans can. Earnest contributions are most valued, even if initially not reaching our quality bar, as they present both sides with a chance to learn the *most*; maintainers on misconceptions the code-flow, comments, or files may provide, and the contributor on how veterans of the codebase approach writing high-level GUI code. If you're a newbie, to Rust, or to GPUI code, you're doubly welcome ;) As this document will continue to state: We **will** help.
+
 Proven contributors may receive exceptions to these extra passes. 
 
 **Ownership.**
