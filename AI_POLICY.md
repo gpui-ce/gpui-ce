@@ -22,15 +22,13 @@ We want to talk to _you_, not a machine. Do not paste LLM-generated output direc
 - Creating or replying to repository (e.g. Github) issues
 - Posting messages in social community areas (e.g. Discord and GitHub Discussions)
 
-**No genAI/LLM-authored commits.** Only humans can be commit authors.
+**No genAI/LLM-authored co-authors.** Only humans can be commit authors.
 
 **All genAI/LLMs usage in any form must be disclosed.**
 
-genAI/LLMs must not be used to generate a substantial amount of changes.
+genAI/LLMs must not be used to generate a substantial amount of changes. This varies from task to task, but you should feel true ownership in your work, as it's rare contributions will be merged without deep reviews and back-and-forth. It is not valuable to us to communicate via meat-proxy.
 
-Any commits that include genAI/LLM assisted changes, or Pull Requests that include such commits, must clearly identify that the change was LLM assisted and the extent of the work that was assisted by genAI/LLMs.
-
-If you use genAI/LLMs in discovering bugs/issues and report such issues to the issue tracker, you must clearly identify that an LLM was used to do so.
+Any commits that include genAI/LLM assisted changes, or were inspired by genAI findings (bugs), must clearly identify that the change was LLM assisted. We see further disclosure as a matter of respect to the people who will rely on and read your changes, so, while it's not *required* to be so upfront (We have no way of knowing the extent), it builds trust the more you're able to share, even if it's "I translated these words" or "Here's the chat for the research I did".
 
 **Quality.**
 
@@ -42,6 +40,12 @@ The policy holds LLM-generated changes to a _higher_ bar than human-authored cha
 It is recommended that any genAI/LLM assisted changes be isolated into their own commits, especially when contained in Pull Requests via stacked commits.
 
 It is expected that Pull Requests containing genAI/LLM assisted changes will take longer to review. Such changes will require more reviews by the community and will require subject matter experts from affected domains to approve the changes. Authors should expect such changes to take longer to be approved and likely require more revisions/involvement by the author.
+
+These higher standards aren't because we see LLM-generated content as de-facto lower quality than human contributions, in fact, sometimes the opposite can be true; but they are machines of probability, while humans are not. This inconsistency in intelligence is far more dangerous of a collaborator than a human, who we can expect to be predictable in understanding across their change-set. As LLM-assisted contributions are used to accelerate development, their usage is also correlated with fewer interactions with the code being edited, decreasing the chances of noticing when the model has entered into these intelligence cliffs.
+
+Furthermore, models cannot grow, while humans can. Earnest contributions are most valued, even if initially not reaching our quality bar, as they present both sides with a chance to learn the *most*; maintainers on misconceptions the code-flow, comments, or files may provide, and the contributor on how veterans of the codebase approach writing high-level GUI code. If you're a newbie, to Rust, or to GPUI code, you're doubly welcome ;) As this document will continue to state: We **will** help.
+
+Proven contributors may receive exceptions to these extra passes. 
 
 **Ownership.**
 
@@ -60,6 +64,8 @@ Individual reviewers are empowered to request changes to contributions that fail
 People who violate this policy (e.g. by providing bad contributions that are clearly LLM-generated or slop) will loose our trust and be revoked from the vouch list (see CONTRIBUTING). This will cause all future contributions to be blocked and automatically closed.
 
 We deeply value helping junior developers or peers new to the project learn and grow; if you're interested in aiding the project, then don't use genAI/LLMs in ways that violate this policy.
+
+If you are an avid LLM user, and are made uncomfortable by these policies, we're not sorry. Reinvest the time you believe you have saved through using them into work you are proud of, that you can defend as your own. Saving you a few hours could cost real users collectively, thousands. We will help you grow, and work with your abilities, just be humble :)
 
 ## There are Humans Here
 

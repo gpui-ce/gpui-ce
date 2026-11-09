@@ -136,6 +136,6 @@ While you will need to read both documents in full to contribute, they can be su
 - issues and PRs from non-vouched contributors will be automatically closed
 - all commits/PRs must update the changelog if they affect functionality
 - there are commit content and description guidelines (see contributing doc)
-- do not use genAI/LLMs to create code or prose, and all other forms of usage must be disclosed
+- do not use genAI/LLMs to write prose, and all other forms of usage must be disclosed
 
 Then read the [setup guide](SETUP.md) for installation instructions.
