@@ -28,7 +28,7 @@ We want to talk to _you_, not a machine. Do not paste LLM-generated output direc
 
 genAI/LLMs must not be used to generate a substantial amount of changes. This varies from task to task, but you should feel true ownership in your work, as it's rare contributions will be merged without deep reviews and back-and-forth. It is not valuable to us to communicate via meat-proxy.
 
-Any commits that include genAI/LLM assisted changes, or were inspired by genAI findings (bugs), must clearly identify that the change was LLM assisted. We see further disclosure as, while not necessary, a matter of respect to the people who will rely on and read your changes.
+Any commits that include genAI/LLM assisted changes, or were inspired by genAI findings (bugs), must clearly identify that the change was LLM assisted. We see further disclosure as a matter of respect to the people who will rely on and read your changes, so, while it's not *required* to be so upfront (We have no way of knowing the extent), it builds trust the more you're able to share, even if it's "I translated these words" or "Here's the chat for the research I did".
 
 **Quality.**
 
