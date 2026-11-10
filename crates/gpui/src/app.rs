@@ -915,6 +915,7 @@ pub struct App {
     pub(crate) mode: GpuiMode,
     pub(crate) cursor_hide_mode: CursorHideMode,
     pub(crate) reduce_motion: bool,
+    pub(crate) reduced_motion_epoch: u64,
     /// Origin of the shared clock that phase-locks synced repeating animations.
     pub(crate) synced_animation_epoch: Instant,
     /// Whether the app was created by [`Application::new_inaccessible`]. No
@@ -1022,6 +1023,7 @@ impl App {
                 quitting: false,
                 cursor_hide_mode: CursorHideMode::default(),
                 reduce_motion: false,
+                reduced_motion_epoch: 0,
                 synced_animation_epoch,
                 accessibility_force_disabled: false,
                 accessibility_forced: false,
@@ -1248,6 +1250,9 @@ impl App {
     pub fn set_reduce_motion(&mut self, reduce_motion: bool) {
         if self.reduce_motion != reduce_motion {
             self.reduce_motion = reduce_motion;
+            if reduce_motion {
+                self.reduced_motion_epoch = self.reduced_motion_epoch.wrapping_add(1);
+            }
             self.refresh_windows();
         }
     }
