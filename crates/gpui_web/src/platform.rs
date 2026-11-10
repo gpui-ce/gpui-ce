@@ -14,7 +14,7 @@ use gpui::{
     PlatformWindow, ScrollPhysics, Task, ThermalState, WindowAppearance, WindowKind, WindowParams,
     popup::PopupNotSupportedError,
 };
-use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_parley::ParleyTextSystem;
 use gpui_render::SwashGlyphRasterizer;
 use gpui_wgpu::{PreparedWebGraphics, WebBackendPreference, WgpuContext, wgpu};
 use std::{
@@ -159,11 +159,11 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(ParleyTextSystem::new(
-            SystemFonts::Skip,
-            "IBM Plex Sans",
-            SwashGlyphRasterizer::default(),
-        ));
+        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
+            ParleyTextSystem::new(SwashGlyphRasterizer::default())
+                .with_system_fallback_family("IBM Plex Sans")
+                .with_fallback_families(["IBM Plex Sans"]),
+        );
 
         let active_display: Rc<dyn PlatformDisplay> =
             Rc::new(WebDisplay::new(browser_window.clone()));

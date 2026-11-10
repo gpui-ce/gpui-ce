@@ -5,16 +5,12 @@ use gpui::{
 };
 use gpui_ce_render::SwashGlyphRasterizer;
 use gpui_fonts::IBM_PLEX;
-use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_parley::ParleyTextSystem;
 use std::{borrow::Cow, sync::Arc};
 
 fn raster_case() -> (TextSystem, RenderGlyphParams) {
-    let system = ParleyTextSystem::new(
-        SystemFonts::Skip,
-        IBM_PLEX.family,
-        SwashGlyphRasterizer::default(),
-    )
-    .with_fallback_families([IBM_PLEX.family]);
+    let system = ParleyTextSystem::new(SwashGlyphRasterizer::default())
+        .with_fallback_families([IBM_PLEX.family]);
 
     system
         .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
