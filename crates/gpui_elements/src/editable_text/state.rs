@@ -1443,6 +1443,7 @@ mod tests {
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
     use gpui_parley::{ParleyTextSystem, SystemFonts};
+    use gpui_render::SwashGlyphRasterizer;
 
     type TestMovementAction =
         fn(&mut EditableTextState, &mut Window, &mut Context<'_, EditableTextState>);
@@ -1595,9 +1596,14 @@ mod tests {
 
     fn movement_document(text: &str, wrap_width: Option<Pixels>) -> Arc<ShapedText> {
         let backend = Arc::new(
-            ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
-                .with_fallback_families(["IBM Plex Sans", "Noto Color Emoji"]),
+            ParleyTextSystem::new(
+                SystemFonts::Skip,
+                "IBM Plex Sans",
+                SwashGlyphRasterizer::default(),
+            )
+            .with_fallback_families(["IBM Plex Sans", "Noto Color Emoji"]),
         );
+
         backend
             .add_fonts(vec![
                 Cow::Borrowed(*gpui_fonts::IBM_PLEX),

@@ -20,7 +20,6 @@ anyhow.workspace = true
 fontique = { workspace = true, features = ["std"] }
 gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts", optional = true }
-gpui_render = { workspace = true, features = ["swash"] }
 parking_lot.workspace = true
 parley = { workspace = true, features = ["complex-scripts"] }
 skrifa = { workspace = true, features = ["std"] }

@@ -195,8 +195,7 @@ fn text_group_bounds(
 
 #[test]
 fn centered_inline_lines_move_as_one_group_during_fractional_resize() {
-    let text_system =
-        ParleyTextSystem::new_with_rasterizer(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
+    let text_system = ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
 
     text_system
         .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
@@ -236,8 +235,7 @@ fn centered_inline_lines_move_as_one_group_during_fractional_resize() {
 }
 
 fn headless() -> HeadlessAppContext {
-    let system =
-        ParleyTextSystem::new_with_rasterizer(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
+    let system = ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
 
     system
         .add_fonts(vec![

@@ -14,7 +14,6 @@ use gpui::{
     TextMovement, TextRangeExt, TextRenderingMode, TextRun, TextSelectionKind, UnicodeBidi,
     VisualDirection, VisualLine, align_inline_boxes, is_paragraph_separator, point, px, size,
 };
-use gpui_render::SwashGlyphRasterizer;
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
 use parley::{
@@ -1390,25 +1389,8 @@ pub struct ParleyTextSystem {
 }
 
 impl ParleyTextSystem {
-    /// Creates a text system using GPUI's default system-font family.
-    pub fn new(system_fonts: SystemFonts) -> Self {
-        Self::new_with_system_font(system_fonts, ".SystemUIFont")
-    }
-
-    /// Creates a text system with the concrete family used for GPUI's system-font alias.
-    pub fn new_with_system_font(
-        system_fonts: SystemFonts,
-        system_font_fallback: impl Into<String>,
-    ) -> Self {
-        Self::new_with_rasterizer(
-            system_fonts,
-            system_font_fallback,
-            SwashGlyphRasterizer::default(),
-        )
-    }
-
     /// Creates a text system which delegates only glyph rasterization to `rasterizer`.
-    pub fn new_with_rasterizer(
+    pub fn new(
         system_fonts: SystemFonts,
         system_font_fallback: impl Into<String>,
         rasterizer: impl GlyphRasterizer + 'static,
@@ -1448,11 +1430,6 @@ impl ParleyTextSystem {
         self.automatic_optical_sizing = true;
 
         self
-    }
-
-    /// Creates a deterministic text system without operating-system fonts.
-    pub fn without_system_fonts() -> Self {
-        Self::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
     }
 
     /// Adds fallback families after those supplied by each text style.
@@ -2521,19 +2498,15 @@ mod tests {
 
     fn test_system() -> Arc<ParleyTextSystem> {
         let system = Arc::new(
-            ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                IBM_PLEX.family,
-                TestTextSystem,
-            )
-            .with_fallback_families([
-                IBM_PLEX.family,
-                LILEX.family,
-                SOURCE_SERIF.family,
-                NOTO_COLOR_EMOJI.family,
-                NOTO_ARABIC.family,
-                NOTO_HEBREW.family,
-            ]),
+            ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem)
+                .with_fallback_families([
+                    IBM_PLEX.family,
+                    LILEX.family,
+                    SOURCE_SERIF.family,
+                    NOTO_COLOR_EMOJI.family,
+                    NOTO_ARABIC.family,
+                    NOTO_HEBREW.family,
+                ]),
         );
 
         system
@@ -4331,7 +4304,7 @@ mod tests {
         let prepare_calls = Arc::new(AtomicUsize::new(0));
         let recommended_calls = Arc::new(AtomicUsize::new(0));
 
-        let system = ParleyTextSystem::new_with_rasterizer(
+        let system = ParleyTextSystem::new(
             SystemFonts::Skip,
             "IBM Plex Sans",
             PolicyRasterizer {
@@ -4371,12 +4344,8 @@ mod tests {
     #[test]
     fn font_registration_invalidates_layouts_and_distinguishes_requested_instances() {
         let backend = Arc::new(
-            ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                IBM_PLEX.family,
-                TestTextSystem,
-            )
-            .with_fallback_families([IBM_PLEX.family]),
+            ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem)
+                .with_fallback_families([IBM_PLEX.family]),
         );
 
         backend
@@ -4609,12 +4578,8 @@ mod tests {
 
     #[test]
     fn automatic_optical_sizing_tracks_logical_default_and_inline_sizes() {
-        let system = ParleyTextSystem::new_with_rasterizer(
-            SystemFonts::Skip,
-            SOURCE_SERIF.family,
-            TestTextSystem,
-        )
-        .with_automatic_optical_sizing();
+        let system = ParleyTextSystem::new(SystemFonts::Skip, SOURCE_SERIF.family, TestTextSystem)
+            .with_automatic_optical_sizing();
 
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
@@ -4693,7 +4658,7 @@ mod tests {
     #[test]
     fn native_backend_receives_the_face_instance_selected_during_shaping() {
         let seen = Arc::new(Mutex::new(None));
-        let system = ParleyTextSystem::new_with_rasterizer(
+        let system = ParleyTextSystem::new(
             SystemFonts::Skip,
             SOURCE_SERIF.family,
             RecordingRasterizer { seen: seen.clone() },

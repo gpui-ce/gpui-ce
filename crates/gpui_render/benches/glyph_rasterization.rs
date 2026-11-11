@@ -9,7 +9,7 @@ use gpui_parley::{ParleyTextSystem, SystemFonts};
 use std::{borrow::Cow, sync::Arc};
 
 fn raster_case() -> (TextSystem, RenderGlyphParams) {
-    let system = ParleyTextSystem::new_with_rasterizer(
+    let system = ParleyTextSystem::new(
         SystemFonts::Skip,
         IBM_PLEX.family,
         SwashGlyphRasterizer::default(),

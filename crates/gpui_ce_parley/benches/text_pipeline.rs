@@ -8,8 +8,7 @@ use gpui_fonts::{IBM_PLEX, LILEX, SOURCE_SERIF};
 use std::borrow::Cow;
 
 fn text_system() -> (ParleyTextSystem, TextRun) {
-    let system =
-        ParleyTextSystem::new_with_rasterizer(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
+    let system = ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
 
     system
         .add_fonts(vec![

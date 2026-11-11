@@ -84,7 +84,7 @@ impl DirectWriteTextSystem {
 
     fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
-        let parley = ParleyTextSystem::new_with_rasterizer(
+        let parley = ParleyTextSystem::new(
             SystemFonts::Load,
             "Segoe UI",
             BitmapFallbackGlyphRasterizer::new(SharedDirectWriteRenderer(renderer.clone())),

@@ -2723,7 +2723,6 @@ dependencies = [
  "gpui-ce",
  "gpui-ce-fonts",
  "gpui_ce_collections",
- "gpui_ce_render",
  "parking_lot",
  "parley",
  "skrifa",

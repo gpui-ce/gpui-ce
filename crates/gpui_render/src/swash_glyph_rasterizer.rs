@@ -420,7 +420,7 @@ mod tests {
     use std::{borrow::Cow, sync::Arc};
 
     fn test_system() -> Arc<ParleyTextSystem> {
-        let system = ParleyTextSystem::new_with_rasterizer(
+        let system = ParleyTextSystem::new(
             SystemFonts::Skip,
             IBM_PLEX.family,
             SwashGlyphRasterizer::default(),

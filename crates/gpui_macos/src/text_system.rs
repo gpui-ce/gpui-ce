@@ -19,7 +19,7 @@ impl MacTextSystem {
     /// Creates the macOS text system.
     pub fn new() -> Self {
         Self {
-            parley: ParleyTextSystem::new_with_rasterizer(
+            parley: ParleyTextSystem::new(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
                 BitmapFallbackGlyphRasterizer::new(MacGlyphRenderer::new()),
@@ -879,11 +879,8 @@ mod renderer {
 
         #[test]
         fn in_memory_variable_font_renders_stably_across_glyphs_and_sizes() {
-            let system = ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                "Source Serif 4",
-                MacGlyphRenderer::new(),
-            );
+            let system =
+                ParleyTextSystem::new(SystemFonts::Skip, "Source Serif 4", MacGlyphRenderer::new());
 
             system
                 .add_fonts(vec![
@@ -1011,12 +1008,9 @@ mod renderer {
 
         #[test]
         fn shaped_optical_instances_reach_core_text_unchanged() {
-            let system = ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                "Source Serif 4",
-                MacGlyphRenderer::new(),
-            )
-            .with_automatic_optical_sizing();
+            let system =
+                ParleyTextSystem::new(SystemFonts::Skip, "Source Serif 4", MacGlyphRenderer::new())
+                    .with_automatic_optical_sizing();
 
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::SOURCE_SERIF)])
@@ -1133,7 +1127,7 @@ mod renderer {
 
         #[test]
         fn system_optical_families_shape_and_rasterize() {
-            let system = ParleyTextSystem::new_with_rasterizer(
+            let system = ParleyTextSystem::new(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
                 MacGlyphRenderer::new(),
@@ -1194,11 +1188,8 @@ mod renderer {
 
         #[test]
         fn synthetic_bold_keeps_stroked_tips_inside_the_raster() {
-            let system = ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                "IBM Plex Sans",
-                MacGlyphRenderer::new(),
-            );
+            let system =
+                ParleyTextSystem::new(SystemFonts::Skip, "IBM Plex Sans", MacGlyphRenderer::new());
 
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])
@@ -1273,11 +1264,8 @@ mod renderer {
 
         #[test]
         fn core_text_obeys_platform_style_mask_color_baseline_and_empty_glyph_behavior() {
-            let system = ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                "Source Serif 4",
-                MacGlyphRenderer::new(),
-            );
+            let system =
+                ParleyTextSystem::new(SystemFonts::Skip, "Source Serif 4", MacGlyphRenderer::new());
 
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::SOURCE_SERIF)])
@@ -1448,7 +1436,7 @@ mod renderer {
             assert_eq!(zero_size.size, gpui::Size::default());
             assert!(zero_size.pixels.is_empty());
 
-            let emoji_system = ParleyTextSystem::new_with_rasterizer(
+            let emoji_system = ParleyTextSystem::new(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
                 MacGlyphRenderer::new(),
@@ -1564,7 +1552,7 @@ mod renderer {
 
         #[test]
         fn native_color_bounds_follow_visible_artwork_at_the_requested_size() {
-            let system = ParleyTextSystem::new_with_rasterizer(
+            let system = ParleyTextSystem::new(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
                 MacGlyphRenderer::new(),
