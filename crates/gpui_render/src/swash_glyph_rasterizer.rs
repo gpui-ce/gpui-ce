@@ -227,12 +227,16 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
             Content::Mask => (RasterizedGlyphFormat::AlphaMask, image.data),
         };
 
-        Ok(RasterizedGlyph {
+        let raster = RasterizedGlyph {
             bounds,
             size: bounds.size,
             format,
             pixels,
-        })
+        };
+
+        raster.validate()?;
+
+        Ok(raster)
     }
 }
 
@@ -781,6 +785,7 @@ mod tests {
                 let mut request = params(glyph_id);
                 request.font_size = font_size;
                 let empty = rasterizer.rasterize(face, &request).unwrap();
+                empty.validate().unwrap();
                 assert_eq!(empty.size, Size::default(), "{name}");
                 assert_eq!(empty.format, mode.rasterized_format(), "{name}");
                 assert!(empty.pixels.is_empty(), "{name}");
