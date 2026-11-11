@@ -19,6 +19,8 @@ Items are sorted by issue or pull request number.
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
 
+- Moved `GlyphRasterizer`, `RasterFace`, `FontDataBlob`, `FontVariation`, `FontSynthesis`, and `ColorGlyphKind` from `gpui_parley` to `gpui`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+
 ### Removals
 
 ### Fixes

@@ -5,7 +5,8 @@ use gpui::{
     Pixels, PlatformTextSystem, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
     RenderGlyphParams, Result, Size, TextLayoutRequest, TextRenderingMode,
 };
-use gpui_parley::{BitmapFallbackGlyphRasterizer, ParleyTextSystem, SystemFonts};
+use gpui_parley::BitmapFallbackGlyphRasterizer;
+use gpui_parley::{ParleyTextSystem, SystemFonts};
 
 use self::renderer::MacGlyphRenderer;
 
@@ -104,12 +105,12 @@ mod renderer {
 
     #[cfg(test)]
     use gpui::{
-        GlyphId, PlatformTextSystem, RasterizedGlyphFormat, Rgba8, TextLayoutRequest, TextRun,
-        font as gpui_font, px, rgba,
+        FontVariation, GlyphId, PlatformTextSystem, RasterizedGlyphFormat, Rgba8,
+        TextLayoutRequest, TextRun, font as gpui_font, px, rgba,
     };
 
     #[cfg(test)]
-    use gpui_parley::{FontVariation, ParleyTextSystem, SystemFonts};
+    use gpui_parley::{ParleyTextSystem, SystemFonts};
 
     #[cfg(test)]
     use std::borrow::Cow;
@@ -138,11 +139,11 @@ mod renderer {
         canvas::RasterizationOptions, font::Font as FontKitFont, hinting::HintingOptions,
     };
     use gpui::{
-        Bounds, DevicePixels, FontId, GlyphRenderMode, Pixels, PreparedRasterStyle,
-        RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams,
-        SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
+        Bounds, ColorGlyphKind, DevicePixels, FontDataBlob, FontId, FontSynthesis, GlyphRasterizer,
+        GlyphRenderMode, Pixels, PreparedRasterStyle, RasterColorEffect, RasterFace,
+        RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, SUBPIXEL_VARIANTS_X,
+        SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
     };
-    use gpui_parley::{ColorGlyphKind, FontDataBlob, FontSynthesis, GlyphRasterizer, RasterFace};
     use objc2::rc::autoreleasepool;
     use pathfinder_geometry::{rect::RectI, transform2d::Transform2F};
     use skrifa::{FontRef, Tag, raw::MinByteRange};
@@ -883,12 +884,14 @@ mod renderer {
                 "Source Serif 4",
                 MacGlyphRenderer::new(),
             );
+
             system
                 .add_fonts(vec![
                     Cow::Borrowed(*gpui_fonts::SOURCE_SERIF),
                     Cow::Borrowed(*gpui_fonts::NOTO_SANS),
                 ])
                 .unwrap();
+
             let render_pass = |descriptor: &gpui::Font| {
                 let font_id = system.font_id(descriptor).unwrap();
 
@@ -911,7 +914,9 @@ mod renderer {
                                 },
                             })
                             .unwrap();
+
                         glyph.validate().unwrap();
+
                         assert!(
                             glyph.pixels.iter().any(|&coverage| coverage != 0),
                             "'{character}' produced an empty coverage mask"
@@ -940,6 +945,7 @@ mod renderer {
             }
 
             let normal = render_pass(&gpui_font("Noto Sans"));
+
             let condensed = render_pass(&gpui::Font {
                 width: FontWidth::CONDENSED,
                 ..gpui_font("Noto Sans")
@@ -1011,6 +1017,7 @@ mod renderer {
                 MacGlyphRenderer::new(),
             )
             .with_automatic_optical_sizing();
+
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::SOURCE_SERIF)])
                 .unwrap();
@@ -1192,6 +1199,7 @@ mod renderer {
                 "IBM Plex Sans",
                 MacGlyphRenderer::new(),
             );
+
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])
                 .unwrap();
@@ -1270,6 +1278,7 @@ mod renderer {
                 "Source Serif 4",
                 MacGlyphRenderer::new(),
             );
+
             system
                 .add_fonts(vec![Cow::Borrowed(*gpui_fonts::SOURCE_SERIF)])
                 .unwrap();

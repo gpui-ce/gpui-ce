@@ -2476,6 +2476,7 @@ dependencies = [
  "image",
  "inventory",
  "itertools 0.14.0",
+ "linebender_resource_handle",
  "log",
  "lyon",
  "num_cpus",

@@ -1,18 +1,18 @@
 use crate::{
-    ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
+    FontStore, SwashGlyphRasterizer, SystemFonts,
     catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
 };
 use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
-    InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineRangeGeometry,
-    InlineTextMetrics, InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle,
-    ParagraphDirection, Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
-    PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
-    ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
-    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRangeExt, TextRenderingMode, TextRun,
-    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes,
-    is_paragraph_separator, point, px, size,
+    Bounds, CaretAffinity, CaretMovement, CaretPosition, ColorGlyphKind, Font, FontId, FontMetrics,
+    FontVariation, GlyphId, GlyphRasterizer, InlineBidiScope, InlineBoxRequest, InlineLayout,
+    InlineLayoutRequest, InlineRangeGeometry, InlineTextMetrics, InlineTextStyle, InlineVisualLine,
+    LineLayout, PaintFragment, PaintStyle, ParagraphDirection, Pixels, PlatformTextLayout,
+    PlatformTextSystem, Point, PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest,
+    RasterizedGlyph, RenderGlyphParams, ResolvedDirection, ShapedGlyph, Size, TextAlign,
+    TextBoundary as Boundary, TextDirection as Direction, TextLayoutOptions, TextLayoutRequest,
+    TextMovement, TextRangeExt, TextRenderingMode, TextRun, TextSelectionKind, UnicodeBidi,
+    VisualDirection, VisualLine, align_inline_boxes, is_paragraph_separator, point, px, size,
 };
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
@@ -2096,7 +2096,7 @@ impl ParleyTextSystem {
                     .collect::<Vec<_>>();
                 let shaping_variations = self
                     .automatic_optical_sizing
-                    .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
+                    .then(|| [FontVariation::new(*b"opsz", run.font_size())]);
                 let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
@@ -2486,7 +2486,6 @@ impl PlatformTextSystem for ParleyTextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FontSynthesis, FontVariation, RasterFace};
     use gpui::{
         AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
         FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode,
@@ -2494,6 +2493,7 @@ mod tests {
         Render, ScaledPixels, StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle,
         VerticalAlign, Window, WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
     };
+    use gpui::{FontSynthesis, RasterFace};
     use gpui_fonts::{
         IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS,
         SOURCE_SERIF,
