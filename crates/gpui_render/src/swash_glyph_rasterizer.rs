@@ -3,7 +3,8 @@ use gpui::{
     Bounds, ColorGlyphClassifier, ColorGlyphKind, FontId, ForegroundDependency, GlyphId,
     GlyphRasterizer, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect, RasterFace,
     RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size, swap_rgba_pa_to_bgra,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, multiply_alpha, point, size,
+    swap_rgba_pa_to_bgra,
 };
 use skrifa::{
     FontRef, GlyphId as SkrifaGlyphId, MetadataProvider as _, Tag,
@@ -147,15 +148,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
 
         let (format, pixels) = match image.content {
             Content::Color => {
-                let premultiplied = matches!(image.source, Source::ColorOutline(_));
-
-                for pixel in image.data.chunks_exact_mut(4) {
-                    if premultiplied {
-                        swap_rgba_pa_to_bgra(pixel);
-                    } else {
-                        pixel.swap(0, 2);
-                    }
-                }
+                convert_color_image_to_bgra(&mut image, params.raster_style);
 
                 (RasterizedGlyphFormat::BgraColor, image.data)
             }
@@ -189,8 +182,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                     .data
                     .into_iter()
                     .flat_map(|coverage| {
-                        let alpha =
-                            ((u16::from(coverage) * u16::from(foreground_alpha) + 127) / 255) as u8;
+                        let alpha = multiply_alpha(coverage, foreground_alpha);
 
                         [blue, green, red, alpha]
                     })
@@ -298,6 +290,28 @@ fn subpixel_offset(params: &RenderGlyphParams) -> Vector {
         params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
         params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
     )
+}
+
+fn convert_color_image_to_bgra(image: &mut Image, style: PreparedRasterStyle) {
+    let premultiplied = matches!(image.source, Source::ColorOutline(_));
+    let is_bitmap = matches!(image.source, Source::ColorBitmap(_));
+
+    let foreground_alpha = match style.color_effect {
+        RasterColorEffect::Preblend(color) => color.alpha,
+        _ => 255,
+    };
+
+    for pixel in image.data.chunks_exact_mut(4) {
+        if premultiplied {
+            swap_rgba_pa_to_bgra(pixel);
+        } else {
+            pixel.swap(0, 2);
+        }
+
+        if is_bitmap {
+            pixel[3] = multiply_alpha(pixel[3], foreground_alpha);
+        }
+    }
 }
 
 fn convert_subpixel_mask_to_bgra(pixels: &mut [u8]) {
@@ -435,20 +449,24 @@ mod tests {
         Arc::new(system)
     }
 
+    fn text_run(text: &str, family: &str) -> TextRun {
+        TextRun {
+            len: text.len(),
+            font: font(family),
+            ..Default::default()
+        }
+    }
+
     fn layout_line(
         system: &ParleyTextSystem,
         text: &str,
         font_size: Pixels,
-        family: &str,
+        runs: &[TextRun],
     ) -> LineLayout {
         system.layout_text(TextLayoutRequest {
             text,
             font_size,
-            runs: &[TextRun {
-                len: text.len(),
-                font: font(family),
-                ..Default::default()
-            }],
+            runs,
             options: TextLayoutOptions::default(),
         })
     }
@@ -745,15 +763,82 @@ mod tests {
     }
 
     #[test]
+    fn fixed_color_bitmaps_ignore_foreground_rgb_but_preserve_alpha() {
+        let system = test_system();
+        let font_id = system.font_id(&font(NOTO_COLOR_EMOJI.family)).unwrap();
+        let glyph_id = system.glyph_for_char(font_id, '😀').unwrap();
+
+        let style = |color| system.prepare_raster_style(color_request(font_id, glyph_id, color));
+
+        let mut params = raster_params(font_id, glyph_id, GlyphRenderMode::Color);
+        params.scale_factor = 1.5;
+        params.raster_style = style(rgba(0xffffffff));
+        let opaque = system.rasterize_glyph(&params).unwrap();
+
+        assert!(
+            opaque
+                .pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 0 && pixel[3] < 255)
+        );
+
+        for alpha in [0u8, 64, 128, 255] {
+            let red = style(rgba(0xff000000 | u32::from(alpha)));
+            let blue = style(rgba(0x0000ff00 | u32::from(alpha)));
+            assert_eq!(red, blue);
+            assert_eq!(red.foreground_dependency, ForegroundDependency::AlphaOnly);
+
+            assert_eq!(
+                red.color_effect,
+                RasterColorEffect::Preblend(Rgba8::new(0, 0, 0, alpha))
+            );
+
+            params.raster_style = red;
+            let raster = system.rasterize_glyph(&params).unwrap();
+            raster.validate().unwrap();
+            assert_eq!(raster.bounds, opaque.bounds);
+            assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
+
+            for (actual, original) in raster
+                .pixels
+                .chunks_exact(4)
+                .zip(opaque.pixels.chunks_exact(4))
+            {
+                let expected_alpha =
+                    (f32::from(original[3]) * f32::from(alpha) / 255.0).round() as u8;
+
+                let expected = [original[0], original[1], original[2], expected_alpha];
+
+                assert_eq!(actual, expected, "foreground alpha {alpha}");
+            }
+        }
+    }
+
+    #[test]
     fn bundled_emoji_sample_keeps_font_metrics_and_device_scaling() {
-        const SAMPLE: &str = "Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
-        const EMOJI: [char; 6] = ['😀', '🎉', '🚀', '💡', '🔥', '✨'];
+        const SAMPLE: &str = "1 1 Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
+        const EMOJI: [char; 8] = ['1', '1', '😀', '🎉', '🚀', '💡', '🔥', '✨'];
 
         let system = test_system();
         let noto_id = system.font_id(&font("Noto Color Emoji")).unwrap();
+        let source = FontDataBlob::from(NOTO_COLOR_EMOJI.data.to_vec());
+        let font = FontRef::new(source.as_ref()).unwrap();
 
-        for font_size in [px(16.0), px(24.0), px(32.0)] {
-            let layout = layout_line(&system, SAMPLE, font_size, IBM_PLEX.family);
+        let strike = BitmapStrikes::with_format(&font, BitmapFormat::Cbdt)
+            .unwrap()
+            .get(0)
+            .unwrap();
+
+        for font_size in [px(16.0), px(24.0), px(32.0), px(strike.ppem())] {
+            let layout = layout_line(
+                &system,
+                SAMPLE,
+                font_size,
+                &[
+                    text_run("1 1", NOTO_COLOR_EMOJI.family),
+                    text_run(&SAMPLE[3..], IBM_PLEX.family),
+                ],
+            );
 
             let emoji_glyphs = shaped_glyphs(&layout)
                 .filter(|(_, _, glyph)| glyph.is_emoji)
@@ -770,6 +855,8 @@ mod tests {
 
                 assert_eq!(fragment.font_size, font_size);
                 assert_eq!(glyph.position.y, Pixels::ZERO);
+
+                let bitmap = strike.get(SkrifaGlyphId::new(glyph.id.0)).unwrap();
 
                 assert_eq!(
                     glyph.id,
@@ -791,37 +878,44 @@ mod tests {
                     rgba(0xffffffff),
                 ));
 
-                let mut scale_one_bounds: Option<[f32; 4]> = None;
-
                 for scale_factor in [1.0, 1.5, 2.0] {
-                    let raster = system
-                        .rasterize_glyph(&RenderGlyphParams {
-                            font_size: fragment.font_size,
-                            scale_factor,
-                            raster_style,
-                            ..raster_params(fragment.font_id, glyph.id, Color)
-                        })
-                        .unwrap();
+                    let params = RenderGlyphParams {
+                        font_id: fragment.font_id,
+                        glyph_id: glyph.id,
+                        font_size: fragment.font_size,
+                        subpixel_variant: point(0, 0),
+                        scale_factor,
+                        raster_style,
+                    };
+
+                    let raster = system.rasterize_glyph(&params).unwrap();
 
                     let case = format!("{character}, size={font_size:?}, scale={scale_factor}");
                     assert_visible_raster(&raster, BgraColor, &case);
 
-                    let logical_bounds = [
-                        raster.bounds.origin.x.0 as f32 / scale_factor,
-                        raster.bounds.origin.y.0 as f32 / scale_factor,
-                        raster.size.width.0 as f32 / scale_factor,
-                        raster.size.height.0 as f32 / scale_factor,
-                    ];
+                    let bitmap_scale = f32::from(font_size) * scale_factor / bitmap.ppem_y;
 
-                    if let Some(reference) = scale_one_bounds {
-                        for (actual, expected) in logical_bounds.into_iter().zip(reference) {
-                            assert!(
-                                (actual - expected).abs() <= 1.0,
-                                "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
-                            );
-                        }
-                    } else {
-                        scale_one_bounds = Some(logical_bounds);
+                    let expected = Bounds {
+                        origin: point(bitmap.inner_bearing_x, -bitmap.inner_bearing_y),
+                        size: size(bitmap.width as f32, bitmap.height as f32),
+                    }
+                    .map(|value| ((value * bitmap_scale) as i32).into());
+
+                    assert_eq!(
+                        raster.bounds, expected,
+                        "{character} at scale {scale_factor}"
+                    );
+
+                    for subpixel_variant in [
+                        point(1, 0),
+                        point(SUBPIXEL_VARIANTS_X - 1, SUBPIXEL_VARIANTS_Y - 1),
+                    ] {
+                        let mut shifted = params.clone();
+                        shifted.subpixel_variant = subpixel_variant;
+                        let shifted = system.rasterize_glyph(&shifted).unwrap();
+
+                        assert_eq!(shifted.bounds, raster.bounds);
+                        assert_eq!(shifted.pixels, raster.pixels);
                     }
                 }
             }
