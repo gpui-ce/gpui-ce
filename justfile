@@ -381,6 +381,62 @@ clean:
     cargo clean
 
 
+[doc('Print the committed gpui-ce version (the release being worked towards)')]
+[group('release')]
+release-version:
+    @nu scripts/release/release.nu version
+
+[doc('Record VERSION on every crate and internal pin, without touching the CHANGELOG')]
+[group('release')]
+release-sync version:
+    @nu scripts/release/release.nu sync '{{ version }}'
+
+[doc('Bump every crate to VERSION and roll the CHANGELOG [Unreleased] section into it')]
+[group('release')]
+release-prepare version:
+    @nu scripts/release/release.nu prepare '{{ version }}'
+
+[doc('Verify the tree is a coherent, unpublished release (tag_free="true" also asks crates.io)')]
+[group('release')]
+release-check tag_free="false":
+    #!/usr/bin/env nu
+    if '{{ tag_free }}' == "true" { nu scripts/release/release.nu check --tag-free } else { nu scripts/release/release.nu check }
+
+[doc('Fail if a publishable crate depends on something crates.io cannot resolve')]
+[group('release')]
+publishable:
+    @nu scripts/release/release.nu publishable
+
+[doc('CI: a release PR must have the release/vX.Y.Z branch and the release label')]
+[group('release')]
+release-pr-check head_ref labels:
+    @nu scripts/release/release.nu pr-check '{{ head_ref }}' '{{ labels }}'
+
+[doc('CI: open the release PR for VERSION (bump, roll the changelog, refresh the lockfile)')]
+[group('release')]
+release-pr-open version:
+    @nu scripts/release/release.nu pr-open '{{ version }}'
+
+[doc('CI: after a push to main, tag the release if it merged a release PR')]
+[group('release')]
+release-tag:
+    @nu scripts/release/release.nu tag
+
+[doc('CI: allocate the next crates.io alpha for the given main commit')]
+[group('release')]
+alpha-version sha:
+    @nu scripts/release/release.nu alpha-version '{{ sha }}'
+
+[doc('CI: publish every crate as the given alpha, in dependency order')]
+[group('release')]
+alpha-publish version sha:
+    @nu scripts/release/release.nu alpha-publish '{{ version }}' '{{ sha }}'
+
+[doc('CI: compile a fresh consumer crate against a published alpha')]
+[group('release')]
+alpha-smoke version:
+    @nu scripts/release/release.nu alpha-smoke '{{ version }}'
+
 [doc('Publish GPUI crates to crates.io in dependency order (dry="true" for a dry run)')]
 [group('release')]
 publish dry="false":
