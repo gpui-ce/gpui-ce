@@ -466,7 +466,9 @@ mod tests {
         prelude::*,
         px, rgba,
     };
-    use gpui_fonts::{IBM_PLEX, IBM_PLEX_SEMIBOLD, NOTO_COLOR_EMOJI, SOURCE_SERIF};
+    use gpui_fonts::{
+        IBM_PLEX, IBM_PLEX_SEMIBOLD, NOTO_COLOR_EMOJI, SOURCE_SERIF, test_collection,
+    };
     use gpui_parley::ParleyTextSystem;
     use gpui_parley::test_support::{
         OVERFLOW_CASES, OverflowParagraph, SCALE_FACTOR, first_group_color, logical_bounds,
@@ -706,35 +708,6 @@ mod tests {
                 Vector::new(0.75 / scale_factor, 0.0)
             );
         }
-    }
-
-    fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
-        let mut collection = vec![0; 12 + faces.len() * 4];
-        collection[..4].copy_from_slice(b"ttcf");
-        collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
-
-        for (face_idx, face) in faces.iter().enumerate() {
-            collection.resize(collection.len().next_multiple_of(4), 0);
-            let face_offset = collection.len();
-            let offset_position = 12 + face_idx * 4;
-
-            collection[offset_position..offset_position + 4]
-                .copy_from_slice(&(face_offset as u32).to_be_bytes());
-
-            collection.extend_from_slice(face);
-            let font = FontRef::from_index(face, 0).unwrap();
-
-            for (table_idx, record) in font.table_directory().table_records().iter().enumerate() {
-                let offset_position = face_offset + 12 + table_idx * 16 + 8;
-                let table_offset = record.offset() + face_offset as u32;
-
-                collection[offset_position..offset_position + 4]
-                    .copy_from_slice(&table_offset.to_be_bytes());
-            }
-        }
-
-        collection
     }
 
     fn assert_cached_raster_matches_fresh(
