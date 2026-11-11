@@ -17,8 +17,8 @@ use gpui::{
     RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size,
     TextLayoutRequest, TextRenderingMode, point, size,
 };
-use gpui_parley::BitmapFallbackGlyphRasterizer;
 use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_render::BitmapFallbackGlyphRasterizer;
 use parking_lot::RwLock;
 use windows::{
     Win32::{

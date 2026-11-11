@@ -9,3 +9,9 @@ mod target_stack;
 
 pub use instances::InstanceRange;
 pub use target_stack::TargetStack;
+
+#[cfg(feature = "swash")]
+mod swash_glyph_rasterizer;
+
+#[cfg(feature = "swash")]
+pub use swash_glyph_rasterizer::{BitmapFallbackGlyphRasterizer, SwashGlyphRasterizer};

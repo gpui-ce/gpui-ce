@@ -5,8 +5,8 @@ use gpui::{
     Pixels, PlatformTextSystem, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
     RenderGlyphParams, Result, Size, TextLayoutRequest, TextRenderingMode,
 };
-use gpui_parley::BitmapFallbackGlyphRasterizer;
 use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_render::BitmapFallbackGlyphRasterizer;
 
 use self::renderer::MacGlyphRenderer;
 
