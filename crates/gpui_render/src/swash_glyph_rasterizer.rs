@@ -157,6 +157,10 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
             return Err(SwashRasterError::InvalidScaleFactor.into());
         }
 
+        if font_size == 0.0 {
+            return Ok(RasterizedGlyph::empty(format));
+        }
+
         let rendered = self.render_glyph_image(&face, params)?;
 
         let Some(mut image) = rendered else {
@@ -773,10 +777,14 @@ mod tests {
             let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
             let mut rasterizer = SwashGlyphRasterizer::default();
 
-            let empty = rasterizer.rasterize(face, &params(space)).unwrap();
-            assert_eq!(empty.size, Size::default(), "{name}");
-            assert_eq!(empty.format, mode.rasterized_format(), "{name}");
-            assert!(empty.pixels.is_empty(), "{name}");
+            for (glyph_id, font_size) in [(space, px(24.0)), (glyph, px(0.0))] {
+                let mut request = params(glyph_id);
+                request.font_size = font_size;
+                let empty = rasterizer.rasterize(face, &request).unwrap();
+                assert_eq!(empty.size, Size::default(), "{name}");
+                assert_eq!(empty.format, mode.rasterized_format(), "{name}");
+                assert!(empty.pixels.is_empty(), "{name}");
+            }
 
             let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
 

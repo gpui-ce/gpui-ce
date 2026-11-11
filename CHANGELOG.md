@@ -36,6 +36,7 @@ Items are sorted by issue or pull request number.
   - Cleared color channels for fully transparent bitmap glyph pixels.
   - Rejected unsupported dilation styles for color bitmap glyphs.
 - Swash glyph rasterization now rejects invalid glyph font sizes and scale factors, including overflow or underflow when multiplied. [#404](https://github.com/gpui-ce/gpui-ce/pull/404)
+- Fixed glyph rendering at font size zero to return an empty glyph. [#404](https://github.com/gpui-ce/gpui-ce/pull/404)
 
 ### Security Changes
 
