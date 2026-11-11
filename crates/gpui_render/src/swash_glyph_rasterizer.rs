@@ -61,6 +61,20 @@ impl SwashGlyphRasterizer {
             return Err(SwashRasterError::InvalidPixelSize.into());
         }
 
+        let is_cbdt = self.requested_color_glyph_kind(face, params)? == Some(ColorGlyphKind::Cbdt);
+
+        let sources: &[Source] = if is_cbdt {
+            &[Source::ColorBitmap(StrikeWith::BestFit), Source::Outline]
+        } else if params.raster_style.mode == GlyphRenderMode::Color {
+            &[
+                Source::ColorOutline(0),
+                Source::ColorBitmap(StrikeWith::BestFit),
+                Source::Outline,
+            ]
+        } else {
+            &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
+        };
+
         let cache_key = *self
             .cache_keys
             .entry(face.font_id)
@@ -83,16 +97,6 @@ impl SwashGlyphRasterizer {
             )
             .hint(true)
             .build();
-
-        let sources: &[Source] = if params.raster_style.mode == GlyphRenderMode::Color {
-            &[
-                Source::ColorOutline(0),
-                Source::ColorBitmap(StrikeWith::BestFit),
-                Source::Outline,
-            ]
-        } else {
-            &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
-        };
 
         let mut renderer = Render::new(sources);
 
@@ -475,6 +479,7 @@ mod tests {
         OVERFLOW_CASES, OverflowParagraph, SCALE_FACTOR, first_group_color, logical_bounds,
         open_overflow_paragraph, quads, second_group_color, update_view,
     };
+    use skrifa::{bitmap::BitmapData, raw::MinByteRange as _};
     use std::{borrow::Cow, sync::Arc};
 
     fn test_system() -> Arc<ParleyTextSystem> {
@@ -665,11 +670,22 @@ mod tests {
 
                 if character == '😀' {
                     assert_eq!(
-                        face.supported_color_glyph_kind(glyph_id, |kind| rasterizer
-                            .supports_color_glyph(kind))
+                        rasterizer
+                            .requested_color_glyph_kind(&face, &params)
                             .unwrap(),
                         Some(ColorGlyphKind::Cbdt)
                     );
+
+                    for mode in [Grayscale, Subpixel] {
+                        let request = raster_params(face.font_id, glyph_id, mode);
+
+                        assert_eq!(
+                            rasterizer
+                                .requested_color_glyph_kind(&face, &request)
+                                .unwrap(),
+                            None
+                        );
+                    }
                 }
 
                 rasterizer.rasterize(face, &params).unwrap();
@@ -833,6 +849,116 @@ mod tests {
             let recovered = rasterizer.rasterize(face, &params(glyph)).unwrap();
             assert_visible_raster(&recovered, mode.rasterized_format(), &name);
         }
+    }
+
+    #[test]
+    fn corrupt_color_bitmaps_fall_back_to_tintable_outlines_when_available() {
+        for include_outlines in [false, true] {
+            let source = FontDataBlob::from(damaged_emoji_font(include_outlines));
+            let font = FontRef::new(source.as_ref()).unwrap();
+            let face = raster_face(&source);
+            let glyph_id = GlyphId(font.charmap().map('😀').unwrap().to_u32());
+            let mut rasterizer = SwashGlyphRasterizer::default();
+
+            let raster_style = rasterizer.prepare_style(RasterStyleRequest {
+                foreground_dependency: AlphaOnly,
+                ..color_request(face.font_id, glyph_id, rgba(0xe0201080))
+            });
+
+            let params = RenderGlyphParams {
+                raster_style,
+                ..raster_params(face.font_id, glyph_id, Color)
+            };
+
+            assert_eq!(
+                rasterizer
+                    .requested_color_glyph_kind(&face, &params)
+                    .unwrap(),
+                Some(ColorGlyphKind::Cbdt)
+            );
+
+            let result = rasterizer.rasterize(face, &params);
+
+            if include_outlines {
+                let fallback = result.unwrap();
+                assert_visible_raster(&fallback, AlphaMask, "corrupt bitmap outline fallback");
+
+                let outline = rasterizer
+                    .rasterize(face, &raster_params(face.font_id, glyph_id, Grayscale))
+                    .unwrap();
+
+                assert_eq!(fallback.bounds, outline.bounds);
+                assert_eq!(fallback.pixels, outline.pixels);
+            } else {
+                assert!(result.is_err());
+            }
+
+            let glyph_id = GlyphId(font.charmap().map('🚀').unwrap().to_u32());
+
+            let recovered = rasterizer
+                .rasterize(face, &raster_params(face.font_id, glyph_id, Color))
+                .unwrap();
+
+            assert_visible_raster(&recovered, BgraColor, "valid bitmap after decode failure");
+        }
+    }
+
+    fn damaged_emoji_font(include_outlines: bool) -> Vec<u8> {
+        let mut data = NOTO_COLOR_EMOJI.data.to_vec();
+        let font = FontRef::new(&data).unwrap();
+        let glyph_id = font.charmap().map('😀').unwrap();
+
+        let bitmap = BitmapStrikes::with_format(&font, BitmapFormat::Cbdt)
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .get(glyph_id)
+            .unwrap();
+
+        let BitmapData::Png(payload) = bitmap.data else {
+            panic!("expected a CBDT PNG payload");
+        };
+
+        let payload_offset = payload.as_ptr() as usize - data.as_ptr() as usize;
+        data[payload_offset..payload_offset + 8].fill(0);
+
+        if !include_outlines {
+            return data;
+        }
+
+        let font = FontRef::new(&data).unwrap();
+        let directory_end = font.table_directory().min_table_bytes().len();
+        let glyph_count = usize::from(font.maxp().unwrap().num_glyphs());
+        let mut records = data[12..directory_end].as_chunks::<16>().0.to_vec();
+        let outline_font = FontRef::new(IBM_PLEX.data).unwrap();
+
+        // Reuse real outlines to exercise recovery from a failed CBDT decode.
+        for (old_tag, new_tag) in [(b"vhea", b"glyf"), (b"vmtx", b"loca")] {
+            let record = records
+                .iter_mut()
+                .find(|record| &record[..4] == old_tag)
+                .unwrap();
+
+            let table = outline_font.table_data(Tag::new(new_tag)).unwrap();
+            let table = table.as_bytes();
+
+            let table = if new_tag == b"loca" {
+                &table[..(glyph_count + 1) * 2]
+            } else {
+                table
+            };
+
+            data.resize(data.len().next_multiple_of(4), 0);
+            record[..4].copy_from_slice(new_tag);
+            record[8..12].copy_from_slice(&(data.len() as u32).to_be_bytes());
+            record[12..].copy_from_slice(&(table.len() as u32).to_be_bytes());
+            data.extend_from_slice(table);
+        }
+
+        records.sort();
+        data[12..directory_end].copy_from_slice(records.as_flattened());
+
+        data
     }
 
     #[test]
