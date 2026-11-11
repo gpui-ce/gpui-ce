@@ -111,6 +111,16 @@ pub enum ColorGlyphKind {
     Svg,
 }
 
+impl ColorGlyphKind {
+    /// Returns whether this format stores artwork in bitmap strikes.
+    pub const fn is_bitmap(self) -> bool {
+        match self {
+            Self::Cbdt | Self::Sbix => true,
+            Self::ColrV0 | Self::ColrV1 | Self::Svg => false,
+        }
+    }
+}
+
 /// Rasterizes glyphs from the exact font instance selected during shaping.
 pub trait GlyphRasterizer: Send {
     /// Returns whether this rasterizer can preserve the glyph's native color artwork.
@@ -228,10 +238,16 @@ impl ColorGlyphClassifier<'_> {
 
         match kind {
             ColorGlyphKind::Cbdt | ColorGlyphKind::Sbix => ForegroundDependency::AlphaOnly,
-            ColorGlyphKind::ColrV0 if self.colr_v0_has_fixed_palette(glyph_id) => {
-                ForegroundDependency::AlphaOnly
+
+            ColorGlyphKind::ColrV0 => {
+                if self.colr_v0_has_fixed_palette(glyph_id) {
+                    ForegroundDependency::AlphaOnly
+                } else {
+                    ForegroundDependency::Full
+                }
             }
-            _ => ForegroundDependency::Full,
+
+            ColorGlyphKind::ColrV1 | ColorGlyphKind::Svg => ForegroundDependency::Full,
         }
     }
 
@@ -304,10 +320,10 @@ mod tests {
         table.extend_from_slice(&32u32.to_be_bytes());
         table.extend_from_slice(&2u16.to_be_bytes());
 
-        for (glyph_id, first_layer) in [(1u16, 0u16), (2, 1), (4, 2)] {
+        for (glyph_id, first_layer, layer_count) in [(1u16, 0u16, 1u16), (2, 0, 2), (4, 2, 1)] {
             table.extend_from_slice(&glyph_id.to_be_bytes());
             table.extend_from_slice(&first_layer.to_be_bytes());
-            table.extend_from_slice(&1u16.to_be_bytes());
+            table.extend_from_slice(&layer_count.to_be_bytes());
         }
 
         for (glyph_id, palette_idx) in [(10u16, 0u16), (11, u16::MAX)] {
@@ -324,10 +340,18 @@ mod tests {
             svg_records: &[],
         };
 
-        assert!(classifier.colr_v0_has_fixed_palette(GlyphId(1)));
-        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(2)));
-        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(3)));
-        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(4)));
+        for (glyph_id, expected) in [
+            (GlyphId(1), ForegroundDependency::AlphaOnly),
+            (GlyphId(2), ForegroundDependency::Full),
+            (GlyphId(3), ForegroundDependency::Full),
+            (GlyphId(4), ForegroundDependency::Full),
+        ] {
+            assert_eq!(
+                classifier.foreground_dependency(glyph_id, |kind| kind == ColorGlyphKind::ColrV0),
+                expected,
+                "glyph {glyph_id:?}",
+            );
+        }
     }
 
     #[test]
