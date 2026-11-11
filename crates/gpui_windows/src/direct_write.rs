@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result, bail, ensure};
 use collections::HashMap;
 use gpui::{
     Bounds, ColorGlyphKind, DevicePixels, FontDataBlob, FontId, GlyphRasterizer, GlyphRenderMode,
@@ -16,7 +16,6 @@ use gpui::{
     SUBPIXEL_VARIANTS_Y, TextRenderingMode, apply_pixel_opacity, multiply_alpha, point, size,
 };
 use gpui_parley::ParleyTextSystem;
-use gpui_render::BitmapFallbackGlyphRasterizer;
 use windows::{
     Win32::{
         Foundation::*,
@@ -38,7 +37,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::DirectXDevices;
 
 struct NativeFace {
-    face: IDWriteFontFace3,
+    face: IDWriteFontFace4,
 }
 
 struct NativeSource {
@@ -52,12 +51,10 @@ struct FontDataOwner {
 
 pub(crate) fn new_text_system() -> Result<Arc<dyn PlatformTextSystem>> {
     Ok(Arc::new(
-        ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
-            DirectWriteGlyphRasterizer::new()?,
-        ))
-        .with_system_fallback_family("Segoe UI")
-        .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
-        .with_system_fonts(),
+        ParleyTextSystem::new(DirectWriteGlyphRasterizer::new()?)
+            .with_system_fallback_family("Segoe UI")
+            .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
+            .with_system_fonts(),
     ))
 }
 
@@ -162,7 +159,7 @@ impl DirectWriteGlyphRasterizer {
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
         let glyph_run = DWRITE_GLYPH_RUN {
-            fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&***font.face) })),
+            fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&****font.face) })),
             fontEmSize: params.font_size.as_f32(),
             glyphCount: 1,
             glyphIndices: glyph_id.as_ptr(),
@@ -350,7 +347,7 @@ impl DirectWriteGlyphRasterizer {
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
         let glyph_run = DWRITE_GLYPH_RUN {
-            fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&***font.face) })),
+            fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&****font.face) })),
             fontEmSize: params.font_size.as_f32(),
             glyphCount: 1,
             glyphIndices: glyph_id.as_ptr(),
@@ -489,6 +486,56 @@ impl DirectWriteGlyphRasterizer {
             Ok(())
         })
     }
+
+    fn rasterize_bitmap_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
+        self.with_bitmap_glyph(params, |wic, data, bitmap| {
+            let destination = bitmap_glyph_rect(params, data)?;
+            let ink_bounds = bitmap_ink_bounds(destination)?;
+
+            draw_bitmap_glyph(wic, params, bitmap, destination, ink_bounds)
+        })
+    }
+
+    fn with_bitmap_glyph(
+        &self,
+        params: &RenderGlyphParams,
+        draw: impl FnOnce(
+            &IWICImagingFactory,
+            &DWRITE_GLYPH_IMAGE_DATA,
+            &IWICBitmap,
+        ) -> Result<RasterizedGlyph>,
+    ) -> Result<RasterizedGlyph> {
+        let _apartment = ColorRasterApartment::new()?;
+        let face = &self.faces[&params.font_id].face;
+        let glyph_id = u16::try_from(params.glyph_id.0).context("invalid bitmap glyph ID")?;
+
+        ensure!(
+            params.font_size.as_f32().is_finite() && params.font_size.as_f32() > 0.0,
+            "invalid bitmap glyph font size"
+        );
+
+        ensure!(
+            params.scale_factor.is_finite() && params.scale_factor > 0.0,
+            "invalid bitmap glyph scale factor"
+        );
+
+        let pixels_per_em = params.font_size.as_f32() as f64 * params.scale_factor as f64;
+
+        ensure!(
+            pixels_per_em.is_finite() && pixels_per_em > 0.0 && pixels_per_em <= u32::MAX as f64,
+            "invalid bitmap glyph size"
+        );
+
+        let (image, image_format) =
+            load_bitmap_image(face, glyph_id, pixels_per_em.round().max(1.0) as u32)?;
+
+        let wic: IWICImagingFactory =
+            unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+
+        let bitmap = decode_bitmap_glyph(&wic, &image.data, image.bytes()?, image_format)?;
+
+        draw(&wic, &image.data, &bitmap)
+    }
 }
 
 impl Drop for DirectWriteGlyphRasterizer {
@@ -506,7 +553,7 @@ impl Drop for DirectWriteGlyphRasterizer {
 
 impl GlyphRasterizer for DirectWriteGlyphRasterizer {
     fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-        kind == ColorGlyphKind::ColrV0
+        matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Cbdt)
     }
 
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
@@ -538,6 +585,8 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
             return Ok(RasterizedGlyph::empty(format));
         }
 
+        let is_cbdt = self.requested_color_glyph_kind(&face, params)? == Some(ColorGlyphKind::Cbdt);
+
         self.load_face(face)?;
 
         ensure!(
@@ -548,6 +597,10 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
         );
+
+        if is_cbdt {
+            return self.rasterize_bitmap_glyph(params);
+        }
 
         let glyph_analysis = self.create_glyph_run_analysis(params)?;
         let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
@@ -587,7 +640,7 @@ impl NativeFace {
             simulations |= DWRITE_FONT_SIMULATIONS_OBLIQUE;
         }
 
-        let native_face = if use_default_axes {
+        let native_face: IDWriteFontFace3 = if use_default_axes {
             let reference =
                 unsafe { factory.CreateFontFaceReference(file, face.face_index, simulations) }?;
 
@@ -616,7 +669,9 @@ impl NativeFace {
             variable_face.cast()?
         };
 
-        Ok(Self { face: native_face })
+        Ok(Self {
+            face: native_face.cast()?,
+        })
     }
 }
 
@@ -639,6 +694,104 @@ impl NativeSource {
 
         Ok(Self { file })
     }
+}
+
+struct GlyphImageData<'a> {
+    face: &'a IDWriteFontFace4,
+    data: DWRITE_GLYPH_IMAGE_DATA,
+    context: Option<*mut c_void>,
+}
+
+impl<'a> GlyphImageData<'a> {
+    fn new(
+        face: &'a IDWriteFontFace4,
+        glyph_id: u16,
+        pixels_per_em: u32,
+        image_format: DWRITE_GLYPH_IMAGE_FORMATS,
+    ) -> Result<Option<Self>> {
+        let mut data = DWRITE_GLYPH_IMAGE_DATA::default();
+        let mut context = std::ptr::null_mut();
+
+        unsafe {
+            face.GetGlyphImageData(
+                glyph_id,
+                pixels_per_em,
+                image_format,
+                &mut data,
+                &mut context,
+            )
+        }
+        .context("retrieving DirectWrite bitmap glyph data")?;
+
+        // Empty results have no mapping. Retain ownership independently of the image metadata.
+        let image = Self {
+            face,
+            data,
+            context: (data.imageDataSize != 0).then_some(context),
+        };
+
+        if image.data.imageDataSize == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(image))
+    }
+
+    fn bytes(&self) -> Result<&[u8]> {
+        ensure!(
+            !self.data.imageData.is_null()
+                && self.data.imageDataSize > 0
+                && self.data.imageDataSize as u64 <= isize::MAX as u64,
+            "DirectWrite returned an invalid bitmap glyph buffer"
+        );
+
+        // The guard borrows the face and releases the mapping only after this slice expires.
+        Ok(unsafe {
+            std::slice::from_raw_parts(self.data.imageData.cast(), self.data.imageDataSize as usize)
+        })
+    }
+}
+
+impl Drop for GlyphImageData<'_> {
+    fn drop(&mut self) {
+        if let Some(context) = self.context {
+            unsafe { self.face.ReleaseGlyphImageData(context) };
+        }
+    }
+}
+
+fn load_bitmap_image(
+    face: &IDWriteFontFace4,
+    glyph_id: u16,
+    pixels_per_em: u32,
+) -> Result<(GlyphImageData<'_>, DWRITE_GLYPH_IMAGE_FORMATS)> {
+    ensure!(
+        glyph_id < unsafe { face.GetGlyphCount() },
+        "invalid bitmap glyph ID"
+    );
+
+    ensure!(pixels_per_em > 0, "invalid bitmap glyph pixels per em");
+
+    // Search every strike. A bitmap need not exist at the requested pixels per em.
+    let formats = unsafe { face.GetGlyphImageFormats(glyph_id, 0, u32::MAX) }
+        .context("querying DirectWrite bitmap glyph formats")?;
+
+    for image_format in [
+        DWRITE_GLYPH_IMAGE_FORMATS_PNG,
+        DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8,
+    ] {
+        if (formats & image_format).0 == 0 {
+            continue;
+        }
+
+        let Some(image) = GlyphImageData::new(face, glyph_id, pixels_per_em, image_format)? else {
+            continue;
+        };
+
+        return Ok((image, image_format));
+    }
+
+    bail!("DirectWrite returned no image data for the selected CBDT artwork")
 }
 
 fn rasterize_color_bitmap(
@@ -738,6 +891,142 @@ fn color_bitmap_byte_count(width: i32, height: i32) -> Result<usize> {
     );
 
     Ok(byte_count)
+}
+
+fn decode_bitmap_glyph(
+    wic: &IWICImagingFactory,
+    data: &DWRITE_GLYPH_IMAGE_DATA,
+    bytes: &[u8],
+    image_format: DWRITE_GLYPH_IMAGE_FORMATS,
+) -> Result<IWICBitmap> {
+    let width = i32::try_from(data.pixelSize.width).context("bitmap glyph width overflow")?;
+    let height = i32::try_from(data.pixelSize.height).context("bitmap glyph height overflow")?;
+    let byte_count = color_bitmap_byte_count(width, height)?;
+
+    if image_format == DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8 {
+        ensure!(
+            bytes.len() == byte_count,
+            "invalid BGRA bitmap glyph buffer size"
+        );
+
+        return Ok(unsafe {
+            wic.CreateBitmapFromMemory(
+                width as u32,
+                height as u32,
+                &GUID_WICPixelFormat32bppPBGRA,
+                width as u32 * 4,
+                bytes,
+            )?
+        });
+    }
+
+    ensure!(
+        image_format == DWRITE_GLYPH_IMAGE_FORMATS_PNG,
+        "unsupported bitmap glyph format"
+    );
+
+    ensure!(
+        u32::try_from(bytes.len()).is_ok(),
+        "PNG bitmap glyph exceeds WIC's buffer limit"
+    );
+
+    let stream = unsafe { wic.CreateStream()? };
+    unsafe { stream.InitializeFromMemory(bytes)? };
+
+    let decoder = unsafe {
+        wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)
+    }
+    .context("decoding PNG bitmap glyph")?;
+
+    let frame = unsafe { decoder.GetFrame(0)? };
+    let mut decoded_width = 0;
+    let mut decoded_height = 0;
+    unsafe { frame.GetSize(&mut decoded_width, &mut decoded_height)? };
+
+    ensure!(
+        decoded_width == data.pixelSize.width && decoded_height == data.pixelSize.height,
+        "PNG bitmap glyph dimensions differ from DirectWrite image data"
+    );
+
+    let converter = unsafe { WICConvertBitmapSource(&GUID_WICPixelFormat32bppPBGRA, &frame)? };
+
+    // Materialize the pixels before the stream's borrowed input can expire.
+    Ok(unsafe { wic.CreateBitmapFromSource(&converter, WICBitmapCacheOnLoad)? })
+}
+
+fn bitmap_glyph_rect(
+    params: &RenderGlyphParams,
+    data: &DWRITE_GLYPH_IMAGE_DATA,
+) -> Result<D2D_RECT_F> {
+    ensure!(data.pixelsPerEm > 0, "bitmap glyph has no strike size");
+
+    let scale =
+        params.font_size.as_f32() as f64 * params.scale_factor as f64 / data.pixelsPerEm as f64;
+
+    let left = params.subpixel_variant.x as f64 / SUBPIXEL_VARIANTS_X as f64
+        - data.horizontalLeftOrigin.x as f64 * scale;
+
+    let top = params.subpixel_variant.y as f64 / SUBPIXEL_VARIANTS_Y as f64
+        - data.horizontalLeftOrigin.y as f64 * scale;
+
+    ensure!(
+        scale.is_finite() && scale > 0.0,
+        "invalid bitmap glyph scale"
+    );
+
+    Ok(D2D_RECT_F {
+        left: left as f32,
+        top: top as f32,
+        right: (left + data.pixelSize.width as f64 * scale) as f32,
+        bottom: (top + data.pixelSize.height as f64 * scale) as f32,
+    })
+}
+
+fn bitmap_ink_bounds(rect: D2D_RECT_F) -> Result<RECT> {
+    let edges = [
+        rect.left.floor(),
+        rect.top.floor(),
+        rect.right.ceil(),
+        rect.bottom.ceil(),
+    ];
+
+    ensure!(
+        edges.iter().all(|edge| edge.is_finite()
+            && *edge as f64 >= i32::MIN as f64
+            && (*edge as f64) <= i32::MAX as f64),
+        "bitmap glyph bounds overflow"
+    );
+
+    Ok(RECT {
+        left: edges[0] as i32,
+        top: edges[1] as i32,
+        right: edges[2] as i32,
+        bottom: edges[3] as i32,
+    })
+}
+
+fn draw_bitmap_glyph(
+    wic: &IWICImagingFactory,
+    params: &RenderGlyphParams,
+    bitmap: &IWICBitmap,
+    destination: D2D_RECT_F,
+    ink_bounds: RECT,
+) -> Result<RasterizedGlyph> {
+    rasterize_color_bitmap(wic, params.raster_style, ink_bounds, |target| {
+        let image = unsafe { target.CreateBitmapFromWicBitmap(bitmap, None)? };
+
+        unsafe {
+            target.DrawBitmap(
+                &image,
+                Some(&destination),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            );
+        }
+
+        Ok(())
+    })
 }
 
 fn get_system_subpixel_rendering() -> bool {
@@ -857,7 +1146,7 @@ mod tests {
     use gpui::{
         Font, FontStyle, FontSynthesis, FontWeight, FontWidth, ForegroundDependency, GlyphId,
         GlyphRenderMode::{Color, Grayscale, Subpixel},
-        Point, RasterizedGlyphFormat, Rgba, Size, font, px, rgba,
+        Point, RasterizedGlyphFormat, Rgba, Size, TextLayoutRequest, TextRun, font, px, rgba,
     };
     use gpui_fonts::test_collection;
     use std::{borrow::Cow, collections::BTreeMap};
@@ -1140,14 +1429,21 @@ mod tests {
     }
 
     #[test]
-    fn color_layer_bounds_cover_empty_and_smaller_base_outlines() -> Result<()> {
+    fn color_bounds_cover_layers_and_resampled_bitmap_strikes() -> Result<()> {
         let (system, font_id) = color_test_system()?;
         let color_data = color_font_data(&*system, font_id);
+        let bitmap = bitmap_test_params(&*system)?;
 
-        for character in ['i', ' '] {
+        for (font_id, character) in [(font_id, 'i'), (font_id, ' '), (bitmap.font_id, '😀')] {
             let glyph_id = system.glyph_for_char(font_id, character).unwrap();
 
-            let rasterizer = test_rasterizer(font_id, &color_data, 0)?;
+            let data = if character == '😀' {
+                gpui_fonts::NOTO_COLOR_EMOJI.data
+            } else {
+                &color_data
+            };
+
+            let rasterizer = test_rasterizer(font_id, data, 0)?;
 
             for (font_size, scale_factor) in [
                 (12.0, 1.0),
@@ -1200,6 +1496,10 @@ mod tests {
                     .transpose()?;
                 let before = explicit_calling_apartment()?;
                 let (system, font_id) = color_test_system()?;
+                let bitmap_params = bitmap_test_params(&*system)?;
+                let rasterizer =
+                    test_rasterizer(bitmap_params.font_id, gpui_fonts::NOTO_COLOR_EMOJI.data, 0)?;
+
                 let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
                 let mut params =
                     raster_params(&*system, font_id, glyph_id, Color, rgba(0x20c080ff));
@@ -1208,6 +1508,28 @@ mod tests {
                 params.scale_factor = 1.5;
 
                 for iteration in 0..3 {
+                    let bitmap = system.rasterize_glyph(&bitmap_params)?;
+                    bitmap.validate()?;
+                    assert!(!bitmap.pixels.is_empty());
+
+                    assert_eq!(explicit_calling_apartment()?, before);
+
+                    // Fail after retrieval and decoding to exercise the apartment and image guards.
+                    assert!(
+                        rasterizer
+                            .with_bitmap_glyph(&bitmap_params, |_wic, _data, _bitmap| {
+                                bail!("injected bitmap draw failure")
+                            })
+                            .is_err()
+                    );
+
+                    assert_eq!(explicit_calling_apartment()?, before);
+
+                    let mut invalid_bitmap = bitmap_params.clone();
+                    invalid_bitmap.glyph_id = GlyphId(u32::MAX);
+                    assert!(rasterizer.rasterize_bitmap_glyph(&invalid_bitmap).is_err());
+                    assert_eq!(explicit_calling_apartment()?, before);
+
                     let rasterized = system.rasterize_glyph(&params)?;
                     rasterized.validate()?;
 
@@ -1233,6 +1555,194 @@ mod tests {
             })
             .join()
             .expect("color raster thread panicked")?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn cbdt_preserves_sequences_and_empty_or_invalid_glyphs() -> Result<()> {
+        let system = new_text_system()?;
+        let mut params = bitmap_test_params(&*system)?;
+        system.rasterize_glyph(&params)?;
+
+        let rasterizer = test_rasterizer(params.font_id, gpui_fonts::NOTO_COLOR_EMOJI.data, 0)?;
+        let rasterize_native =
+            |params: &RenderGlyphParams| rasterizer.rasterize_bitmap_glyph(params);
+
+        for text in ["👩‍💻", "👩🏽", "🇬🇧", "1️⃣"] {
+            let runs = [TextRun {
+                len: text.len(),
+                font: font("Noto Color Emoji"),
+                ..Default::default()
+            }];
+
+            let layout = system.layout_text(TextLayoutRequest {
+                text,
+                font_size: px(24.0),
+                runs: &runs,
+                options: Default::default(),
+            });
+
+            let fragments = &layout.paint_fragments;
+            assert_eq!(fragments.len(), 1, "{text}");
+            assert_eq!(fragments[0].font_id, params.font_id, "{text}");
+            assert_eq!(fragments[0].glyphs.len(), 1, "{text}");
+            let glyph_id = fragments[0].glyphs[0].id;
+            params = raster_params(&*system, params.font_id, glyph_id, Color, rgba(0xffffffff));
+
+            assert_eq!(
+                params.raster_style.foreground_dependency,
+                ForegroundDependency::AlphaOnly
+            );
+
+            let actual = system.rasterize_glyph(&params)?;
+            actual.validate()?;
+
+            assert!(
+                actual.pixels.chunks_exact(4).any(|pixel| {
+                    pixel[3] > 0 && (pixel[0] != pixel[1] || pixel[1] != pixel[2])
+                }),
+                "{text}"
+            );
+
+            let native = rasterize_native(&params)?;
+
+            assert_eq!(actual.bounds, native.bounds, "{text}");
+            assert_eq!(actual.format, native.format, "{text}");
+            assert_eq!(actual.pixels, native.pixels, "{text}");
+        }
+
+        params.glyph_id = system.glyph_for_char(params.font_id, ' ').unwrap();
+
+        let empty = system.rasterize_glyph(&params)?;
+        empty.validate()?;
+        assert!(empty.pixels.is_empty());
+        assert!(rasterize_native(&params).is_err());
+
+        for invalid in [u16::MAX as u32, u16::MAX as u32 + 1, u32::MAX] {
+            params.glyph_id = GlyphId(invalid);
+            assert!(system.rasterize_glyph(&params).is_err());
+
+            assert!(rasterize_native(&params).is_err());
+        }
+
+        params.glyph_id = system.glyph_for_char(params.font_id, '😀').unwrap();
+        params.font_size = Pixels::ZERO;
+        assert!(system.rasterize_glyph(&params)?.pixels.is_empty());
+
+        for invalid in [f32::NAN, f32::INFINITY, -1.0, f32::MAX] {
+            params.font_size = px(invalid);
+
+            assert!(system.rasterize_glyph(&params).is_err());
+            assert!(rasterize_native(&params).is_err());
+        }
+
+        params.font_size = px(24.0);
+
+        for invalid in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            params.scale_factor = invalid;
+
+            assert!(system.rasterize_glyph(&params).is_err());
+            assert!(rasterize_native(&params).is_err());
+        }
+
+        params.scale_factor = 1.0;
+        assert!(!system.rasterize_glyph(&params)?.pixels.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn cbdt_image_data_survives_retrieval_decode_and_target_errors() -> Result<()> {
+        let _apartment = ColorRasterApartment::new()?;
+
+        let wic: IWICImagingFactory =
+            unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+
+        let system = new_text_system()?;
+        let params = bitmap_test_params(&*system)?;
+        system.rasterize_glyph(&params)?;
+        let rasterizer = test_rasterizer(params.font_id, gpui_fonts::NOTO_COLOR_EMOJI.data, 0)?;
+        let face = &rasterizer.faces[&params.font_id].face;
+        let glyph_id = params.glyph_id.0 as u16;
+        let png = DWRITE_GLYPH_IMAGE_FORMATS_PNG;
+
+        assert!(
+            GlyphImageData::new(
+                face,
+                glyph_id,
+                24,
+                png | DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8
+            )
+            .is_err()
+        );
+
+        assert!(GlyphImageData::new(face, glyph_id, 24, DWRITE_GLYPH_IMAGE_FORMATS_SVG)?.is_none());
+
+        // Each failure unwinds the data guard before the next retrieval.
+        let load = |length: usize| -> Result<_> {
+            let image = GlyphImageData::new(face, glyph_id, 24, png)?
+                .context("missing Noto PNG artwork")?;
+
+            let bytes = image.bytes()?;
+
+            let bitmap =
+                decode_bitmap_glyph(&wic, &image.data, &bytes[..length.min(bytes.len())], png)?;
+
+            Ok((image.data, bitmap))
+        };
+
+        for iteration in 0..3 {
+            assert!(load(16).is_err());
+            let (data, bitmap) = load(usize::MAX)?;
+            assert!(decode_bitmap_glyph(&wic, &data, b"not a PNG", png).is_err());
+            let mut invalid = data;
+            invalid.pixelSize.width += 1;
+            let image = GlyphImageData::new(face, glyph_id, 24, png)?.unwrap();
+            assert!(decode_bitmap_glyph(&wic, &invalid, image.bytes()?, png).is_err());
+
+            for (width, height) in [(0, 1), (1, 0), (u32::MAX, 1), (65536, 65536)] {
+                invalid = data;
+                invalid.pixelSize.width = width;
+                invalid.pixelSize.height = height;
+
+                assert!(decode_bitmap_glyph(&wic, &invalid, image.bytes()?, png).is_err());
+            }
+
+            let mut invalid_image = GlyphImageData::new(face, glyph_id, 24, png)?.unwrap();
+            invalid_image.data.imageData = std::ptr::null();
+            assert!(invalid_image.bytes().is_err());
+            invalid_image.data.imageDataSize = 0;
+            assert!(invalid_image.bytes().is_err());
+            drop(invalid_image);
+
+            invalid = data;
+            invalid.pixelsPerEm = 0;
+            assert!(bitmap_glyph_rect(&params, &invalid).is_err());
+
+            for edge in [f32::NAN, f32::INFINITY, i32::MAX as f32] {
+                assert!(
+                    bitmap_ink_bounds(D2D_RECT_F {
+                        right: edge,
+                        bottom: 1.0,
+                        ..Default::default()
+                    })
+                    .is_err()
+                );
+            }
+
+            let destination = bitmap_glyph_rect(&params, &data)?;
+            let bounds = bitmap_ink_bounds(destination)?;
+            let failed_bounds = oversized_color_bounds(&wic, params.raster_style)?;
+            assert!(draw_bitmap_glyph(&wic, &params, &bitmap, destination, failed_bounds).is_err());
+            let actual = draw_bitmap_glyph(&wic, &params, &bitmap, destination, bounds)?;
+            actual.validate()?;
+
+            assert!(
+                !actual.pixels.is_empty(),
+                "glyph data lost after error {iteration}"
+            );
         }
 
         Ok(())
@@ -1306,21 +1816,66 @@ mod tests {
             factory.CreateBitmapFromMemory(2, 2, &GUID_WICPixelFormat32bppPBGRA, 12, &source)?
         };
 
-        for (alpha, expected_alpha) in [(255, 128), (128, 64), (64, 32)] {
-            let pixels = read_color_bitmap(&bitmap, 2, 2, alpha)?;
-            assert_eq!(
-                pixels,
-                [
-                    [0; 4],
-                    [64, 128, 255, expected_alpha],
-                    [255, 0, 0, alpha],
-                    [0; 4]
-                ]
-                .concat()
-            );
+        let data = DWRITE_GLYPH_IMAGE_DATA {
+            pixelsPerEm: 2,
+            pixelSize: D2D_SIZE_U {
+                width: 2,
+                height: 2,
+            },
+            horizontalLeftOrigin: POINT { x: 1, y: 2 },
+            ..Default::default()
+        };
+
+        let bytes = [0, 0, 0, 0, 32, 64, 128, 128, 255, 0, 0, 255, 0, 0, 0, 0];
+
+        let bgra = DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8;
+        let decoded = decode_bitmap_glyph(&factory, &data, &bytes, bgra)?;
+
+        for current in [&bitmap, &decoded] {
+            for (alpha, expected_alpha) in [(255, 128), (128, 64), (64, 32)] {
+                let pixels = read_color_bitmap(current, 2, 2, alpha)?;
+
+                assert_eq!(
+                    pixels,
+                    [
+                        [0; 4],
+                        [64, 128, 255, expected_alpha],
+                        [255, 0, 0, alpha],
+                        [0; 4]
+                    ]
+                    .concat()
+                );
+            }
+
+            assert_eq!(read_color_bitmap(current, 2, 2, 0)?, vec![0; 16]);
         }
 
-        assert_eq!(read_color_bitmap(&bitmap, 2, 2, 0)?, vec![0; 16]);
+        for invalid in [&bytes[..15], &bytes[..0]] {
+            assert!(decode_bitmap_glyph(&factory, &data, invalid, bgra).is_err());
+        }
+
+        let system = new_text_system()?;
+        let mut params = bitmap_test_params(&*system)?;
+
+        params.font_size = px(4.0);
+
+        let destination = bitmap_glyph_rect(&params, &data)?;
+        let bounds = bitmap_ink_bounds(destination)?;
+
+        assert_eq!(
+            (bounds.left, bounds.top, bounds.right, bounds.bottom),
+            (-2, -4, 2, 0)
+        );
+
+        let actual = draw_bitmap_glyph(&factory, &params, &decoded, destination, bounds)?;
+        actual.validate()?;
+
+        // Premultiplied interpolation keeps transparent neighbors from darkening the color.
+        let edge = &actual.pixels[4..8];
+        assert!(edge[3] > 0 && edge[3] < 128);
+        assert!(edge[0].abs_diff(64) <= 8);
+        assert!(edge[1].abs_diff(128) <= 8);
+        assert!(edge[2] >= 248);
 
         Ok(())
     }
@@ -1448,19 +2003,65 @@ mod tests {
 
         let padded_bounds = actual.bounds.dilate(DevicePixels(4));
 
-        let glyph_analysis = rasterizer.create_glyph_run_analysis(params)?;
+        let padded = if character == '😀' {
+            rasterizer.with_bitmap_glyph(params, |wic, data, bitmap| {
+                let direct = rasterizer.rasterize_bitmap_glyph(params)?;
 
-        let base_bounds =
-            unsafe { glyph_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
+                assert_eq!(
+                    (actual.bounds, actual.format, &actual.pixels),
+                    (direct.bounds, direct.format, &direct.pixels)
+                );
 
-        if character == ' ' {
-            assert_eq!(base_bounds.right, base_bounds.left);
-            assert_eq!(base_bounds.bottom, base_bounds.top);
+                assert_ne!(
+                    data.pixelsPerEm, 24,
+                    "fixture must exercise strike resampling"
+                );
+
+                assert!(actual.bounds.origin.y.0 < 0);
+
+                assert!(
+                    actual
+                        .pixels
+                        .chunks_exact(4)
+                        .any(|pixel| pixel[3] > 0 && pixel[2] > pixel[0].saturating_add(32))
+                );
+
+                let scale =
+                    params.font_size.as_f32() * params.scale_factor / data.pixelsPerEm as f32;
+
+                assert!(
+                    (actual.size.width.0 as f32 - data.pixelSize.width as f32 * scale).abs() < 2.0
+                );
+
+                draw_bitmap_glyph(
+                    wic,
+                    params,
+                    bitmap,
+                    bitmap_glyph_rect(params, data)?,
+                    RECT {
+                        left: padded_bounds.left().0,
+                        top: padded_bounds.top().0,
+                        right: padded_bounds.right().0,
+                        bottom: padded_bounds.bottom().0,
+                    },
+                )
+            })?
         } else {
-            assert!(actual.size.width.0 > base_bounds.right - base_bounds.left);
-        }
+            let glyph_analysis = rasterizer.create_glyph_run_analysis(params)?;
 
-        let padded = rasterizer.rasterize_color(params, padded_bounds)?;
+            let base_bounds =
+                unsafe { glyph_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
+
+            if character == ' ' {
+                assert_eq!(base_bounds.right, base_bounds.left);
+                assert_eq!(base_bounds.bottom, base_bounds.top);
+            } else {
+                assert!(actual.size.width.0 > base_bounds.right - base_bounds.left);
+            }
+
+            rasterizer.rasterize_color(params, padded_bounds)?
+        };
+
         padded.validate()?;
         assert_padded_color_matches(&actual, &padded);
 
