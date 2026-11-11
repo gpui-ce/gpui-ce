@@ -1,18 +1,18 @@
 use crate::{
-    ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
+    FontStore, SystemFonts,
     catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
 };
 use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
-    InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineRangeGeometry,
-    InlineTextMetrics, InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle,
-    ParagraphDirection, Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
-    PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
-    ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
-    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRangeExt, TextRenderingMode, TextRun,
-    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes,
-    is_paragraph_separator, point, px, size,
+    Bounds, CaretAffinity, CaretMovement, CaretPosition, ColorGlyphKind, Font, FontId, FontMetrics,
+    FontVariation, GlyphId, GlyphRasterizer, InlineBidiScope, InlineBoxRequest, InlineLayout,
+    InlineLayoutRequest, InlineRangeGeometry, InlineTextMetrics, InlineTextStyle, InlineVisualLine,
+    LineLayout, PaintFragment, PaintStyle, ParagraphDirection, Pixels, PlatformTextLayout,
+    PlatformTextSystem, Point, PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest,
+    RasterizedGlyph, RenderGlyphParams, ResolvedDirection, ShapedGlyph, Size, TextAlign,
+    TextBoundary as Boundary, TextDirection as Direction, TextLayoutOptions, TextLayoutRequest,
+    TextMovement, TextRangeExt, TextRenderingMode, TextRun, TextSelectionKind, UnicodeBidi,
+    VisualDirection, VisualLine, align_inline_boxes, is_paragraph_separator, point, px, size,
 };
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
@@ -1389,25 +1389,8 @@ pub struct ParleyTextSystem {
 }
 
 impl ParleyTextSystem {
-    /// Creates a text system using GPUI's default system-font family.
-    pub fn new(system_fonts: SystemFonts) -> Self {
-        Self::new_with_system_font(system_fonts, ".SystemUIFont")
-    }
-
-    /// Creates a text system with the concrete family used for GPUI's system-font alias.
-    pub fn new_with_system_font(
-        system_fonts: SystemFonts,
-        system_font_fallback: impl Into<String>,
-    ) -> Self {
-        Self::new_with_rasterizer(
-            system_fonts,
-            system_font_fallback,
-            SwashGlyphRasterizer::default(),
-        )
-    }
-
     /// Creates a text system which delegates only glyph rasterization to `rasterizer`.
-    pub fn new_with_rasterizer(
+    pub fn new(
         system_fonts: SystemFonts,
         system_font_fallback: impl Into<String>,
         rasterizer: impl GlyphRasterizer + 'static,
@@ -1447,11 +1430,6 @@ impl ParleyTextSystem {
         self.automatic_optical_sizing = true;
 
         self
-    }
-
-    /// Creates a deterministic text system without operating-system fonts.
-    pub fn without_system_fonts() -> Self {
-        Self::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
     }
 
     /// Adds fallback families after those supplied by each text style.
@@ -2096,7 +2074,8 @@ impl ParleyTextSystem {
                     .collect::<Vec<_>>();
                 let shaping_variations = self
                     .automatic_optical_sizing
-                    .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
+                    .then(|| [FontVariation::new(*b"opsz", run.font_size())]);
+
                 let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
@@ -2263,19 +2242,6 @@ impl ParleyTextSystem {
 
         Ok(result)
     }
-}
-
-fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
-    let mut start = 0;
-
-    runs.iter()
-        .map(|run| {
-            let range = start..start + run.len;
-            start = range.end;
-
-            range
-        })
-        .collect()
 }
 
 fn face_families<'a>(
@@ -2483,16 +2449,29 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 }
 
+fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
+    let mut start = 0;
+
+    runs.iter()
+        .map(|run| {
+            let range = start..start + run.len;
+            start = range.end;
+
+            range
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FontSynthesis, FontVariation, RasterFace};
     use gpui::{
         AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
-        FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode,
-        HeadlessAppContext, HighlightStyle, Hsla, IntoElement, Point, RasterizedGlyphFormat,
-        Render, ScaledPixels, StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle,
-        VerticalAlign, Window, WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
+        FontStyle as GpuiFontStyle, FontSynthesis, FontWeight as GpuiFontWeight, GlyphRenderMode,
+        HeadlessAppContext, HighlightStyle, Hsla, IntoElement, Point, RasterFace,
+        RasterizedGlyphFormat, Render, StrikethroughStyle, Styled, StyledText, TestTextSystem,
+        TextSystem, UnderlineStyle, VerticalAlign, Window, WindowHandle, WindowTextSystem, div,
+        font, hsla, prelude::*,
     };
     use gpui_fonts::{
         IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS,
@@ -2519,7 +2498,7 @@ mod tests {
 
     fn test_system() -> Arc<ParleyTextSystem> {
         let system = Arc::new(
-            ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family)
+            ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem)
                 .with_fallback_families([
                     IBM_PLEX.family,
                     LILEX.family,
@@ -2529,6 +2508,7 @@ mod tests {
                     NOTO_HEBREW.family,
                 ]),
         );
+
         system
             .add_fonts(vec![
                 Cow::Borrowed(IBM_PLEX.data),
@@ -4323,7 +4303,8 @@ mod tests {
 
         let prepare_calls = Arc::new(AtomicUsize::new(0));
         let recommended_calls = Arc::new(AtomicUsize::new(0));
-        let system = ParleyTextSystem::new_with_rasterizer(
+
+        let system = ParleyTextSystem::new(
             SystemFonts::Skip,
             "IBM Plex Sans",
             PolicyRasterizer {
@@ -4331,6 +4312,7 @@ mod tests {
                 recommended_calls: recommended_calls.clone(),
             },
         );
+
         let request = RasterStyleRequest {
             font_id: FontId(1),
             glyph_id: GlyphId(1),
@@ -4362,9 +4344,10 @@ mod tests {
     #[test]
     fn font_registration_invalidates_layouts_and_distinguishes_requested_instances() {
         let backend = Arc::new(
-            ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family)
+            ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem)
                 .with_fallback_families([IBM_PLEX.family]),
         );
+
         backend
             .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
             .unwrap();
@@ -4571,258 +4554,33 @@ mod tests {
     }
 
     #[test]
-    fn rasterizes_monochrome_and_color_glyphs_with_expected_buffer_formats() {
+    fn bundled_color_artwork_is_classified_per_glyph() {
         let system = test_system();
 
-        let mixed_color_face = layout_line(
-            &system,
-            "1 1",
-            px(24.0),
-            &[text_run("1 1", NOTO_COLOR_EMOJI.family)],
-        );
-        let color_flags = mixed_color_face
-            .paint_fragments
-            .iter()
-            .flat_map(|fragment| fragment.glyphs.iter().map(|glyph| glyph.is_emoji))
-            .collect::<Vec<_>>();
-        assert_eq!(color_flags, [true, false, true]);
-
-        for (text, mode, expected_format) in [
-            (
-                "A",
-                GlyphRenderMode::Grayscale,
-                RasterizedGlyphFormat::AlphaMask,
-            ),
-            (
-                "A",
-                GlyphRenderMode::Subpixel,
-                RasterizedGlyphFormat::BgraSubpixelMask,
-            ),
-            (
-                "😀",
-                GlyphRenderMode::Color,
-                RasterizedGlyphFormat::BgraColor,
-            ),
-        ] {
-            let expect_color = mode == GlyphRenderMode::Color;
-            let layout = layout_line(&system, text, px(24.0), &[text_run(text, IBM_PLEX.family)]);
-            let glyph = layout
-                .paint_fragments
-                .iter()
-                .flat_map(|fragment| {
-                    fragment
-                        .glyphs
-                        .iter()
-                        .map(move |glyph| (fragment.font_id, glyph))
-                })
-                .find(|(_, glyph)| glyph.is_emoji == expect_color)
-                .unwrap();
-            let raster = system
-                .rasterize_glyph(&RenderGlyphParams {
-                    font_id: glyph.0,
-                    glyph_id: glyph.1.id,
-                    font_size: px(24.0),
-                    subpixel_variant: Default::default(),
-                    scale_factor: 1.0,
-                    raster_style: PreparedRasterStyle::independent(mode),
-                })
-                .unwrap();
-            assert_eq!(raster.bounds.size, raster.size);
-            assert!(raster.size.width.0 > 0 && raster.size.height.0 > 0);
-            let channels = match raster.format {
-                gpui::RasterizedGlyphFormat::AlphaMask => 1,
-                gpui::RasterizedGlyphFormat::BgraSubpixelMask
-                | gpui::RasterizedGlyphFormat::BgraColor => 4,
-            };
-
-            assert_eq!(raster.format, expected_format);
-            assert_eq!(
-                raster.pixels.len(),
-                raster.size.width.0 as usize * raster.size.height.0 as usize * channels
-            );
-            match expected_format {
-                RasterizedGlyphFormat::AlphaMask => {
-                    assert!(raster.pixels.iter().any(|&alpha| alpha > 0));
-                }
-                RasterizedGlyphFormat::BgraSubpixelMask => {
-                    assert!(
-                        raster
-                            .pixels
-                            .chunks_exact(4)
-                            .any(|pixel| { pixel[0] != pixel[1] || pixel[1] != pixel[2] })
-                    );
-                }
-                RasterizedGlyphFormat::BgraColor => {
-                    assert!(raster.pixels.chunks_exact(4).any(|pixel| {
-                        pixel[3] > 128
-                            && (pixel[0] != pixel[1]
-                                || pixel[1] != pixel[2]
-                                || pixel[0] != pixel[2])
-                    }));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bundled_emoji_sample_keeps_font_metrics_and_device_scaling() {
-        const SAMPLE: &str = "Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
-        const EMOJI: [char; 6] = ['😀', '🎉', '🚀', '💡', '🔥', '✨'];
-
-        let system = test_system();
-        let noto_id = system.font_id(&font("Noto Color Emoji")).unwrap();
-
-        for font_size in [px(16.0), px(24.0), px(32.0)] {
+        for (text, expected_flags) in [("👩🏽‍💻", &[true][..]), ("1 1", &[true, false, true][..])]
+        {
             let layout = layout_line(
                 &system,
-                SAMPLE,
-                font_size,
-                &[text_run(SAMPLE, "IBM Plex Sans")],
+                text,
+                px(24.0),
+                &[text_run(text, NOTO_COLOR_EMOJI.family)],
             );
-            let emoji_glyphs = layout
+
+            let color_flags = layout
                 .paint_fragments
                 .iter()
-                .flat_map(|fragment| {
-                    fragment
-                        .glyphs
-                        .iter()
-                        .filter(|glyph| glyph.is_emoji)
-                        .map(move |glyph| (fragment, glyph))
-                })
+                .flat_map(|fragment| fragment.glyphs.iter().map(|glyph| glyph.is_emoji))
                 .collect::<Vec<_>>();
 
-            assert_eq!(emoji_glyphs.len(), EMOJI.len());
-            assert_eq!(layout.font_size, font_size);
-
-            for (character, (fragment, glyph)) in EMOJI.into_iter().zip(emoji_glyphs) {
-                assert_eq!(
-                    fragment.font_id, noto_id,
-                    "{character} selected another font"
-                );
-                assert_eq!(fragment.font_size, font_size);
-                assert_eq!(glyph.position.y, Pixels::ZERO);
-                assert_eq!(
-                    glyph.id,
-                    system.glyph_for_char(noto_id, character).unwrap(),
-                    "{character} did not use its nominal bundled glyph"
-                );
-
-                let glyph_idx = fragment
-                    .glyphs
-                    .iter()
-                    .position(|candidate| std::ptr::eq(candidate, glyph))
-                    .unwrap();
-                let shaped_advance = fragment
-                    .glyphs
-                    .get(glyph_idx + 1)
-                    .map(|next| next.position.x - glyph.position.x)
-                    .unwrap_or(fragment.x_range.end - glyph.position.x);
-                assert!(shaped_advance > Pixels::ZERO);
-                let raster_style = system.prepare_raster_style(RasterStyleRequest {
-                    font_id: fragment.font_id,
-                    glyph_id: glyph.id,
-                    scene_color: gpui::rgba(0xffffffff),
-                    requested_mode: GlyphRenderMode::Color,
-                    foreground_dependency: gpui::ForegroundDependency::Full,
-                });
-                let mut scale_one_bounds: Option<[f32; 4]> = None;
-
-                for scale_factor in [1.0, 1.5, 2.0] {
-                    let raster = system
-                        .rasterize_glyph(&RenderGlyphParams {
-                            font_id: fragment.font_id,
-                            glyph_id: glyph.id,
-                            font_size: fragment.font_size,
-                            subpixel_variant: point(0, 0),
-                            scale_factor,
-                            raster_style,
-                        })
-                        .unwrap();
-                    raster.validate().unwrap();
-                    assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
-                    assert!(
-                        raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-                        "{character} produced no visible pixels"
-                    );
-
-                    let logical_bounds = [
-                        raster.bounds.origin.x.0 as f32 / scale_factor,
-                        raster.bounds.origin.y.0 as f32 / scale_factor,
-                        raster.size.width.0 as f32 / scale_factor,
-                        raster.size.height.0 as f32 / scale_factor,
-                    ];
-
-                    if let Some(reference) = scale_one_bounds {
-                        for (actual, expected) in logical_bounds.into_iter().zip(reference) {
-                            assert!(
-                                (actual - expected).abs() <= 1.0,
-                                "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
-                            );
-                        }
-                    } else {
-                        scale_one_bounds = Some(logical_bounds);
-                    }
-                }
-            }
+            assert_eq!(color_flags, expected_flags, "{text:?}");
         }
-    }
-
-    #[test]
-    fn bundled_joined_emoji_sequence_shapes_as_one_color_glyph() {
-        let system = test_system();
-        let text = "👩🏽‍💻";
-        let layout = layout_line(
-            &system,
-            text,
-            px(24.0),
-            &[text_run(text, "Noto Color Emoji")],
-        );
-        let glyphs = layout
-            .paint_fragments
-            .iter()
-            .flat_map(|fragment| fragment.glyphs.iter())
-            .collect::<Vec<_>>();
-
-        assert_eq!(glyphs.len(), 1);
-        assert!(glyphs[0].is_emoji);
-    }
-
-    #[test]
-    fn fixed_color_bitmaps_ignore_foreground_rgb_but_preserve_alpha() {
-        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family);
-        system
-            .add_fonts(vec![
-                Cow::Borrowed(IBM_PLEX.data),
-                Cow::Borrowed(NOTO_COLOR_EMOJI.data),
-            ])
-            .unwrap();
-        let font_id = system.font_id(&font(NOTO_COLOR_EMOJI.family)).unwrap();
-        let glyph_id = system.glyph_for_char(font_id, '😀').unwrap();
-        let style = |color| {
-            system.prepare_raster_style(RasterStyleRequest {
-                font_id,
-                glyph_id,
-                scene_color: color,
-                requested_mode: GlyphRenderMode::Color,
-                foreground_dependency: gpui::ForegroundDependency::Full,
-            })
-        };
-
-        let red = style(gpui::rgba(0xff0000cc));
-        let blue = style(gpui::rgba(0x0000ffcc));
-        let translucent = style(gpui::rgba(0x0000ff80));
-        assert_eq!(red, blue);
-        assert_eq!(
-            red.foreground_dependency,
-            gpui::ForegroundDependency::AlphaOnly
-        );
-        assert_ne!(red, translucent);
     }
 
     #[test]
     fn automatic_optical_sizing_tracks_logical_default_and_inline_sizes() {
-        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, SOURCE_SERIF.family)
+        let system = ParleyTextSystem::new(SystemFonts::Skip, SOURCE_SERIF.family, TestTextSystem)
             .with_automatic_optical_sizing();
+
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
             .unwrap();
@@ -4900,12 +4658,13 @@ mod tests {
     #[test]
     fn native_backend_receives_the_face_instance_selected_during_shaping() {
         let seen = Arc::new(Mutex::new(None));
-        let system = ParleyTextSystem::new_with_rasterizer(
+        let system = ParleyTextSystem::new(
             SystemFonts::Skip,
             SOURCE_SERIF.family,
             RecordingRasterizer { seen: seen.clone() },
         )
         .with_automatic_optical_sizing();
+
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
             .unwrap();
@@ -4938,6 +4697,12 @@ mod tests {
         assert!(raster.pixels.is_empty());
 
         let seen = seen.lock().clone().expect("rasterizer saw a face");
+
+        let instances = system.font_instances.read();
+        let selected = instances.get(font_id).unwrap();
+
+        assert_eq!(seen.source_id, selected.data.id());
+        assert_eq!(seen.normalized_coords, selected.normalized_coords);
         assert_eq!(seen.font_id, font_id);
         assert_eq!(seen.face_index, 0);
         assert!(seen.data_matches);
@@ -4961,6 +4726,8 @@ mod tests {
     #[derive(Clone, Debug)]
     struct SeenRasterFace {
         font_id: FontId,
+        source_id: u64,
+        normalized_coords: Vec<NormalizedCoord>,
         face_index: u32,
         data_matches: bool,
         variations: Vec<FontVariation>,
@@ -4984,6 +4751,8 @@ mod tests {
         ) -> Result<RasterizedGlyph> {
             *self.seen.lock() = Some(SeenRasterFace {
                 font_id: face.font_id,
+                source_id: face.source_id,
+                normalized_coords: face.normalized_coords.to_vec(),
                 face_index: face.face_index,
                 data_matches: face.data() == SOURCE_SERIF.data,
                 variations: face.variations.to_vec(),

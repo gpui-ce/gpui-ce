@@ -2476,6 +2476,7 @@ dependencies = [
  "image",
  "inventory",
  "itertools 0.14.0",
+ "linebender_resource_handle",
  "log",
  "lyon",
  "num_cpus",
@@ -2581,6 +2582,7 @@ dependencies = [
  "gpui-ce-fonts",
  "gpui_ce_parley",
  "gpui_ce_platform",
+ "gpui_ce_render",
  "palette",
  "smallvec",
  "unicode-segmentation",
@@ -2604,6 +2606,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_parley",
+ "gpui_ce_render",
  "gpui_ce_util",
  "gpui_ce_wgpu",
  "image",
@@ -2659,6 +2662,7 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_media",
  "gpui_ce_parley",
+ "gpui_ce_render",
  "gpui_ce_util",
  "gpui_ce_wgpu",
  "image",
@@ -2722,7 +2726,6 @@ dependencies = [
  "parking_lot",
  "parley",
  "skrifa",
- "swash",
  "unicode-segmentation",
 ]
 
@@ -2763,10 +2766,17 @@ dependencies = [
 name = "gpui_ce_render"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "criterion",
  "gpui-ce",
+ "gpui-ce-fonts",
+ "gpui_ce_parley",
  "naga 24.0.0",
  "naga 29.0.4",
+ "skrifa",
  "smallvec",
+ "swash",
+ "unicode-segmentation",
  "wgsl-rs",
  "windows 0.62.2",
 ]
@@ -2835,6 +2845,7 @@ dependencies = [
  "futures",
  "gpui-ce",
  "gpui_ce_parley",
+ "gpui_ce_render",
  "gpui_ce_scheduler",
  "gpui_ce_wgpu",
  "http",

@@ -50,6 +50,7 @@ foreign-types.workspace = true
 futures.workspace = true
 gpui_apple.workspace = true
 gpui_parley = { workspace = true, features = ["system-fonts"] }
+gpui_render = { workspace = true, features = ["swash"] }
 gpui_util.workspace = true
 gpui_wgpu = { workspace = true, optional = true }
 image.workspace = true

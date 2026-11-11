@@ -14,12 +14,18 @@ Items are sorted by issue or pull request number.
 
 ### Breaking Changes
 
+- `ParleyTextSystem::new` now requires a system-font fallback family and a glyph rasterizer, replacing `new_with_rasterizer`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+
 ### Additions
 
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
+- Moved `GlyphRasterizer`, `RasterFace`, `FontDataBlob`, `FontVariation`, `FontSynthesis`, and `ColorGlyphKind` from `gpui_parley` to `gpui`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+- Moved `SwashGlyphRasterizer` and `BitmapFallbackGlyphRasterizer` from `gpui_parley` to `gpui_render`, behind a new `swash` feature. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 
 ### Removals
+
+- Removed `ParleyTextSystem::new_with_system_font` and `ParleyTextSystem::without_system_fonts`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 
 ### Fixes
 
