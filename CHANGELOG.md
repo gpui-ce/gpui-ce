@@ -34,6 +34,7 @@ Items are sorted by issue or pull request number.
 - Fixed color bitmap glyph opacity and style handling. [#401](https://github.com/gpui-ce/gpui-ce/pull/401)
   - Glyphs now respect text opacity.
   - Cleared color channels for fully transparent bitmap glyph pixels.
+  - Rejected unsupported dilation styles for color bitmap glyphs.
 
 ### Security Changes
 

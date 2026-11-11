@@ -148,7 +148,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
 
         let (format, pixels) = match image.content {
             Content::Color => {
-                convert_color_image_to_bgra(&mut image, params.raster_style);
+                convert_color_image_to_bgra(&mut image, params.raster_style)?;
 
                 (RasterizedGlyphFormat::BgraColor, image.data)
             }
@@ -292,12 +292,15 @@ fn subpixel_offset(params: &RenderGlyphParams) -> Vector {
     )
 }
 
-fn convert_color_image_to_bgra(image: &mut Image, style: PreparedRasterStyle) {
+fn convert_color_image_to_bgra(image: &mut Image, style: PreparedRasterStyle) -> Result<()> {
     let premultiplied = matches!(image.source, Source::ColorOutline(_));
     let is_bitmap = matches!(image.source, Source::ColorBitmap(_));
 
     let foreground_alpha = match style.color_effect {
         RasterColorEffect::Preblend(color) => color.alpha,
+        RasterColorEffect::Dilation(_) if is_bitmap => {
+            bail!("color bitmap rasterization cannot use a dilation style")
+        }
         _ => 255,
     };
 
@@ -312,6 +315,8 @@ fn convert_color_image_to_bgra(image: &mut Image, style: PreparedRasterStyle) {
             apply_pixel_opacity(pixel, foreground_alpha);
         }
     }
+
+    Ok(())
 }
 
 fn convert_subpixel_mask_to_bgra(pixels: &mut [u8]) {
@@ -816,6 +821,9 @@ mod tests {
                 assert_eq!(actual, expected, "foreground alpha {alpha}");
             }
         }
+
+        params.raster_style.color_effect = RasterColorEffect::Dilation(1);
+        assert!(system.rasterize_glyph(&params).is_err());
     }
 
     #[test]
