@@ -19,14 +19,20 @@ pub fn load_fonts(cx: &App) -> bool {
                 .as_slice(),
         ),
         Cow::Borrowed(
-            include_bytes!("../../../gpui_ce_fonts/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf")
-                .as_slice(),
+            include_bytes!(
+                "../../../gpui_ce_fonts/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf"
+            )
+            .as_slice(),
         ),
         Cow::Borrowed(
             include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-Regular.ttf").as_slice(),
         ),
-        Cow::Borrowed(include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-Bold.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-Italic.ttf").as_slice()),
+        Cow::Borrowed(
+            include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-Bold.ttf").as_slice(),
+        ),
+        Cow::Borrowed(
+            include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-Italic.ttf").as_slice(),
+        ),
         Cow::Borrowed(
             include_bytes!("../../../gpui_ce_fonts/fonts/lilex/Lilex-BoldItalic.ttf").as_slice(),
         ),
