@@ -3,7 +3,7 @@ name = "gpui-ce-fonts"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
-publish = false
+publish = true
 description = "Fonts for testing text information"
 repository = "https://github.com/gpui-ce/gpui-ce"
 
