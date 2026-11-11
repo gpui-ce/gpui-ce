@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_refineable"
-version = "0.2.2"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = true
@@ -12,4 +12,4 @@ path = "src/refineable.rs"
 doctest = false
 
 [dependencies]
-derive_refineable = { package = "gpui_ce_derive_refineable", version = "0.2.2", path = "../gpui_derive_refineable" }
+derive_refineable = { package = "gpui_ce_derive_refineable", version = "0.4.0", path = "../gpui_derive_refineable" }
