@@ -19,7 +19,7 @@ screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
 gpui = { path = "../gpui", version = "0.4.0", package = "gpui-ce", default-features = false }
-gpui_render = { workspace = true, features = ["swash"] }
+gpui_render.workspace = true
 wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
