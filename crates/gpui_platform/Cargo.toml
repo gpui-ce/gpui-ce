@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_platform"
-version = "0.4.0"
+version = "0.3.1"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -41,7 +41,7 @@ x11 = ["gpui_linux/x11"]
 gpui = { workspace = true, default-features = false }
 
 [dev-dependencies]
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.3.1", package = "gpui-ce-fonts" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_apple.workspace = true
@@ -64,7 +64,7 @@ gpui = { workspace = true, features = ["windows-manifest"] }
 gpui_linux.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-gpui_web = { path = "../gpui_web", version = "0.4.0", package = "gpui_ce_web", default-features = false }
+gpui_web = { path = "../gpui_web", version = "0.3.1", package = "gpui_ce_web", default-features = false }
 console_error_panic_hook.workspace = true
 
 [[test]]

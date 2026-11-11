@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_linux"
-version = "0.4.0"
+version = "0.3.1"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true

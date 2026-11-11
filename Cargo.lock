@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-ce"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "accesskit_consumer 0.38.0",
@@ -2537,11 +2537,11 @@ dependencies = [
 
 [[package]]
 name = "gpui-ce-fonts"
-version = "0.4.0"
+version = "0.3.1"
 
 [[package]]
 name = "gpui_ce_apple"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "block",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_collections"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -2575,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_derive_refineable"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2584,7 +2584,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_elements"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "derive_setters",
  "gpui-ce",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_linux"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -2647,7 +2647,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_macos"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2701,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_macros"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2711,7 +2711,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_media"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_parley"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_path"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dunce",
@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_platform"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -2766,14 +2766,14 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_refineable"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
 
 [[package]]
 name = "gpui_ce_render"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_scheduler"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "async-task",
  "backtrace",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_shared_string"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "schemars",
  "serde",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_sum_tree"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "heapless",
  "log",
@@ -2828,7 +2828,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_tokio"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "gpui-ce",
@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_util"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "log",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_web"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_wgpu"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2912,7 +2912,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_windows"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "gpui_ce_zed_util"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-fs",

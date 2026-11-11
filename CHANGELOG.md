@@ -14,7 +14,27 @@ Items are sorted by issue or pull request number.
 
 ### Breaking Changes
 
-- `ParleyTextSystem::new` now requires a system-font fallback family and a glyph rasterizer, replacing `new_with_rasterizer`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+### Additions
+
+### Removals
+
+### Fixes
+
+### Security Changes
+
+### Deprecations
+
+## [0.3.1] - 2026-11-11
+
+### Highlights
+
+- Glyph rasterization moved out of the Parley integration: `ParleyTextSystem::new` now takes both a fallback family, a rasterizer, while leaving the Swash rasterizers in `gpui_render`.
+- Linux builds can target Wayland, X11, or both through `gpui`'s `wayland` and `x11` features.
+- Parley and Fontique updated to `0.12.0`, and Linux portal and credential dependencies updated to zbus 6.
+
+### Breaking Changes
+
+- `ParleyTextSystem::new` now requires a system-font fallback family alongside a glyph rasterizer, replacing `new_with_rasterizer`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 
 ### Additions
 
@@ -22,6 +42,7 @@ Items are sorted by issue or pull request number.
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
 - Moved `GlyphRasterizer`, `RasterFace`, `FontDataBlob`, `FontVariation`, `FontSynthesis`, and `ColorGlyphKind` from `gpui_parley` to `gpui`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 - Moved `SwashGlyphRasterizer` and `BitmapFallbackGlyphRasterizer` from `gpui_parley` to `gpui_render`, behind a new `swash` feature. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+- `gpui-ce-fonts` is now published to crates.io, with its font files bundled in the crate, and `wgsl-rs` comes from crates.io. [#407](https://github.com/gpui-ce/gpui-ce/pull/407)
 
 ### Removals
 
