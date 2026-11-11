@@ -42,6 +42,7 @@ gpui = { workspace = true, default-features = false }
 
 [dev-dependencies]
 gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
+image = { workspace = true, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_apple.workspace = true

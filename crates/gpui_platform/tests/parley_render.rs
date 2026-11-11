@@ -8,11 +8,20 @@ use gpui::{
     AppContext as _, Context, Div, FontWeight, IntoElement, ParentElement as _, Render,
     Styled as _, Window, div, px, rgb, white,
 };
+#[cfg(not(target_family = "wasm"))]
+use image::{Rgba, RgbaImage};
 use std::borrow::Cow;
 #[cfg(target_family = "wasm")]
 use std::cell::RefCell;
 
 use gpui_fonts::{IBM_PLEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, SOURCE_SERIF};
+
+#[cfg(target_os = "macos")]
+const EMOJI_FAMILY: &str = "Apple Color Emoji";
+#[cfg(target_os = "windows")]
+const EMOJI_FAMILY: &str = "Segoe UI Emoji";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const EMOJI_FAMILY: &str = "Noto Color Emoji";
 
 #[cfg(target_family = "wasm")]
 thread_local! {
@@ -36,6 +45,38 @@ fn fixture_fonts() -> Vec<Cow<'static, [u8]>> {
     ]
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn pixels_in(
+    image: &RgbaImage,
+    scale_factor: f32,
+    bounds: (f32, f32, f32, f32),
+) -> impl Iterator<Item = &Rgba<u8>> {
+    let (left, top, right, bottom) = bounds;
+    let left = (left * scale_factor).floor() as u32;
+    let right = (right * scale_factor).ceil() as u32;
+    let top = (top * scale_factor).floor() as u32;
+    let bottom = (bottom * scale_factor).ceil() as u32;
+
+    (top..bottom.min(image.height()))
+        .flat_map(move |y| (left..right.min(image.width())).map(move |x| image.get_pixel(x, y)))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn count_colored_pixels_in(
+    image: &RgbaImage,
+    scale_factor: f32,
+    bounds: (f32, f32, f32, f32),
+) -> usize {
+    pixels_in(image, scale_factor, bounds)
+        .filter(|pixel| {
+            let maximum = pixel[0].max(pixel[1]).max(pixel[2]);
+            let minimum = pixel[0].min(pixel[1]).min(pixel[2]);
+
+            maximum - minimum > 32
+        })
+        .count()
+}
+
 fn main() {
     #[cfg(not(target_family = "wasm"))]
     if std::env::var_os("GPUI_RUN_RENDERING_TESTS").is_none() {
@@ -46,7 +87,7 @@ fn main() {
 
     impl Render for ParleyRenderingFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
+            let fixture = div()
                 .size_full()
                 .relative()
                 .bg(rgb(0x101418))
@@ -57,7 +98,7 @@ fn main() {
                 .child(positioned_text(-2.5, 31.25).child("Parley office cafe\u{301} العربية אבג"))
                 .child(
                     positioned_text(32.0, 80.0)
-                        .font_family("Noto Color Emoji")
+                        .font_family(EMOJI_FAMILY)
                         .child("😀 🎉 🚀 💡 🔥 ✨"),
                 )
                 .child(positioned_text(400.0, 128.0).child("日本語 ไทย"))
@@ -96,10 +137,22 @@ fn main() {
                         .child("Hamburgefontsiv"),
                 )
                 .child(
+                    // Segoe UI Emoji has no color country flags. The bundled Noto row covers flags.
                     positioned_text(700.0, 220.0)
-                        .font_family("Noto Color Emoji")
-                        .child("👩🏽‍💻 🇬🇧 1️⃣"),
-                )
+                        .font_family(EMOJI_FAMILY)
+                        .child("👩🏽‍💻 👍🏽 1️⃣"),
+                );
+
+            fixture.children(
+                ["👩‍💻", "👩🏽", "🇬🇧", "1️⃣"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, text)| {
+                        positioned_text(700.0 + idx as f32 * 80.0, 300.0)
+                            .font_family("Noto Color Emoji")
+                            .child(text)
+                    }),
+            )
         }
     }
 
@@ -166,17 +219,22 @@ fn main() {
         let window = window.into();
         cx.run_until_parked();
 
-        let primitive_counts = cx
-            .update_window(window, |_, window, _| window.rendered_primitive_counts())
+        let (primitive_counts, scale_factor) = cx
+            .update_window(window, |_, window, _| {
+                (window.rendered_primitive_counts(), window.scale_factor())
+            })
             .expect("failed to inspect rendered text");
+
         let (_, monochrome, subpixel, polychrome) = primitive_counts;
         assert!(
             monochrome + subpixel > 0,
             "Parley scene contained no text glyph sprites"
         );
+        let minimum_color_glyphs = 13;
+
         assert!(
-            polychrome >= 9,
-            "Parley scene contained {polychrome} color emoji sprites, expected at least 9"
+            polychrome >= minimum_color_glyphs,
+            "Parley scene contained {polychrome} color emoji sprites, expected at least {minimum_color_glyphs}"
         );
 
         let image = cx
@@ -190,31 +248,29 @@ fn main() {
         #[cfg(target_os = "macos")]
         {
             let background = *image.get_pixel(0, 0);
-            let scale_x = image.width() as f32 / 1280.0;
-            let scale_y = image.height() as f32 / 800.0;
-            let changed_pixels_in = |left: f32, top: f32, right: f32, bottom: f32| {
-                let left = (left * scale_x).floor() as u32;
-                let top = (top * scale_y).floor() as u32;
-                let right = ((right * scale_x).ceil() as u32).min(image.width());
-                let bottom = ((bottom * scale_y).ceil() as u32).min(image.height());
-                (top..bottom)
-                    .flat_map(|y| (left..right).map(move |x| (x, y)))
-                    .filter(|(x, y)| *image.get_pixel(*x, *y) != background)
-                    .count()
-            };
+
+            // AppKit can shrink the requested window to fit the CI display. Glyph positions
+            // remain in logical pixels, so only the display scale converts screenshot bounds.
+            let viewport_height = image.height() as f32 / scale_factor;
 
             for (name, bounds, minimum_ink) in [
                 ("multiscript text", (24.0, 24.0, 1200.0, 72.0), 100),
                 ("emoji text", (24.0, 72.0, 600.0, 120.0), 50),
                 ("wrapped text", (24.0, 120.0, 320.0, 260.0), 100),
                 ("bidi paragraphs", (24.0, 292.0, 650.0, 510.0), 100),
-                ("bottom-clipped text", (24.0, 780.0, 700.0, 800.0), 20),
+                (
+                    "bottom-clipped text",
+                    (24.0, viewport_height - 20.0, 700.0, viewport_height),
+                    20,
+                ),
                 ("small optical text", (690.0, 24.0, 1270.0, 64.0), 30),
                 ("large optical text", (690.0, 72.0, 1270.0, 150.0), 100),
-                ("emoji sequences", (690.0, 200.0, 1000.0, 550.0), 50),
+                ("Apple emoji sequences", (690.0, 200.0, 1000.0, 280.0), 50),
             ] {
-                let (left, top, right, bottom) = bounds;
-                let changed_pixels = changed_pixels_in(left, top, right, bottom);
+                let changed_pixels = pixels_in(&image, scale_factor, bounds)
+                    .filter(|pixel| **pixel != background)
+                    .count();
+
                 assert!(
                     changed_pixels >= minimum_ink,
                     "{name} painted {changed_pixels} non-background pixels, expected at least {minimum_ink}; primitive counts were {primitive_counts:?}"
@@ -225,14 +281,34 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         {
             let background = *image.get_pixel(0, 0);
-            let changed_emoji_pixels = (72..120)
-                .flat_map(|y| (24..600).map(move |x| (x, y)))
-                .filter(|(x, y)| *image.get_pixel(*x, *y) != background)
+            let changed_emoji_pixels = pixels_in(&image, scale_factor, (24.0, 72.0, 600.0, 120.0))
+                .filter(|pixel| **pixel != background)
                 .count();
 
             assert!(
                 changed_emoji_pixels >= 50,
                 "emoji region painted {changed_emoji_pixels} non-background pixels; primitive counts were {primitive_counts:?}"
+            );
+        }
+
+        for (idx, name) in ["joined emoji", "skin-tone modifier", "flag", "keycap"]
+            .into_iter()
+            .enumerate()
+        {
+            let colored_pixels = count_colored_pixels_in(
+                &image,
+                scale_factor,
+                (
+                    700.0 + idx as f32 * 80.0,
+                    300.0,
+                    772.0 + idx as f32 * 80.0,
+                    350.0,
+                ),
+            );
+
+            assert!(
+                colored_pixels >= 20,
+                "CBDT {name} painted only {colored_pixels} colored pixels"
             );
         }
     }

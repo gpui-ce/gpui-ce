@@ -6,9 +6,8 @@ use gpui::{
     RenderGlyphParams, Result, Size, TextLayoutRequest, TextRenderingMode,
 };
 use gpui_parley::ParleyTextSystem;
-use gpui_render::BitmapFallbackGlyphRasterizer;
 
-use self::renderer::MacGlyphRenderer;
+use self::rasterizer::MacGlyphRasterizer;
 
 /// The macOS text system, with Parley layout and native glyph rasterization.
 pub struct MacTextSystem {
@@ -18,18 +17,17 @@ pub struct MacTextSystem {
 impl MacTextSystem {
     /// Creates the macOS text system.
     pub fn new() -> Self {
-        let parley =
-            ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(MacGlyphRenderer::new()))
-                .with_automatic_optical_sizing()
-                .with_system_fallback_family(".AppleSystemUIFont")
-                .with_fallback_families([
-                    ".AppleSystemUIFont",
-                    "Lilex",
-                    "IBM Plex Sans",
-                    "Helvetica",
-                    "Arial",
-                ])
-                .with_system_fonts();
+        let parley = ParleyTextSystem::new(MacGlyphRasterizer::new())
+            .with_automatic_optical_sizing()
+            .with_system_fallback_family(".AppleSystemUIFont")
+            .with_fallback_families([
+                ".AppleSystemUIFont",
+                "Lilex",
+                "IBM Plex Sans",
+                "Helvetica",
+                "Arial",
+            ])
+            .with_system_fonts();
 
         Self { parley }
     }
@@ -99,7 +97,7 @@ impl PlatformTextSystem for MacTextSystem {
     }
 }
 
-mod renderer {
+mod rasterizer {
     use core_foundation_sys::{
         array::CFArrayRef, data::CFDataRef, preferences::CFPreferencesCopyAppValue,
         preferences::kCFPreferencesCurrentApplication, string::CFStringRef,
@@ -149,6 +147,7 @@ mod renderer {
         RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, SUBPIXEL_VARIANTS_X,
         SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
     };
+    use gpui_render::SwashGlyphRasterizer;
     use objc2::rc::autoreleasepool;
     use pathfinder_geometry::{rect::RectI, transform2d::Transform2F};
     use skrifa::{FontRef, Tag, raw::MinByteRange};
@@ -172,10 +171,11 @@ mod renderer {
     #[allow(non_upper_case_globals)]
     const kCGImageAlphaOnly: u32 = 7;
 
-    /// CoreText and CoreGraphics rasterization for the exact face selected by Parley.
-    pub(crate) struct MacGlyphRenderer {
+    /// Native rasterization with shared Swash support for CBDT artwork.
+    pub(crate) struct MacGlyphRasterizer {
         faces: HashMap<FontId, NativeFace>,
         sources: HashMap<u64, Arc<SendCFData>>,
+        cbdt: SwashGlyphRasterizer,
     }
 
     struct NativeFace {
@@ -190,21 +190,25 @@ mod renderer {
     }
 
     /// An immutable Core Foundation data object retained by the serialized macOS rasterizer.
+    /// Unlike CTFontDescriptor and CTFont, CFData wraps a raw pointer without Send or Sync.
+    /// Both traits are needed for the Arc entries in NativeFace and MacGlyphRasterizer::sources
+    /// to satisfy GlyphRasterizer's Send bound.
     struct SendCFData {
         data: CFData,
     }
 
-    // SAFETY: CFData is immutable, and MacGlyphRenderer only accesses native faces while its
-    // enclosing mutex is held. The value is retained solely to extend the source data's lifetime.
+    // SAFETY: source_from_blob creates immutable CFData with CFData::from_arc, which retains a
+    // Send + Sync backing buffer that can be read and released on any thread.
     unsafe impl Send for SendCFData {}
-    // SAFETY: CFData is immutable, so retaining it from multiple native-face entries is safe.
+    // SAFETY: The data and its backing bytes remain immutable, so shared access is safe.
     unsafe impl Sync for SendCFData {}
 
-    impl MacGlyphRenderer {
+    impl MacGlyphRasterizer {
         pub(crate) fn new() -> Self {
             Self {
                 faces: HashMap::default(),
                 sources: HashMap::default(),
+                cbdt: SwashGlyphRasterizer::default(),
             }
         }
 
@@ -411,11 +415,7 @@ mod renderer {
         }
     }
 
-    impl GlyphRasterizer for MacGlyphRenderer {
-        fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-            kind != ColorGlyphKind::Cbdt
-        }
-
+    impl GlyphRasterizer for MacGlyphRasterizer {
         fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
             if request.requested_mode == GlyphRenderMode::Color {
                 return PreparedRasterStyle::preblend(request);
@@ -442,6 +442,10 @@ mod renderer {
             face: RasterFace<'_>,
             params: &RenderGlyphParams,
         ) -> Result<RasterizedGlyph> {
+            if self.requested_color_glyph_kind(&face, params)? == Some(ColorGlyphKind::Cbdt) {
+                return self.cbdt.rasterize(face, params);
+            }
+
             autoreleasepool(|_| {
                 let format = params.raster_style.mode.rasterized_format();
 
@@ -769,12 +773,12 @@ mod renderer {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use gpui::{FontWidth, LineLayout, TextAlign, TextLayoutOptions};
-        use gpui_fonts::{FontFixture, IBM_PLEX, NOTO_SANS, SOURCE_SERIF};
+        use gpui::{FontWidth, ForegroundDependency, LineLayout, TextAlign, TextLayoutOptions};
+        use gpui_fonts::{FontFixture, IBM_PLEX, NOTO_COLOR_EMOJI, NOTO_SANS, SOURCE_SERIF};
         use itertools::Itertools as _;
 
         fn test_system(fonts: &[FontFixture]) -> ParleyTextSystem {
-            let system = ParleyTextSystem::new(MacGlyphRenderer::new())
+            let system = ParleyTextSystem::new(MacGlyphRasterizer::new())
                 .with_fallback_families(fonts.first().map(|fixture| fixture.family));
 
             system
@@ -790,7 +794,7 @@ mod renderer {
         }
 
         fn system_fonts() -> ParleyTextSystem {
-            ParleyTextSystem::new(MacGlyphRenderer::new())
+            ParleyTextSystem::new(MacGlyphRasterizer::new())
                 .with_system_fallback_family(".AppleSystemUIFont")
                 .with_fallback_families([".AppleSystemUIFont"])
                 .with_system_fonts()
@@ -879,7 +883,7 @@ mod renderer {
             drop(source);
 
             let retained_before_rasterizer = collection_source.strong_count();
-            let mut rasterizer = MacGlyphRenderer::new();
+            let mut rasterizer = MacGlyphRasterizer::new();
 
             for (font_id, face_index) in [(FontId(1), 1), (FontId(2), 2)] {
                 rasterizer
@@ -1535,6 +1539,87 @@ mod renderer {
                             "font size {font_size} at scale {scale_factor} left {padding}px of {axis} transparent padding"
                         );
                     }
+                }
+            }
+        }
+
+        #[test]
+        fn bundled_cbdt_sequences_use_the_shared_rasterizer() {
+            let system = test_system(&[NOTO_COLOR_EMOJI]);
+            let font_id = system.font_id(&gpui_font(NOTO_COLOR_EMOJI.family)).unwrap();
+            let shared = ParleyTextSystem::new(SwashGlyphRasterizer::default());
+
+            shared
+                .add_fonts(vec![Cow::Borrowed(NOTO_COLOR_EMOJI.data)])
+                .unwrap();
+
+            assert_eq!(
+                shared.font_id(&gpui_font(NOTO_COLOR_EMOJI.family)).unwrap(),
+                font_id
+            );
+
+            let text = "😀👩‍💻👩🏽🇬🇧1️⃣";
+
+            let layout = system.layout_text(TextLayoutRequest {
+                text,
+                font_size: px(24.0),
+                runs: &[TextRun {
+                    len: text.len(),
+                    font: gpui_font(NOTO_COLOR_EMOJI.family),
+                    ..Default::default()
+                }],
+                options: Default::default(),
+            });
+
+            let [fragment] = layout.paint_fragments.as_slice() else {
+                panic!("bundled emoji must use one Noto run");
+            };
+
+            assert_eq!(fragment.font_id, font_id);
+            assert_eq!(fragment.glyphs.len(), 5);
+
+            for glyph in fragment.glyphs.iter() {
+                assert!(glyph.is_emoji);
+
+                let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                    font_id,
+                    glyph_id: glyph.id,
+                    scene_color: rgba(0x4080ff80),
+                    requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: ForegroundDependency::Full,
+                });
+
+                assert_eq!(
+                    raster_style.foreground_dependency,
+                    ForegroundDependency::AlphaOnly
+                );
+
+                for scale_factor in [1.0, 1.5, 2.0] {
+                    let params = RenderGlyphParams {
+                        font_id,
+                        glyph_id: glyph.id,
+                        font_size: fragment.font_size,
+                        subpixel_variant: point(SUBPIXEL_VARIANTS_X - 1, 0),
+                        scale_factor,
+                        raster_style,
+                    };
+
+                    let actual = system.rasterize_glyph(&params).unwrap();
+                    let expected = shared.rasterize_glyph(&params).unwrap();
+
+                    actual.validate().unwrap();
+                    assert_eq!(actual.format, RasterizedGlyphFormat::BgraColor);
+                    assert_eq!(actual.format, expected.format);
+                    assert_eq!(actual.size, expected.size);
+                    assert_eq!(actual.bounds, expected.bounds);
+                    assert_eq!(actual.pixels, expected.pixels);
+
+                    assert!(
+                        actual.pixels.chunks_exact(4).any(|pixel| {
+                            pixel[3] != 0 && (pixel[0] != pixel[1] || pixel[1] != pixel[2])
+                        }),
+                        "{text}"
+                    );
                 }
             }
         }
