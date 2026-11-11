@@ -15,7 +15,7 @@ use skrifa::{
 };
 use std::collections::{HashMap, hash_map::Entry};
 use swash::{
-    CacheKey as SwashCacheKey, FontRef as SwashFontRef,
+    FontRef as SwashFontRef,
     scale::{
         Render, ScaleContext, Source, StrikeWith,
         image::{Content, Image},
@@ -46,7 +46,6 @@ enum SwashRasterError {
 #[derive(Default)]
 pub struct SwashGlyphRasterizer {
     scale_context: ScaleContext,
-    cache_keys: HashMap<FontId, SwashCacheKey>,
 }
 
 impl SwashGlyphRasterizer {
@@ -75,20 +74,14 @@ impl SwashGlyphRasterizer {
             &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
         };
 
-        let cache_key = *self
-            .cache_keys
-            .entry(face.font_id)
-            .or_insert_with(SwashCacheKey::new);
-
-        let mut font_ref = SwashFontRef::from_index(face.data(), face.face_index as usize)
+        let font_ref = SwashFontRef::from_index(face.data(), face.face_index as usize)
             .context("Swash could not parse the stored font face")?;
 
-        font_ref.key = cache_key;
         let subpixel_offset = subpixel_offset(params);
 
         let mut scaler = self
             .scale_context
-            .builder(font_ref)
+            .builder_with_id(font_ref, [face.source_id, u64::from(face.face_index)])
             .size(pixel_size)
             .normalized_coords(
                 face.normalized_coords
@@ -536,8 +529,8 @@ mod tests {
         HeadlessAppContext::new(test_system())
     }
 
-    fn raster_face(source: &FontDataBlob<u8>) -> RasterFace<'_> {
-        let font = FontRef::new(source.as_ref()).unwrap();
+    fn raster_face(source: &FontDataBlob<u8>, face_index: u32) -> RasterFace<'_> {
+        let font = FontRef::from_index(source.as_ref(), face_index).unwrap();
 
         let has_color_glyphs = [*b"CBDT", *b"sbix", *b"COLR", *b"SVG "]
             .into_iter()
@@ -547,7 +540,7 @@ mod tests {
             font_id: FontId(1),
             source_id: source.id(),
             source,
-            face_index: 0,
+            face_index,
             normalized_coords: &[],
             variations: &[],
             synthesis: FontSynthesis::default(),
@@ -661,7 +654,7 @@ mod tests {
             let font = FontRef::new(source.as_ref()).unwrap();
             let face = RasterFace {
                 font_id: FontId(idx + 1),
-                ..raster_face(&source)
+                ..raster_face(&source, 0)
             };
 
             for character in characters.chars() {
@@ -715,45 +708,181 @@ mod tests {
         }
     }
 
+    fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
+        let mut collection = vec![0; 12 + faces.len() * 4];
+        collection[..4].copy_from_slice(b"ttcf");
+        collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
+
+        for (face_idx, face) in faces.iter().enumerate() {
+            collection.resize(collection.len().next_multiple_of(4), 0);
+            let face_offset = collection.len();
+            let offset_position = 12 + face_idx * 4;
+
+            collection[offset_position..offset_position + 4]
+                .copy_from_slice(&(face_offset as u32).to_be_bytes());
+
+            collection.extend_from_slice(face);
+            let font = FontRef::from_index(face, 0).unwrap();
+
+            for (table_idx, record) in font.table_directory().table_records().iter().enumerate() {
+                let offset_position = face_offset + 12 + table_idx * 16 + 8;
+                let table_offset = record.offset() + face_offset as u32;
+
+                collection[offset_position..offset_position + 4]
+                    .copy_from_slice(&table_offset.to_be_bytes());
+            }
+        }
+
+        collection
+    }
+
+    fn assert_cached_raster_matches_fresh(
+        rasterizer: &mut SwashGlyphRasterizer,
+        face: RasterFace<'_>,
+        params: &RenderGlyphParams,
+    ) -> RasterizedGlyph {
+        let case = format!(
+            "source {}, face {}, FontId {:?}, coords {:?}, synthesis {:?}",
+            face.source_id, face.face_index, face.font_id, face.normalized_coords, face.synthesis
+        );
+
+        let actual = rasterizer
+            .rasterize(face, params)
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+
+        let expected = SwashGlyphRasterizer::default()
+            .rasterize(face, params)
+            .unwrap();
+
+        assert_visible_raster(&actual, params.raster_style.mode.rasterized_format(), &case);
+        assert_eq!(actual.format, expected.format, "{case}");
+        assert_eq!(actual.bounds, expected.bounds, "{case}");
+        assert_eq!(actual.size, expected.size, "{case}");
+        assert_eq!(actual.pixels, expected.pixels, "{case}");
+
+        actual
+    }
+
     #[test]
-    fn portable_rasterization_uses_parleys_normalized_coordinates() {
+    fn portable_cache_distinguishes_sources_and_collection_faces() {
+        let plex = FontDataBlob::from(IBM_PLEX.data.to_vec());
+        let serif = FontDataBlob::from(SOURCE_SERIF.data.to_vec());
+        let emoji = FontDataBlob::from(NOTO_COLOR_EMOJI.data.to_vec());
+
+        let collection = FontDataBlob::from(test_collection(&[
+            IBM_PLEX.data,
+            NOTO_COLOR_EMOJI.data,
+            SOURCE_SERIF.data,
+        ]));
+
+        let faces = [
+            (raster_face(&plex, 0), 'A', Grayscale),
+            (raster_face(&emoji, 0), '😀', Color),
+            (raster_face(&serif, 0), 'A', Grayscale),
+            (raster_face(&collection, 0), 'A', Grayscale),
+            (raster_face(&collection, 1), '😀', Color),
+            (raster_face(&collection, 2), 'A', Grayscale),
+        ];
+
+        let mut rasterizer = SwashGlyphRasterizer::default();
+
+        for font_id in [FontId(1), FontId(2)] {
+            for (mut face, character, mode) in faces.into_iter().chain(faces.into_iter().rev()) {
+                face.font_id = font_id;
+                let font = FontRef::from_index(face.data(), face.face_index).unwrap();
+                let glyph_id = GlyphId(font.charmap().map(character).unwrap().to_u32());
+                let params = raster_params(font_id, glyph_id, mode);
+                assert_cached_raster_matches_fresh(&mut rasterizer, face, &params);
+            }
+        }
+    }
+
+    #[test]
+    fn portable_cache_preserves_normalized_coordinates_and_synthesis() {
         let source = FontDataBlob::from(SOURCE_SERIF.data.to_vec());
         let font = FontRef::new(source.as_ref()).unwrap();
         let default_coords = font.axes().location([] as [(Tag, f32); 0]);
+        let optical_coords = font.axes().location([(Tag::new(b"opsz"), 72.0)]);
+        let weight_coords = font.axes().location([(Tag::new(b"wght"), 700.0)]);
 
         let default_face = RasterFace {
             normalized_coords: default_coords.coords(),
-            ..raster_face(&source)
+            ..raster_face(&source, 0)
         };
 
-        let optical_coords = font.axes().location([(Tag::new(b"opsz"), 72.0)]);
-
-        let optical_face = RasterFace {
-            font_id: FontId(2),
-            normalized_coords: optical_coords.coords(),
-            ..default_face
-        };
+        let instances = [
+            RasterFace {
+                normalized_coords: optical_coords.coords(),
+                ..default_face
+            },
+            RasterFace {
+                normalized_coords: weight_coords.coords(),
+                ..default_face
+            },
+            RasterFace {
+                synthesis: FontSynthesis {
+                    embolden: true,
+                    ..FontSynthesis::default()
+                },
+                ..default_face
+            },
+            RasterFace {
+                synthesis: FontSynthesis {
+                    skew_degrees: Some(14.0),
+                    ..FontSynthesis::default()
+                },
+                ..default_face
+            },
+            RasterFace {
+                normalized_coords: optical_coords.coords(),
+                synthesis: FontSynthesis {
+                    embolden: true,
+                    skew_degrees: Some(14.0),
+                },
+                ..default_face
+            },
+        ];
 
         let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
-
         let mut rasterizer = SwashGlyphRasterizer::default();
-        let mut render = |face: RasterFace<'_>| {
-            let params = RenderGlyphParams {
-                font_size: px(48.0),
-                ..raster_params(face.font_id, glyph_id, Grayscale)
-            };
 
-            rasterizer.rasterize(face, &params).unwrap()
+        let params = RenderGlyphParams {
+            font_size: px(48.0),
+            ..raster_params(default_face.font_id, glyph_id, Grayscale)
         };
 
-        assert_ne!(render(default_face).pixels, render(optical_face).pixels);
+        let original = assert_cached_raster_matches_fresh(&mut rasterizer, default_face, &params);
+
+        for (idx, instance) in instances.into_iter().enumerate() {
+            let face = RasterFace {
+                font_id: FontId(idx + 2),
+                ..instance
+            };
+
+            let instance_params = RenderGlyphParams {
+                font_id: face.font_id,
+                ..params.clone()
+            };
+
+            let changed =
+                assert_cached_raster_matches_fresh(&mut rasterizer, face, &instance_params);
+
+            assert_ne!(changed.pixels, original.pixels, "instance {idx}");
+
+            let restored =
+                assert_cached_raster_matches_fresh(&mut rasterizer, default_face, &params);
+
+            assert_eq!(restored.bounds, original.bounds, "instance {idx}");
+            assert_eq!(restored.pixels, original.pixels, "instance {idx}");
+        }
     }
 
     #[test]
     fn portable_color_outline_fallback_returns_a_tintable_mask() {
         let source = FontDataBlob::from(SOURCE_SERIF.data.to_vec());
         let font = FontRef::new(source.as_ref()).unwrap();
-        let face = raster_face(&source);
+        let face = raster_face(&source, 0);
         let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
         let mut rasterizer = SwashGlyphRasterizer::default();
 
@@ -790,7 +919,7 @@ mod tests {
             let name = format!("{mode:?} glyph {visible}");
             let source = FontDataBlob::from(data.to_vec());
             let font = FontRef::new(source.as_ref()).unwrap();
-            let face = raster_face(&source);
+            let face = raster_face(&source, 0);
 
             let params = |glyph_id| raster_params(face.font_id, glyph_id, mode);
             let glyph = GlyphId(font.charmap().map(visible).unwrap().to_u32());
@@ -856,7 +985,7 @@ mod tests {
         for include_outlines in [false, true] {
             let source = FontDataBlob::from(damaged_emoji_font(include_outlines));
             let font = FontRef::new(source.as_ref()).unwrap();
-            let face = raster_face(&source);
+            let face = raster_face(&source, 0);
             let glyph_id = GlyphId(font.charmap().map('😀').unwrap().to_u32());
             let mut rasterizer = SwashGlyphRasterizer::default();
 
