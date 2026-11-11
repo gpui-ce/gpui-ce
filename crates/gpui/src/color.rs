@@ -49,6 +49,17 @@ pub fn multiply_alpha(alpha: u8, opacity: u8) -> u8 {
     ((u16::from(alpha) * u16::from(opacity) + 127) / 255) as u8
 }
 
+/// Scales an RGBA or BGRA pixel's alpha, clearing all channels if it becomes zero.
+/// Otherwise, the color channels are unchanged.
+#[inline]
+pub fn apply_pixel_opacity(pixel: &mut [u8], opacity: u8) {
+    pixel[3] = multiply_alpha(pixel[3], opacity);
+
+    if pixel[3] == 0 {
+        pixel.fill(0);
+    }
+}
+
 /// Swap from RGBA with premultiplied alpha to BGRA
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);

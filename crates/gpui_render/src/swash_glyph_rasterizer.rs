@@ -3,8 +3,8 @@ use gpui::{
     Bounds, ColorGlyphClassifier, ColorGlyphKind, FontId, ForegroundDependency, GlyphId,
     GlyphRasterizer, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect, RasterFace,
     RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, multiply_alpha, point, size,
-    swap_rgba_pa_to_bgra,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, apply_pixel_opacity,
+    multiply_alpha, point, size, swap_rgba_pa_to_bgra,
 };
 use skrifa::{
     FontRef, GlyphId as SkrifaGlyphId, MetadataProvider as _, Tag,
@@ -309,7 +309,7 @@ fn convert_color_image_to_bgra(image: &mut Image, style: PreparedRasterStyle) {
         }
 
         if is_bitmap {
-            pixel[3] = multiply_alpha(pixel[3], foreground_alpha);
+            apply_pixel_opacity(pixel, foreground_alpha);
         }
     }
 }
@@ -807,7 +807,11 @@ mod tests {
                 let expected_alpha =
                     (f32::from(original[3]) * f32::from(alpha) / 255.0).round() as u8;
 
-                let expected = [original[0], original[1], original[2], expected_alpha];
+                let expected = if expected_alpha == 0 {
+                    [0; 4]
+                } else {
+                    [original[0], original[1], original[2], expected_alpha]
+                };
 
                 assert_eq!(actual, expected, "foreground alpha {alpha}");
             }
