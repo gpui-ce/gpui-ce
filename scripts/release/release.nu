@@ -72,7 +72,7 @@ def crates-io-versions [crate: string] {
 
 # Publishable workspace crates, dependencies first.
 #
-# Ordering is relevant to normal + build deps primairly, otherwise you'll get cycles from dev deps
+# Ordering is relevant to normal + build deps primarily, otherwise you'll get cycles from dev deps
 def publish-order [] {
     let packages = (workspace-packages | where { is-publishable $in })
     let names = ($packages | get name)
