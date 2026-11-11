@@ -21,12 +21,13 @@ Items are sorted by issue or pull request number.
 - `gpui/wayland` and `gpui/x11` now toggle the corresponding `gpui_platform` flags, so Linux builds can target either backend or both. [#373](https://github.com/gpui-ce/gpui-ce/issues/373), [#379](https://github.com/gpui-ce/gpui-ce/pull/379)
 - Updated Parley from `0.11` to `0.12.0` and Fontique from `0.11.1` to `0.12.0`. [#389](https://github.com/gpui-ce/gpui-ce/pull/389)
 - Moved `GlyphRasterizer`, `RasterFace`, `FontDataBlob`, `FontVariation`, `FontSynthesis`, and `ColorGlyphKind` from `gpui_parley` to `gpui`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
-- Moved `SwashGlyphRasterizer` and `BitmapFallbackGlyphRasterizer` from `gpui_parley` to `gpui_render`, behind a new `swash` feature. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+- Moved `SwashGlyphRasterizer` from `gpui_parley` to `gpui_render`, behind a new `swash` feature. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 
 ### Removals
 
 - Removed `ParleyTextSystem::new_with_system_font` and `ParleyTextSystem::without_system_fonts`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
 - Removed `SystemFonts` enum. Use `.with_system_fonts()` to load operating-system fonts after construction. [#400](https://github.com/gpui-ce/gpui-ce/pull/400)
+- Removed `BitmapFallbackGlyphRasterizer`. Windows now renders CBDT artwork through DirectWrite, WIC, and software Direct2D.
 
 ### Fixes
 
@@ -41,6 +42,7 @@ Items are sorted by issue or pull request number.
 - Enabled fallback to a monochrome outline in the same font when CBDT bitmap decoding fails. Rasterization returns an error if neither source can be rendered. [#404](https://github.com/gpui-ce/gpui-ce/pull/404)
 - macOS now only uses Swash for CBDT color artwork. Other glyph rendering requests use the native renderer. [#405](https://github.com/gpui-ce/gpui-ce/pull/405)
 - Keyed Swash's font cache by source and collection face to prevent stale cache reuse when a `FontId` is reused for different font data or a different collection face. [#406](https://github.com/gpui-ce/gpui-ce/pull/406)
+- Windows now renders CBDT emoji natively with strike resampling, native bitmap origins, and foreground opacity. Its normal dependency graph no longer enables Swash.
 
 ### Security Changes
 
