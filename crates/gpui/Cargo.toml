@@ -1,6 +1,6 @@
 [package]
 name = "gpui-ce"
-version = "0.2.2"
+version = "0.4.0"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
 description = "A community fork of Zed's GPU-accelerated UI framework"
@@ -160,7 +160,7 @@ collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 gpui_ce_elements = { path = "../gpui_elements" }
 gpui_platform = { workspace = true, features = ["font-kit"] }
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
 gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }
 rand.workspace = true
