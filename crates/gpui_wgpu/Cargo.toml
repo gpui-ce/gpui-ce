@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_wgpu"
-version = "0.4.0"
+version = "0.3.1"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -19,7 +19,7 @@ custom-gpu = ["gpui/custom-gpu"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
 [dependencies]
-gpui = { path = "../gpui", version = "0.4.0", package = "gpui-ce", default-features = false }
+gpui = { path = "../gpui", version = "0.3.1", package = "gpui-ce", default-features = false }
 gpui_render.workspace = true
 anyhow.workspace = true
 collections.workspace = true

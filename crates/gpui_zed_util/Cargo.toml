@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_zed_util"
-version = "0.4.0"
+version = "0.3.1"
 edition = "2024"
 license = "Apache-2.0"
 publish = true
@@ -20,7 +20,7 @@ debug-embed = ["rust-embed/debug-embed"]
 [dependencies]
 anyhow = "1.0.86"
 async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
-collections = { package = "gpui_ce_collections", version = "0.4.0", path = "../gpui_collections" }
+collections = { package = "gpui_ce_collections", version = "0.3.1", path = "../gpui_collections" }
 dunce = "1.0"
 futures-lite = "2.6.1"
 futures = "0.3.32"
@@ -42,8 +42,8 @@ tempfile = "3.20.0"
 unicase = "2.6"
 url = "2.2"
 percent-encoding = "2.3.2"
-gpui_util = { package = "gpui_ce_util", version = "0.4.0", path = "../gpui_ce_util" }
-path = { package = "gpui_ce_path", version = "0.4.0", path = "../gpui_path", features = [
+gpui_util = { package = "gpui_ce_util", version = "0.3.1", path = "../gpui_ce_util" }
+path = { package = "gpui_ce_path", version = "0.3.1", path = "../gpui_path", features = [
   "serde",
 ] }
 
@@ -69,6 +69,6 @@ windows.workspace = true
 [dev-dependencies]
 pretty_assertions = { version = "1.3.0", features = ["unstable"] }
 rand.workspace = true
-path = { package = "gpui_ce_path", version = "0.4.0", path = "../gpui_path", features = [
+path = { package = "gpui_ce_path", version = "0.3.1", path = "../gpui_path", features = [
   "test-support",
 ] }

@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_elements"
-version = "0.4.0"
+version = "0.3.1"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -24,7 +24,7 @@ gpui_render = { workspace = true, features = ["swash"] }
 gpui_parley.workspace = true
 gpui = { path = "../gpui", package = "gpui-ce", features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.3.1", package = "gpui-ce-fonts" }
 
 [[example]]
 name = "editable_text"

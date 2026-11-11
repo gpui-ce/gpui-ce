@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_shared_string"
-version = "0.4.0"
+version = "0.3.1"
 description = "Shared immutable string types for GPUI CE"
 publish.workspace = true
 edition.workspace = true
