@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result, bail, ensure};
+use anyhow::{Context as _, Result, bail};
 use gpui::{
     Bounds, ColorGlyphClassifier, ColorGlyphKind, FontId, ForegroundDependency, GlyphId,
     GlyphRasterizer, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect, RasterFace,
@@ -22,6 +22,25 @@ use swash::{
     },
     zeno::{Angle, Format, Transform, Vector},
 };
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+enum SwashRasterError {
+    #[error("invalid raster font size")]
+    InvalidFontSize,
+
+    #[error("invalid raster scale factor")]
+    InvalidScaleFactor,
+
+    #[error("invalid raster pixel size")]
+    InvalidPixelSize,
+
+    #[error("glyph ID {glyph_id} is outside the selected face's {glyph_count} glyphs")]
+    InvalidGlyphId { glyph_id: u32, glyph_count: u32 },
+
+    #[error("cannot parse the selected face's bitmap tables")]
+    InvalidBitmapTables,
+}
 
 /// Swash raster state used by Linux, web, and explicit fallback construction.
 #[derive(Default)]
@@ -36,10 +55,11 @@ impl SwashGlyphRasterizer {
         face: &RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<Option<Image>> {
-        ensure!(
-            params.scale_factor.is_finite() && params.scale_factor > 0.0,
-            "invalid raster scale factor"
-        );
+        let pixel_size = f32::from(params.font_size) * params.scale_factor;
+
+        if !pixel_size.is_finite() || pixel_size <= 0.0 {
+            return Err(SwashRasterError::InvalidPixelSize.into());
+        }
 
         let cache_key = *self
             .cache_keys
@@ -55,7 +75,7 @@ impl SwashGlyphRasterizer {
         let mut scaler = self
             .scale_context
             .builder(font_ref)
-            .size(f32::from(params.font_size) * params.scale_factor)
+            .size(pixel_size)
             .normalized_coords(
                 face.normalized_coords
                     .iter()
@@ -89,7 +109,7 @@ impl SwashGlyphRasterizer {
         renderer.offset(subpixel_offset);
 
         if face.synthesis.embolden {
-            renderer.embolden(f32::from(params.font_size) * params.scale_factor / 48.0);
+            renderer.embolden(pixel_size / 48.0);
         }
 
         if let Some(degrees) = face.synthesis.skew_degrees {
@@ -127,6 +147,16 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
         let format = params.raster_style.mode.rasterized_format();
+        let font_size = f32::from(params.font_size);
+
+        if !font_size.is_finite() || font_size < 0.0 {
+            return Err(SwashRasterError::InvalidFontSize.into());
+        }
+
+        if !params.scale_factor.is_finite() || params.scale_factor <= 0.0 {
+            return Err(SwashRasterError::InvalidScaleFactor.into());
+        }
+
         let rendered = self.render_glyph_image(&face, params)?;
 
         let Some(mut image) = rendered else {
@@ -335,11 +365,13 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
             .num_glyphs(),
     );
 
-    ensure!(
-        glyph_id.0 < glyph_count,
-        "glyph ID {} is outside the selected face's {glyph_count} glyphs",
-        glyph_id.0
-    );
+    if glyph_id.0 >= glyph_count {
+        return Err(SwashRasterError::InvalidGlyphId {
+            glyph_id: glyph_id.0,
+            glyph_count,
+        }
+        .into());
+    }
 
     let skrifa_id = SkrifaGlyphId::new(glyph_id.0);
     let outlines = font.outline_glyphs();
@@ -385,10 +417,9 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
         };
 
         let Some(strikes) = BitmapStrikes::with_format(&font, format) else {
-            ensure!(
-                !has_tables,
-                "cannot parse the selected face's bitmap tables"
-            );
+            if has_tables {
+                return Err(SwashRasterError::InvalidBitmapTables.into());
+            }
 
             continue;
         };
@@ -725,45 +756,69 @@ mod tests {
     }
 
     #[test]
-    fn empty_glyphs_and_invalid_ids_preserve_subsequent_rasterization() {
-        let system = test_system();
-
-        for (fixture, visible, mode, expected_format) in [
-            (IBM_PLEX, 'A', Grayscale, AlphaMask),
-            (SOURCE_SERIF, 'A', Grayscale, AlphaMask),
-            (IBM_PLEX, 'A', Subpixel, BgraSubpixelMask),
-            (NOTO_COLOR_EMOJI, '😀', Color, BgraColor),
+    fn portable_rasterization_validates_requests_and_preserves_empty_glyphs() {
+        for (data, mode, visible) in [
+            (IBM_PLEX.data, Grayscale, 'A'),
+            (IBM_PLEX.data, Subpixel, 'A'),
+            (SOURCE_SERIF.data, Grayscale, 'A'),
+            (NOTO_COLOR_EMOJI.data, Color, '😀'),
         ] {
-            let case = format!("{} {mode:?}, size=24, scale=1", fixture.family);
-            let font_id = system.font_id(&font(fixture.family)).unwrap();
-            let glyph_id = system.glyph_for_char(font_id, visible).unwrap();
-            let params = raster_params(font_id, glyph_id, mode);
-            let face_font = FontRef::new(fixture.data).unwrap();
+            let name = format!("{mode:?} glyph {visible}");
+            let source = FontDataBlob::from(data.to_vec());
+            let font = FontRef::new(source.as_ref()).unwrap();
+            let face = raster_face(&source);
 
-            let space = GlyphId(face_font.charmap().map(' ').unwrap().to_u32());
-            let empty = system
-                .rasterize_glyph(&raster_params(font_id, space, mode))
-                .unwrap();
+            let params = |glyph_id| raster_params(face.font_id, glyph_id, mode);
+            let glyph = GlyphId(font.charmap().map(visible).unwrap().to_u32());
+            let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
+            let mut rasterizer = SwashGlyphRasterizer::default();
 
-            assert_eq!(empty.size, Size::default(), "{case}");
-            assert_eq!(empty.format, expected_format, "{case}");
-            assert!(empty.pixels.is_empty(), "{case}");
+            let empty = rasterizer.rasterize(face, &params(space)).unwrap();
+            assert_eq!(empty.size, Size::default(), "{name}");
+            assert_eq!(empty.format, mode.rasterized_format(), "{name}");
+            assert!(empty.pixels.is_empty(), "{name}");
 
-            let invalid = GlyphId(u32::from(face_font.maxp().unwrap().num_glyphs()));
-            let error = system
-                .rasterize_glyph(&raster_params(font_id, invalid, mode))
+            let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
+
+            let error = rasterizer
+                .rasterize(face, &params(GlyphId(glyph_count)))
                 .unwrap_err();
 
             assert!(
-                format!("{error:#}").contains("outside the selected face"),
-                "{case}: {error:#}"
+                matches!(
+                    error.downcast_ref::<SwashRasterError>(),
+                    Some(SwashRasterError::InvalidGlyphId {
+                        glyph_id,
+                        glyph_count: count,
+                    }) if *glyph_id == glyph_count && *count == glyph_count
+                ),
+                "{name}: {error}"
             );
 
-            let recovered = system
-                .rasterize_glyph(&params)
-                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            for (font_size, scale_factor) in [
+                (-1.0, 1.0),
+                (f32::NAN, 1.0),
+                (f32::INFINITY, 1.0),
+                (0.0, 0.0),
+                (24.0, 0.0),
+                (24.0, -1.0),
+                (24.0, f32::NAN),
+                (24.0, f32::INFINITY),
+                (f32::MAX, 2.0),
+                (f32::MIN_POSITIVE, f32::MIN_POSITIVE),
+            ] {
+                let mut request = params(glyph);
+                request.font_size = px(font_size);
+                request.scale_factor = scale_factor;
 
-            assert_visible_raster(&recovered, expected_format, &case);
+                assert!(
+                    rasterizer.rasterize(face, &request).is_err(),
+                    "{name}: accepted font size {font_size} at scale {scale_factor}"
+                );
+            }
+
+            let recovered = rasterizer.rasterize(face, &params(glyph)).unwrap();
+            assert_visible_raster(&recovered, mode.rasterized_format(), &name);
         }
     }
 
