@@ -1,23 +1,13 @@
-use std::borrow::Cow;
+use std::sync::Arc;
 
-use gpui::{
-    Bounds, Font, FontId, FontMetrics, GlyphId, InlineLayout, InlineLayoutRequest, LineLayout,
-    Pixels, PlatformTextSystem, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
-    RenderGlyphParams, Result, Size, TextLayoutRequest, TextRenderingMode,
-};
+use gpui::PlatformTextSystem;
 use gpui_parley::ParleyTextSystem;
 
 use self::rasterizer::MacGlyphRasterizer;
 
-/// The macOS text system, with Parley layout and native glyph rasterization.
-pub struct MacTextSystem {
-    parley: ParleyTextSystem,
-}
-
-impl MacTextSystem {
-    /// Creates the macOS text system.
-    pub fn new() -> Self {
-        let parley = ParleyTextSystem::new(MacGlyphRasterizer::new())
+pub(crate) fn new_text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(
+        ParleyTextSystem::new(MacGlyphRasterizer::new())
             .with_automatic_optical_sizing()
             .with_system_fallback_family(".AppleSystemUIFont")
             .with_fallback_families([
@@ -27,74 +17,8 @@ impl MacTextSystem {
                 "Helvetica",
                 "Arial",
             ])
-            .with_system_fonts();
-
-        Self { parley }
-    }
-}
-
-impl Default for MacTextSystem {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PlatformTextSystem for MacTextSystem {
-    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        self.parley.add_fonts(fonts)
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        self.parley.all_font_names()
-    }
-
-    fn font_generation(&self) -> u64 {
-        self.parley.font_generation()
-    }
-
-    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
-        self.parley.font_id(descriptor)
-    }
-
-    fn prewarm_fonts(&self, font_ids: &[FontId]) {
-        self.parley.prewarm_fonts(font_ids);
-    }
-
-    fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.parley.font_metrics(font_id)
-    }
-
-    fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        self.parley.typographic_bounds(font_id, glyph_id)
-    }
-
-    fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        self.parley.advance(font_id, glyph_id)
-    }
-
-    fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
-        self.parley.glyph_for_char(font_id, character)
-    }
-
-    fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
-        self.parley.rasterize_glyph(params)
-    }
-
-    fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
-        self.parley.prepare_raster_style(request)
-    }
-
-    fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-        self.parley.layout_text(request)
-    }
-
-    fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        self.parley.layout_inline(request)
-    }
-
-    fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
-        self.parley.recommended_rendering_mode(font_id, font_size)
-    }
+            .with_system_fonts(),
+    )
 }
 
 mod rasterizer {
