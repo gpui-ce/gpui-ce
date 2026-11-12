@@ -27,6 +27,7 @@ use windows::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
             Dxgi::Common::*,
+            Gdi::UnionRect,
             Imaging::*,
         },
         System::Com::*,
@@ -512,7 +513,10 @@ impl DirectWriteGlyphRenderer {
             };
             let layer_bounds =
                 unsafe { analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
-            union_ink_bounds(&mut ink_bounds, layer_bounds);
+
+            let previous_bounds = ink_bounds;
+
+            let _nonempty = unsafe { UnionRect(&mut ink_bounds, &previous_bounds, &layer_bounds) };
         }
 
         let format = params.raster_style.mode.rasterized_format();
@@ -521,69 +525,29 @@ impl DirectWriteGlyphRenderer {
             return Ok(RasterizedGlyph::empty(format));
         }
 
-        let width = ink_bounds
-            .right
-            .checked_sub(ink_bounds.left)
-            .context("color glyph width overflow")?;
-        let height = ink_bounds
-            .bottom
-            .checked_sub(ink_bounds.top)
-            .context("color glyph height overflow")?;
-        let byte_count = (width as usize)
-            .checked_mul(height as usize)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .context("color glyph byte count overflow")?;
-        ensure!(
-            u32::try_from(byte_count).is_ok(),
-            "color glyph exceeds WIC's buffer limit"
-        );
-
         let wic: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
-        let bitmap = unsafe {
-            wic.CreateBitmap(
-                width as u32,
-                height as u32,
-                &GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapCacheOnLoad,
-            )?
-        };
-        let factory: ID2D1Factory =
-            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
-        let properties = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            usage: D2D1_RENDER_TARGET_USAGE_NONE,
-            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-        };
-        let target = unsafe { factory.CreateWicBitmapRenderTarget(&bitmap, &properties)? };
-        let brush = unsafe { target.CreateSolidColorBrush(&D2D1_COLOR_F::default(), None)? };
         let foreground = raster_foreground(params.raster_style);
 
-        // Enumerate again rather than retaining pointers invalidated by MoveNext.
-        let enumerator = self.translate_color_glyph(params)?;
+        rasterize_color_bitmap(&wic, params.raster_style, ink_bounds, |target| {
+            let brush = unsafe { target.CreateSolidColorBrush(&D2D1_COLOR_F::default(), None)? };
 
-        unsafe {
-            target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            target.SetTextRenderingParams(&self.rendering_params);
-            target.SetTransform(&Matrix3x2 {
-                M11: params.scale_factor,
-                M12: 0.0,
-                M21: 0.0,
-                M22: params.scale_factor,
-                M31: -(ink_bounds.left as f32),
-                M32: -(ink_bounds.top as f32),
-            });
-            target.BeginDraw();
-            target.Clear(Some(&D2D1_COLOR_F::default()));
-        }
+            // MoveNext invalidates native layer pointers, so enumerate again for drawing.
+            let enumerator = self.translate_color_glyph(params)?;
 
-        let draw_result = (|| -> Result<()> {
+            unsafe {
+                target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                target.SetTextRenderingParams(&self.rendering_params);
+
+                target.SetTransform(
+                    &(Matrix3x2::scale(params.scale_factor, params.scale_factor)
+                        * Matrix3x2::translation(
+                            -(ink_bounds.left as f32),
+                            -(ink_bounds.top as f32),
+                        )),
+                );
+            }
+
             while unsafe { enumerator.MoveNext()? }.as_bool() {
                 let color_run = unsafe { &*enumerator.GetCurrentRun()? };
                 let layer = &color_run.Base;
@@ -615,32 +579,7 @@ impl DirectWriteGlyphRenderer {
             }
 
             Ok(())
-        })();
-        let end_result = unsafe { target.EndDraw(None, None) };
-        draw_result?;
-        end_result.context("drawing Direct2D color glyph layers")?;
-        drop(brush);
-        drop(target);
-
-        let pixels = read_color_bitmap(&bitmap, width, height, foreground.alpha)?;
-
-        if pixels.chunks_exact(4).all(|pixel| pixel[3] == 0) {
-            return Ok(RasterizedGlyph::empty(format));
-        }
-
-        let bitmap_size = size(width.into(), height.into());
-        let rasterized = RasterizedGlyph {
-            bounds: Bounds {
-                origin: point(ink_bounds.left.into(), ink_bounds.top.into()),
-                size: bitmap_size,
-            },
-            size: bitmap_size,
-            format,
-            pixels,
-        };
-        rasterized.validate()?;
-
-        Ok(rasterized)
+        })
     }
 
     fn handle_gpu_lost(&mut self, _directx_devices: &DirectXDevices) -> Result<()> {
@@ -788,6 +727,105 @@ impl NativeSource {
     }
 }
 
+fn rasterize_color_bitmap(
+    wic: &IWICImagingFactory,
+    style: PreparedRasterStyle,
+    bounds: RECT,
+    draw: impl FnOnce(&ID2D1RenderTarget) -> Result<()>,
+) -> Result<RasterizedGlyph> {
+    let width = bounds
+        .right
+        .checked_sub(bounds.left)
+        .context("color glyph width overflow")?;
+
+    let height = bounds
+        .bottom
+        .checked_sub(bounds.top)
+        .context("color glyph height overflow")?;
+
+    color_bitmap_byte_count(width, height)?;
+
+    let bitmap = unsafe {
+        wic.CreateBitmap(
+            width as u32,
+            height as u32,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapCacheOnLoad,
+        )?
+    };
+
+    let factory: ID2D1Factory =
+        unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+
+    let properties = D2D1_RENDER_TARGET_PROPERTIES {
+        r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        ..Default::default()
+    };
+
+    let target = unsafe { factory.CreateWicBitmapRenderTarget(&bitmap, &properties)? };
+
+    unsafe {
+        target.SetTransform(&Matrix3x2::translation(
+            -(bounds.left as f32),
+            -(bounds.top as f32),
+        ));
+
+        target.BeginDraw();
+        target.Clear(Some(&D2D1_COLOR_F::default()));
+    }
+
+    let draw_result = draw(&target);
+    let end_result = unsafe { target.EndDraw(None, None) };
+    draw_result?;
+    end_result.context("drawing Direct2D color glyph")?;
+    drop(target);
+
+    let pixels = read_color_bitmap(&bitmap, width, height, raster_foreground(style).alpha)?;
+    let format = style.mode.rasterized_format();
+
+    if pixels.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+        return Ok(RasterizedGlyph::empty(format));
+    }
+
+    let bitmap_size = size(width.into(), height.into());
+
+    let rasterized = RasterizedGlyph {
+        bounds: Bounds {
+            origin: point(bounds.left.into(), bounds.top.into()),
+            size: bitmap_size,
+        },
+        size: bitmap_size,
+        format,
+        pixels,
+    };
+
+    rasterized.validate()?;
+
+    Ok(rasterized)
+}
+
+fn color_bitmap_byte_count(width: i32, height: i32) -> Result<usize> {
+    ensure!(width > 0 && height > 0, "color bitmap dimensions are empty");
+
+    let byte_count = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .context("color glyph byte count overflow")?;
+
+    ensure!(
+        u32::try_from(byte_count).is_ok() && byte_count <= isize::MAX as usize,
+        "color glyph exceeds WIC's buffer limit"
+    );
+
+    Ok(byte_count)
+}
+
 fn get_system_subpixel_rendering() -> bool {
     let mut smoothing_enabled = BOOL::default();
     let enabled_result = unsafe {
@@ -865,64 +903,20 @@ fn raster_foreground(style: PreparedRasterStyle) -> Rgba8 {
     }
 }
 
-fn union_ink_bounds(bounds: &mut RECT, layer: RECT) {
-    if layer.right <= layer.left || layer.bottom <= layer.top {
-        return;
-    }
-
-    if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
-        *bounds = layer;
-
-        return;
-    }
-
-    bounds.left = bounds.left.min(layer.left);
-    bounds.top = bounds.top.min(layer.top);
-    bounds.right = bounds.right.max(layer.right);
-    bounds.bottom = bounds.bottom.max(layer.bottom);
-}
-
 fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) -> Result<Vec<u8>> {
-    ensure!(width > 0 && height > 0, "color bitmap dimensions are empty");
+    let mut pixels = vec![0; color_bitmap_byte_count(width, height)?];
 
-    let lock = unsafe {
-        bitmap.Lock(
+    unsafe {
+        bitmap.CopyPixels(
             &WICRect {
                 X: 0,
                 Y: 0,
                 Width: width,
                 Height: height,
             },
-            WICBitmapLockRead.0 as u32,
-        )?
-    };
-    let stride = unsafe { lock.GetStride()? } as usize;
-    let mut buffer_size = 0;
-    let mut buffer = std::ptr::null_mut();
-    unsafe { lock.GetDataPointer(&mut buffer_size, &mut buffer)? };
-
-    let row_bytes = (width as usize)
-        .checked_mul(4)
-        .context("color bitmap row size overflow")?;
-    let required_bytes = (height as usize - 1)
-        .checked_mul(stride)
-        .and_then(|offset| offset.checked_add(row_bytes))
-        .context("color bitmap buffer size overflow")?;
-    ensure!(
-        !buffer.is_null() && stride >= row_bytes && buffer_size as usize >= required_bytes,
-        "WIC returned an invalid color bitmap buffer"
-    );
-
-    // The lock owns the mapping until all rows have been copied.
-    let source = unsafe { std::slice::from_raw_parts(buffer, buffer_size as usize) };
-    let byte_count = row_bytes
-        .checked_mul(height as usize)
-        .context("color bitmap byte count overflow")?;
-    let mut pixels = vec![0; byte_count];
-
-    for (row_index, row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        let offset = row_index * stride;
-        row.copy_from_slice(&source[offset..offset + row_bytes]);
+            width as u32 * 4,
+            &mut pixels,
+        )?;
     }
 
     // Scaling premultiplied RGB and alpha together leaves straight RGB unchanged.
