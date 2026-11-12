@@ -1252,8 +1252,7 @@ mod tests {
         Point, PositionedInlineBox, PreparedRasterStyle, RasterFace, RasterStyleRequest,
         RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, ResolvedDirection, ShapedGlyph,
         Size, TextAlign, TextBoundary, TextDirection, TextLayoutRequest, TextMovement,
-        TextRenderingMode, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
-        point, px, size,
+        TextRenderingMode, TextSelectionKind, VisualDirection, VisualLine, point, px, size,
     };
     use anyhow::Result;
     use std::{borrow::Cow, ops::Range, sync::Arc};
@@ -1521,6 +1520,8 @@ mod tests {
         request: InlineLayoutRequest<'_>,
         em_width: Pixels,
         baseline: Pixels,
+        line_height: Pixels,
+        x_height: Pixels,
     ) -> Vec<PositionedInlineBox> {
         let mut preceding_width = Pixels::ZERO;
         request
@@ -1538,7 +1539,7 @@ mod tests {
                     bounds: Bounds::new(
                         point(
                             text_width + preceding_width,
-                            baseline - inline_box.size.height,
+                            inline_box.y_offset(baseline, line_height, x_height),
                         ),
                         inline_box.size,
                     ),
@@ -1792,44 +1793,40 @@ mod tests {
             });
 
             let em_width = self.em_width(request.font_size);
-            let baseline = request
-                .boxes
-                .iter()
-                .map(|inline_box| inline_box.size.height)
-                .fold(request.line_height, Pixels::max);
-            let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
+
+            // This deterministic backend models one row using its fixed font metrics.
+            let metrics = self.font_metrics(self.font_id(request.base_font).unwrap());
+            let ascent = metrics.ascent(request.font_size);
+            let descent = metrics.descent(request.font_size);
+            let x_height = metrics.x_height(request.font_size);
+
+            let (top, bottom) = request.line_extents(ascent, descent, x_height);
+            let baseline = -top;
+            let line_height = bottom - top;
+            let positioned_boxes =
+                position_test_inline_boxes(request, em_width, baseline, line_height, x_height);
             add_test_inline_box_advances(&mut layout, request);
+
             let line_width = request
                 .options
                 .wrap_width
                 .unwrap_or(Pixels::MAX)
                 .min(layout.width);
             let line_offset = layout.visual_lines[0].offset;
-            let mut inline = InlineLayout {
-                size: size(layout.width, baseline),
+
+            InlineLayout {
+                size: size(layout.width, line_height),
                 layout: Arc::new(layout),
                 lines: [InlineVisualLine {
                     origin: point(line_offset, Pixels::ZERO),
-                    size: size(line_width, baseline),
+                    size: size(line_width, line_height),
                     baseline,
                 }]
                 .into_iter()
                 .collect(),
                 boxes: positioned_boxes,
                 alignment_offset: Pixels::ZERO,
-            };
-
-            align_inline_boxes(
-                &mut inline.lines,
-                &mut inline.boxes,
-                &mut inline.size,
-                request.boxes,
-                &[request.text_metrics],
-                &[],
-                request.text_metrics,
-                request.line_height,
-            );
-            inline
+            }
         }
 
         fn recommended_rendering_mode(

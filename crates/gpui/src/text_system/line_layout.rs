@@ -1448,7 +1448,7 @@ impl AsCacheKeyRef for CacheKeyRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{point, px, size};
+    use crate::{point, size};
 
     #[test]
     fn caret_selection_endpoint_ordering_uses_byte_indices() {
@@ -1510,7 +1510,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn inline_box_alignment_preserves_unsorted_boxes_and_empty_lines() {
         let mut lines = [InlineVisualLine::default(); 3];
