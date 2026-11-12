@@ -2684,7 +2684,6 @@ fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::InlineTextMetrics;
     use gpui::{
         AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
         FontStyle as GpuiFontStyle, FontSynthesis, FontWeight as GpuiFontWeight,
@@ -3330,7 +3329,6 @@ mod tests {
                 boxes: &[],
                 text_styles: &[],
                 line_height: px(24.0),
-                text_metrics: InlineTextMetrics::default(),
                 base_font: &font(IBM_PLEX.family),
                 options: TextLayoutOptions {
                     alignment_width,
@@ -3603,7 +3601,6 @@ mod tests {
             text,
             runs,
             base_font,
-            text_metrics: InlineTextMetrics::default(),
             font_size: px(18.),
             line_height: px(24.),
             text_styles: &[],
