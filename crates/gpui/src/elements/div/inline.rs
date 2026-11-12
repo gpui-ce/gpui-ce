@@ -4,9 +4,9 @@ use crate::elements::text::{
 };
 use crate::{
     App, AvailableSpace, Bounds, Display, InlineBidiScope, InlineBoxRequest, InlineLayout,
-    InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
-    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi,
-    Window, WindowTextSystem, place_inline_layout, size,
+    InlineLayoutRequest, InlineTextStyle, LayoutId, Pixels, Point, Position, SharedString, Size,
+    Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi, Window,
+    WindowTextSystem, place_inline_layout, size,
 };
 
 use collections::FxHashMap;
@@ -340,13 +340,6 @@ impl InlineParagraphCollector<'_> {
         );
 
         let base_font = text_style.font();
-        let font_id = self.window.text_system().resolve_font(&base_font);
-
-        let text_metrics = InlineTextMetrics {
-            ascent: self.window.text_system().ascent(font_id, font_size),
-            descent: self.window.text_system().descent(font_id, font_size),
-            x_height: self.window.text_system().x_height(font_id, font_size),
-        };
 
         let measured_document = document.clone();
         let measurement_cache = measurement.clone();
@@ -384,7 +377,6 @@ impl InlineParagraphCollector<'_> {
                     boxes: &measured_document.boxes,
                     font_size,
                     line_height,
-                    text_metrics,
                     base_font: &base_font,
                     options,
                     bidi_scopes: &bidi_scopes,
