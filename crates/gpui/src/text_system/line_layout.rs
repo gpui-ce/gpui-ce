@@ -2,7 +2,7 @@ use crate::{
     Bounds, Font, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
     InlineTextMetrics, InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point,
     SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
-    UnderlineStyle, VerticalAlign,
+    UnderlineStyle, VerticalAlign, px,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -196,8 +196,8 @@ pub fn align_inline_boxes(
 
 /// Backend-owned text interaction for a laid-out string.
 ///
-/// Byte positions are UTF-8 boundaries. Geometry is in GPUI layout coordinates, using the
-/// caller-provided line height. Implementations must preserve visual order and caret affinity.
+/// Byte positions are UTF-8 boundaries. Inline layouts use native line geometry, while raw
+/// text documents may use caller-sized rows. Implementations preserve visual order and caret affinity.
 ///
 /// A cluster is one backend-defined caret step. It may contain several Unicode scalar values, such
 /// as a combining sequence or an emoji ZWJ sequence. Logical clusters are independent of visual
@@ -211,6 +211,17 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
     /// Natural layout size reported by the backend.
     fn size(&self) -> Size<Pixels>;
+
+    /// Native line geometry for inline layout. Raw text documents may use caller-sized rows.
+    fn native_lines(&self) -> Option<&[InlineVisualLine]> {
+        None
+    }
+
+    /// The visual line owning this caret, including its affinity at a soft wrap.
+    fn visual_line_index(&self, caret: CaretPosition) -> usize {
+        self.caret_bounds(caret, px(1.))
+            .map_or(0, |bounds| bounds.origin.y.0.max(0.) as usize)
+    }
 
     /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
     fn byte_index_from_pixel_point(
@@ -443,6 +454,10 @@ pub struct PaintFragment {
     pub underline_offset: Option<Pixels>,
     /// Resolved strikethrough offset from the baseline.
     pub strikethrough_offset: Option<Pixels>,
+    /// Run baseline relative to the line baseline.
+    pub baseline_offset: Pixels,
+    /// Content area relative to the line baseline, when supplied by the backend.
+    pub background_range: Option<Range<Pixels>>,
 }
 
 /// A single glyph, ready to paint.
@@ -664,6 +679,10 @@ impl ShapedTextLayout {
 
     /// The document width, capped by the wrapping constraint.
     pub fn width(&self) -> Pixels {
+        if self.layout.platform_layout.native_lines().is_some() {
+            return self.layout.platform_layout.size().width;
+        }
+
         self.wrap_width
             .unwrap_or(Pixels::MAX)
             .min(self.layout.width)
@@ -671,6 +690,10 @@ impl ShapedTextLayout {
 
     /// The size of the complete text for the given line height.
     pub fn size(&self, line_height: Pixels) -> Size<Pixels> {
+        if self.layout.platform_layout.native_lines().is_some() {
+            return self.layout.platform_layout.size();
+        }
+
         Size {
             width: self.width(),
             height: line_height * self.line_count(),

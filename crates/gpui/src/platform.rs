@@ -1752,6 +1752,8 @@ mod tests {
             .collect();
             let paint_fragments = (!glyphs.is_empty())
                 .then(|| PaintFragment {
+                    baseline_offset: Pixels::ZERO,
+                    background_range: None,
                     source_run: 0,
                     font_id: FontId(0),
                     font_size,
