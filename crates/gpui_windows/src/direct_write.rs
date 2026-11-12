@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::hash_map::Entry,
     ffi::{c_uint, c_void},
     marker::PhantomData,
@@ -11,15 +10,13 @@ use std::{
 use anyhow::{Context as _, Result, ensure};
 use collections::HashMap;
 use gpui::{
-    Bounds, ColorGlyphKind, DevicePixels, Font, FontDataBlob, FontId, FontMetrics, GlyphId,
-    GlyphRasterizer, GlyphRenderMode, InlineLayout, InlineLayoutRequest, LineLayout, Pixels,
-    PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterFace, RasterStyleRequest,
-    RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size,
-    TextLayoutRequest, TextRenderingMode, apply_pixel_opacity, multiply_alpha, point, size,
+    Bounds, ColorGlyphKind, DevicePixels, FontDataBlob, FontId, GlyphRasterizer, GlyphRenderMode,
+    Pixels, PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterFace,
+    RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y, TextRenderingMode, apply_pixel_opacity, multiply_alpha, point, size,
 };
 use gpui_parley::ParleyTextSystem;
 use gpui_render::BitmapFallbackGlyphRasterizer;
-use parking_lot::RwLock;
 use windows::{
     Win32::{
         Foundation::*,
@@ -37,30 +34,8 @@ use windows::{
 };
 use windows_numerics::{Matrix3x2, Vector2};
 
-use crate::*;
-
-pub(crate) struct DirectWriteTextSystem {
-    parley: ParleyTextSystem,
-    renderer: Arc<RwLock<DirectWriteGlyphRenderer>>,
-}
-
-#[derive(Clone)]
-struct SharedDirectWriteRenderer(Arc<RwLock<DirectWriteGlyphRenderer>>);
-
-struct DirectWriteGlyphRenderer {
-    components: DirectWriteComponents,
-    variable_factory: Option<IDWriteFactory6>,
-    rendering_params: IDWriteRenderingParams,
-    color_rendering_params: IDWriteRenderingParams3,
-    faces: HashMap<FontId, NativeFace>,
-    sources: HashMap<u64, NativeSource>,
-    system_subpixel_rendering: bool,
-}
-
-struct DirectWriteComponents {
-    factory: IDWriteFactory5,
-    in_memory_loader: IDWriteInMemoryFontFileLoader,
-}
+#[cfg(test)]
+use crate::DirectXDevices;
 
 struct NativeFace {
     face: IDWriteFontFace3,
@@ -75,114 +50,30 @@ struct FontDataOwner {
     _data: FontDataBlob<u8>,
 }
 
-impl DirectWriteTextSystem {
-    pub(crate) fn new(directx_devices: &DirectXDevices) -> Result<Self> {
-        Self::new_inner(Some(directx_devices))
-    }
-
-    pub(crate) fn new_headless() -> Result<Self> {
-        Self::new_inner(None)
-    }
-
-    fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
-        let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
-        let parley = ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
-            SharedDirectWriteRenderer(renderer.clone()),
+pub(crate) fn new_text_system() -> Result<Arc<dyn PlatformTextSystem>> {
+    Ok(Arc::new(
+        ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
+            DirectWriteGlyphRasterizer::new()?,
         ))
         .with_system_fallback_family("Segoe UI")
         .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
-        .with_system_fonts();
-
-        Ok(Self { parley, renderer })
-    }
-
-    pub(crate) fn handle_gpu_lost(&self, directx_devices: &DirectXDevices) -> Result<()> {
-        self.renderer.write().handle_gpu_lost(directx_devices)
-    }
+        .with_system_fonts(),
+    ))
 }
 
-impl PlatformTextSystem for DirectWriteTextSystem {
-    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        self.parley.add_fonts(fonts)
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        self.parley.all_font_names()
-    }
-
-    fn font_generation(&self) -> u64 {
-        self.parley.font_generation()
-    }
-
-    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
-        self.parley.font_id(descriptor)
-    }
-
-    fn prewarm_fonts(&self, font_ids: &[FontId]) {
-        self.parley.prewarm_fonts(font_ids);
-    }
-
-    fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.parley.font_metrics(font_id)
-    }
-
-    fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        self.parley.typographic_bounds(font_id, glyph_id)
-    }
-
-    fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        self.parley.advance(font_id, glyph_id)
-    }
-
-    fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
-        self.parley.glyph_for_char(font_id, character)
-    }
-
-    fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
-        self.parley.rasterize_glyph(params)
-    }
-
-    fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
-        self.parley.prepare_raster_style(request)
-    }
-
-    fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-        self.parley.layout_text(request)
-    }
-
-    fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        self.parley.layout_inline(request)
-    }
-
-    fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
-        self.parley.recommended_rendering_mode(font_id, font_size)
-    }
+struct DirectWriteGlyphRasterizer {
+    factory: IDWriteFactory5,
+    in_memory_loader: IDWriteInMemoryFontFileLoader,
+    variable_factory: Option<IDWriteFactory6>,
+    rendering_params: IDWriteRenderingParams,
+    color_rendering_params: IDWriteRenderingParams3,
+    faces: HashMap<FontId, NativeFace>,
+    sources: HashMap<u64, NativeSource>,
+    system_subpixel_rendering: bool,
 }
 
-impl GlyphRasterizer for SharedDirectWriteRenderer {
-    fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-        self.0.read().supports_color_glyph(kind)
-    }
-
-    fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
-        self.0.read().prepare_style(request)
-    }
-
-    fn rasterize(
-        &mut self,
-        face: RasterFace<'_>,
-        params: &RenderGlyphParams,
-    ) -> Result<RasterizedGlyph> {
-        self.0.write().rasterize(face, params)
-    }
-
-    fn recommended_mode(&self) -> TextRenderingMode {
-        self.0.read().recommended_mode()
-    }
-}
-
-impl DirectWriteGlyphRenderer {
-    fn new(_directx_devices: Option<&DirectXDevices>) -> Result<Self> {
+impl DirectWriteGlyphRasterizer {
+    fn new() -> Result<Self> {
         let factory: IDWriteFactory5 = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
             .context("creating the DirectWrite factory")?;
         let variable_factory = factory.cast().ok();
@@ -211,10 +102,8 @@ impl DirectWriteGlyphRenderer {
         .context("creating DirectWrite color rendering parameters")?;
 
         Ok(Self {
-            components: DirectWriteComponents {
-                factory,
-                in_memory_loader,
-            },
+            factory,
+            in_memory_loader,
             variable_factory,
             rendering_params,
             color_rendering_params,
@@ -228,8 +117,8 @@ impl DirectWriteGlyphRenderer {
         let Entry::Vacant(entry) = self.faces.entry(face.font_id) else {
             return Ok(());
         };
-        let factory = &self.components.factory;
-        let loader = &self.components.in_memory_loader;
+        let factory = &self.factory;
+        let loader = &self.in_memory_loader;
         let variable_factory = self.variable_factory.as_ref();
         let use_default_axes = face.variations.is_empty()
             || (variable_factory.is_none() && face.has_default_variations()?);
@@ -325,7 +214,7 @@ impl DirectWriteGlyphRenderer {
         };
 
         let glyph_analysis = unsafe {
-            self.components.factory.CreateGlyphRunAnalysis(
+            self.factory.CreateGlyphRunAnalysis(
                 &glyph_run,
                 Some(&transform),
                 rendering_mode,
@@ -478,7 +367,7 @@ impl DirectWriteGlyphRenderer {
 
         // Request COLRv0 translation into ordinary outline runs, including foreground layers.
         Ok(unsafe {
-            self.components.factory.TranslateColorGlyphRun(
+            self.factory.TranslateColorGlyphRun(
                 baseline,
                 &glyph_run,
                 None,
@@ -519,7 +408,7 @@ impl DirectWriteGlyphRenderer {
             );
             let layer = &color_run.Base;
             let analysis = unsafe {
-                self.components.factory.CreateGlyphRunAnalysis(
+                self.factory.CreateGlyphRunAnalysis(
                     &layer.glyphRun,
                     Some(&transform),
                     self.color_rendering_params.GetRenderingMode1(),
@@ -600,28 +489,22 @@ impl DirectWriteGlyphRenderer {
             Ok(())
         })
     }
-
-    fn handle_gpu_lost(&mut self, _directx_devices: &DirectXDevices) -> Result<()> {
-        // Color targets are software bitmaps owned by each raster call.
-        Ok(())
-    }
 }
 
-impl Drop for DirectWriteGlyphRenderer {
+impl Drop for DirectWriteGlyphRasterizer {
     fn drop(&mut self) {
         self.faces.clear();
         self.sources.clear();
 
         unsafe {
             let _ = self
-                .components
                 .factory
-                .UnregisterFontFileLoader(&self.components.in_memory_loader);
+                .UnregisterFontFileLoader(&self.in_memory_loader);
         }
     }
 }
 
-impl GlyphRasterizer for DirectWriteGlyphRenderer {
+impl GlyphRasterizer for DirectWriteGlyphRasterizer {
     fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
         kind == ColorGlyphKind::ColrV0
     }
@@ -651,9 +534,11 @@ impl GlyphRasterizer for DirectWriteGlyphRenderer {
         }
 
         self.load_face(face)?;
+
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
         );
+
         let glyph_analysis = self.create_glyph_run_analysis(params)?;
         let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
             DWRITE_TEXTURE_CLEARTYPE_3x1
@@ -969,7 +854,7 @@ mod tests {
 
     #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
-        let system = DirectWriteTextSystem::new_headless()?;
+        let system = new_text_system()?;
         system.add_fonts(vec![
             Cow::Borrowed(*gpui_fonts::IBM_PLEX),
             Cow::Borrowed(*gpui_fonts::SOURCE_SERIF),
@@ -987,7 +872,7 @@ mod tests {
                 (Subpixel, RasterizedGlyphFormat::BgraSubpixelMask),
             ] {
                 let mut params =
-                    raster_params(&system, regular_id, regular_glyph, mode, rgba(0xffffffff));
+                    raster_params(&*system, regular_id, regular_glyph, mode, rgba(0xffffffff));
 
                 params.scale_factor = scale_factor;
 
@@ -1006,13 +891,13 @@ mod tests {
             .glyph_for_char(regular_id, ' ')
             .context("IBM Plex Sans has no space glyph")?;
 
-        let params = raster_params(&system, regular_id, space, Grayscale, rgba(0xffffffff));
+        let params = raster_params(&*system, regular_id, space, Grayscale, rgba(0xffffffff));
 
         let empty = system.rasterize_glyph(&params)?;
         assert_eq!(empty.size, Size::default());
         assert!(empty.pixels.is_empty());
 
-        let params = raster_params(&system, regular_id, regular_glyph, Color, rgba(0xffffffff));
+        let params = raster_params(&*system, regular_id, regular_glyph, Color, rgba(0xffffffff));
 
         let monochrome_color = system.rasterize_glyph(&params)?;
         assert_eq!(monochrome_color.format, RasterizedGlyphFormat::BgraColor);
@@ -1027,7 +912,7 @@ mod tests {
 
         for alpha in [0, 64, 128, 255] {
             let mut params = raster_params(
-                &system,
+                &*system,
                 regular_id,
                 regular_glyph,
                 Color,
@@ -1059,7 +944,7 @@ mod tests {
             .context("synthesized IBM Plex Sans has no A glyph")?;
 
         let mut params = raster_params(
-            &system,
+            &*system,
             synthesized_id,
             synthesized_glyph,
             Grayscale,
@@ -1083,7 +968,8 @@ mod tests {
                 .glyph_for_char(font_id, 'A')
                 .context("fixture has no A glyph")?;
 
-            let mut params = raster_params(&system, font_id, glyph_id, Grayscale, rgba(0xffffffff));
+            let mut params =
+                raster_params(&*system, font_id, glyph_id, Grayscale, rgba(0xffffffff));
 
             params.scale_factor = 2.0;
 
@@ -1133,15 +1019,15 @@ mod tests {
     }
 
     #[test]
-    fn native_color_survives_device_recovery() -> Result<()> {
+    fn native_color_survives_device_replacement() -> Result<()> {
         let devices = DirectXDevices::new()?;
-        let system = DirectWriteTextSystem::new(&devices)?;
+        let system = new_text_system()?;
         let font_id = system.font_id(&font("Segoe UI Emoji"))?;
         let glyph_id = system
             .glyph_for_char(font_id, '😀')
             .context("Segoe UI Emoji has no grinning-face glyph")?;
 
-        let mut params = raster_params(&system, font_id, glyph_id, Color, rgba(0xffffffff));
+        let mut params = raster_params(&*system, font_id, glyph_id, Color, rgba(0xffffffff));
 
         params.scale_factor = 2.0;
         let before = system.rasterize_glyph(&params)?;
@@ -1154,8 +1040,8 @@ mod tests {
         }));
         before.validate()?;
 
-        let replacement_devices = DirectXDevices::new()?;
-        system.handle_gpu_lost(&replacement_devices)?;
+        drop(devices);
+        let _replacement_devices = DirectXDevices::new()?;
         let after = system.rasterize_glyph(&params)?;
         after.validate()?;
         assert_eq!(before.bounds, after.bounds);
@@ -1169,13 +1055,13 @@ mod tests {
     fn headless_color_layers_preserve_palette_foreground_and_alpha() -> Result<()> {
         let (system, font_id) = color_test_system()?;
 
-        let bitmap = bitmap_test_params(&system)?;
+        let bitmap = bitmap_test_params(&*system)?;
 
         for (font_id, character) in [(font_id, 'A'), (font_id, 'B'), (bitmap.font_id, '😀')] {
             let glyph_id = system.glyph_for_char(font_id, character).unwrap();
-            let mut red = raster_params(&system, font_id, glyph_id, Color, rgba(0xe02010ff));
+            let mut red = raster_params(&*system, font_id, glyph_id, Color, rgba(0xe02010ff));
             red.scale_factor = 2.0;
-            let mut green = raster_params(&system, font_id, glyph_id, Color, rgba(0x20c080ff));
+            let mut green = raster_params(&*system, font_id, glyph_id, Color, rgba(0x20c080ff));
             green.scale_factor = 2.0;
             let red_pixels = system.rasterize_glyph(&red)?;
             let green_pixels = system.rasterize_glyph(&green)?;
@@ -1230,7 +1116,7 @@ mod tests {
                 };
 
                 let mut params =
-                    raster_params(&system, font_id, glyph_id, Color, foreground.into());
+                    raster_params(&*system, font_id, glyph_id, Color, foreground.into());
 
                 params.scale_factor = 2.0;
                 let rasterized = system.rasterize_glyph(&params)?;
@@ -1246,7 +1132,7 @@ mod tests {
     #[test]
     fn color_layer_bounds_cover_empty_and_smaller_base_outlines() -> Result<()> {
         let (system, font_id) = color_test_system()?;
-        let color_data = color_font_data(&system, font_id);
+        let color_data = color_font_data(&*system, font_id);
 
         for character in ['i', ' '] {
             let glyph_id = system.glyph_for_char(font_id, character).unwrap();
@@ -1264,13 +1150,13 @@ mod tests {
             ] {
                 for subpixel_variant in subpixel_variants().chain([point(1, 1)]) {
                     let mut params =
-                        raster_params(&system, font_id, glyph_id, Color, rgba(0xffffffff));
+                        raster_params(&*system, font_id, glyph_id, Color, rgba(0xffffffff));
 
                     params.subpixel_variant = subpixel_variant;
                     params.scale_factor = scale_factor;
 
                     params.font_size = px(font_size);
-                    assert_color_bounds(&system, &rasterizer, character, &params)?;
+                    assert_color_bounds(&*system, &rasterizer, character, &params)?;
                 }
             }
         }
@@ -1305,7 +1191,8 @@ mod tests {
                 let before = explicit_calling_apartment()?;
                 let (system, font_id) = color_test_system()?;
                 let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
-                let mut params = raster_params(&system, font_id, glyph_id, Color, rgba(0x20c080ff));
+                let mut params =
+                    raster_params(&*system, font_id, glyph_id, Color, rgba(0x20c080ff));
 
                 params.subpixel_variant = point(1, 1);
                 params.scale_factor = 1.5;
@@ -1348,12 +1235,12 @@ mod tests {
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
         let (system, font_id) = color_test_system()?;
         let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
-        let params = raster_params(&system, font_id, glyph_id, Color, rgba(0xe0201080));
+        let params = raster_params(&*system, font_id, glyph_id, Color, rgba(0xe0201080));
         system.rasterize_glyph(&params)?;
 
         let width = oversized_color_bounds(&wic, params.raster_style)?.right;
 
-        let rasterizer = test_rasterizer(font_id, &color_font_data(&system, font_id), 0)?;
+        let rasterizer = test_rasterizer(font_id, &color_font_data(&*system, font_id), 0)?;
         let glyph_analysis = rasterizer.create_glyph_run_analysis(&params)?;
         let oversized = Bounds {
             origin: point(0.into(), (-10).into()),
@@ -1541,7 +1428,7 @@ mod tests {
 
     fn assert_color_bounds(
         system: &dyn PlatformTextSystem,
-        rasterizer: &DirectWriteGlyphRenderer,
+        rasterizer: &DirectWriteGlyphRasterizer,
         character: char,
         params: &RenderGlyphParams,
     ) -> Result<()> {
@@ -1595,13 +1482,13 @@ mod tests {
         }
     }
 
-    fn color_test_system() -> Result<(DirectWriteTextSystem, FontId)> {
-        let outline_system = DirectWriteTextSystem::new_headless()?;
+    fn color_test_system() -> Result<(Arc<dyn PlatformTextSystem>, FontId)> {
+        let outline_system = new_text_system()?;
         outline_system.add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])?;
         let font_id = outline_system.font_id(&font("IBM Plex Sans"))?;
-        let data = color_font_data(&outline_system, font_id);
+        let data = color_font_data(&*outline_system, font_id);
 
-        let system = DirectWriteTextSystem::new_headless()?;
+        let system = new_text_system()?;
         system.add_fonts(vec![Cow::Owned(data)])?;
         let font_id = system.font_id(&font("IBM Plex Sans"))?;
 
@@ -1612,9 +1499,9 @@ mod tests {
         font_id: FontId,
         data: &[u8],
         face_index: u32,
-    ) -> Result<DirectWriteGlyphRenderer> {
+    ) -> Result<DirectWriteGlyphRasterizer> {
         let source = FontDataBlob::from(data.to_vec());
-        let mut rasterizer = DirectWriteGlyphRenderer::new(None)?;
+        let mut rasterizer = DirectWriteGlyphRasterizer::new()?;
 
         rasterizer.load_face(RasterFace {
             font_id,
