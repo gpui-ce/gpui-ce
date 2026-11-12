@@ -453,22 +453,6 @@ impl PlatformTextLayout for SourceMappedLayout {
         )
     }
 
-    fn inline_geometry_for_ranges(&self, ranges: &[Range<usize>]) -> Vec<Vec<InlineRangeGeometry>> {
-        let ranges = ranges
-            .iter()
-            .cloned()
-            .map(|range| {
-                if range.is_empty() {
-                    0..0
-                } else {
-                    self.map.backend_range(range)
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.inner.inline_geometry_for_ranges(&ranges)
-    }
-
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
         let mut backend_caret = self.map.backend_caret(caret);
 
@@ -805,6 +789,7 @@ struct ParleyLayout {
     text: Arc<str>,
     caret_stops: OnceLock<ParleyCaretStops>,
     graphemes: OnceLock<Vec<std::ops::Range<usize>>>,
+    cluster_geometry: OnceLock<Vec<ParleyClusterGeometry>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -847,6 +832,7 @@ struct ParleyClusterGeometry {
     text_range: Range<usize>,
     bounds: Bounds<Pixels>,
     line_index: usize,
+    visual_idx: usize,
 }
 
 impl ParleyLayout {
@@ -863,6 +849,7 @@ impl ParleyLayout {
             text,
             caret_stops: OnceLock::new(),
             graphemes: OnceLock::new(),
+            cluster_geometry: OnceLock::new(),
         }
     }
 
@@ -1141,28 +1128,33 @@ impl ParleyLayout {
             .unwrap_or_else(|| self.layout.len().saturating_sub(1))
     }
 
-    fn inline_cluster_geometry(&self) -> Vec<ParleyClusterGeometry> {
-        let mut geometries = Vec::new();
+    fn inline_cluster_geometry(&self) -> &[ParleyClusterGeometry] {
+        self.cluster_geometry.get_or_init(|| {
+            let mut geometries = Vec::new();
 
-        for (line_index, line) in self.layout.lines().enumerate() {
-            Self::visit_line_clusters(line, |cluster, advance, vertical| {
-                let left = px(advance.start);
-                let right = px(advance.end);
+            for (line_index, line) in self.layout.lines().enumerate() {
+                Self::visit_line_clusters(line, |cluster, advance, vertical| {
+                    let left = px(advance.start);
+                    let right = px(advance.end);
 
-                if right > left {
-                    geometries.push(ParleyClusterGeometry {
-                        text_range: cluster.text_range(),
-                        bounds: Bounds::new(
-                            point(left, px(vertical.start)),
-                            size(right - left, px(vertical.end - vertical.start)),
-                        ),
-                        line_index,
-                    });
-                }
-            });
-        }
+                    if right > left {
+                        geometries.push(ParleyClusterGeometry {
+                            text_range: cluster.text_range(),
+                            bounds: Bounds::new(
+                                point(left, px(vertical.start)),
+                                size(right - left, px(vertical.end - vertical.start)),
+                            ),
+                            line_index,
+                            visual_idx: geometries.len(),
+                        });
+                    }
+                });
+            }
 
-        geometries
+            geometries.sort_unstable_by_key(|geometry| geometry.text_range.start);
+
+            geometries
+        })
     }
 
     fn append_inline_geometry(
@@ -1400,58 +1392,27 @@ impl PlatformTextLayout for ParleyLayout {
         bounds
     }
 
-    fn inline_geometry(&self, range: std::ops::Range<usize>) -> Option<Vec<InlineRangeGeometry>> {
+    fn inline_geometry(&self, range: Range<usize>) -> Option<Vec<InlineRangeGeometry>> {
         if range.is_empty() {
             return None;
         }
 
-        Some(
-            self.inline_geometry_for_ranges(std::slice::from_ref(&range))
-                .pop()
-                .unwrap(),
-        )
-    }
-
-    fn inline_geometry_for_ranges(&self, ranges: &[Range<usize>]) -> Vec<Vec<InlineRangeGeometry>> {
         let geometries = self.inline_cluster_geometry();
-        let mut owners = vec![Vec::new(); geometries.len()];
-        let mut geometry_order = (0..geometries.len()).collect::<Vec<_>>();
-        geometry_order.sort_unstable_by_key(|idx| geometries[*idx].text_range.start);
 
-        let mut range_order = (0..ranges.len())
-            .filter(|idx| !ranges[*idx].is_empty())
-            .collect::<Vec<_>>();
-        range_order.sort_unstable_by_key(|idx| ranges[*idx].start);
+        // Logical cluster ranges are disjoint, so both endpoints can use binary search.
+        let start = geometries.partition_point(|geometry| geometry.text_range.end <= range.start);
+        let end = geometries.partition_point(|geometry| geometry.text_range.start < range.end);
 
-        let mut active_ranges: Vec<usize> = Vec::new();
-        let mut next_range = 0;
+        let mut visual_order = geometries[start..end].iter().collect::<Vec<_>>();
+        visual_order.sort_unstable_by_key(|geometry| geometry.visual_idx);
 
-        for geometry_idx in geometry_order {
-            let text_range = &geometries[geometry_idx].text_range;
-            active_ranges.retain(|range_idx| ranges[*range_idx].end > text_range.start);
+        let mut output = Vec::new();
 
-            while let Some(range_idx) = range_order.get(next_range).copied()
-                && ranges[range_idx].start < text_range.end
-            {
-                if ranges[range_idx].end > text_range.start {
-                    active_ranges.push(range_idx);
-                }
-
-                next_range += 1;
-            }
-
-            owners[geometry_idx].extend(active_ranges.iter().copied());
+        for geometry in visual_order {
+            Self::append_inline_geometry(&mut output, geometry);
         }
 
-        let mut output = vec![Vec::new(); ranges.len()];
-
-        for (geometry, owners) in geometries.iter().zip(owners) {
-            for range_idx in owners {
-                Self::append_inline_geometry(&mut output[range_idx], geometry);
-            }
-        }
-
-        output
+        Some(output)
     }
 
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
@@ -3809,6 +3770,143 @@ mod tests {
                     expected_glyphs,
                     "child runs must retain their own font features",
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn native_cluster_geometry_matches_positioned_runs() {
+        let system = test_system();
+
+        for (text, family, style_range, letter_spacing, box_index) in [
+            ("abcde", IBM_PLEX.family, 2..3, 0., None),
+            ("office", SOURCE_SERIF.family, 2..3, 0., None),
+            ("لا", NOTO_ARABIC.family, 2..4, 0., None),
+            ("\u{301}a", IBM_PLEX.family, 0..2, 0., None),
+            ("ab\ncd", IBM_PLEX.family, 2..3, 1.5, None),
+            ("abcde", IBM_PLEX.family, 2..3, 1.5, Some(3)),
+            ("A אב office B", IBM_PLEX.family, 4..6, 1.5, Some(7)),
+            ("אב office", IBM_PLEX.family, 0..4, -1.5, None),
+        ] {
+            let native = native_layout(&system, text, family, None, |builder| {
+                builder.push_default(StyleProperty::LetterSpacing(letter_spacing));
+                builder.push(
+                    StyleProperty::LineHeight(LineHeight::Absolute(36.)),
+                    style_range,
+                );
+
+                if let Some(index) = box_index {
+                    builder.push_inline_box(InlineBox {
+                        id: 0,
+                        kind: InlineBoxKind::InFlow,
+                        index,
+                        width: 12.,
+                        height: 10.,
+                        baseline: None,
+                        vertical_align: ParleyVerticalAlign::MIDDLE,
+                    });
+                }
+            });
+
+            let mut expected_advance = 0.;
+            let mut actual_advance = 0.;
+            let mut actual_ranges = Vec::new();
+            let mut ligature_continuations = 0;
+
+            for line in native.layout.lines() {
+                let native_regions = line
+                    .items()
+                    .filter_map(|item| {
+                        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                            return None;
+                        };
+                        let metrics = glyph_run.run().font_metrics();
+                        expected_advance += glyph_run.advance();
+
+                        Some((
+                            glyph_run.offset()..glyph_run.offset() + glyph_run.advance(),
+                            glyph_run.baseline() - metrics.ascent
+                                ..glyph_run.baseline() + metrics.descent,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+
+                ParleyLayout::visit_line_clusters(line, |cluster, advance, vertical| {
+                    actual_advance += advance.end - advance.start;
+                    actual_ranges.push(cluster.text_range());
+                    ligature_continuations += usize::from(cluster.is_ligature_continuation());
+                    assert!(
+                        native_regions
+                            .iter()
+                            .any(|(native_inline, native_vertical)| {
+                                advance.start >= native_inline.start - 0.001
+                                    && advance.end <= native_inline.end + 0.001
+                                    && vertical == *native_vertical
+                            }),
+                        "{text:?}: cluster geometry must stay within its native glyph run",
+                    );
+                });
+            }
+
+            let expected_ranges = text
+                .grapheme_indices(true)
+                .filter(|(_idx, grapheme)| *grapheme != "\n")
+                .map(|(idx, grapheme)| idx..idx + grapheme.len())
+                .collect::<Vec<_>>();
+            actual_ranges.sort_unstable_by_key(|range| range.start);
+            assert_eq!(actual_ranges, expected_ranges, "{text:?}");
+            assert!(
+                (actual_advance - expected_advance).abs() < 0.001,
+                "{text:?}: cluster advances must cover each native glyph run once",
+            );
+
+            if matches!(text, "office" | "لا") {
+                assert!(
+                    ligature_continuations > 0,
+                    "{text:?}: fixture must form a ligature"
+                );
+            }
+
+            let geometries = native.inline_cluster_geometry();
+
+            for pair in geometries.windows(2) {
+                assert!(
+                    pair[0].text_range.end <= pair[1].text_range.start,
+                    "{text:?}: logical cluster ranges must not overlap",
+                );
+            }
+
+            let mut ranges = vec![
+                text.len()..text.len() + 4,
+                0..text.len(),
+                1..text.len().saturating_sub(1),
+                0..0,
+                text.len()..0,
+                0..usize::MAX,
+                1..1,
+                0..text.len(),
+            ];
+
+            ranges.extend((0..text.len()).map(|idx| idx..idx + 1));
+
+            let actual = native.inline_geometry_for_ranges(&ranges);
+            assert_eq!(actual.len(), ranges.len());
+
+            let mut visual_order = geometries.iter().collect::<Vec<_>>();
+            visual_order.sort_unstable_by_key(|geometry| geometry.visual_idx);
+
+            for (range, actual) in ranges.iter().zip(actual) {
+                let mut expected = Vec::new();
+
+                for geometry in visual_order.iter().filter(|geometry| {
+                    !range.is_empty()
+                        && geometry.text_range.start < range.end
+                        && range.start < geometry.text_range.end
+                }) {
+                    ParleyLayout::append_inline_geometry(&mut expected, geometry);
+                }
+
+                assert_eq!(actual, expected, "{text:?}, range {range:?}");
             }
         }
     }
