@@ -361,6 +361,14 @@ impl SourceMappedLayout {
 }
 
 impl PlatformTextLayout for SourceMappedLayout {
+    fn native_lines(&self) -> Option<&[InlineVisualLine]> {
+        self.inner.native_lines()
+    }
+
+    fn visual_line_index(&self, caret: CaretPosition) -> usize {
+        self.inner.visual_line_index(self.map.backend_caret(caret))
+    }
+
     fn len(&self) -> usize {
         self.source_len
     }
@@ -792,8 +800,10 @@ fn inline_alignment_offset(
 
 #[derive(Clone, Debug)]
 struct ParleyLayout {
+    native_geometry: bool,
     layout: Layout<usize>,
     inline_lines: Vec<InlineVisualLine>,
+    // Cluster and caret caches use backend text indices, including synthetic bidi controls.
     text: Arc<str>,
     caret_stops: OnceLock<ParleyCaretStops>,
     graphemes: OnceLock<Vec<std::ops::Range<usize>>>,
@@ -834,43 +844,22 @@ struct ParleyCaretStops {
     indices: HashMap<CaretPosition, usize>,
 }
 
+#[derive(Clone, Debug)]
 struct ParleyClusterGeometry {
     text_range: Range<usize>,
     bounds: Bounds<Pixels>,
     line_index: usize,
 }
 
-fn visit_line_clusters(
-    line: Line<'_, usize>,
-    mut visit: impl FnMut(Cluster<'_, usize>, Range<f32>),
-) {
-    let mut previous_run_index = None;
-
-    for item in line.items() {
-        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-            continue;
-        };
-
-        let run = glyph_run.run();
-
-        if previous_run_index == Some(run.index()) {
-            continue;
-        }
-
-        previous_run_index = Some(run.index());
-        let mut inline = glyph_run.offset();
-
-        for cluster in run.visual_clusters() {
-            let advance = inline..inline + cluster.advance();
-            inline = advance.end;
-            visit(cluster, advance);
-        }
-    }
-}
-
 impl ParleyLayout {
-    fn new(layout: Layout<usize>, text: Arc<str>, inline_lines: Vec<InlineVisualLine>) -> Self {
+    fn new(
+        layout: Layout<usize>,
+        text: Arc<str>,
+        inline_lines: Vec<InlineVisualLine>,
+        native_geometry: bool,
+    ) -> Self {
         Self {
+            native_geometry,
             layout,
             inline_lines,
             text,
@@ -890,6 +879,7 @@ impl ParleyLayout {
 
     fn caret_position(cursor: Cursor) -> CaretPosition {
         let gpui_affinity = cursor.affinity().into_affinity();
+
         CaretPosition {
             index: cursor.index(),
             affinity: gpui_affinity,
@@ -898,12 +888,45 @@ impl ParleyLayout {
 
     fn cursor(&self, caret: CaretPosition) -> Cursor {
         let parley_affinity = caret.affinity.into_affinity();
+
         Cursor::from_byte_index(&self.layout, caret.index, parley_affinity)
     }
 
     fn cursor_position(layout: &Layout<usize>, cursor: Cursor) -> (f64, f64) {
         let geometry = cursor.geometry(layout, 0.0);
+
         (geometry.y0, geometry.x0)
+    }
+
+    fn visit_line_clusters(
+        line: Line<'_, usize>,
+        mut visit: impl FnMut(Cluster<'_, usize>, Range<f32>, Range<f32>),
+    ) {
+        let mut previous_run_index = None;
+
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+
+            let run = glyph_run.run();
+
+            if previous_run_index == Some(run.index()) {
+                continue;
+            }
+
+            previous_run_index = Some(run.index());
+            let mut inline = glyph_run.offset();
+            let metrics = run.font_metrics();
+            let vertical =
+                glyph_run.baseline() - metrics.ascent..glyph_run.baseline() + metrics.descent;
+
+            for cluster in run.visual_clusters() {
+                let advance = inline..inline + cluster.advance();
+                inline = advance.end;
+                visit(cluster, advance, vertical.clone());
+            }
+        }
     }
 
     fn collect_caret_stops(
@@ -913,36 +936,23 @@ impl ParleyLayout {
     ) -> ParleyCaretStops {
         let mut stops = Vec::with_capacity((graphemes.len() + 2) * 2);
         let mut indices = HashMap::with_capacity((graphemes.len() + 2) * 2);
+
         let grapheme_boundaries = std::iter::once(0)
             .chain(graphemes.iter().map(|range| range.end))
             .collect::<HashSet<_>>();
 
         for line in layout.lines() {
             let block = f64::from(line.metrics().block_min_coord);
-            visit_line_clusters(line, |cluster, advance| {
+
+            Self::visit_line_clusters(line, |cluster, advance, _vertical| {
                 let range = cluster.text_range();
+                let start = CaretPosition::attached_to_next_cluster(range.start);
+                let end = CaretPosition::attached_to_previous_cluster(range.end);
+
                 let (left, right) = if cluster.is_rtl() {
-                    (
-                        CaretPosition {
-                            index: range.end,
-                            affinity: CaretAffinity::Upstream,
-                        },
-                        CaretPosition {
-                            index: range.start,
-                            affinity: CaretAffinity::Downstream,
-                        },
-                    )
+                    (end, start)
                 } else {
-                    (
-                        CaretPosition {
-                            index: range.start,
-                            affinity: CaretAffinity::Downstream,
-                        },
-                        CaretPosition {
-                            index: range.end,
-                            affinity: CaretAffinity::Upstream,
-                        },
-                    )
+                    (start, end)
                 };
 
                 for (caret, inline) in [(left, advance.start), (right, advance.end)] {
@@ -962,6 +972,7 @@ impl ParleyLayout {
         if stops.is_empty() {
             let cursor = Cursor::from_byte_index(layout, text_len, Affinity::Upstream);
             let (block, inline) = Self::cursor_position(layout, cursor);
+
             Self::push_caret_stop(
                 &mut stops,
                 &mut indices,
@@ -990,6 +1001,7 @@ impl ParleyLayout {
         }
 
         indices.insert(caret, stops.len());
+
         stops.push(ParleyCaretStop {
             caret,
             block,
@@ -1007,11 +1019,13 @@ impl ParleyLayout {
         let stops = self.caret_stops.get_or_init(|| {
             Self::collect_caret_stops(&self.layout, self.text.len(), self.graphemes())
         });
+
         if let Some(idx) = stops.indices.get(&caret).copied() {
             return Some(idx);
         }
 
         let cursor = self.cursor(caret);
+
         if let Some(idx) = stops.indices.get(&Self::caret_position(cursor)).copied() {
             return Some(idx);
         }
@@ -1026,6 +1040,7 @@ impl ParleyLayout {
 
         search.ok().or_else(|| {
             let insertion_idx = search.unwrap_err();
+
             [insertion_idx.checked_sub(1), Some(insertion_idx)]
                 .into_iter()
                 .flatten()
@@ -1073,14 +1088,34 @@ impl ParleyLayout {
         }
     }
 
+    fn native_point(&self, position: Point<Pixels>, line_height: Pixels) -> (f32, f32) {
+        let y = if self.native_geometry {
+            position.y.into()
+        } else {
+            self.native_y_for_line(Self::line_index_from_point(position, line_height))
+        };
+
+        (position.x.into(), y)
+    }
+
     fn line_index_at_block(&self, block: f32) -> usize {
+        if block < 0. {
+            return 0;
+        }
+
+        let line_idx = self
+            .inline_lines
+            .partition_point(|line| f32::from(line.origin.y) <= block)
+            .saturating_sub(1);
+
         self.layout
-            .lines()
-            .position(|line| {
+            .get(line_idx)
+            .filter(|line| {
                 let metrics = line.metrics();
 
                 block >= metrics.block_min_coord && block < metrics.block_max_coord
             })
+            .map(|_line| line_idx)
             .unwrap_or_else(|| self.layout.len().saturating_sub(1))
     }
 
@@ -1091,7 +1126,7 @@ impl ParleyLayout {
             let Some(inline_line) = self.inline_lines.get(line_index).copied() else {
                 continue;
             };
-            visit_line_clusters(line, |cluster, advance| {
+            Self::visit_line_clusters(line, |cluster, advance, _vertical| {
                 let left = px(advance.start);
                 let right = px(advance.end);
 
@@ -1131,9 +1166,84 @@ impl ParleyLayout {
             visual_line_index: geometry.line_index,
         });
     }
+
+    fn logical_cluster(&self, caret: CaretPosition, before: bool) -> Option<Range<usize>> {
+        if self.native_geometry {
+            let cursor = self.cursor(caret);
+
+            let cluster = if before {
+                cursor.upstream_cluster(&self.layout)
+            } else {
+                cursor.downstream_cluster(&self.layout)
+            };
+
+            return Some(cluster?.text_range());
+        }
+
+        if before {
+            self.graphemes()
+                .iter()
+                .rfind(|range| range.start < caret.index)
+                .cloned()
+        } else {
+            self.graphemes()
+                .iter()
+                .find(|range| range.end > caret.index)
+                .cloned()
+        }
+    }
+
+    fn backend_caret_from_point(
+        &self,
+        pixel_point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<CaretPosition, CaretPosition> {
+        let line_idx = if self.native_geometry {
+            self.line_index_at_block(pixel_point.y.into())
+        } else {
+            Self::line_index_from_point(pixel_point, line_height)
+        };
+
+        let (x, y) = self.native_point(pixel_point, line_height);
+        let caret = Self::caret_position(Cursor::from_point(&self.layout, x, y));
+
+        if self.text.is_empty() {
+            return Err(caret);
+        }
+
+        let Some(line) = self.layout.get(line_idx) else {
+            return Err(caret);
+        };
+
+        let metrics = line.metrics();
+        let left = metrics.inline_min_coord + metrics.offset;
+        let right = left + metrics.advance;
+
+        if pixel_point.y >= Pixels::ZERO
+            && (self.native_geometry || line_height > Pixels::ZERO)
+            && (!self.native_geometry || pixel_point.y < px(self.layout.height()))
+            && f32::from(pixel_point.x) >= left
+            && f32::from(pixel_point.x) < right
+        {
+            Ok(caret)
+        } else {
+            Err(caret)
+        }
+    }
 }
 
 impl PlatformTextLayout for ParleyLayout {
+    fn visual_line_index(&self, caret: CaretPosition) -> usize {
+        let geometry = self.cursor(caret).geometry(&self.layout, 0.);
+
+        // Parley's private Cursor::line helper uses the midpoint of this native rectangle.
+        self.line_index_at_block(((geometry.y0 + geometry.y1) / 2.) as f32)
+    }
+
+    fn native_lines(&self) -> Option<&[InlineVisualLine]> {
+        self.native_geometry.then_some(self.inline_lines.as_slice())
+    }
+
     fn len(&self) -> usize {
         self.text.len()
     }
@@ -1154,65 +1264,35 @@ impl PlatformTextLayout for ParleyLayout {
 
     fn byte_index_from_pixel_point(
         &self,
-        pixel_point: gpui::Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
-    ) -> std::result::Result<usize, usize> {
+    ) -> Result<usize, usize> {
         let closest = self
-            .caret_from_pixel_point(pixel_point, line_height)
+            .backend_caret_from_point(pixel_point, line_height)
             .map_err(|caret| caret.index)?
             .index;
 
-        Cluster::from_point(
-            &self.layout,
-            pixel_point.x.into(),
-            self.native_y_for_line(Self::line_index_from_point(pixel_point, line_height)),
-        )
-        .map(|(cluster, _)| cluster.text_range().start)
-        .ok_or(closest)
+        let (x, y) = self.native_point(pixel_point, line_height);
+
+        Cluster::from_point(&self.layout, x, y)
+            .map(|(cluster, _side)| cluster.text_range().start)
+            .ok_or(closest)
     }
 
     fn caret_from_pixel_point(
         &self,
-        pixel_point: gpui::Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
-    ) -> std::result::Result<CaretPosition, CaretPosition> {
-        let line_index = Self::line_index_from_point(pixel_point, line_height);
-
-        let caret = Self::caret_position(Cursor::from_point(
-            &self.layout,
-            pixel_point.x.into(),
-            self.native_y_for_line(line_index),
-        ));
-
-        if self.text.is_empty() {
-            return Err(caret);
-        }
-
-        let Some(line) = self.layout.get(line_index) else {
-            return Err(caret);
-        };
-
-        let metrics = line.metrics();
-        let left = metrics.inline_min_coord + metrics.offset;
-        let right = left + metrics.advance;
-
-        if pixel_point.y >= Pixels::ZERO
-            && line_height > Pixels::ZERO
-            && f32::from(pixel_point.x) >= left
-            && f32::from(pixel_point.x) < right
-        {
-            Ok(caret)
-        } else {
-            Err(caret)
-        }
+    ) -> Result<CaretPosition, CaretPosition> {
+        self.backend_caret_from_point(pixel_point, line_height)
     }
 
     fn caret_bounds(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
-        if caret.index > self.len() {
+        if caret.index > self.text.len() {
             return None;
         }
 
-        if self.text.is_empty() && self.layout.inline_boxes().len() == 0 {
+        if !self.native_geometry && self.text.is_empty() && self.layout.inline_boxes().len() == 0 {
             return Some(Bounds::new(
                 point(self.inline_lines[0].origin.x, Pixels::ZERO),
                 size(Pixels::ZERO, line_height),
@@ -1221,11 +1301,29 @@ impl PlatformTextLayout for ParleyLayout {
 
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
-        let line_index = self.line_index_at_block(geometry.y0 as f32);
+
+        if self.native_geometry {
+            let empty = self.text.is_empty() && self.layout.inline_boxes().len() == 0;
+
+            let left = if empty {
+                self.inline_lines[0].origin.x
+            } else {
+                px(geometry.x0 as f32)
+            };
+
+            let right = if empty { left } else { px(geometry.x1 as f32) };
+
+            return Some(Bounds::from_corners(
+                point(left, px(geometry.y0 as f32)),
+                point(right, px(geometry.y1 as f32)),
+            ));
+        }
+
+        let line_idx = self.line_index_at_block(((geometry.y0 + geometry.y1) / 2.) as f32);
 
         Some(Bounds::from_corners(
-            point(px(geometry.x0 as f32), line_height * line_index),
-            point(px(geometry.x1 as f32), line_height * (line_index + 1)),
+            point(px(geometry.x0 as f32), line_height * line_idx),
+            point(px(geometry.x1 as f32), line_height * (line_idx + 1)),
         ))
     }
 
@@ -1242,27 +1340,45 @@ impl PlatformTextLayout for ParleyLayout {
             return None;
         }
 
-        self.adjacent_caret_stop(caret, direction)
-            .map(|stop| stop.caret)
+        if !self.native_geometry {
+            return self
+                .adjacent_caret_stop(caret, direction)
+                .map(|stop| stop.caret);
+        }
+
+        let cursor = self.cursor(caret);
+
+        let moved = match direction {
+            VisualDirection::Left => cursor.previous_visual(&self.layout),
+            VisualDirection::Right => cursor.next_visual(&self.layout),
+        };
+
+        (moved != cursor).then(|| Self::caret_position(moved))
     }
 
     fn selection_bounds(
         &self,
-        byte_range: std::ops::Range<usize>,
+        byte_range: Range<usize>,
         line_height: Pixels,
     ) -> Vec<Bounds<Pixels>> {
         let anchor = Cursor::from_byte_index(&self.layout, byte_range.start, Affinity::Downstream);
         let focus = Cursor::from_byte_index(&self.layout, byte_range.end, Affinity::Upstream);
-        Selection::new(anchor, focus)
-            .geometry(&self.layout)
-            .into_iter()
-            .map(|(geometry, line_index)| {
-                Bounds::from_corners(
-                    point(px(geometry.x0 as f32), line_height * line_index),
-                    point(px(geometry.x1 as f32), line_height * (line_index + 1)),
-                )
-            })
-            .collect()
+        let mut bounds = Vec::new();
+
+        Selection::new(anchor, focus).geometry_with(&self.layout, |geometry, line_idx| {
+            let (top, bottom) = if self.native_geometry {
+                (px(geometry.y0 as f32), px(geometry.y1 as f32))
+            } else {
+                (line_height * line_idx, line_height * (line_idx + 1))
+            };
+
+            bounds.push(Bounds::from_corners(
+                point(px(geometry.x0 as f32), top),
+                point(px(geometry.x1 as f32), bottom),
+            ));
+        });
+
+        bounds
     }
 
     fn inline_geometry(&self, range: std::ops::Range<usize>) -> Option<Vec<InlineRangeGeometry>> {
@@ -1319,19 +1435,12 @@ impl PlatformTextLayout for ParleyLayout {
         output
     }
 
-    fn logical_cluster_before(&self, caret: CaretPosition) -> Option<std::ops::Range<usize>> {
-        self.graphemes()
-            .iter()
-            .rev()
-            .find(|range| range.start < caret.index)
-            .cloned()
+    fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        self.logical_cluster(caret, true)
     }
 
-    fn logical_cluster_after(&self, caret: CaretPosition) -> Option<std::ops::Range<usize>> {
-        self.graphemes()
-            .iter()
-            .find(|range| range.end > caret.index)
-            .cloned()
+    fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        self.logical_cluster(caret, false)
     }
 
     fn caret_movement(
@@ -1341,6 +1450,7 @@ impl PlatformTextLayout for ParleyLayout {
         vertical_navigation_x: Option<Pixels>,
     ) -> CaretMovement {
         let cursor = self.cursor(caret);
+
         let moved = match (movement.direction, movement.boundary) {
             (Direction::Left | Direction::Right, Boundary::Cluster) => {
                 let direction = if movement.direction == Direction::Left {
@@ -1388,12 +1498,15 @@ impl PlatformTextLayout for ParleyLayout {
                     1
                 };
 
-                let geometry = cursor.geometry(&self.layout, 0.0);
-                let line_index = self.line_index_at_block(geometry.y0 as f32);
-                let target_ix = line_index
+                let geometry = cursor.geometry(&self.layout, 0.);
+
+                let line_idx = self.line_index_at_block(((geometry.y0 + geometry.y1) / 2.) as f32);
+
+                let target_idx = line_idx
                     .checked_add_signed(delta)
-                    .filter(|&target_ix| self.layout.get(target_ix).is_some());
-                let Some(target_ix) = target_ix else {
+                    .filter(|&target_idx| self.layout.get(target_idx).is_some());
+
+                let Some(target_idx) = target_idx else {
                     let selection = Selection::from(cursor);
                     let moved = if delta < 0 {
                         selection.previous_line(&self.layout, false)
@@ -1407,9 +1520,9 @@ impl PlatformTextLayout for ParleyLayout {
                     };
                 };
 
-                let x = vertical_navigation_x
-                    .map_or_else(|| cursor.geometry(&self.layout, 0.0).x0 as f32, f32::from);
-                let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_ix));
+                let x = vertical_navigation_x.map_or(geometry.x0 as f32, f32::from);
+                let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_idx));
+
                 return CaretMovement {
                     result: Self::caret_position(moved),
                     vertical_navigation_x: Some(px(x)),
@@ -1426,25 +1539,20 @@ impl PlatformTextLayout for ParleyLayout {
 
     fn selection_from_pixel_point(
         &self,
-        pixel_point: gpui::Point<Pixels>,
+        pixel_point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
-    ) -> std::ops::Range<usize> {
-        let line_index = Self::line_index_from_point(pixel_point, line_height);
+    ) -> Range<usize> {
+        let (x, y) = self.native_point(pixel_point, line_height);
 
-        let y = self.native_y_for_line(line_index);
-        match kind {
-            TextSelectionKind::Word => {
-                Selection::word_from_point(&self.layout, pixel_point.x.into(), y)
-            }
-            TextSelectionKind::VisualLine => {
-                Selection::line_from_point(&self.layout, pixel_point.x.into(), y)
-            }
-            TextSelectionKind::HardLine => {
-                Selection::hard_line_from_point(&self.layout, pixel_point.x.into(), y)
-            }
+        let selection = match kind {
+            TextSelectionKind::Word => Selection::word_from_point(&self.layout, x, y),
+            TextSelectionKind::VisualLine => Selection::line_from_point(&self.layout, x, y),
+            TextSelectionKind::HardLine => Selection::hard_line_from_point(&self.layout, x, y),
         }
-        .text_range()
+        .text_range();
+
+        selection
     }
 }
 
@@ -1840,7 +1948,7 @@ impl ParleyTextSystem {
             positioned_inline_boxes.extend(result.inline_boxes);
         }
 
-        let platform_layout = ParleyDocumentLayout::new(paragraphs, text, document_size);
+        let platform_layout = ParleyDocumentLayout::new(paragraphs, text, document_size, None);
 
         Ok(ParleyLayoutResult {
             layout: LineLayout {
@@ -2359,7 +2467,8 @@ impl ParleyTextSystem {
             );
         }
 
-        let platform_layout = ParleyLayout::new(layout, paragraph_text, inline_lines.clone());
+        let platform_layout =
+            ParleyLayout::new(layout, paragraph_text, inline_lines.clone(), false);
         let platform_layout: Arc<dyn PlatformTextLayout> = Arc::new(SourceMappedLayout {
             source_len: source_text_len,
             map: prepared.map,
@@ -2607,6 +2716,7 @@ mod tests {
         FontFixture, IBM_PLEX, IBM_PLEX_SEMIBOLD, IBM_PLEX_SEMIBOLD_ITALIC, LILEX, NOTO_ARABIC,
         NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS, SOURCE_SERIF, WIDTH_CONDENSED, WIDTH_REGULAR,
     };
+    use parley::RangedBuilder;
     use std::{
         cell::Cell,
         cell::RefCell,
@@ -3496,6 +3606,89 @@ mod tests {
                     .selection_bounds(0..text.len(), line_height)
                     .is_empty()
             );
+        }
+    }
+
+    fn native_layout(
+        system: &ParleyTextSystem,
+        text: &str,
+        family: &str,
+        wrap_width: Option<f32>,
+        configure: impl FnOnce(&mut RangedBuilder<'_, usize>),
+    ) -> ParleyLayout {
+        let mut state = system.parley.lock();
+
+        let ParleyState {
+            font_context,
+            layout_context,
+        } = &mut *state;
+
+        let mut builder = layout_context.ranged_builder(font_context, text, 1., false);
+
+        for property in system.font_properties(&font(family)).unwrap() {
+            builder.push_default(property);
+        }
+
+        builder.push_default(StyleProperty::FontSize(18.));
+        builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(24.)));
+        configure(&mut builder);
+        let mut layout = builder.build(text);
+        layout.break_all_lines(wrap_width);
+        layout.align(Alignment::Left, AlignmentOptions::default());
+
+        let inline_lines = layout
+            .lines()
+            .map(|line| InlineVisualLine {
+                origin: point(Pixels::ZERO, px(line.metrics().block_min_coord)),
+                size: size(px(line.metrics().advance), px(line.metrics().line_height)),
+                baseline: px(line.metrics().baseline - line.metrics().block_min_coord),
+            })
+            .collect();
+
+        ParleyLayout::new(layout, text.into(), inline_lines, true)
+    }
+
+    #[test]
+    fn line_lookup_preserves_native_boundaries_and_empty_rows() {
+        let system = test_system();
+        let text = "one two three four five six seven eight ".repeat(8);
+
+        for line_height in [0., 12.] {
+            let native = native_layout(&system, &text, IBM_PLEX.family, Some(60.), |builder| {
+                builder.push_default(StyleProperty::FontSize(16.));
+                builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(line_height)));
+
+                if line_height > 0. {
+                    builder.push(StyleProperty::LineHeight(LineHeight::Absolute(32.)), 0..24);
+                }
+            });
+
+            let last_idx = native.layout.len() - 1;
+            assert!(native.layout.len() > 8);
+
+            let samples = native.layout.lines().flat_map(|line| {
+                let metrics = line.metrics();
+
+                [
+                    metrics.block_min_coord,
+                    (metrics.block_min_coord + metrics.block_max_coord) / 2.,
+                    metrics.block_max_coord,
+                ]
+            });
+
+            for block in samples.chain([-1., native.layout.height(), f32::INFINITY, f32::NAN]) {
+                let expected = native.layout.lines().position(|line| {
+                    let metrics = line.metrics();
+
+                    block >= metrics.block_min_coord && block < metrics.block_max_coord
+                });
+                let expected = if block < 0. {
+                    0
+                } else {
+                    expected.unwrap_or(last_idx)
+                };
+                assert_eq!(native.line_index_at_block(block), expected);
+            }
         }
     }
 
