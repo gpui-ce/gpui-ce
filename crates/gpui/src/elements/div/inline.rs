@@ -339,7 +339,8 @@ impl InlineParagraphCollector<'_> {
                 .to_pixels(font_size.into(), self.window.rem_size()),
         );
 
-        let font_id = self.window.text_system().resolve_font(&text_style.font());
+        let base_font = text_style.font();
+        let font_id = self.window.text_system().resolve_font(&base_font);
 
         let text_metrics = InlineTextMetrics {
             ascent: self.window.text_system().ascent(font_id, font_size),
@@ -384,6 +385,7 @@ impl InlineParagraphCollector<'_> {
                     font_size,
                     line_height,
                     text_metrics,
+                    base_font: &base_font,
                     options,
                     bidi_scopes: &bidi_scopes,
                 };

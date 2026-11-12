@@ -144,6 +144,7 @@ struct ParagraphCacheKey {
     font_generation: u64,
     text: Arc<str>,
     font_size: Pixels,
+    base_font: Option<Font>,
     runs: Vec<ParleyShapingRun>,
     inline_boxes: Vec<InlineBoxRequest>,
     text_styles: Vec<InlineTextStyle>,
@@ -750,6 +751,7 @@ struct ParleyInlineLayoutParams<'a> {
     text_styles: &'a [InlineTextStyle],
     line_height: Pixels,
     text_metrics: InlineTextMetrics,
+    base_font: &'a Font,
     bidi_scopes: &'a [InlineBidiScope],
 }
 
@@ -867,11 +869,7 @@ fn visit_line_clusters(
 }
 
 impl ParleyLayout {
-    fn new(
-        layout: Layout<usize>,
-        text: Arc<str>,
-        inline_lines: Vec<InlineVisualLine>,
-    ) -> Self {
+    fn new(layout: Layout<usize>, text: Arc<str>, inline_lines: Vec<InlineVisualLine>) -> Self {
         Self {
             layout,
             inline_lines,
@@ -1477,6 +1475,46 @@ pub struct ParleyTextSystem {
 }
 
 impl ParleyTextSystem {
+    fn font_properties<'a>(&'a self, font: &'a Font) -> Result<[StyleProperty<'a, usize>; 5]> {
+        let families = self
+            .font_families(font)
+            .chain(
+                self.fallback_families
+                    .iter()
+                    .map(|family| FontFamilyName::Named(Cow::Borrowed(family.as_str()))),
+            )
+            .collect::<Vec<_>>();
+
+        let style = match font.style {
+            GpuiFontStyle::Normal => FontStyle::Normal,
+            GpuiFontStyle::Italic => FontStyle::Italic,
+            GpuiFontStyle::Oblique => FontStyle::Oblique(None),
+        };
+
+        let features = font
+            .features
+            .tag_value_list()
+            .iter()
+            .map(|(tag, value)| {
+                let tag = Tag::parse(tag)
+                    .with_context(|| format!("invalid OpenType feature tag '{tag}'"))?;
+                let value = (*value)
+                    .try_into()
+                    .context("OpenType feature value is larger than u16")?;
+
+                Ok(FontFeature::new(tag, value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok([
+            StyleProperty::FontFamily(FontFamily::List(Cow::Owned(families))),
+            StyleProperty::FontWeight(FontWeight::new(font.weight.0)),
+            StyleProperty::FontWidth(FontWidth::from_percentage(font.width.0)),
+            StyleProperty::FontStyle(style),
+            StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(features))),
+        ])
+    }
+
     /// Creates a text system with an empty font catalog and the supplied glyph rasterizer.
     pub fn new(rasterizer: impl GlyphRasterizer + 'static) -> Self {
         let parley = ParleyState::new();
@@ -1826,16 +1864,18 @@ impl ParleyTextSystem {
         params: ParleyLayoutParams<'_>,
     ) -> Result<ParleyLayoutResult> {
         let request = params.text;
-        let (inline_boxes, text_styles, line_height, inline_text_metrics, bidi_scopes) =
+
+        let (inline_boxes, text_styles, line_height, base_font, inline_text_metrics, bidi_scopes) =
             match params.inline.as_ref() {
                 Some(inline) => (
                     inline.boxes,
                     inline.text_styles,
                     Some(inline.line_height),
+                    Some(inline.base_font),
                     Some(inline.text_metrics),
                     inline.bidi_scopes,
                 ),
-                None => (&[][..], &[][..], None, None, &[][..]),
+                None => (&[][..], &[][..], None, None, None, &[][..]),
             };
 
         let TextLayoutRequest {
@@ -1844,6 +1884,7 @@ impl ParleyTextSystem {
             runs,
             options,
         } = request;
+
         let TextLayoutOptions {
             wrap_width,
             line_clamp,
@@ -1852,10 +1893,13 @@ impl ParleyTextSystem {
             direction,
             unicode_bidi,
         } = options;
+
         let wrap = (wrap_width.is_some() || line_clamp.is_some())
             .then_some((wrap_width.unwrap_or(Pixels::MAX), line_clamp));
+
         let source_text_len = text.len();
         let source_runs = runs;
+
         let prepared = prepare_bidi_text(
             text,
             runs,
@@ -1865,11 +1909,14 @@ impl ParleyTextSystem {
             unicode_bidi,
             bidi_scopes,
         );
+
         let text = prepared.text.as_str();
         let runs = prepared.runs.as_slice();
+        let base_font = base_font.or_else(|| runs.first().map(|run| &run.font));
         let text_styles = prepared.text_styles.as_slice();
         let inline_boxes = prepared.inline_boxes.as_slice();
         let run_ranges = run_ranges(runs);
+
         let line_height = if text.is_empty() {
             text_styles
                 .last()
@@ -1878,16 +1925,20 @@ impl ParleyTextSystem {
         } else {
             line_height
         };
+
         let paragraph_text: Arc<str> = text.into();
+
         let cache_key = ParagraphCacheKey {
             font_generation: self.font_generation.load(Ordering::Acquire),
             text: paragraph_text.clone(),
             font_size,
+            base_font: base_font.cloned(),
             runs: runs.iter().map(ParleyShapingRun::from).collect(),
             inline_boxes: inline_boxes.to_vec(),
             text_styles: text_styles.to_vec(),
             line_height,
         };
+
         let result_cache_key = ParagraphResultCacheKey {
             paragraph: cache_key.clone(),
             source_map: prepared.map.clone(),
@@ -1906,65 +1957,44 @@ impl ParleyTextSystem {
         let mut layout = if let Some(layout) = self.paragraph_cache.lock().get(&cache_key) {
             layout
         } else {
-            let family_lists =
-                runs.iter()
-                    .map(|run| {
-                        self.font_families(&run.font)
-                            .chain(self.fallback_families.iter().map(|family| {
-                                FontFamilyName::Named(Cow::Borrowed(family.as_str()))
-                            }))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-            let feature_lists = runs
+            let base_properties = base_font
+                .map(|font| self.font_properties(font))
+                .transpose()?;
+
+            let font_properties = runs
                 .iter()
                 .map(|run| {
-                    let descriptor = &run.font;
-                    descriptor
-                        .features
-                        .tag_value_list()
-                        .iter()
-                        .map(|(tag, value)| {
-                            let tag = Tag::parse(tag)
-                                .with_context(|| format!("invalid OpenType feature tag '{tag}'"))?;
-                            let value = (*value).try_into().with_context(|| {
-                                format!("OpenType feature '{tag}' value is larger than u16")
-                            })?;
+                    if base_font == Some(&run.font) {
+                        return Ok(None);
+                    }
 
-                            Ok(FontFeature::new(tag, value))
-                        })
-                        .collect::<Result<Vec<_>>>()
+                    self.font_properties(&run.font).map(Some)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let inline_optical_settings = self.automatic_optical_sizing.then(|| {
-                text_styles
-                    .iter()
-                    .map(|style| {
-                        [ParleyFontVariation::new(
-                            Tag::new(b"opsz"),
-                            f32::from(style.font_size),
-                        )]
-                    })
-                    .collect::<Vec<_>>()
-            });
 
             let mut state = self.parley.lock();
             let ParleyState {
                 font_context,
                 layout_context,
             } = &mut *state;
+
             let mut builder = layout_context.ranged_builder(font_context, text, 1.0, false);
             builder.set_line_break_override(Some(CHROMIUM_LINE_BREAK_OVERRIDE));
             builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
 
-            let default_optical_settings = self.automatic_optical_sizing.then(|| {
-                [ParleyFontVariation::new(
-                    Tag::new(b"opsz"),
-                    f32::from(font_size),
-                )]
-            });
-            if let Some(settings) = &default_optical_settings {
-                builder.push_default(StyleProperty::FontVariations(settings.as_slice().into()));
+            for property in base_properties.into_iter().flatten() {
+                builder.push_default(property);
+            }
+
+            if self.automatic_optical_sizing {
+                builder.push_default(StyleProperty::FontVariations(
+                    [ParleyFontVariation::new(
+                        Tag::new(b"opsz"),
+                        f32::from(font_size),
+                    )]
+                    .as_slice()
+                    .into(),
+                ));
             }
 
             if let Some(line_height) = line_height {
@@ -1973,7 +2003,28 @@ impl ParleyTextSystem {
                 ))));
             }
 
-            let mut push_style = |property, range| {
+            for (run_index, (run, properties)) in runs.iter().zip(font_properties).enumerate() {
+                let range = run_ranges[run_index].clone();
+
+                if range.is_empty() && !text.is_empty() {
+                    continue;
+                }
+
+                for property in properties.into_iter().flatten() {
+                    builder.push(property, range.clone());
+                }
+
+                builder.push(StyleProperty::Brush(run_index), range.clone());
+
+                if let Some(letter_spacing) = run.letter_spacing {
+                    builder.push(
+                        StyleProperty::LetterSpacing(f32::from(letter_spacing)),
+                        range,
+                    );
+                }
+            }
+
+            let mut push_style = |property: StyleProperty<'_, usize>, range| {
                 if text.is_empty() {
                     builder.push_default(property);
                 } else {
@@ -1981,55 +2032,22 @@ impl ParleyTextSystem {
                 }
             };
 
-            for (run_index, run) in runs.iter().enumerate() {
-                let descriptor = &run.font;
-                let range = run_ranges[run_index].clone();
-                if range.is_empty() && !text.is_empty() {
-                    continue;
-                }
-
-                for property in [
-                    StyleProperty::FontFamily(FontFamily::from(family_lists[run_index].as_slice())),
-                    StyleProperty::FontWeight(FontWeight::new(descriptor.weight.0)),
-                    StyleProperty::FontWidth(parley::FontWidth::from_percentage(
-                        descriptor.width.0,
-                    )),
-                    StyleProperty::FontStyle(match descriptor.style {
-                        gpui::FontStyle::Normal => FontStyle::Normal,
-                        gpui::FontStyle::Italic => FontStyle::Italic,
-                        gpui::FontStyle::Oblique => FontStyle::Oblique(None),
-                    }),
-                    StyleProperty::Brush(run_index),
-                ] {
-                    push_style(property, range.clone());
-                }
-
-                if !feature_lists[run_index].is_empty() {
-                    push_style(
-                        StyleProperty::FontFeatures(FontFeatures::from(
-                            feature_lists[run_index].as_slice(),
-                        )),
-                        range.clone(),
-                    );
-                }
-
-                if let Some(letter_spacing) = run.letter_spacing {
-                    push_style(
-                        StyleProperty::LetterSpacing(f32::from(letter_spacing)),
-                        range,
-                    );
-                }
-            }
-
-            for (style_idx, style) in text_styles.iter().enumerate() {
+            for style in text_styles {
                 push_style(
                     StyleProperty::FontSize(f32::from(style.font_size)),
                     style.range.clone(),
                 );
 
-                if let Some(settings) = &inline_optical_settings {
+                if self.automatic_optical_sizing {
                     push_style(
-                        StyleProperty::FontVariations(settings[style_idx].as_slice().into()),
+                        StyleProperty::FontVariations(
+                            [ParleyFontVariation::new(
+                                Tag::new(b"opsz"),
+                                f32::from(style.font_size),
+                            )]
+                            .as_slice()
+                            .into(),
+                        ),
                         style.range.clone(),
                     );
                 }
@@ -2531,6 +2549,7 @@ impl PlatformTextSystem for ParleyTextSystem {
                     text_styles: request.text_styles,
                     line_height: request.line_height,
                     text_metrics: request.text_metrics,
+                    base_font: request.base_font,
                     bidi_scopes: request.bidi_scopes,
                 }),
             })
@@ -3209,6 +3228,7 @@ mod tests {
                 text_styles: &[],
                 line_height: px(24.0),
                 text_metrics: InlineTextMetrics::default(),
+                base_font: &font(IBM_PLEX.family),
                 options: TextLayoutOptions {
                     alignment_width,
                     direction: ParagraphDirection::LeftToRight,
@@ -3500,6 +3520,7 @@ mod tests {
                 descent: px(3.),
                 x_height: px(7.),
             },
+            base_font: &font(IBM_PLEX.family),
 
             options: TextLayoutOptions {
                 wrap_width: Some(px(300.)),
@@ -3642,6 +3663,7 @@ mod tests {
             font_size: px(18.0),
             line_height: px(24.0),
             text_metrics,
+            base_font: &font(IBM_PLEX.family),
             options: TextLayoutOptions {
                 wrap_width: Some(px(160.0)),
                 text_align: TextAlign::Center,
@@ -3747,6 +3769,7 @@ mod tests {
                 descent: px(4.0),
                 x_height: px(8.0),
             },
+            base_font: &font(IBM_PLEX.family),
             options: TextLayoutOptions {
                 wrap_width: Some(px(24.0)),
                 text_align: TextAlign::Left,
@@ -4158,6 +4181,7 @@ mod tests {
                     descent: px(4.),
                     x_height: px(9.),
                 },
+                base_font: &font(IBM_PLEX.family),
                 options: TextLayoutOptions {
                     wrap_width: Some(px(260.)),
                     text_align,
@@ -5008,6 +5032,7 @@ mod tests {
             font_size: px(12.0),
             line_height: px(16.0),
             text_metrics: InlineTextMetrics::default(),
+            base_font: &font(IBM_PLEX.family),
             options: TextLayoutOptions {
                 text_align: TextAlign::Left,
                 ..Default::default()
