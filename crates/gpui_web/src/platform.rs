@@ -159,11 +159,7 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            ParleyTextSystem::new(SwashGlyphRasterizer::default())
-                .with_system_fallback_family("IBM Plex Sans")
-                .with_fallback_families(["IBM Plex Sans"]),
-        );
+        let text_system = new_text_system();
 
         let active_display: Rc<dyn PlatformDisplay> =
             Rc::new(WebDisplay::new(browser_window.clone()));
@@ -202,6 +198,14 @@ impl WebPlatform {
     pub fn fetch_http_client(&self) -> FetchHttpClient {
         FetchHttpClient::default()
     }
+}
+
+fn new_text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(
+        ParleyTextSystem::new(SwashGlyphRasterizer::default())
+            .with_system_fallback_family("IBM Plex Sans")
+            .with_fallback_families(["IBM Plex Sans"]),
+    )
 }
 
 async fn initialize_graphics(
