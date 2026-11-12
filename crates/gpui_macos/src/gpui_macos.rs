@@ -33,7 +33,6 @@ pub(crate) use display::*;
 pub(crate) use display_link::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;
-pub(crate) use text_system::*;
 pub(crate) use window::*;
 
 pub use platform::MacPlatform;
