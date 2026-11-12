@@ -75,6 +75,10 @@ struct DirectWriteGlyphRasterizer {
 
 #[derive(Debug, Error)]
 enum DirectWriteRasterError {
+    #[error("invalid raster font size")]
+    InvalidFontSize,
+    #[error("invalid glyph ID")]
+    InvalidGlyphId,
     #[error("color bitmap dimensions are empty")]
     EmptyBitmapDimensions,
     #[error("color glyph exceeds WIC's buffer limit")]
@@ -531,6 +535,12 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         face: RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
+        let font_size = params.font_size.as_f32();
+
+        if !font_size.is_finite() || font_size < 0.0 {
+            return Err(DirectWriteRasterError::InvalidFontSize.into());
+        }
+
         ensure!(
             params.scale_factor.is_finite() && params.scale_factor > 0.0,
             "invalid raster scale factor"
@@ -543,6 +553,12 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         }
 
         self.load_face(face)?;
+
+        let glyph_count = unsafe { self.faces[&params.font_id].face.GetGlyphCount() };
+
+        if params.glyph_id.0 >= u32::from(glyph_count) {
+            return Err(DirectWriteRasterError::InvalidGlyphId.into());
+        }
 
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
