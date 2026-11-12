@@ -523,6 +523,11 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
         ensure!(
+            params.font_size.as_f32().is_finite() && params.font_size.as_f32() >= 0.0,
+            "invalid raster font size"
+        );
+
+        ensure!(
             params.scale_factor.is_finite() && params.scale_factor > 0.0,
             "invalid raster scale factor"
         );
@@ -534,6 +539,11 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         }
 
         self.load_face(face)?;
+
+        ensure!(
+            params.glyph_id.0 < unsafe { self.faces[&params.font_id].face.GetGlyphCount() } as u32,
+            "invalid glyph ID"
+        );
 
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
