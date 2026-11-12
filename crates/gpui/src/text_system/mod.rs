@@ -123,6 +123,7 @@ mod layout_cache_tests {
             font_size: px(16.0),
             line_height: px(20.0),
             text_metrics: InlineTextMetrics::default(),
+            base_font: &runs[0].font,
             options: TextLayoutOptions {
                 wrap_width: Some(wrap_width),
                 text_align: TextAlign::Left,
@@ -149,6 +150,22 @@ mod layout_cache_tests {
         });
         assert!(!Arc::ptr_eq(&wide, &changed_paint));
         assert!(!Arc::ptr_eq(&wide, &changed_size));
+
+        let parent_font = runs[0].font.clone().bold();
+        let changed_parent = system.layout_inline(InlineLayoutRequest {
+            base_font: &parent_font,
+            ..request(px(200.0))
+        });
+
+        assert!(!Arc::ptr_eq(&wide, &changed_parent));
+        assert!(Arc::ptr_eq(
+            &changed_parent,
+            &system.layout_inline(InlineLayoutRequest {
+                base_font: &parent_font,
+                ..request(px(200.0))
+            })
+        ));
+
         assert!(Arc::ptr_eq(
             &wide,
             &system.layout_inline(request(px(200.0)))

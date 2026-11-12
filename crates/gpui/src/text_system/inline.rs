@@ -1,4 +1,6 @@
-use crate::{Pixels, Point, ResolvedDirection, Size, TextLayoutOptions, TextRun, UnicodeBidi};
+use crate::{
+    Font, Pixels, Point, ResolvedDirection, Size, TextLayoutOptions, TextRun, UnicodeBidi,
+};
 use std::ops::Range;
 
 /// A directional scope within an inline text document.
@@ -54,6 +56,8 @@ pub struct InlineLayoutRequest<'a> {
     pub line_height: Pixels,
     /// Metrics for the inline container's base font.
     pub text_metrics: InlineTextMetrics,
+    /// Font of the inline container, used for its line strut and box alignment.
+    pub base_font: &'a Font,
     /// Wrapping, alignment, and bidirectional layout options.
     pub options: TextLayoutOptions,
     /// Directional scopes established by nested inline elements.
