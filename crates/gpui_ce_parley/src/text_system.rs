@@ -119,12 +119,7 @@ fn resolve_face(
 
 struct ParleyState {
     font_context: FontContext,
-    layout_context: LayoutContext<ParleyBrush>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct ParleyBrush {
-    source_run: usize,
+    layout_context: LayoutContext<usize>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -199,7 +194,7 @@ where
     }
 }
 
-type ParagraphCache = BoundedCache<ParagraphCacheKey, Layout<ParleyBrush>, 512>;
+type ParagraphCache = BoundedCache<ParagraphCacheKey, Layout<usize>, 512>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphResultCacheKey {
@@ -795,7 +790,7 @@ fn inline_alignment_offset(
 
 #[derive(Clone, Debug)]
 struct ParleyLayout {
-    layout: Layout<ParleyBrush>,
+    layout: Layout<usize>,
     inline_lines: Vec<InlineVisualLine>,
     text: Arc<str>,
     caret_stops: OnceLock<ParleyCaretStops>,
@@ -844,8 +839,8 @@ struct ParleyClusterGeometry {
 }
 
 fn visit_line_clusters(
-    line: Line<'_, ParleyBrush>,
-    mut visit: impl FnMut(Cluster<'_, ParleyBrush>, Range<f32>),
+    line: Line<'_, usize>,
+    mut visit: impl FnMut(Cluster<'_, usize>, Range<f32>),
 ) {
     let mut previous_run_index = None;
 
@@ -873,7 +868,7 @@ fn visit_line_clusters(
 
 impl ParleyLayout {
     fn new(
-        layout: Layout<ParleyBrush>,
+        layout: Layout<usize>,
         text: Arc<str>,
         inline_lines: Vec<InlineVisualLine>,
     ) -> Self {
@@ -908,13 +903,13 @@ impl ParleyLayout {
         Cursor::from_byte_index(&self.layout, caret.index, parley_affinity)
     }
 
-    fn cursor_position(layout: &Layout<ParleyBrush>, cursor: Cursor) -> (f64, f64) {
+    fn cursor_position(layout: &Layout<usize>, cursor: Cursor) -> (f64, f64) {
         let geometry = cursor.geometry(layout, 0.0);
         (geometry.y0, geometry.x0)
     }
 
     fn collect_caret_stops(
-        layout: &Layout<ParleyBrush>,
+        layout: &Layout<usize>,
         text_len: usize,
         graphemes: &[std::ops::Range<usize>],
     ) -> ParleyCaretStops {
@@ -2004,9 +1999,7 @@ impl ParleyTextSystem {
                         gpui::FontStyle::Italic => FontStyle::Italic,
                         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
                     }),
-                    StyleProperty::Brush(ParleyBrush {
-                        source_run: run_index,
-                    }),
+                    StyleProperty::Brush(run_index),
                 ] {
                     push_style(property, range.clone());
                 }
@@ -2265,7 +2258,7 @@ impl ParleyTextSystem {
                 };
 
                 let start = px(glyph_run.offset()) - line_x;
-                let source_run = glyph_run.style().brush.source_run;
+                let source_run = glyph_run.style().brush;
                 paint_fragments.push(PaintFragment {
                     source_run,
                     font_id,
