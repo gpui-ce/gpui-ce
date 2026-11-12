@@ -1,5 +1,5 @@
 use crate::{
-    Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
+    Bounds, Font, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
     InlineTextMetrics, InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point,
     SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
     UnderlineStyle, VerticalAlign,
@@ -1283,6 +1283,7 @@ struct InlineCacheKey {
     font_size: Pixels,
     line_height: Pixels,
     text_metrics: InlineTextMetrics,
+    base_font: Font,
     options: TextLayoutOptions,
     bidi_scopes: Vec<InlineBidiScope>,
 }
@@ -1297,6 +1298,7 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
             font_size: request.font_size,
             line_height: request.line_height,
             text_metrics: request.text_metrics,
+            base_font: request.base_font.clone(),
             options: request.options,
             bidi_scopes: request.bidi_scopes.to_vec(),
         }
@@ -1313,6 +1315,7 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
             font_size: self.font_size,
             line_height: self.line_height,
             text_metrics: self.text_metrics,
+            base_font: &self.base_font,
             options: self.options,
             bidi_scopes: &self.bidi_scopes,
         }
