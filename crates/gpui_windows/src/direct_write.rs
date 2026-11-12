@@ -85,7 +85,17 @@ struct DirectWriteGlyphRasterizer {
 
 #[derive(Debug, Error)]
 enum DirectWriteRasterError {
-    #[error("color bitmap dimensions are empty")]
+    #[error(
+        "Invalid raster font size {0}. Rasterization requires a finite size greater than zero."
+    )]
+    InvalidFontSize(f32),
+
+    #[error(
+        "Invalid glyph ID {glyph_id}. Glyph IDs must be less than the font face's glyph count of {glyph_count}."
+    )]
+    InvalidGlyphId { glyph_id: u32, glyph_count: u16 },
+
+    #[error("Color bitmap dimensions are empty.")]
     EmptyBitmapDimensions,
 
     #[error(
@@ -550,6 +560,12 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         face: RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
+        let font_size = params.font_size.as_f32();
+
+        if !font_size.is_finite() || font_size < 0.0 {
+            return Err(DirectWriteRasterError::InvalidFontSize(font_size).into());
+        }
+
         ensure!(
             params.scale_factor.is_finite() && params.scale_factor > 0.0,
             "invalid raster scale factor"
@@ -562,6 +578,17 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
         }
 
         self.load_face(face)?;
+
+        let glyph_id = params.glyph_id.0;
+        let glyph_count = unsafe { self.faces[&params.font_id].face.GetGlyphCount() };
+
+        if glyph_id >= u32::from(glyph_count) {
+            return Err(DirectWriteRasterError::InvalidGlyphId {
+                glyph_id,
+                glyph_count,
+            }
+            .into());
+        }
 
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
@@ -883,6 +910,47 @@ mod tests {
     };
     use gpui_fonts::test_collection;
     use std::{borrow::Cow, collections::BTreeMap};
+
+    #[test]
+    fn raster_errors_report_invalid_values_and_limits() -> Result<()> {
+        let system = new_text_system()?;
+        system.add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])?;
+        let font_id = system.font_id(&font("IBM Plex Sans"))?;
+        let glyph_id = system
+            .glyph_for_char(font_id, 'A')
+            .context("IBM Plex Sans has no A glyph")?;
+
+        let mut params = raster_params(&*system, font_id, glyph_id, Grayscale, rgba(0xffffffff));
+
+        for font_size in [-1.5, f32::INFINITY, f32::NAN] {
+            params.font_size = px(font_size);
+            let error = system.rasterize_glyph(&params).unwrap_err();
+
+            assert_eq!(
+                error.root_cause().to_string(),
+                format!(
+                    "Invalid raster font size {font_size}. Rasterization requires a finite size greater than zero."
+                )
+            );
+        }
+
+        params.font_size = px(24.0);
+        params.glyph_id = GlyphId(u32::MAX);
+        let error = system.rasterize_glyph(&params).unwrap_err();
+        let message = error.root_cause().to_string();
+
+        let glyph_count = message
+            .strip_prefix(
+                "Invalid glyph ID 4294967295. Glyph IDs must be less than the font face's glyph count of ",
+            )
+            .and_then(|count| count.strip_suffix('.'))
+            .with_context(|| format!("Unexpected raster error {message:?}."))?
+            .parse::<u16>()?;
+
+        assert!(glyph_count > 0);
+
+        Ok(())
+    }
 
     #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
