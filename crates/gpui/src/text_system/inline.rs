@@ -73,8 +73,6 @@ pub struct InlineLayoutRequest<'a> {
     pub font_size: Pixels,
     /// Requested height of an ordinary text row.
     pub line_height: Pixels,
-    /// Metrics for the inline container's base font.
-    pub text_metrics: InlineTextMetrics,
     /// Font of the inline container, used for its line strut and box alignment.
     pub base_font: &'a Font,
     /// Wrapping, alignment, and bidirectional layout options.
@@ -116,17 +114,6 @@ impl InlineLayoutRequest<'_> {
 
         (top, bottom)
     }
-}
-
-/// Font metrics used to construct the vertical extents of an inline line.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct InlineTextMetrics {
-    /// Distance above the text baseline.
-    pub ascent: Pixels,
-    /// Distance below the text baseline.
-    pub descent: Pixels,
-    /// Height of a lowercase x in the inline container's font.
-    pub x_height: Pixels,
 }
 
 /// A row in an inline layout.

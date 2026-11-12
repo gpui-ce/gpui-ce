@@ -122,7 +122,6 @@ mod layout_cache_tests {
             boxes: &[],
             font_size: px(16.0),
             line_height: px(20.0),
-            text_metrics: InlineTextMetrics::default(),
             base_font: &runs[0].font,
             options: TextLayoutOptions {
                 wrap_width: Some(wrap_width),
