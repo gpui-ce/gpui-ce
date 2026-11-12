@@ -39,6 +39,7 @@ parking_lot.workspace = true
 rand.workspace = true
 raw-window-handle.workspace = true
 smallvec.workspace = true
+thiserror.workspace = true
 uuid.workspace = true
 windows.workspace = true
 windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
