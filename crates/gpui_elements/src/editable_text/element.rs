@@ -890,7 +890,7 @@ mod tests {
         ModifiersChangedEvent, NavigationDirection, PlatformInput, PlatformTextSystem, Render,
         ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*, rgba,
     };
-    use gpui_parley::{ParleyTextSystem, SystemFonts};
+    use gpui_parley::ParleyTextSystem;
     use gpui_render::SwashGlyphRasterizer;
     use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
@@ -980,16 +980,8 @@ mod tests {
             unicode_bidi: Option<UnicodeBidi>,
             placeholder: Option<&'static str>,
         ) -> Self {
-            let system = ParleyTextSystem::new(
-                SystemFonts::Skip,
-                "IBM Plex Sans",
-                SwashGlyphRasterizer::default(),
-            )
-            .with_fallback_families([
-                "IBM Plex Sans",
-                "Noto Sans Hebrew",
-                "Noto Sans Arabic",
-            ]);
+            let system = ParleyTextSystem::new(SwashGlyphRasterizer::default())
+                .with_fallback_families(["IBM Plex Sans", "Noto Sans Hebrew", "Noto Sans Arabic"]);
 
             system
                 .add_fonts(vec![

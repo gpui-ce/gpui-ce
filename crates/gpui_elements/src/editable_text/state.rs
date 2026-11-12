@@ -1442,7 +1442,7 @@ mod tests {
         AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
-    use gpui_parley::{ParleyTextSystem, SystemFonts};
+    use gpui_parley::ParleyTextSystem;
     use gpui_render::SwashGlyphRasterizer;
 
     type TestMovementAction =
@@ -1596,12 +1596,8 @@ mod tests {
 
     fn movement_document(text: &str, wrap_width: Option<Pixels>) -> Arc<ShapedText> {
         let backend = Arc::new(
-            ParleyTextSystem::new(
-                SystemFonts::Skip,
-                "IBM Plex Sans",
-                SwashGlyphRasterizer::default(),
-            )
-            .with_fallback_families(["IBM Plex Sans", "Noto Color Emoji"]),
+            ParleyTextSystem::new(SwashGlyphRasterizer::default())
+                .with_fallback_families(["IBM Plex Sans", "Noto Color Emoji"]),
         );
 
         backend

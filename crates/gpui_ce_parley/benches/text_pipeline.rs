@@ -3,12 +3,12 @@ use gpui::{
     FontFallbacks, PlatformTextSystem, TestTextSystem, TextAlign, TextLayoutOptions,
     TextLayoutRequest, TextRun, font, px,
 };
-use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
+use gpui_ce_parley::ParleyTextSystem;
 use gpui_fonts::{IBM_PLEX, LILEX, SOURCE_SERIF};
 use std::borrow::Cow;
 
 fn text_system() -> (ParleyTextSystem, TextRun) {
-    let system = ParleyTextSystem::new(SystemFonts::Skip, IBM_PLEX.family, TestTextSystem);
+    let system = ParleyTextSystem::new(TestTextSystem).with_fallback_families([IBM_PLEX.family]);
 
     system
         .add_fonts(vec![

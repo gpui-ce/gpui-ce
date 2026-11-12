@@ -17,7 +17,7 @@ use gpui::{
     RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size,
     TextLayoutRequest, TextRenderingMode, point, size,
 };
-use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_parley::ParleyTextSystem;
 use gpui_render::BitmapFallbackGlyphRasterizer;
 use parking_lot::RwLock;
 use windows::{
@@ -84,12 +84,12 @@ impl DirectWriteTextSystem {
 
     fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
-        let parley = ParleyTextSystem::new(
-            SystemFonts::Load,
-            "Segoe UI",
-            BitmapFallbackGlyphRasterizer::new(SharedDirectWriteRenderer(renderer.clone())),
-        )
-        .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]);
+        let parley = ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
+            SharedDirectWriteRenderer(renderer.clone()),
+        ))
+        .with_system_fallback_family("Segoe UI")
+        .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
+        .with_system_fonts();
 
         Ok(Self { parley, renderer })
     }

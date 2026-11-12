@@ -14,7 +14,7 @@ Items are sorted by issue or pull request number.
 
 ### Breaking Changes
 
-- `ParleyTextSystem::new` now requires a system-font fallback family and a glyph rasterizer, replacing `new_with_rasterizer`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+- `ParleyTextSystem::new` replaces `new_with_rasterizer`. It takes only a glyph rasterizer, and starts with an empty font catalog. Use `.with_system_fonts()` or `.add_fonts(...)` to load fonts, `.with_system_fallback_family(...)` to set the `.SystemUIFont` fallback, and `.with_fallback_families(...)` to configure general fallbacks. [#399](https://github.com/gpui-ce/gpui-ce/pull/399), [#400](https://github.com/gpui-ce/gpui-ce/pull/400)
 
 ### Additions
 
@@ -26,6 +26,7 @@ Items are sorted by issue or pull request number.
 ### Removals
 
 - Removed `ParleyTextSystem::new_with_system_font` and `ParleyTextSystem::without_system_fonts`. [#399](https://github.com/gpui-ce/gpui-ce/pull/399)
+- Removed `SystemFonts` enum. Use `.with_system_fonts()` to load operating-system fonts after construction. [#400](https://github.com/gpui-ce/gpui-ce/pull/400)
 
 ### Fixes
 

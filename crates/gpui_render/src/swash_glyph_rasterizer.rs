@@ -412,20 +412,16 @@ mod tests {
         px, rgba,
     };
     use gpui_fonts::{IBM_PLEX, IBM_PLEX_SEMIBOLD, NOTO_COLOR_EMOJI, SOURCE_SERIF};
+    use gpui_parley::ParleyTextSystem;
     use gpui_parley::test_support::{
         OVERFLOW_CASES, OverflowParagraph, SCALE_FACTOR, first_group_color, logical_bounds,
         open_overflow_paragraph, quads, second_group_color, update_view,
     };
-    use gpui_parley::{ParleyTextSystem, SystemFonts};
     use std::{borrow::Cow, sync::Arc};
 
     fn test_system() -> Arc<ParleyTextSystem> {
-        let system = ParleyTextSystem::new(
-            SystemFonts::Skip,
-            IBM_PLEX.family,
-            SwashGlyphRasterizer::default(),
-        )
-        .with_fallback_families([IBM_PLEX.family, NOTO_COLOR_EMOJI.family]);
+        let system = ParleyTextSystem::new(SwashGlyphRasterizer::default())
+            .with_fallback_families([IBM_PLEX.family, NOTO_COLOR_EMOJI.family]);
 
         system
             .add_fonts(vec![
