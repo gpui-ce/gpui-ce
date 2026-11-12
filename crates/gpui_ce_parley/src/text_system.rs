@@ -2266,7 +2266,10 @@ impl ParleyTextSystem {
                             let id = GlyphId(glyph.id);
                             ShapedGlyph {
                                 id,
-                                position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
+                                position: point(
+                                    px(glyph.x) - line_x,
+                                    px(glyph.y - metrics.baseline),
+                                ),
                                 is_emoji: color_glyphs
                                     .available_kinds(id)
                                     .any(|kind| self.color_glyph_formats.contains(&kind)),
@@ -2278,6 +2281,11 @@ impl ParleyTextSystem {
                 let start = px(glyph_run.offset()) - line_x;
                 let source_run = glyph_run.style().brush;
                 paint_fragments.push(PaintFragment {
+                    baseline_offset: px(baseline - metrics.baseline),
+                    background_range: Some(
+                        px(baseline - metrics.baseline - run_metrics.ascent)
+                            ..px(baseline - metrics.baseline + run_metrics.descent),
+                    ),
                     source_run,
                     font_id,
                     font_size: px(run.font_size()),
