@@ -1,6 +1,6 @@
 use crate::{
-    FontId, ForegroundDependency, GlyphId, PreparedRasterStyle, RasterStyleRequest,
-    RasterizedGlyph, RenderGlyphParams, Result, TextRenderingMode,
+    FontId, ForegroundDependency, GlyphId, GlyphRenderMode, PreparedRasterStyle,
+    RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Result, TextRenderingMode,
 };
 use anyhow::Context as _;
 use linebender_resource_handle::Blob;
@@ -116,6 +116,19 @@ pub trait GlyphRasterizer: Send {
     /// Returns whether this rasterizer can preserve the glyph's native color artwork.
     fn supports_color_glyph(&self, _kind: ColorGlyphKind) -> bool {
         true
+    }
+
+    /// Returns the preferred supported artwork for a color raster request.
+    fn requested_color_glyph_kind(
+        &self,
+        face: &RasterFace<'_>,
+        params: &RenderGlyphParams,
+    ) -> Result<Option<ColorGlyphKind>> {
+        if params.raster_style.mode != GlyphRenderMode::Color {
+            return Ok(None);
+        }
+
+        face.supported_color_glyph_kind(params.glyph_id, |kind| self.supports_color_glyph(kind))
     }
 
     /// Reduces a scene request to the settings which alter cached raster pixels.

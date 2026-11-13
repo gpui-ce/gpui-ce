@@ -14,12 +14,13 @@ path = "src/gpui_render.rs"
 
 [features]
 default = []
-swash = ["dep:anyhow", "dep:skrifa", "dep:swash"]
+swash = ["dep:anyhow", "dep:skrifa", "dep:swash", "dep:thiserror"]
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true, features = ["std"] }
 swash = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 gpui = { path = "../gpui", version = "0.4.0", package = "gpui-ce", default-features = false }
 smallvec.workspace = true
 wgsl-rs.workspace = true
