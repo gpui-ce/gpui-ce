@@ -1918,7 +1918,7 @@ impl ParleyTextSystem {
                 if let Some(letter_spacing) = run.letter_spacing {
                     push_style(
                         StyleProperty::LetterSpacing(f32::from(letter_spacing)),
-                        range.clone(),
+                        range,
                     );
                 }
             }
