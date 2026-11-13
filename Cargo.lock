@@ -2762,6 +2762,7 @@ dependencies = [
  "gpui_ce_web",
  "gpui_ce_wgpu",
  "gpui_ce_windows",
+ "image",
 ]
 
 [[package]]
