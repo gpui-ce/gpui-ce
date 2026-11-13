@@ -2744,9 +2744,9 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "dunce",
- "pretty_assertions",
  "serde",
  "tempfile",
+ "tendril",
 ]
 
 [[package]]
@@ -2977,7 +2977,6 @@ dependencies = [
  "smol",
  "take-until",
  "tempfile",
- "tendril",
  "unicase",
  "url",
  "walkdir",
