@@ -84,7 +84,7 @@ impl AbsPath {
     }
 
     pub fn ancestors(&self) -> impl Iterator<Item = &AbsPath> {
-        self.0.ancestors().map(AbsPath::new_unchecked)
+        self.0.ancestors().map(|p| AbsPath::new_unchecked(p))
     }
 
     pub fn strip_prefix<'a>(&'a self, prefix: &AbsPath) -> Option<Cow<'a, RelPath>> {
@@ -136,7 +136,9 @@ pub struct AbsPathBuf(PathBuf);
 impl AbsPathBuf {
     pub fn new(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = path.into();
-        AbsPath::new(&path)?;
+        if let Err(e) = AbsPath::new(&path) {
+            return Err(e);
+        }
         Ok(Self(path))
     }
 
