@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_web"
-version = "0.1.0"
+version = "0.4.0"
 description.workspace = true
 publish.workspace = true
 edition.workspace = true
@@ -19,6 +19,7 @@ path = "src/gpui_web.rs"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gpui.workspace = true
+gpui_render = { workspace = true, features = ["swash"] }
 gpui_parley.workspace = true
 scheduler.workspace = true
 parking_lot = { workspace = true, features = ["nightly"] }

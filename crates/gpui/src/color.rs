@@ -1,4 +1,4 @@
-use palette::{IntoColor, OklabHue, Oklcha, RgbHue};
+use palette::{IntoColor, OklabHue, Oklcha, RgbHue, WithAlpha};
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
@@ -32,6 +32,32 @@ pub fn rgb_to_hsla(color: Rgba) -> Hsla {
 /// Convert GPUI's HSL-with-alpha representation to sRGB.
 pub fn hsla_to_rgba(color: Hsla) -> Rgba {
     color.into_color()
+}
+
+/// Multiplies byte alpha by opacity, rounding to nearest.
+///
+/// Adding 127 rounds up remainders of at least 128 when dividing by 255.
+/// Adding 128 would also round up remainder 127, although 127/255 is less than one half.
+///
+/// Jerry R. VanAken, "Alpha Blending with No Division Operations", page 10, reference 2:
+/// https://arxiv.org/pdf/2202.02864#page=10
+///
+/// > ...loses a half-bit of accuracy by not rounding off this product before dividing.
+/// > ...rounding should be done by adding 127, not 128.
+#[inline]
+pub fn multiply_alpha(alpha: u8, opacity: u8) -> u8 {
+    ((u16::from(alpha) * u16::from(opacity) + 127) / 255) as u8
+}
+
+/// Scales an RGBA or BGRA pixel's alpha, clearing all channels if it becomes zero.
+/// Otherwise, the color channels are unchanged.
+#[inline]
+pub fn apply_pixel_opacity(pixel: &mut [u8], opacity: u8) {
+    pixel[3] = multiply_alpha(pixel[3], opacity);
+
+    if pixel[3] == 0 {
+        pixel.fill(0);
+    }
 }
 
 /// Swap from RGBA with premultiplied alpha to BGRA
@@ -165,7 +191,9 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
 
 /// Wrapper methods to make alpha operations more convenient
 pub trait ColorExt {
-    /// Performs a SrcAlpha x (1 - SrcAlpha) blend
+    /// Performs a `(1 - DstAlpha) + DstAlpha` blend, with custom considerations for DstAlpha <=0 and >=1.
+    ///
+    /// This is a nonstandard blend maintained for backwards compatibility. Its strongly recommended that users interface with the [palette crate blend ops](palette::blend) directly.
     fn blend(&self, other: &Self) -> Self
     where
         Self: Sized;
@@ -208,10 +236,46 @@ pub trait ColorExt {
 }
 impl ColorExt for Rgba {
     fn blend(&self, other: &Self) -> Self {
-        use palette::blend::{BlendWith, Equations, Parameter};
-        let blend_mode =
-            Equations::from_parameters(Parameter::OneMinusSourceAlpha, Parameter::SourceAlpha);
-        self.blend_with(*other, blend_mode)
+        use palette::blend::{BlendFunction, Equation, Equations, Parameter, Parameters, PreAlpha};
+        let src = self.with_alpha(self.alpha.clamp(0f32, 1f32));
+        let dst = other.with_alpha(other.alpha.clamp(0f32, 1f32));
+        let blend_mode = Equations {
+            color_equation: Equation::Add,
+            alpha_equation: Equation::Add,
+            // color = [src.color * (1 - dst.alpha)] + [dst.color * dst.alpha]
+            color_parameters: Parameters {
+                source: Parameter::OneMinusDestinationAlpha,
+                destination: Parameter::DestinationAlpha,
+            },
+            alpha_parameters: match dst.alpha > 0f32 && dst.alpha < 1f32 {
+                // alpha = [src.alpha * One] + [dst.alpha * Zero] => src.alpha
+                true => Parameters {
+                    source: Parameter::One,
+                    destination: Parameter::Zero,
+                },
+                // alpha = [src.alpha * (1 - dst.alpha)] + [dst.alpha * dst.alpha]
+                //		=> dst.alpha when dst.alpha == 1
+                //		=> src.alpha when dst.alpha == 0
+                false => Parameters {
+                    source: Parameter::OneMinusDestinationAlpha,
+                    destination: Parameter::DestinationAlpha,
+                },
+            },
+        };
+        // in order to match original/upstream behavior, this blend does /not/ premultiply (as palette standard is)
+        let src = PreAlpha {
+            color: src.color,
+            alpha: src.alpha,
+        };
+        let dst = PreAlpha {
+            color: dst.color,
+            alpha: dst.alpha,
+        };
+        let premul = blend_mode.apply_to(src, dst);
+        Rgba {
+            color: premul.color,
+            alpha: premul.alpha,
+        }
     }
 
     fn fade_out(&mut self, factor: f32) {
@@ -538,6 +602,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_multiply_alpha_examples() {
+        let cases = [
+            (0, 0, 0),
+            (0, 255, 0),
+            (255, 0, 0),
+            (255, 255, 255),
+            (173, 255, 173),
+            (255, 173, 173),
+            (51, 85, 17),    // An exact result: 51 * 85 / 255 = 17.
+            (1, 127, 0),     // Just below half a byte: 127 / 255 rounds down.
+            (1, 128, 1),     // Just above half a byte: 128 / 255 rounds up.
+            (127, 128, 64),  // About 63.75 rounds up.
+            (128, 128, 64),  // About 64.25 rounds down.
+            (254, 254, 253), // About 253.004 rounds down.
+        ];
+
+        for (alpha, opacity, expected) in cases {
+            assert_eq!(
+                multiply_alpha(alpha, opacity),
+                expected,
+                "alpha={alpha}, opacity={opacity}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiply_alpha_matches_normalized_product() {
+        let samples = [0, 1, 64, 127, 128, 192, 254, 255];
+
+        for alpha in samples {
+            for opacity in samples {
+                let normalized_alpha = f64::from(alpha) / 255.0;
+                let normalized_opacity = f64::from(opacity) / 255.0;
+                let expected = (normalized_alpha * normalized_opacity * 255.0).round() as u8;
+
+                assert_eq!(
+                    multiply_alpha(alpha, opacity),
+                    expected,
+                    "alpha={alpha}, opacity={opacity}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_background_solid() {
         let color: Hsla = rgba(0xff0099ff).into_color();
         let mut background = Background::from(color);
@@ -619,5 +728,58 @@ mod tests {
         let color = Rgba::new(0.2, 0.6, 1.0, 0.8);
         assert!((color.opacity(0.5).alpha - 0.4).abs() < 1e-6);
         assert_eq!(color.opacity(2.0).alpha, 0.8);
+    }
+
+    fn upstream_blend(src: Rgba, dst: Rgba) -> Rgba {
+        // per upstream logic;
+        // https://github.com/gpui-ce/gpui-ce/commit/c738623ffbcec2aeddc44a645cc6b74646d5cf97#diff-585dd80a91eb97df686c8d31dc27ebc33b0c678a4a98c2a70a3745cd36576aaaL57-L71
+        // if dst.alpha >= 1: blend with OneMinusDstAlpha (= 0) + DstAlpha (= 1)
+        // 		which reduces to be equivalent to dst itself
+        // if dst.alpha  < 0: blend with OneMinusDstAlpha (= 1) + DstAlpha (= 0)
+        // 		which reduces to be equivalent to src itself
+        // otherwise, blend color by OneMinusDstAlpha + DstAlpha, and take only the src alpha
+        let new_alpha = if dst.alpha > 0f32 && dst.alpha < 1f32 {
+            src.alpha
+        } else {
+            (src.alpha * (1f32 - dst.alpha)) + (dst.alpha * dst.alpha)
+        };
+        Rgba::new(
+            (src.red * (1f32 - dst.alpha)) + (dst.red * dst.alpha),
+            (src.green * (1f32 - dst.alpha)) + (dst.green * dst.alpha),
+            (src.blue * (1f32 - dst.alpha)) + (dst.blue * dst.alpha),
+            new_alpha,
+        )
+    }
+
+    // per original behavior, blending a dst color that is opaque should always return that destination color
+    #[test]
+    fn test_blend_dst_opaque() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
+        let blended = src.blend(&dst);
+        assert_eq!(blended, dst);
+    }
+
+    // per original behavior, blending a dst color that is transparent should always return the source color
+    #[test]
+    fn test_blend_dst_transparent() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 0f32);
+        let blended = src.blend(&dst);
+        assert_eq!(blended, src);
+    }
+
+    #[test]
+    fn test_blend_opaque_white_black() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
+        let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
+        assert_eq!(src.blend(&dst), upstream_blend(src, dst));
+    }
+
+    #[test]
+    fn test_blend_translucent_on_opaquewhite() {
+        let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
+        let dst = Rgba::new(0.3f32, 0.6f32, 1f32, 0.5f32);
+        assert_eq!(src.blend(&dst), upstream_blend(src, dst));
     }
 }

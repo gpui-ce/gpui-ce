@@ -1,10 +1,18 @@
-# Publish to crates on a version tag push
+# Publish to crates on a version tag push, or when release-tag.yml calls it
+# after a release PR merges (tags pushed with GITHUB_TOKEN trigger no workflows,
+# so that path calls this one directly instead of relying on the tag push).
 name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v0.4.0'
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       dry_run:
@@ -15,6 +23,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 # Stable and alpha uploads share a registry namespace. Do not let a stable tag
 # overtake an alpha allocation (or vice versa).
@@ -31,9 +40,11 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - id: check
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "value=false" >> "$GITHUB_OUTPUT"
@@ -47,6 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -77,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -91,6 +106,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true'
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -107,8 +124,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           draft: true
           prerelease: ${{ needs.prerelease.outputs.value }}
           generate_release_notes: true

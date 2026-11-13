@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_linux"
-version = "0.1.0"
+version = "0.4.0"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -57,6 +57,7 @@ image.workspace = true
 futures.workspace = true
 gpui = { workspace = true, default-features = false }
 gpui_util.workspace = true
+gpui_render = { workspace = true, features = ["swash"] }
 gpui_parley = { workspace = true, features = ["system-fonts"] }
 gpui_wgpu = { workspace = true, optional = true }
 itertools.workspace = true
@@ -70,7 +71,7 @@ url.workspace = true
 uuid.workspace = true
 
 # Always used
-oo7 = { version = "0.6", default-features = false, features = [
+oo7 = { version = "0.7", default-features = false, features = [
   "async-std",
   "native_crypto",
 ] }

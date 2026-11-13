@@ -9,14 +9,28 @@ use anyhow::anyhow;
 use image::RgbaImage;
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
-/// A test context that uses real macOS rendering instead of mocked rendering.
-/// This is used for visual tests that need to capture actual screenshots.
+/// A test context that renders with the real macOS platform, for screenshot tests.
 ///
-/// Unlike `TestAppContext` which uses `TestPlatform` with mocked rendering,
-/// `VisualTestAppContext` uses the real `MacPlatform` to produce actual rendered output.
+/// **This type is macOS-only.** It exists only on macOS with the `test-support`
+/// feature. Its name is `VisualTestAppContext`, not `VisualTestContext`: the
+/// latter is the window context for [`TestAppContext`](crate::TestAppContext),
+/// which mocks rendering.
 ///
-/// Windows created through this context are positioned off-screen (at coordinates like -10000, -10000)
-/// so they are invisible to the user but still fully rendered by the compositor.
+/// The two differ in these ways:
+///
+/// - [`TestAppContext`](crate::TestAppContext) runs on `TestPlatform`, which mocks
+///   rendering. `VisualTestAppContext` runs on the real macOS platform, so
+///   [`VisualTestAppContext::capture_screenshot`] returns the pixels a user would see.
+/// - Windows are opened off-screen by [`VisualTestAppContext::open_offscreen_window`],
+///   so they don't appear on the display but are still composited.
+/// - Input methods take the window as a parameter, not through a
+///   `VisualTestContext`. `simulate_keystrokes` splits on whitespace, and
+///   `simulate_input` sends a space as the space character.
+/// - Tasks are scheduled deterministically, as in `TestAppContext`, and
+///   [`VisualTestAppContext::advance_clock`] moves the simulated clock.
+///
+/// Use `TestAppContext` for behavior tests and this type only when the test must
+/// inspect rendered output.
 #[derive(Clone)]
 pub struct VisualTestAppContext {
     /// The underlying app cell
@@ -32,24 +46,20 @@ pub struct VisualTestAppContext {
 }
 
 impl VisualTestAppContext {
-    /// Creates a new `VisualTestAppContext` with real macOS platform rendering
-    /// but deterministic task scheduling via TestDispatcher.
+    /// Creates a context on `platform` with the real rendering and deterministic task scheduling.
     ///
-    /// This provides:
-    /// - Real Metal/compositor rendering for accurate screenshots
-    /// - Deterministic task scheduling via TestDispatcher
-    /// - Controllable time via `advance_clock`
+    /// The scheduler seed is read from the `SEED` environment variable, and is `0`
+    /// when it's unset or isn't a number.
     ///
-    /// Note: This uses a no-op asset source, so SVG icons won't render.
-    /// Use `with_asset_source` to provide real assets for icon rendering.
+    /// This uses an empty asset source, so SVG icons don't render. Use
+    /// [`VisualTestAppContext::with_asset_source`] to load real assets.
     pub fn new(platform: Rc<dyn Platform>) -> Self {
         Self::with_asset_source(platform, Arc::new(()))
     }
 
-    /// Creates a new `VisualTestAppContext` with a custom asset source.
+    /// Creates a context on `platform` that loads assets from `asset_source`.
     ///
-    /// Use this when you need SVG icons to render properly in visual tests.
-    /// Pass the real `Assets` struct to enable icon rendering.
+    /// Pass the application's real asset source so that SVG icons render in screenshots.
     pub fn with_asset_source(
         platform: Rc<dyn Platform>,
         asset_source: Arc<dyn AssetSource>,
@@ -90,14 +100,14 @@ impl VisualTestAppContext {
         }
     }
 
-    /// Opens a window positioned off-screen for invisible rendering.
+    /// Opens a window of `size` at the origin `(-10000, -10000)`, off every display.
     ///
-    /// The window is positioned at (-10000, -10000) so it's not visible on any display,
-    /// but it's still fully rendered by the compositor and can be captured via ScreenCaptureKit.
+    /// The window is shown and composited, so [`VisualTestAppContext::capture_screenshot`]
+    /// can capture it. It doesn't take focus.
     ///
-    /// # Arguments
-    /// * `size` - The size of the window to create
-    /// * `build_root` - A closure that builds the root view for the window
+    /// # Errors
+    ///
+    /// Returns an error if the window can't be opened.
     pub fn open_offscreen_window<V: Render + 'static>(
         &mut self,
         size: Size<Pixels>,
@@ -120,7 +130,9 @@ impl VisualTestAppContext {
         )
     }
 
-    /// Opens an off-screen window with default size (1280x800).
+    /// Opens an off-screen window of 1280 by 800 pixels.
+    ///
+    /// See [`VisualTestAppContext::open_offscreen_window`].
     pub fn open_offscreen_window_default<V: Render + 'static>(
         &mut self,
         build_root: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
@@ -129,52 +141,57 @@ impl VisualTestAppContext {
         self.open_offscreen_window(size(px(1280.0), px(800.0)), build_root)
     }
 
-    /// Returns whether screen capture is supported on this platform.
+    /// Returns whether this platform can capture the screen.
     pub fn is_screen_capture_supported(&self) -> bool {
         self.platform.is_screen_capture_supported()
     }
 
-    /// Returns the text system used by this context.
+    /// Returns the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system
     }
 
-    /// Returns the background executor.
+    /// Returns a clone of the background executor.
     pub fn executor(&self) -> BackgroundExecutor {
         self.background_executor.clone()
     }
 
-    /// Returns the foreground executor.
+    /// Returns a clone of the foreground executor.
     pub fn foreground_executor(&self) -> ForegroundExecutor {
         self.foreground_executor.clone()
     }
 
-    /// Runs all pending foreground and background tasks until there's nothing left to do.
-    /// This is essential for processing async operations like tooltip timers.
+    /// Runs pending foreground and background tasks until none can make progress.
+    ///
+    /// This doesn't move the simulated clock. Use [`VisualTestAppContext::advance_clock`] for that.
     pub fn run_until_parked(&self) {
         self.dispatcher.run_until_parked();
     }
 
-    /// Advances the simulated clock by the given duration and processes any tasks
-    /// that become ready. This is essential for testing time-based behaviors like
-    /// tooltip delays.
+    /// Moves the simulated clock forward by `duration`, and runs the tasks that become ready.
+    ///
+    /// Use this for time-based behavior such as tooltip delays.
     pub fn advance_clock(&self, duration: Duration) {
         self.dispatcher.advance_clock(duration);
     }
 
-    /// Updates the app state.
+    /// Runs `f` with mutable access to the [`App`]. This doesn't run pending tasks.
     pub fn update<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut app = self.app.borrow_mut();
         f(&mut app)
     }
 
-    /// Reads from the app state.
+    /// Runs `f` with read-only access to the [`App`].
     pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let app = self.app.borrow();
         f(&app)
     }
 
-    /// Updates a window.
+    /// Runs `f` with the window's root view, the [`Window`] and the [`App`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `window` has been closed.
     pub fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
@@ -183,7 +200,7 @@ impl VisualTestAppContext {
         lock.update_window(window, f)
     }
 
-    /// Spawns a task on the foreground executor.
+    /// Spawns a future on the foreground executor. It runs when tasks run.
     pub fn spawn<F, R>(&self, f: F) -> Task<R>
     where
         F: Future<Output = R> + 'static,
@@ -192,25 +209,33 @@ impl VisualTestAppContext {
         self.foreground_executor.spawn(f)
     }
 
-    /// Checks if a global of type G exists.
+    /// Returns whether a global of type `G` is set.
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app.borrow();
         app.has_global::<G>()
     }
 
-    /// Reads a global value.
+    /// Runs `f` with the global of type `G`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no global of type `G` is set.
     pub fn read_global<G: Global, R>(&self, f: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app.borrow();
         f(app.global::<G>(), &app)
     }
 
-    /// Sets a global value.
+    /// Sets the global of type `G`, replacing any previous value.
     pub fn set_global<G: Global>(&mut self, global: G) {
         let mut app = self.app.borrow_mut();
         app.set_global(global);
     }
 
-    /// Updates a global value.
+    /// Runs `f` with mutable access to the global of type `G`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no global of type `G` is set.
     pub fn update_global<G: Global, R>(&mut self, f: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let mut lock = self.app.borrow_mut();
         lock.update(|cx| {
@@ -221,9 +246,14 @@ impl VisualTestAppContext {
         })
     }
 
-    /// Simulates a sequence of keystrokes on the given window.
+    /// Sends each keystroke in a whitespace-separated list to `window`, then runs pending tasks.
     ///
-    /// Keystrokes are specified as a space-separated string, e.g., "cmd-p escape".
+    /// Unlike [`TestAppContext::simulate_keystrokes`](crate::TestAppContext::simulate_keystrokes),
+    /// this splits on any whitespace, so a tab or newline separates keystrokes too.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any part isn't a valid keystroke.
     pub fn simulate_keystrokes(&mut self, window: AnyWindowHandle, keystrokes: &str) {
         for keystroke_text in keystrokes.split_whitespace() {
             let keystroke = Keystroke::parse(keystroke_text)
@@ -233,7 +263,9 @@ impl VisualTestAppContext {
         self.run_until_parked();
     }
 
-    /// Dispatches a single keystroke to a window.
+    /// Dispatches one keystroke to the focused element in `window`.
+    ///
+    /// If the window is closed, the keystroke is dropped silently. This doesn't run pending tasks.
     pub fn dispatch_keystroke(&mut self, window: AnyWindowHandle, keystroke: Keystroke) {
         self.update_window(window, |_, window, cx| {
             window.dispatch_keystroke(keystroke, cx);
@@ -241,7 +273,10 @@ impl VisualTestAppContext {
         .ok();
     }
 
-    /// Simulates typing text input on the given window.
+    /// Types `input` into `window`, one keystroke per character, then runs pending tasks.
+    ///
+    /// Each keystroke carries its character as the key and as the text, so a space
+    /// typed this way reaches text inputs as a space.
     pub fn simulate_input(&mut self, window: AnyWindowHandle, input: &str) {
         for char in input.chars() {
             let key = char.to_string();
@@ -255,7 +290,7 @@ impl VisualTestAppContext {
         self.run_until_parked();
     }
 
-    /// Simulates a mouse move event.
+    /// Moves the pointer to `position`, with `button` held if it's `Some`.
     pub fn simulate_mouse_move(
         &mut self,
         window: AnyWindowHandle,
@@ -273,7 +308,7 @@ impl VisualTestAppContext {
         );
     }
 
-    /// Simulates a mouse down event.
+    /// Presses `button` at `position`. The click count is always `1`.
     pub fn simulate_mouse_down(
         &mut self,
         window: AnyWindowHandle,
@@ -293,7 +328,7 @@ impl VisualTestAppContext {
         );
     }
 
-    /// Simulates a mouse up event.
+    /// Releases `button` at `position`. The click count is always `1`.
     pub fn simulate_mouse_up(
         &mut self,
         window: AnyWindowHandle,
@@ -312,7 +347,7 @@ impl VisualTestAppContext {
         );
     }
 
-    /// Simulates a click (mouse down followed by mouse up).
+    /// Presses and releases the left button at `position`, with click count `1` on both events.
     pub fn simulate_click(
         &mut self,
         window: AnyWindowHandle,
@@ -323,7 +358,9 @@ impl VisualTestAppContext {
         self.simulate_mouse_up(window, position, MouseButton::Left, modifiers);
     }
 
-    /// Simulates an input event on the given window.
+    /// Dispatches `event` to `window`, then runs pending tasks.
+    ///
+    /// If the window is closed, the event is dropped silently.
     pub fn simulate_event<E: InputEvent>(&mut self, window: AnyWindowHandle, event: E) {
         self.update_window(window, |_, window, cx| {
             window.dispatch_event(event.to_platform_input(), cx);
@@ -332,7 +369,9 @@ impl VisualTestAppContext {
         self.run_until_parked();
     }
 
-    /// Dispatches an action to the given window.
+    /// Dispatches `action` to the focused element in `window`, then runs pending tasks.
+    ///
+    /// If the window is closed, the action is dropped silently.
     pub fn dispatch_action(&mut self, window: AnyWindowHandle, action: impl Action) {
         self.update_window(window, |_, window, cx| {
             window.dispatch_action(action.boxed_clone(), cx);
@@ -341,17 +380,24 @@ impl VisualTestAppContext {
         self.run_until_parked();
     }
 
-    /// Writes to the clipboard.
+    /// Writes `item` to the clipboard.
     pub fn write_to_clipboard(&self, item: ClipboardItem) {
         self.platform.write_to_clipboard(item);
     }
 
-    /// Reads from the clipboard.
+    /// Returns the clipboard's current item, or `None`.
     pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
         self.platform.read_from_clipboard()
     }
 
-    /// Waits for a condition to become true, with a timeout.
+    /// Waits until `predicate` returns `true` for `entity`, or until `timeout` passes.
+    ///
+    /// The predicate is checked between polls, which are 10 milliseconds apart. The
+    /// timeout is measured in real time, not simulated time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `timeout` passes before the predicate is true.
     pub async fn wait_for<T: 'static>(
         &mut self,
         entity: &Entity<T>,
@@ -378,16 +424,20 @@ impl VisualTestAppContext {
         }
     }
 
-    /// Captures a screenshot of the specified window using direct texture capture.
+    /// Renders `window` to an image and returns it.
     ///
-    /// This renders the scene to a Metal texture and reads the pixels directly,
-    /// which does not require the window to be visible on screen.
+    /// This renders to a texture and reads the pixels back, so the window doesn't need
+    /// to be visible on screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window has been closed or can't be rendered.
     #[cfg(any(test, feature = "test-support"))]
     pub fn capture_screenshot(&mut self, window: AnyWindowHandle) -> Result<RgbaImage> {
         self.update_window(window, |_, window, _cx| window.render_to_image())?
     }
 
-    /// Waits for animations to complete by waiting a couple of frames.
+    /// Waits for about two frames (32 milliseconds of simulated time), then runs pending tasks.
     pub async fn wait_for_animations(&self) {
         self.background_executor
             .timer(Duration::from_millis(32))

@@ -3,14 +3,21 @@ use gpui::HeadlessAppContext;
 #[cfg(target_os = "macos")]
 use gpui::VisualTestAppContext;
 #[cfg(target_family = "wasm")]
-use gpui::{App, Bounds, WindowBounds, WindowOptions, size};
+use gpui::{App, ApplicationHandle, Bounds, WindowBounds, WindowOptions, size};
 use gpui::{
     AppContext as _, Context, Div, FontWeight, IntoElement, ParentElement as _, Render,
     Styled as _, Window, div, px, rgb, white,
 };
 use std::borrow::Cow;
+#[cfg(target_family = "wasm")]
+use std::cell::RefCell;
 
 use gpui_fonts::{IBM_PLEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, SOURCE_SERIF};
+
+#[cfg(target_family = "wasm")]
+thread_local! {
+    static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
+}
 
 const BIDI_SAMPLE: &str =
     "שלום עולם\nمرحبا بالعالم\nabc אבג def\nx (مرحبا) y\nEnglish ثم عربي ثم English";
@@ -99,11 +106,14 @@ fn main() {
     #[cfg(target_family = "wasm")]
     {
         gpui_ce_platform::web_init();
-        let application = gpui_ce_platform::application().run_embedded(|cx: &mut App| {
+
+        let application = gpui_ce_platform::application().run(|cx: &mut App| {
             cx.text_system()
                 .add_fonts(fixture_fonts())
                 .expect("failed to load rendering fixture fonts");
+
             let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
+
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -114,7 +124,8 @@ fn main() {
             .expect("failed to open browser text window");
             cx.activate(true);
         });
-        std::mem::forget(application);
+
+        APPLICATION.set(Some(application));
 
         return;
     }

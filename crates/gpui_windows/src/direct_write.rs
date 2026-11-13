@@ -11,16 +11,14 @@ use std::{
 use anyhow::{Context as _, Result, ensure};
 use collections::HashMap;
 use gpui::{
-    Bounds, DevicePixels, Font, FontId, FontMetrics, GlyphId, GlyphRenderMode, InlineLayout,
-    InlineLayoutRequest, LineLayout, Pixels, PlatformTextSystem, PreparedRasterStyle,
-    RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Rgba8,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextLayoutRequest, TextRenderingMode, point,
-    size,
+    Bounds, ColorGlyphKind, DevicePixels, Font, FontDataBlob, FontId, FontMetrics, GlyphId,
+    GlyphRasterizer, GlyphRenderMode, InlineLayout, InlineLayoutRequest, LineLayout, Pixels,
+    PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterFace, RasterStyleRequest,
+    RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size,
+    TextLayoutRequest, TextRenderingMode, apply_pixel_opacity, multiply_alpha, point, size,
 };
-use gpui_parley::{
-    BitmapFallbackGlyphRasterizer, ColorGlyphKind, FontDataBlob, GlyphRasterizer, ParleyTextSystem,
-    RasterFace, SystemFonts,
-};
+use gpui_parley::ParleyTextSystem;
+use gpui_render::BitmapFallbackGlyphRasterizer;
 use parking_lot::RwLock;
 use windows::{
     Win32::{
@@ -86,12 +84,12 @@ impl DirectWriteTextSystem {
 
     fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
-        let parley = ParleyTextSystem::new_with_rasterizer(
-            SystemFonts::Load,
-            "Segoe UI",
-            BitmapFallbackGlyphRasterizer::new(SharedDirectWriteRenderer(renderer.clone())),
-        )
-        .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]);
+        let parley = ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
+            SharedDirectWriteRenderer(renderer.clone()),
+        ))
+        .with_system_fallback_family("Segoe UI")
+        .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
+        .with_system_fonts();
 
         Ok(Self { parley, renderer })
     }
@@ -412,7 +410,7 @@ impl DirectWriteGlyphRenderer {
             pixels = pixels
                 .into_iter()
                 .flat_map(|coverage| {
-                    let alpha = ((coverage as u16 * foreground.alpha as u16 + 127) / 255) as u8;
+                    let alpha = multiply_alpha(coverage, foreground.alpha);
 
                     if alpha == 0 {
                         [0; 4]
@@ -931,19 +929,15 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
     // Retain the original alpha for division to avoid quantizing the scaled RGB twice.
     for pixel in pixels.chunks_exact_mut(4) {
         let coverage = pixel[3] as u16;
-        let scaled_alpha = ((coverage * alpha as u16 + 127) / 255) as u8;
+        apply_pixel_opacity(pixel, alpha);
 
-        if scaled_alpha == 0 {
-            pixel.fill(0);
-
+        if pixel[3] == 0 {
             continue;
         }
 
         for channel in &mut pixel[..3] {
             *channel = ((*channel as u16 * 255 + coverage / 2) / coverage).min(255) as u8;
         }
-
-        pixel[3] = scaled_alpha;
     }
 
     Ok(pixels)
@@ -953,10 +947,9 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
 mod tests {
     use super::*;
     use gpui::{
-        FontStyle, FontWeight, FontWidth, ForegroundDependency, Point, RasterizedGlyphFormat, Rgba,
-        font, px, rgba,
+        FontStyle, FontSynthesis, FontWeight, FontWidth, ForegroundDependency, Point,
+        RasterizedGlyphFormat, Rgba, font, px, rgba,
     };
-    use gpui_parley::FontSynthesis;
     use std::collections::BTreeMap;
 
     #[test]

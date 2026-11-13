@@ -890,7 +890,8 @@ mod tests {
         ModifiersChangedEvent, NavigationDirection, PlatformInput, PlatformTextSystem, Render,
         ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*, rgba,
     };
-    use gpui_parley::{ParleyTextSystem, SystemFonts};
+    use gpui_parley::ParleyTextSystem;
+    use gpui_render::SwashGlyphRasterizer;
     use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
@@ -979,8 +980,9 @@ mod tests {
             unicode_bidi: Option<UnicodeBidi>,
             placeholder: Option<&'static str>,
         ) -> Self {
-            let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
+            let system = ParleyTextSystem::new(SwashGlyphRasterizer::default())
                 .with_fallback_families(["IBM Plex Sans", "Noto Sans Hebrew", "Noto Sans Arabic"]);
+
             system
                 .add_fonts(vec![
                     Cow::Borrowed(*gpui_fonts::IBM_PLEX),

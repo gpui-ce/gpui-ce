@@ -1,13 +1,14 @@
-use crate::{
-    ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
-    catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
+use crate::FontStore;
+use anyhow::{Context as _, Result, bail};
+use fontique::{
+    Attributes, Blob, Collection, CollectionOptions, QueryFamily, QueryFont, SourceCache,
 };
-use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
-    InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineRangeGeometry,
-    InlineTextMetrics, InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle,
-    ParagraphDirection, Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
+    Bounds, CaretAffinity, CaretMovement, CaretPosition, ColorGlyphKind, Font, FontId, FontMetrics,
+    FontStyle as GpuiFontStyle, FontVariation, GlyphId, GlyphRasterizer, InlineBidiScope,
+    InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineRangeGeometry, InlineTextMetrics,
+    InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection,
+    Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
     PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
     ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
     TextLayoutOptions, TextLayoutRequest, TextMovement, TextRangeExt, TextRenderingMode, TextRun,
@@ -19,8 +20,9 @@ use parley::setting::Tag;
 use parley::{
     Affinity, Alignment, AlignmentOptions, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, Cursor,
     FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle,
-    FontVariation as ParleyFontVariation, FontWeight, GenericFamily, InlineBox, InlineBoxKind,
-    Layout, LayoutContext, Line, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
+    FontVariation as ParleyFontVariation, FontWeight, FontWidth, GenericFamily, InlineBox,
+    InlineBoxKind, Layout, LayoutContext, Line, LineHeight, PositionedLayoutItem, Selection,
+    StyleProperty,
 };
 use skrifa::instance::NormalizedCoord;
 use std::{
@@ -38,6 +40,81 @@ use unicode_segmentation::UnicodeSegmentation as _;
 mod paragraphs;
 
 use paragraphs::{ParagraphLayout, ParleyDocumentLayout, local_range, paragraph_ranges};
+
+/// Creates an empty, unshared font context without discovering system fonts.
+fn empty_font_context() -> FontContext {
+    FontContext {
+        collection: Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        }),
+        source_cache: SourceCache::default(),
+    }
+}
+
+/// Registers font blobs after validating the entire batch.
+/// Returns an error without registering any blobs if one contains no supported font faces.
+fn register_font_blobs(context: &mut FontContext, fonts: &[Blob<u8>]) -> Result<()> {
+    let mut validator = Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts: false,
+    });
+
+    for blob in fonts {
+        if validator.register_fonts(blob.clone(), None).is_empty() {
+            bail!("font data did not contain a supported font face");
+        }
+    }
+
+    for blob in fonts {
+        context.collection.register_fonts(blob.clone(), None);
+    }
+
+    Ok(())
+}
+
+/// Returns sorted, deduplicated names of the available font families.
+fn family_names(context: &mut FontContext) -> Vec<String> {
+    let mut names = context
+        .collection
+        .family_names()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    names.sort_unstable();
+    names.dedup();
+
+    names
+}
+
+/// Returns the first matching face for the ordered families and requested attributes.
+/// Returns `None` when Fontique cannot resolve a face.
+fn resolve_face(
+    context: &mut FontContext,
+    families: &[FontFamilyName<'_>],
+    font: &Font,
+) -> Option<QueryFont> {
+    let style = match font.style {
+        GpuiFontStyle::Normal => FontStyle::Normal,
+        GpuiFontStyle::Italic => FontStyle::Italic,
+        GpuiFontStyle::Oblique => FontStyle::Oblique(None),
+    };
+
+    let mut query = context.collection.query(&mut context.source_cache);
+
+    query.set_families(families.iter().map(|family| match family {
+        FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
+        FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
+    }));
+
+    query.set_attributes(Attributes::new(
+        FontWidth::from_percentage(font.width.0),
+        style,
+        FontWeight::new(font.weight.0),
+    ));
+
+    query.first_available_font()
+}
 
 struct ParleyState {
     font_context: FontContext,
@@ -1057,7 +1134,7 @@ impl PlatformTextLayout for ParleyLayout {
     }
 
     fn size(&self) -> Size<Pixels> {
-        let width = if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
+        let width = if self.text.is_empty() && self.layout.inline_boxes().len() == 0 {
             Pixels::ZERO
         } else {
             px(self.layout.width())
@@ -1126,7 +1203,7 @@ impl PlatformTextLayout for ParleyLayout {
             return None;
         }
 
-        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().len() == 0 {
             return Some(Bounds::new(
                 point(self.inline_lines[0].origin.x, Pixels::ZERO),
                 size(Pixels::ZERO, line_height),
@@ -1152,7 +1229,7 @@ impl PlatformTextLayout for ParleyLayout {
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
-        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().len() == 0 {
             return None;
         }
 
@@ -1363,9 +1440,9 @@ impl PlatformTextLayout for ParleyLayout {
 }
 
 impl ParleyState {
-    fn new(system_fonts: SystemFonts) -> Self {
+    fn new() -> Self {
         Self {
-            font_context: new_font_context(system_fonts),
+            font_context: empty_font_context(),
             layout_context: LayoutContext::new(),
         }
     }
@@ -1384,35 +1461,15 @@ pub struct ParleyTextSystem {
     parley: Mutex<ParleyState>,
     paragraph_cache: Mutex<ParagraphCache>,
     paragraph_result_cache: Mutex<ParagraphResultCache>,
-    system_font_fallback: String,
-    additional_fallbacks: Vec<String>,
+    system_fallback_family: Option<String>,
+    fallback_families: Vec<String>,
 }
 
 impl ParleyTextSystem {
-    /// Creates a text system using GPUI's default system-font family.
-    pub fn new(system_fonts: SystemFonts) -> Self {
-        Self::new_with_system_font(system_fonts, ".SystemUIFont")
-    }
+    /// Creates a text system with an empty font catalog and the supplied glyph rasterizer.
+    pub fn new(rasterizer: impl GlyphRasterizer + 'static) -> Self {
+        let parley = ParleyState::new();
 
-    /// Creates a text system with the concrete family used for GPUI's system-font alias.
-    pub fn new_with_system_font(
-        system_fonts: SystemFonts,
-        system_font_fallback: impl Into<String>,
-    ) -> Self {
-        Self::new_with_rasterizer(
-            system_fonts,
-            system_font_fallback,
-            SwashGlyphRasterizer::default(),
-        )
-    }
-
-    /// Creates a text system which delegates only glyph rasterization to `rasterizer`.
-    pub fn new_with_rasterizer(
-        system_fonts: SystemFonts,
-        system_font_fallback: impl Into<String>,
-        rasterizer: impl GlyphRasterizer + 'static,
-    ) -> Self {
-        let parley = ParleyState::new(system_fonts);
         let color_glyph_formats = [
             ColorGlyphKind::ColrV0,
             ColorGlyphKind::ColrV1,
@@ -1423,6 +1480,7 @@ impl ParleyTextSystem {
         .into_iter()
         .filter(|kind| rasterizer.supports_color_glyph(*kind))
         .collect();
+
         let recommended_rendering_mode = rasterizer.recommended_mode();
 
         Self {
@@ -1437,9 +1495,24 @@ impl ParleyTextSystem {
             parley: Mutex::new(parley),
             paragraph_cache: Mutex::default(),
             paragraph_result_cache: Mutex::default(),
-            system_font_fallback: system_font_fallback.into(),
-            additional_fallbacks: Vec::new(),
+            system_fallback_family: None,
+            fallback_families: Vec::new(),
         }
+    }
+
+    /// Loads operating-system fonts and returns the text system.
+    /// Fonts registered with `.add_fonts(...)` and their IDs are preserved across repeated calls.
+    #[cfg(feature = "system-fonts")]
+    pub fn with_system_fonts(mut self) -> Self {
+        self.parley
+            .get_mut()
+            .font_context
+            .collection
+            .load_system_fonts();
+
+        self.fonts_changed();
+
+        self
     }
 
     /// Enables explicit optical sizing from each shaped run's logical font size.
@@ -1449,18 +1522,42 @@ impl ParleyTextSystem {
         self
     }
 
-    /// Creates a deterministic text system without operating-system fonts.
-    pub fn without_system_fonts() -> Self {
-        Self::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
+    /// Sets the fallback family for `.SystemUIFont` when the system UI family is unavailable.
+    pub fn with_system_fallback_family(mut self, family: impl Into<String>) -> Self {
+        self.system_fallback_family = Some(family.into());
+
+        self
     }
 
-    /// Adds fallback families after those supplied by each text style.
+    /// Sets ordered fallback families after those supplied by each text style.
     pub fn with_fallback_families(
         mut self,
         families: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.additional_fallbacks = families.into_iter().map(Into::into).collect();
+        self.fallback_families = families.into_iter().map(Into::into).collect();
+
         self
+    }
+
+    fn fonts_changed(&self) {
+        let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
+        self.paragraph_cache.lock().clear();
+        self.paragraph_result_cache.lock().clear();
+    }
+
+    fn face_families<'a>(&'a self, name: &'a str) -> impl Iterator<Item = FontFamilyName<'a>> {
+        let is_system_font = name == ".SystemUIFont";
+
+        let family = if is_system_font {
+            self.system_fallback_family.as_deref()
+        } else {
+            Some(name)
+        };
+
+        is_system_font
+            .then_some(FontFamilyName::Generic(GenericFamily::SystemUi))
+            .into_iter()
+            .chain(family.map(|family| FontFamilyName::Named(Cow::Borrowed(family))))
     }
 
     fn font_families<'a>(
@@ -1474,30 +1571,24 @@ impl ParleyTextSystem {
                     .iter()
                     .flat_map(|fallbacks| fallbacks.fallback_list().iter().map(String::as_str)),
             )
-            .flat_map(|name| face_families(name, &self.system_font_fallback))
+            .flat_map(|name| self.face_families(name))
     }
 
     fn resolve_canonical_font(&self, descriptor: &Font) -> Result<FontId> {
         let families = self
             .font_families(descriptor)
             .chain(
-                self.additional_fallbacks
+                self.fallback_families
                     .iter()
-                    .flat_map(|name| face_families(name, &self.system_font_fallback)),
+                    .flat_map(|name| self.face_families(name)),
             )
             .collect::<Vec<_>>();
 
         let resolved = {
             let mut state = self.parley.lock();
 
-            resolve_face(
-                &mut state.font_context,
-                &families,
-                descriptor.width,
-                descriptor.weight.0,
-                descriptor.style,
-            )
-            .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?
+            resolve_face(&mut state.font_context, &families, descriptor)
+                .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?
         };
 
         self.font_instances.write().intern_synthesized(
@@ -1810,7 +1901,7 @@ impl ParleyTextSystem {
                 runs.iter()
                     .map(|run| {
                         self.font_families(&run.font)
-                            .chain(self.additional_fallbacks.iter().map(|family| {
+                            .chain(self.fallback_families.iter().map(|family| {
                                 FontFamilyName::Named(Cow::Borrowed(family.as_str()))
                             }))
                             .collect::<Vec<_>>()
@@ -1953,6 +2044,8 @@ impl ParleyTextSystem {
                     index: inline_box.index,
                     width: f32::from(inline_box.size.width),
                     height: f32::from(inline_box.size.height),
+                    baseline: None,
+                    vertical_align: Default::default(),
                 });
             }
 
@@ -2026,6 +2119,7 @@ impl ParleyTextSystem {
                 alignment,
                 AlignmentOptions {
                     align_when_overflowing: true,
+                    last_line_alignment: None,
                 },
             );
         }
@@ -2089,12 +2183,12 @@ impl ParleyTextSystem {
                 let normalized_coords = run
                     .normalized_coords()
                     .iter()
-                    .copied()
-                    .map(NormalizedCoord::from_bits)
+                    .map(|coord| NormalizedCoord::from_bits(coord.to_bits()))
                     .collect::<Vec<_>>();
                 let shaping_variations = self
                     .automatic_optical_sizing
-                    .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
+                    .then(|| [FontVariation::new(*b"opsz", run.font_size())]);
+
                 let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
@@ -2104,7 +2198,7 @@ impl ParleyTextSystem {
                 )?;
 
                 let baseline = glyph_run.baseline();
-                let run_metrics = glyph_run.run().metrics();
+                let run_metrics = glyph_run.run().font_metrics();
 
                 // Resolve leading from the input ranges. Parley 0.11 can report the
                 // following style's line height in a shaped run's cached metrics.
@@ -2117,9 +2211,9 @@ impl ParleyTextSystem {
                     .map(|style| f32::from(style.line_height))
                     .reduce(f32::max)
                     .unwrap_or_else(|| {
-                        line_height
-                            .map(f32::from)
-                            .unwrap_or(run_metrics.line_height)
+                        line_height.map(f32::from).unwrap_or(
+                            run_metrics.ascent + run_metrics.descent + run_metrics.leading,
+                        )
                     });
 
                 let half_leading =
@@ -2199,8 +2293,14 @@ impl ParleyTextSystem {
             inline_text_bounds.push((text_top, text_bottom));
 
             width = width.max(line_advance);
-            ascent = ascent.max(px(metrics.ascent));
-            descent = descent.max(px(metrics.descent));
+
+            ascent = ascent.max(px(
+                (metrics.baseline - metrics.content_block_min_coord).max(0.)
+            ));
+
+            descent = descent.max(px(
+                (metrics.content_block_max_coord - metrics.baseline).max(0.)
+            ));
         }
 
         if visual_lines.is_empty() {
@@ -2257,52 +2357,18 @@ impl ParleyTextSystem {
     }
 }
 
-fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
-    let mut start = 0;
-
-    runs.iter()
-        .map(|run| {
-            let range = start..start + run.len;
-            start = range.end;
-
-            range
-        })
-        .collect()
-}
-
-fn face_families<'a>(
-    name: &'a str,
-    system_font_fallback: &'a str,
-) -> impl Iterator<Item = FontFamilyName<'a>> {
-    let is_system_font = name == ".SystemUIFont";
-    let family = if is_system_font {
-        system_font_fallback
-    } else {
-        name
-    };
-
-    is_system_font
-        .then_some(FontFamilyName::Generic(GenericFamily::SystemUi))
-        .into_iter()
-        .chain(std::iter::once(FontFamilyName::Named(Cow::Borrowed(
-            family,
-        ))))
-}
-
 impl PlatformTextSystem for ParleyTextSystem {
     fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         let blobs = fonts
             .into_iter()
-            .map(|bytes| fontique::Blob::from(bytes.into_owned()))
+            .map(|bytes| Blob::from(bytes.into_owned()))
             .collect::<Vec<_>>();
 
         {
             let mut state = self.parley.lock();
             register_font_blobs(&mut state.font_context, &blobs)?;
 
-            let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
-            self.paragraph_cache.lock().clear();
-            self.paragraph_result_cache.lock().clear();
+            self.fonts_changed();
         }
 
         Ok(())
@@ -2475,20 +2541,33 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 }
 
+fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
+    let mut start = 0;
+
+    runs.iter()
+        .map(|run| {
+            let range = start..start + run.len;
+            start = range.end;
+
+            range
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FontSynthesis, FontVariation, RasterFace};
     use gpui::{
         AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
-        FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode,
-        HeadlessAppContext, HighlightStyle, Hsla, IntoElement, Point, RasterizedGlyphFormat,
-        Render, ScaledPixels, StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle,
-        VerticalAlign, Window, WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
+        FontStyle as GpuiFontStyle, FontSynthesis, FontWeight as GpuiFontWeight,
+        FontWidth as GpuiFontWidth, GlyphRenderMode, HeadlessAppContext, HighlightStyle, Hsla,
+        IntoElement, Point, RasterFace, RasterizedGlyphFormat, Render, StrikethroughStyle, Styled,
+        StyledText, TestTextSystem, TextSystem, UnderlineStyle, VerticalAlign, Window,
+        WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
     };
     use gpui_fonts::{
-        IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS,
-        SOURCE_SERIF,
+        FontFixture, IBM_PLEX, IBM_PLEX_SEMIBOLD, IBM_PLEX_SEMIBOLD_ITALIC, LILEX, NOTO_ARABIC,
+        NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS, SOURCE_SERIF, WIDTH_CONDENSED, WIDTH_REGULAR,
     };
     use std::{
         cell::Cell,
@@ -2500,6 +2579,76 @@ mod tests {
         },
     };
 
+    fn register_bytes(context: &mut FontContext, fonts: &[&[u8]]) -> Result<()> {
+        let blobs = fonts
+            .iter()
+            .map(|bytes| Blob::from(bytes.to_vec()))
+            .collect::<Vec<_>>();
+
+        register_font_blobs(context, &blobs)
+    }
+
+    #[test]
+    fn registered_fonts_are_enumerated_and_resolved() {
+        let mut context = empty_font_context();
+
+        register_bytes(
+            &mut context,
+            &[
+                IBM_PLEX.data,
+                IBM_PLEX_SEMIBOLD_ITALIC.data,
+                LILEX.data,
+                WIDTH_REGULAR.data,
+                WIDTH_CONDENSED.data,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            family_names(&mut context),
+            [WIDTH_REGULAR.family, IBM_PLEX.family, LILEX.family]
+        );
+
+        for (fixture, descriptor) in [
+            (IBM_PLEX, font(IBM_PLEX.family)),
+            (
+                IBM_PLEX_SEMIBOLD_ITALIC,
+                Font {
+                    weight: GpuiFontWeight::SEMIBOLD,
+                    ..font(IBM_PLEX.family).italic()
+                },
+            ),
+            (WIDTH_REGULAR, font(WIDTH_REGULAR.family)),
+            (
+                WIDTH_CONDENSED,
+                Font {
+                    width: GpuiFontWidth::CONDENSED,
+                    ..font(WIDTH_REGULAR.family)
+                },
+            ),
+        ] {
+            let families = [FontFamilyName::Named(fixture.family.into())];
+            let resolved = resolve_face(&mut context, &families, &descriptor).unwrap();
+
+            assert_eq!(resolved.blob.as_ref(), fixture.data, "{descriptor:?}");
+            assert_eq!(resolved.index, 0, "{descriptor:?}");
+        }
+    }
+
+    #[test]
+    fn font_registration_is_atomic() {
+        let mut context = empty_font_context();
+        register_bytes(&mut context, &[LILEX.data]).unwrap();
+        let families_before = family_names(&mut context);
+
+        assert!(register_bytes(&mut context, &[IBM_PLEX.data, b"not a font"]).is_err());
+        assert_eq!(family_names(&mut context), families_before);
+
+        let families = [FontFamilyName::Named(IBM_PLEX.family.into())];
+
+        assert!(resolve_face(&mut context, &families, &font(IBM_PLEX.family)).is_none());
+    }
+
     #[test]
     fn caret_affinity_round_trips_through_parley() {
         for affinity in [CaretAffinity::Downstream, CaretAffinity::Upstream] {
@@ -2510,30 +2659,160 @@ mod tests {
     }
 
     fn test_system() -> Arc<ParleyTextSystem> {
-        let system = Arc::new(
-            ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family)
-                .with_fallback_families([
-                    IBM_PLEX.family,
-                    LILEX.family,
-                    SOURCE_SERIF.family,
-                    NOTO_COLOR_EMOJI.family,
-                    NOTO_ARABIC.family,
-                    NOTO_HEBREW.family,
-                ]),
-        );
+        let system = test_system_with_fonts(&[
+            IBM_PLEX,
+            IBM_PLEX_SEMIBOLD,
+            LILEX,
+            SOURCE_SERIF,
+            NOTO_SANS,
+            NOTO_COLOR_EMOJI,
+            NOTO_ARABIC,
+            NOTO_HEBREW,
+        ])
+        .with_fallback_families([
+            IBM_PLEX.family,
+            LILEX.family,
+            SOURCE_SERIF.family,
+            NOTO_COLOR_EMOJI.family,
+            NOTO_ARABIC.family,
+            NOTO_HEBREW.family,
+        ]);
+
+        Arc::new(system)
+    }
+
+    fn test_system_with_fonts(fonts: &[FontFixture]) -> ParleyTextSystem {
+        let system = ParleyTextSystem::new(TestTextSystem)
+            .with_fallback_families(fonts.first().map(|fixture| fixture.family));
+
         system
-            .add_fonts(vec![
-                Cow::Borrowed(IBM_PLEX.data),
-                Cow::Borrowed(IBM_PLEX_SEMIBOLD.data),
-                Cow::Borrowed(LILEX.data),
-                Cow::Borrowed(SOURCE_SERIF.data),
-                Cow::Borrowed(NOTO_SANS.data),
-                Cow::Borrowed(NOTO_COLOR_EMOJI.data),
-                Cow::Borrowed(NOTO_ARABIC.data),
-                Cow::Borrowed(NOTO_HEBREW.data),
-            ])
+            .add_fonts(
+                fonts
+                    .iter()
+                    .map(|fixture| Cow::Borrowed(fixture.data))
+                    .collect(),
+            )
             .unwrap();
+
         system
+    }
+
+    fn set_generic_family(system: &ParleyTextSystem, generic: GenericFamily, family: &str) {
+        let mut state = system.parley.lock();
+        let collection = &mut state.font_context.collection;
+        let family = collection.family_id(family).unwrap();
+        collection.set_generic_families(generic, std::iter::once(family));
+    }
+
+    #[test]
+    fn font_catalog_starts_empty_and_resolves_independent_fallback_families() {
+        let system = ParleyTextSystem::new(TestTextSystem);
+        assert_eq!(system.all_font_names(), [".SystemUIFont"]);
+        assert!(system.font_id(&font(IBM_PLEX.family)).is_err());
+        assert!(system.font_id(&font(".SystemUIFont")).is_err());
+
+        assert_eq!(
+            system.face_families(".SystemUIFont").collect::<Vec<_>>(),
+            [FontFamilyName::Generic(GenericFamily::SystemUi)]
+        );
+
+        system
+            .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
+            .unwrap();
+
+        let registered = system.font_id(&font(IBM_PLEX.family)).unwrap();
+        assert!(system.font_id(&font(".SystemUIFont")).is_err());
+        let system = system.with_system_fallback_family(IBM_PLEX.family);
+        assert_eq!(system.font_id(&font(".SystemUIFont")).unwrap(), registered);
+        assert!(system.font_id(&font("Missing family")).is_err());
+        set_generic_family(&system, GenericFamily::SystemUi, IBM_PLEX.family);
+        assert_eq!(system.font_id(&font(".SystemUIFont")).unwrap(), registered);
+
+        for families in [
+            [IBM_PLEX.family, LILEX.family],
+            [LILEX.family, IBM_PLEX.family],
+        ] {
+            let system = test_system_with_fonts(&[IBM_PLEX, LILEX])
+                .with_system_fallback_family(families[1])
+                .with_fallback_families(families);
+
+            let primary = system.font_id(&font(families[0])).unwrap();
+            let secondary = system.font_id(&font(families[1])).unwrap();
+            assert_ne!(primary, secondary);
+            let mut authored = font("Missing family");
+            authored.fallbacks = Some(FontFallbacks::from_fonts(vec![families[1].to_owned()]));
+
+            for (generic, descriptor, expected) in [
+                (None, font(".SystemUIFont"), secondary),
+                (None, font("Missing family"), primary),
+                (None, font(families[0]), primary),
+                (None, authored, secondary),
+                (Some(families[0]), font(".SystemUIFont"), primary),
+            ] {
+                if let Some(family) = generic {
+                    set_generic_family(&system, GenericFamily::SystemUi, family);
+                }
+
+                assert_eq!(
+                    system.font_id(&descriptor).unwrap(),
+                    expected,
+                    "{descriptor:?}"
+                );
+
+                let text = if generic.is_some() {
+                    "system UI"
+                } else {
+                    "abc"
+                };
+
+                let run = TextRun {
+                    len: text.len(),
+                    font: descriptor,
+                    ..Default::default()
+                };
+
+                let layout = layout_line(&system, text, px(18.), &[run]);
+                assert_eq!(layout.paint_fragments[0].font_id, expected, "{families:?}");
+            }
+        }
+    }
+
+    #[cfg(feature = "system-fonts")]
+    #[test]
+    fn loading_system_fonts_preserves_registered_faces_and_invalidates_layouts() {
+        let mut system = test_system_with_fonts(&[IBM_PLEX]);
+        let font_id = system.font_id(&font(IBM_PLEX.family)).unwrap();
+        let text = "registered before system fonts";
+        let runs = [text_run(text, IBM_PLEX.family)];
+
+        for _attempt in 0..2 {
+            let before = layout_line(&system, text, px(18.), &runs);
+            let generation = system.font_generation();
+            assert!(!system.paragraph_cache.lock().entries.is_empty());
+            assert!(!system.paragraph_result_cache.lock().entries.is_empty());
+
+            system = system.with_system_fonts();
+
+            assert_eq!(system.font_generation(), generation + 1);
+            assert!(system.paragraph_cache.lock().entries.is_empty());
+            assert!(system.paragraph_result_cache.lock().entries.is_empty());
+            assert_eq!(system.font_id(&font(IBM_PLEX.family)).unwrap(), font_id);
+            assert!(
+                system
+                    .all_font_names()
+                    .iter()
+                    .any(|name| name == IBM_PLEX.family)
+            );
+
+            let after = layout_line(&system, text, px(18.), &runs);
+            assert_eq!(after.paint_fragments[0].font_id, font_id);
+            assert_eq!(before.width, after.width);
+            assert_eq!(before.ascent, after.ascent);
+            assert_eq!(before.descent, after.descent);
+
+            let fonts = system.font_instances.read();
+            assert_eq!(fonts.get(font_id).unwrap().data.as_ref(), IBM_PLEX.data);
+        }
     }
 
     fn text_run(text: &str, family: &str) -> TextRun {
@@ -2633,14 +2912,9 @@ mod tests {
     #[test]
     fn empty_directional_text_without_runs_keeps_metrics_without_paint() {
         let system = test_system();
-        {
-            // Give Parley a default font for synthetic bidi markers without
-            // depending on installed system fonts or an explicit text run.
-            let mut state = system.parley.lock();
-            let collection = &mut state.font_context.collection;
-            let family = collection.family_id(IBM_PLEX.family).unwrap();
-            collection.set_generic_families(GenericFamily::SansSerif, std::iter::once(family));
-        }
+
+        // Give synthetic bidi markers a default font without relying on installed fonts.
+        set_generic_family(&system, GenericFamily::SansSerif, IBM_PLEX.family);
 
         for (direction, expected_direction) in [
             (ParagraphDirection::Auto, ResolvedDirection::LeftToRight),
@@ -4315,14 +4589,13 @@ mod tests {
 
         let prepare_calls = Arc::new(AtomicUsize::new(0));
         let recommended_calls = Arc::new(AtomicUsize::new(0));
-        let system = ParleyTextSystem::new_with_rasterizer(
-            SystemFonts::Skip,
-            "IBM Plex Sans",
-            PolicyRasterizer {
-                prepare_calls: prepare_calls.clone(),
-                recommended_calls: recommended_calls.clone(),
-            },
-        );
+
+        let system = ParleyTextSystem::new(PolicyRasterizer {
+            prepare_calls: prepare_calls.clone(),
+            recommended_calls: recommended_calls.clone(),
+        })
+        .with_fallback_families(["IBM Plex Sans"]);
+
         let request = RasterStyleRequest {
             font_id: FontId(1),
             glyph_id: GlyphId(1),
@@ -4353,13 +4626,7 @@ mod tests {
 
     #[test]
     fn font_registration_invalidates_layouts_and_distinguishes_requested_instances() {
-        let backend = Arc::new(
-            ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family)
-                .with_fallback_families([IBM_PLEX.family]),
-        );
-        backend
-            .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
-            .unwrap();
+        let backend = Arc::new(test_system_with_fonts(&[IBM_PLEX]));
         let text_system = Arc::new(TextSystem::new(backend.clone()));
         let window_text_system = WindowTextSystem::new(text_system);
         let text = "registered later";
@@ -4563,261 +4830,31 @@ mod tests {
     }
 
     #[test]
-    fn rasterizes_monochrome_and_color_glyphs_with_expected_buffer_formats() {
+    fn bundled_color_artwork_is_classified_per_glyph() {
         let system = test_system();
 
-        let mixed_color_face = layout_line(
-            &system,
-            "1 1",
-            px(24.0),
-            &[text_run("1 1", NOTO_COLOR_EMOJI.family)],
-        );
-        let color_flags = mixed_color_face
-            .paint_fragments
-            .iter()
-            .flat_map(|fragment| fragment.glyphs.iter().map(|glyph| glyph.is_emoji))
-            .collect::<Vec<_>>();
-        assert_eq!(color_flags, [true, false, true]);
-
-        for (text, mode, expected_format) in [
-            (
-                "A",
-                GlyphRenderMode::Grayscale,
-                RasterizedGlyphFormat::AlphaMask,
-            ),
-            (
-                "A",
-                GlyphRenderMode::Subpixel,
-                RasterizedGlyphFormat::BgraSubpixelMask,
-            ),
-            (
-                "😀",
-                GlyphRenderMode::Color,
-                RasterizedGlyphFormat::BgraColor,
-            ),
-        ] {
-            let expect_color = mode == GlyphRenderMode::Color;
-            let layout = layout_line(&system, text, px(24.0), &[text_run(text, IBM_PLEX.family)]);
-            let glyph = layout
-                .paint_fragments
-                .iter()
-                .flat_map(|fragment| {
-                    fragment
-                        .glyphs
-                        .iter()
-                        .map(move |glyph| (fragment.font_id, glyph))
-                })
-                .find(|(_, glyph)| glyph.is_emoji == expect_color)
-                .unwrap();
-            let raster = system
-                .rasterize_glyph(&RenderGlyphParams {
-                    font_id: glyph.0,
-                    glyph_id: glyph.1.id,
-                    font_size: px(24.0),
-                    subpixel_variant: Default::default(),
-                    scale_factor: 1.0,
-                    raster_style: PreparedRasterStyle::independent(mode),
-                })
-                .unwrap();
-            assert_eq!(raster.bounds.size, raster.size);
-            assert!(raster.size.width.0 > 0 && raster.size.height.0 > 0);
-            let channels = match raster.format {
-                gpui::RasterizedGlyphFormat::AlphaMask => 1,
-                gpui::RasterizedGlyphFormat::BgraSubpixelMask
-                | gpui::RasterizedGlyphFormat::BgraColor => 4,
-            };
-
-            assert_eq!(raster.format, expected_format);
-            assert_eq!(
-                raster.pixels.len(),
-                raster.size.width.0 as usize * raster.size.height.0 as usize * channels
-            );
-            match expected_format {
-                RasterizedGlyphFormat::AlphaMask => {
-                    assert!(raster.pixels.iter().any(|&alpha| alpha > 0));
-                }
-                RasterizedGlyphFormat::BgraSubpixelMask => {
-                    assert!(
-                        raster
-                            .pixels
-                            .chunks_exact(4)
-                            .any(|pixel| { pixel[0] != pixel[1] || pixel[1] != pixel[2] })
-                    );
-                }
-                RasterizedGlyphFormat::BgraColor => {
-                    assert!(raster.pixels.chunks_exact(4).any(|pixel| {
-                        pixel[3] > 128
-                            && (pixel[0] != pixel[1]
-                                || pixel[1] != pixel[2]
-                                || pixel[0] != pixel[2])
-                    }));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bundled_emoji_sample_keeps_font_metrics_and_device_scaling() {
-        const SAMPLE: &str = "Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
-        const EMOJI: [char; 6] = ['😀', '🎉', '🚀', '💡', '🔥', '✨'];
-
-        let system = test_system();
-        let noto_id = system.font_id(&font("Noto Color Emoji")).unwrap();
-
-        for font_size in [px(16.0), px(24.0), px(32.0)] {
+        for (text, expected_flags) in [("👩🏽‍💻", &[true][..]), ("1 1", &[true, false, true][..])]
+        {
             let layout = layout_line(
                 &system,
-                SAMPLE,
-                font_size,
-                &[text_run(SAMPLE, "IBM Plex Sans")],
+                text,
+                px(24.0),
+                &[text_run(text, NOTO_COLOR_EMOJI.family)],
             );
-            let emoji_glyphs = layout
+
+            let color_flags = layout
                 .paint_fragments
                 .iter()
-                .flat_map(|fragment| {
-                    fragment
-                        .glyphs
-                        .iter()
-                        .filter(|glyph| glyph.is_emoji)
-                        .map(move |glyph| (fragment, glyph))
-                })
+                .flat_map(|fragment| fragment.glyphs.iter().map(|glyph| glyph.is_emoji))
                 .collect::<Vec<_>>();
 
-            assert_eq!(emoji_glyphs.len(), EMOJI.len());
-            assert_eq!(layout.font_size, font_size);
-
-            for (character, (fragment, glyph)) in EMOJI.into_iter().zip(emoji_glyphs) {
-                assert_eq!(
-                    fragment.font_id, noto_id,
-                    "{character} selected another font"
-                );
-                assert_eq!(fragment.font_size, font_size);
-                assert_eq!(glyph.position.y, Pixels::ZERO);
-                assert_eq!(
-                    glyph.id,
-                    system.glyph_for_char(noto_id, character).unwrap(),
-                    "{character} did not use its nominal bundled glyph"
-                );
-
-                let glyph_idx = fragment
-                    .glyphs
-                    .iter()
-                    .position(|candidate| std::ptr::eq(candidate, glyph))
-                    .unwrap();
-                let shaped_advance = fragment
-                    .glyphs
-                    .get(glyph_idx + 1)
-                    .map(|next| next.position.x - glyph.position.x)
-                    .unwrap_or(fragment.x_range.end - glyph.position.x);
-                assert!(shaped_advance > Pixels::ZERO);
-                let raster_style = system.prepare_raster_style(RasterStyleRequest {
-                    font_id: fragment.font_id,
-                    glyph_id: glyph.id,
-                    scene_color: gpui::rgba(0xffffffff),
-                    requested_mode: GlyphRenderMode::Color,
-                    foreground_dependency: gpui::ForegroundDependency::Full,
-                });
-                let mut scale_one_bounds: Option<[f32; 4]> = None;
-
-                for scale_factor in [1.0, 1.5, 2.0] {
-                    let raster = system
-                        .rasterize_glyph(&RenderGlyphParams {
-                            font_id: fragment.font_id,
-                            glyph_id: glyph.id,
-                            font_size: fragment.font_size,
-                            subpixel_variant: point(0, 0),
-                            scale_factor,
-                            raster_style,
-                        })
-                        .unwrap();
-                    raster.validate().unwrap();
-                    assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
-                    assert!(
-                        raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-                        "{character} produced no visible pixels"
-                    );
-
-                    let logical_bounds = [
-                        raster.bounds.origin.x.0 as f32 / scale_factor,
-                        raster.bounds.origin.y.0 as f32 / scale_factor,
-                        raster.size.width.0 as f32 / scale_factor,
-                        raster.size.height.0 as f32 / scale_factor,
-                    ];
-
-                    if let Some(reference) = scale_one_bounds {
-                        for (actual, expected) in logical_bounds.into_iter().zip(reference) {
-                            assert!(
-                                (actual - expected).abs() <= 1.0,
-                                "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
-                            );
-                        }
-                    } else {
-                        scale_one_bounds = Some(logical_bounds);
-                    }
-                }
-            }
+            assert_eq!(color_flags, expected_flags, "{text:?}");
         }
-    }
-
-    #[test]
-    fn bundled_joined_emoji_sequence_shapes_as_one_color_glyph() {
-        let system = test_system();
-        let text = "👩🏽‍💻";
-        let layout = layout_line(
-            &system,
-            text,
-            px(24.0),
-            &[text_run(text, "Noto Color Emoji")],
-        );
-        let glyphs = layout
-            .paint_fragments
-            .iter()
-            .flat_map(|fragment| fragment.glyphs.iter())
-            .collect::<Vec<_>>();
-
-        assert_eq!(glyphs.len(), 1);
-        assert!(glyphs[0].is_emoji);
-    }
-
-    #[test]
-    fn fixed_color_bitmaps_ignore_foreground_rgb_but_preserve_alpha() {
-        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family);
-        system
-            .add_fonts(vec![
-                Cow::Borrowed(IBM_PLEX.data),
-                Cow::Borrowed(NOTO_COLOR_EMOJI.data),
-            ])
-            .unwrap();
-        let font_id = system.font_id(&font(NOTO_COLOR_EMOJI.family)).unwrap();
-        let glyph_id = system.glyph_for_char(font_id, '😀').unwrap();
-        let style = |color| {
-            system.prepare_raster_style(RasterStyleRequest {
-                font_id,
-                glyph_id,
-                scene_color: color,
-                requested_mode: GlyphRenderMode::Color,
-                foreground_dependency: gpui::ForegroundDependency::Full,
-            })
-        };
-
-        let red = style(gpui::rgba(0xff0000cc));
-        let blue = style(gpui::rgba(0x0000ffcc));
-        let translucent = style(gpui::rgba(0x0000ff80));
-        assert_eq!(red, blue);
-        assert_eq!(
-            red.foreground_dependency,
-            gpui::ForegroundDependency::AlphaOnly
-        );
-        assert_ne!(red, translucent);
     }
 
     #[test]
     fn automatic_optical_sizing_tracks_logical_default_and_inline_sizes() {
-        let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, SOURCE_SERIF.family)
-            .with_automatic_optical_sizing();
-        system
-            .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
-            .unwrap();
+        let system = test_system_with_fonts(&[SOURCE_SERIF]).with_automatic_optical_sizing();
 
         let optical_value = |font_id| {
             system
@@ -4892,12 +4929,10 @@ mod tests {
     #[test]
     fn native_backend_receives_the_face_instance_selected_during_shaping() {
         let seen = Arc::new(Mutex::new(None));
-        let system = ParleyTextSystem::new_with_rasterizer(
-            SystemFonts::Skip,
-            SOURCE_SERIF.family,
-            RecordingRasterizer { seen: seen.clone() },
-        )
-        .with_automatic_optical_sizing();
+        let system = ParleyTextSystem::new(RecordingRasterizer { seen: seen.clone() })
+            .with_fallback_families([SOURCE_SERIF.family])
+            .with_automatic_optical_sizing();
+
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
             .unwrap();
@@ -4930,6 +4965,12 @@ mod tests {
         assert!(raster.pixels.is_empty());
 
         let seen = seen.lock().clone().expect("rasterizer saw a face");
+
+        let instances = system.font_instances.read();
+        let selected = instances.get(font_id).unwrap();
+
+        assert_eq!(seen.source_id, selected.data.id());
+        assert_eq!(seen.normalized_coords, selected.normalized_coords);
         assert_eq!(seen.font_id, font_id);
         assert_eq!(seen.face_index, 0);
         assert!(seen.data_matches);
@@ -4953,6 +4994,8 @@ mod tests {
     #[derive(Clone, Debug)]
     struct SeenRasterFace {
         font_id: FontId,
+        source_id: u64,
+        normalized_coords: Vec<NormalizedCoord>,
         face_index: u32,
         data_matches: bool,
         variations: Vec<FontVariation>,
@@ -4976,6 +5019,8 @@ mod tests {
         ) -> Result<RasterizedGlyph> {
             *self.seen.lock() = Some(SeenRasterFace {
                 font_id: face.font_id,
+                source_id: face.source_id,
+                normalized_coords: face.normalized_coords.to_vec(),
                 face_index: face.face_index,
                 data_matches: face.data() == SOURCE_SERIF.data,
                 variations: face.variations.to_vec(),

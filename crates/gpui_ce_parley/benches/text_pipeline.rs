@@ -1,15 +1,15 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use gpui::{
-    FontFallbacks, GlyphRenderMode, PlatformTextSystem, PreparedRasterStyle, RenderGlyphParams,
-    TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, TextSystem, font, px,
+    FontFallbacks, PlatformTextSystem, TestTextSystem, TextAlign, TextLayoutOptions,
+    TextLayoutRequest, TextRun, font, px,
 };
-use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
+use gpui_ce_parley::ParleyTextSystem;
 use gpui_fonts::{IBM_PLEX, LILEX, SOURCE_SERIF};
 use std::borrow::Cow;
-use std::sync::Arc;
 
 fn text_system() -> (ParleyTextSystem, TextRun) {
-    let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family);
+    let system = ParleyTextSystem::new(TestTextSystem).with_fallback_families([IBM_PLEX.family]);
+
     system
         .add_fonts(vec![
             Cow::Borrowed(IBM_PLEX.data),
@@ -35,38 +35,6 @@ fn text_system() -> (ParleyTextSystem, TextRun) {
 
 fn code_text() -> String {
     "fn layout(text: &str, width: Pixels) -> LineLayout { cache.get(text, width) } ".repeat(64)
-}
-
-fn raster_case() -> (TextSystem, RenderGlyphParams) {
-    let (system, mut run) = text_system();
-    let text = "A";
-    run.len = text.len();
-    let layout = system.layout_text(TextLayoutRequest {
-        text,
-        font_size: px(16.0),
-        runs: &[run],
-        options: TextLayoutOptions {
-            text_align: TextAlign::Left,
-            ..Default::default()
-        },
-    });
-
-    let fragment = &layout.paint_fragments[0];
-    let glyph = &fragment.glyphs[0];
-    let params = RenderGlyphParams {
-        font_id: fragment.font_id,
-        glyph_id: glyph.id,
-        font_size: layout.font_size,
-        subpixel_variant: Default::default(),
-        scale_factor: 1.0,
-        raster_style: PreparedRasterStyle::independent(if glyph.is_emoji {
-            GlyphRenderMode::Color
-        } else {
-            GlyphRenderMode::Grayscale
-        }),
-    };
-
-    (TextSystem::new(Arc::new(system)), params)
 }
 
 fn bench_text_pipeline(criterion: &mut Criterion) {
@@ -133,20 +101,6 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
-    });
-
-    group.bench_function("first_glyph_rasterization", |bencher| {
-        bencher.iter_batched(
-            raster_case,
-            |(system, params)| system.rasterize_glyph(&params).unwrap(),
-            BatchSize::SmallInput,
-        );
-    });
-
-    group.bench_function("cached_glyph_rasterization", |bencher| {
-        let (system, params) = raster_case();
-        system.rasterize_glyph(&params).unwrap();
-        bencher.iter(|| system.rasterize_glyph(&params).unwrap());
     });
 
     group.finish();

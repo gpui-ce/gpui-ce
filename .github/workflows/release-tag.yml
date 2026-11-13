@@ -1,0 +1,45 @@
+name: Tag release
+
+on:
+  push:
+    branches: [main]
+    # A release PR always rolls the CHANGELOG
+    paths: [CHANGELOG.md, crates/gpui/Cargo.toml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-ce-release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.detect.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: hustcer/setup-nu@v3
+      - uses: extractions/setup-just@v2
+      - id: detect
+        name: Tag if this push is a merged release PR
+        run: just release-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  release:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write
