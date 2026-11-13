@@ -31,6 +31,10 @@ Items are sorted by issue or pull request number.
 ### Fixes
 
 - `ColorExt::blend` diverged from upstream/original behavior [#327](https://github.com/gpui-ce/gpui-ce/issues/327), [#357](https://github.com/gpui-ce/gpui-ce/pull/357)
+- Fixed color bitmap glyph opacity and style handling. [#401](https://github.com/gpui-ce/gpui-ce/pull/401)
+  - Glyphs now respect text opacity.
+  - Cleared color channels for fully transparent bitmap glyph pixels.
+  - Rejected unsupported dilation styles for color bitmap glyphs.
 
 ### Security Changes
 

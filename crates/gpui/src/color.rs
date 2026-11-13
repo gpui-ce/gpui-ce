@@ -34,6 +34,32 @@ pub fn hsla_to_rgba(color: Hsla) -> Rgba {
     color.into_color()
 }
 
+/// Multiplies byte alpha by opacity, rounding to nearest.
+///
+/// Adding 127 rounds up remainders of at least 128 when dividing by 255.
+/// Adding 128 would also round up remainder 127, although 127/255 is less than one half.
+///
+/// Jerry R. VanAken, "Alpha Blending with No Division Operations", page 10, reference 2:
+/// https://arxiv.org/pdf/2202.02864#page=10
+///
+/// > ...loses a half-bit of accuracy by not rounding off this product before dividing.
+/// > ...rounding should be done by adding 127, not 128.
+#[inline]
+pub fn multiply_alpha(alpha: u8, opacity: u8) -> u8 {
+    ((u16::from(alpha) * u16::from(opacity) + 127) / 255) as u8
+}
+
+/// Scales an RGBA or BGRA pixel's alpha, clearing all channels if it becomes zero.
+/// Otherwise, the color channels are unchanged.
+#[inline]
+pub fn apply_pixel_opacity(pixel: &mut [u8], opacity: u8) {
+    pixel[3] = multiply_alpha(pixel[3], opacity);
+
+    if pixel[3] == 0 {
+        pixel.fill(0);
+    }
+}
+
 /// Swap from RGBA with premultiplied alpha to BGRA
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);
@@ -574,6 +600,51 @@ impl<T: IntoColor<Hsla>> From<T> for Background {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_multiply_alpha_examples() {
+        let cases = [
+            (0, 0, 0),
+            (0, 255, 0),
+            (255, 0, 0),
+            (255, 255, 255),
+            (173, 255, 173),
+            (255, 173, 173),
+            (51, 85, 17),    // An exact result: 51 * 85 / 255 = 17.
+            (1, 127, 0),     // Just below half a byte: 127 / 255 rounds down.
+            (1, 128, 1),     // Just above half a byte: 128 / 255 rounds up.
+            (127, 128, 64),  // About 63.75 rounds up.
+            (128, 128, 64),  // About 64.25 rounds down.
+            (254, 254, 253), // About 253.004 rounds down.
+        ];
+
+        for (alpha, opacity, expected) in cases {
+            assert_eq!(
+                multiply_alpha(alpha, opacity),
+                expected,
+                "alpha={alpha}, opacity={opacity}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiply_alpha_matches_normalized_product() {
+        let samples = [0, 1, 64, 127, 128, 192, 254, 255];
+
+        for alpha in samples {
+            for opacity in samples {
+                let normalized_alpha = f64::from(alpha) / 255.0;
+                let normalized_opacity = f64::from(opacity) / 255.0;
+                let expected = (normalized_alpha * normalized_opacity * 255.0).round() as u8;
+
+                assert_eq!(
+                    multiply_alpha(alpha, opacity),
+                    expected,
+                    "alpha={alpha}, opacity={opacity}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_background_solid() {
