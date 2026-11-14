@@ -1,4 +1,8 @@
-use crate::{Pixels, Point, ResolvedDirection, Size, TextLayoutOptions, TextRun, UnicodeBidi};
+#[cfg(any(test, feature = "test-support"))]
+use crate::VerticalAlign;
+use crate::{
+    Font, Pixels, Point, ResolvedDirection, Size, TextLayoutOptions, TextRun, UnicodeBidi,
+};
 use std::ops::Range;
 
 /// A directional scope within an inline text document.
@@ -24,6 +28,23 @@ pub struct InlineBoxRequest {
     pub size: Size<Pixels>,
     /// Vertical alignment within the line containing this element.
     pub vertical_align: crate::VerticalAlign,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl InlineBoxRequest {
+    pub(crate) fn y_offset(
+        &self,
+        baseline: Pixels,
+        line_height: Pixels,
+        x_height: Pixels,
+    ) -> Pixels {
+        match self.vertical_align {
+            VerticalAlign::Baseline => baseline - self.size.height,
+            VerticalAlign::Middle => baseline - x_height / 2. - self.size.height / 2.,
+            VerticalAlign::Top => Pixels::ZERO,
+            VerticalAlign::Bottom => line_height - self.size.height,
+        }
+    }
 }
 
 /// Resolved font size and line height for part of an inline document.
@@ -52,23 +73,47 @@ pub struct InlineLayoutRequest<'a> {
     pub font_size: Pixels,
     /// Requested height of an ordinary text row.
     pub line_height: Pixels,
-    /// Metrics for the inline container's base font.
-    pub text_metrics: InlineTextMetrics,
+    /// Font of the inline container, used for its line strut and box alignment.
+    pub base_font: &'a Font,
     /// Wrapping, alignment, and bidirectional layout options.
     pub options: TextLayoutOptions,
     /// Directional scopes established by nested inline elements.
     pub bidi_scopes: &'a [InlineBidiScope],
 }
 
-/// Font metrics used to construct the vertical extents of an inline line.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct InlineTextMetrics {
-    /// Distance above the text baseline.
-    pub ascent: Pixels,
-    /// Distance below the text baseline.
-    pub descent: Pixels,
-    /// Height of a lowercase x in the inline container's font.
-    pub x_height: Pixels,
+#[cfg(any(test, feature = "test-support"))]
+impl InlineLayoutRequest<'_> {
+    pub(crate) fn line_extents(
+        &self,
+        ascent: Pixels,
+        descent: Pixels,
+        x_height: Pixels,
+    ) -> (Pixels, Pixels) {
+        let half_leading = (self.line_height - ascent - descent) / 2.;
+        let mut top = -ascent - half_leading;
+        let mut bottom = descent + half_leading;
+        let mut top_height = Pixels::ZERO;
+        let mut bottom_height = Pixels::ZERO;
+
+        for inline_box in self.boxes {
+            let height = inline_box.size.height;
+
+            match inline_box.vertical_align {
+                VerticalAlign::Baseline => top = top.min(-height),
+                VerticalAlign::Middle => {
+                    top = top.min(-x_height / 2. - height / 2.);
+                    bottom = bottom.max(-x_height / 2. + height / 2.);
+                }
+                VerticalAlign::Top => top_height = top_height.max(height),
+                VerticalAlign::Bottom => bottom_height = bottom_height.max(height),
+            }
+        }
+
+        bottom = bottom.max(top + top_height);
+        top = top.min(bottom - bottom_height);
+
+        (top, bottom)
+    }
 }
 
 /// A row in an inline layout.

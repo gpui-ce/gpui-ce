@@ -52,7 +52,6 @@ impl ShapedLine {
             line_height,
             align,
             align_width,
-            &self.layout.visual_lines,
             TextPaintPass::Foreground,
             window,
             cx,
@@ -75,7 +74,6 @@ impl ShapedLine {
             line_height,
             align,
             align_width,
-            &self.layout.visual_lines,
             TextPaintPass::Background,
             window,
             cx,
@@ -121,7 +119,6 @@ impl ShapedText {
             line_height,
             align,
             align_width,
-            &self.layout.visual_lines,
             TextPaintPass::Foreground,
             window,
             cx,
@@ -149,7 +146,6 @@ impl ShapedText {
             line_height,
             align,
             align_width,
-            &self.layout.visual_lines,
             TextPaintPass::Background,
             window,
             cx,
@@ -180,6 +176,12 @@ enum TextPaintPass {
     Foreground,
 }
 
+struct LinePaintGeometry {
+    origin: Point<Pixels>,
+    height: Pixels,
+    baseline_y: Pixels,
+}
+
 struct FragmentPaintContext<'a> {
     line_origin: Point<Pixels>,
     line_height: Pixels,
@@ -200,25 +202,26 @@ fn paint_inline_layout(
         return Ok(());
     }
 
-    let text_system = cx.text_system().clone();
     let placement = place_inline_layout(origin, inline.alignment_offset, window);
-    window.paint_layer(Bounds::new(placement.origin, inline.size), |window| {
-        for (line, visual_line) in inline.lines.iter().zip(&inline.layout.visual_lines) {
-            let line_origin = origin + line.origin + placement.delta;
-            paint_visual_line(
-                &inline.layout,
-                visual_line,
-                line_origin,
-                line.size.height,
-                line_origin.y + line.baseline,
-                pass,
-                &text_system,
-                window,
-            );
-        }
 
-        Ok(())
-    })
+    let lines = inline.lines.iter().map(|line| {
+        let line_origin = origin + line.origin + placement.delta;
+
+        LinePaintGeometry {
+            origin: line_origin,
+            height: line.size.height,
+            baseline_y: line_origin.y + line.baseline,
+        }
+    });
+
+    paint_visual_lines(
+        &inline.layout,
+        lines,
+        Bounds::new(placement.origin, inline.size),
+        pass,
+        window,
+        cx,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,27 +245,34 @@ pub(crate) fn place_inline_layout(
     }
 }
 
-fn paint_visual_line(
+fn paint_visual_lines(
     layout: &LineLayout,
-    visual_line: &VisualLine,
-    line_origin: Point<Pixels>,
-    line_height: Pixels,
-    baseline_y: Pixels,
+    lines: impl Iterator<Item = LinePaintGeometry>,
+    bounds: Bounds<Pixels>,
     pass: TextPaintPass,
-    text_system: &TextSystem,
     window: &mut Window,
-) {
-    let context = FragmentPaintContext {
-        line_origin,
-        line_height,
-        baseline_y,
-        layout,
-        pass,
-        text_system,
-    };
-    for fragment in &layout.paint_fragments[visual_line.paint_fragment_range.clone()] {
-        paint_text_fragment(fragment, &context, window);
-    }
+    cx: &mut App,
+) -> Result<()> {
+    let text_system = cx.text_system().clone();
+
+    window.paint_layer(bounds, |window| {
+        for (visual_line, line) in layout.visual_lines.iter().zip(lines) {
+            let context = FragmentPaintContext {
+                line_origin: line.origin,
+                line_height: line.height,
+                baseline_y: line.baseline_y,
+                layout,
+                pass,
+                text_system: &text_system,
+            };
+
+            for fragment in &layout.paint_fragments[visual_line.paint_fragment_range.clone()] {
+                paint_text_fragment(fragment, &context, window);
+            }
+        }
+
+        Ok(())
+    })
 }
 
 fn paint_text_fragment(
@@ -340,39 +350,54 @@ fn paint_visual_text(
     line_height: Pixels,
     align: TextAlign,
     align_width: Option<Pixels>,
-    visual_lines: &[VisualLine],
     pass: TextPaintPass,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
+    let visual_lines = &layout.visual_lines;
+
     if visual_lines.is_empty() {
         return Ok(());
     }
 
-    let line_bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
-    window.paint_layer(line_bounds, |window| {
-        let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
-        let text_system = cx.text_system().clone();
+    if let Some(lines) = layout.platform_layout.native_lines() {
+        let lines = lines.iter().map(|line| {
+            let line_origin = origin + line.origin;
 
-        for (line_index, line) in visual_lines.iter().enumerate() {
-            let line_origin = point(
-                visual_line_origin_x(origin.x, align, align_width, line),
-                origin.y + line_index as f32 * line_height,
-            );
-            paint_visual_line(
-                layout,
-                line,
-                line_origin,
-                line_height,
-                line_origin.y + padding_top + layout.ascent,
-                pass,
-                &text_system,
-                window,
-            );
+            LinePaintGeometry {
+                origin: line_origin,
+                height: line.size.height,
+                baseline_y: line_origin.y + line.baseline,
+            }
+        });
+
+        return paint_visual_lines(
+            layout,
+            lines,
+            Bounds::new(origin, layout.platform_layout.size()),
+            pass,
+            window,
+            cx,
+        );
+    }
+
+    let bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
+    let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
+
+    let lines = visual_lines.iter().enumerate().map(|(line_idx, line)| {
+        let line_origin = point(
+            visual_line_origin_x(origin.x, align, align_width, line),
+            origin.y + line_idx as f32 * line_height,
+        );
+
+        LinePaintGeometry {
+            origin: line_origin,
+            height: line_height,
+            baseline_y: line_origin.y + padding_top + layout.ascent,
         }
+    });
 
-        Ok(())
-    })
+    paint_visual_lines(layout, lines, bounds, pass, window, cx)
 }
 
 fn visual_text_bounds(
@@ -422,13 +447,15 @@ fn paint_fragment_decorations_at(
     foreground: bool,
 ) {
     let range = line_origin.x + fragment.x_range.start..line_origin.x + fragment.x_range.end;
+    let run_baseline = baseline_y + fragment.baseline_offset;
+
     if foreground {
         if let Some(mut underline) = fragment.style.underline {
             underline.color = Some(underline.color.unwrap_or(fragment.style.color));
             window.paint_underline(
                 point(
                     range.start,
-                    baseline_y + fragment.underline_offset.unwrap_or(layout.descent * 0.618),
+                    run_baseline + fragment.underline_offset.unwrap_or(layout.descent * 0.618),
                 ),
                 range.end - range.start,
                 &underline,
@@ -436,7 +463,7 @@ fn paint_fragment_decorations_at(
         }
         if let Some(mut strike) = fragment.style.strikethrough {
             strike.color = Some(strike.color.unwrap_or(fragment.style.color));
-            let strike_y = baseline_y
+            let strike_y = run_baseline
                 + fragment
                     .strikethrough_offset
                     .unwrap_or(-layout.ascent * 0.5);
@@ -447,10 +474,15 @@ fn paint_fragment_decorations_at(
             );
         }
     } else if let Some(color) = fragment.style.background_color {
+        let vertical = fragment
+            .background_range
+            .as_ref()
+            .map(|range| baseline_y + range.start..baseline_y + range.end)
+            .unwrap_or(line_origin.y..line_origin.y + line_height);
         window.paint_quad(
             PaintQuad::new(Bounds::new(
-                point(range.start, line_origin.y),
-                size(range.end - range.start, line_height),
+                point(range.start, vertical.start),
+                size(range.end - range.start, vertical.end - vertical.start),
             ))
             .background(color),
         );
