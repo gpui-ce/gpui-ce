@@ -40,7 +40,7 @@ pub struct WindowsPlatform {
     icon: HICON,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
-    text_system: Arc<DirectWriteTextSystem>,
+    text_system: Arc<dyn PlatformTextSystem>,
     drop_target_helper: Option<IDropTargetHelper>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
@@ -111,22 +111,19 @@ impl WindowsPlatform {
         unsafe {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
-        let (directx_devices, text_system) = if !headless {
-            let devices = DirectXDevices::new().context("Creating DirectX devices")?;
-            let text_system = Arc::new(
-                DirectWriteTextSystem::new(&devices)
-                    .context("Error creating DirectWriteTextSystem")?,
-            );
 
-            (Some(devices), text_system)
-        } else {
-            let text_system = Arc::new(
-                DirectWriteTextSystem::new_headless()
-                    .context("Error creating headless DirectWriteTextSystem")?,
-            );
+        let directx_devices = (!headless)
+            .then(|| DirectXDevices::new().context("Creating DirectX devices"))
+            .transpose()?;
 
-            (None, text_system)
-        };
+        let text_system = new_text_system().with_context(|| {
+            if headless {
+                "Error creating headless DirectWriteTextSystem"
+            } else {
+                "Error creating DirectWriteTextSystem"
+            }
+        })?;
+
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let validation_number = if usize::BITS == 64 {
             rand::random::<u64>() as usize
@@ -313,7 +310,6 @@ impl WindowsPlatform {
         let platform_window: SafeHwnd = self.handle.into();
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
-        let text_system = Arc::downgrade(&self.text_system);
         let invalidate_devices = self.invalidate_devices.clone();
 
         std::thread::Builder::new()
@@ -330,7 +326,6 @@ impl WindowsPlatform {
                             platform_window.as_raw(),
                             validation_number,
                             &all_windows,
-                            &text_system,
                         ) {
                             panic!("Device lost: {err}");
                         }
@@ -1433,7 +1428,6 @@ fn handle_gpu_device_lost(
     platform_window: HWND,
     validation_number: usize,
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
-    text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
     // If we don't wait, the final drawing result will be blank.
@@ -1454,9 +1448,6 @@ fn handle_gpu_device_lost(
         );
     }
 
-    if let Some(text_system) = text_system.upgrade() {
-        text_system.handle_gpu_lost(&directx_devices)?;
-    }
     if let Some(all_windows) = all_windows.upgrade() {
         for window in all_windows.read().iter() {
             unsafe {
