@@ -226,7 +226,7 @@ impl MacPlatform {
         let marker = MainThreadMarker::new().expect("Mac platform not created on main thread");
         let dispatcher = Arc::new(MacDispatcher::new());
 
-        let text_system = Arc::new(crate::MacTextSystem::new());
+        let text_system = crate::text_system::new_text_system();
 
         let keyboard_layout = MacKeyboardLayout::new();
         let keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));
