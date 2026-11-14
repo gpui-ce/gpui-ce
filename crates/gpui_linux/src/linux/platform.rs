@@ -134,24 +134,7 @@ impl LinuxCommon {
         let (main_sender, main_receiver) = PriorityQueueCalloopReceiver::new();
         let (wake_sender, wake_receiver) = calloop::channel::channel();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
-        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            ParleyTextSystem::new(SwashGlyphRasterizer::default())
-                .with_system_fallback_family("IBM Plex Sans")
-                .with_fallback_families([
-                    "IBM Plex Sans",
-                    "Lilex",
-                    "Ubuntu",
-                    "Cantarell",
-                    "Noto Sans",
-                    "DejaVu Sans",
-                    "Arial",
-                ])
-                .with_system_fonts(),
-        );
-
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
-        let text_system = Arc::new(gpui::NoopTextSystem::new());
+        let text_system = new_text_system();
 
         let callbacks = PlatformHandlers::default();
 
@@ -203,6 +186,29 @@ impl LinuxCommon {
             self.callbacks.system_wake = Some(callback);
         }
     }
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+fn new_text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(
+        ParleyTextSystem::new(SwashGlyphRasterizer::default())
+            .with_system_fallback_family("IBM Plex Sans")
+            .with_fallback_families([
+                "IBM Plex Sans",
+                "Lilex",
+                "Ubuntu",
+                "Cantarell",
+                "Noto Sans",
+                "DejaVu Sans",
+                "Arial",
+            ])
+            .with_system_fonts(),
+    )
+}
+
+#[cfg(not(any(feature = "wayland", feature = "x11")))]
+fn new_text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(gpui::NoopTextSystem::new())
 }
 
 #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
