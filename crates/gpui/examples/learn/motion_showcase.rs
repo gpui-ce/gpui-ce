@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 mod example_prelude;
 
 use gpui::{
-    App, AppContext, Bounds, Context, FontWeight, Motion, MotionPass, MotionSample, Window,
-    WindowBounds, WindowOptions, div, ease_in_out, millis, prelude::*, px, relative, rgb, size,
+    Animation, AnimationExt, App, AppContext, Bounds, Context, FocusHandle, FontWeight, Lerp,
+    Motion, MotionPass, MotionSample, Role, Window, WindowBounds, WindowOptions, div, ease_in_out,
+    millis, prelude::*, px, relative, rgb, size,
 };
 
 const BACKGROUND: u32 = 0x141a26;
@@ -90,6 +91,9 @@ enum Setting {
 
 struct MotionShowcase {
     settings: Settings,
+    notification_event: usize,
+    activity_open: bool,
+    activity_focus: FocusHandle,
     motions: Motions,
     progress: Timeline,
     progress_from: f32,
@@ -157,10 +161,13 @@ fn scale_elapsed(elapsed: Duration, old: Duration, new: Duration) -> Duration {
 }
 
 impl MotionShowcase {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         let settings = Settings::default();
         Self {
             settings,
+            notification_event: 0,
+            activity_open: false,
+            activity_focus: cx.focus_handle(),
             motions: Motions::new(settings),
             progress: Timeline::default(),
             progress_from: 0.,
@@ -674,6 +681,89 @@ impl Render for MotionShowcase {
                 ),
         );
 
+        let reduced = cx.reduce_motion();
+        let replay_panel = panel(
+            "Replayable notification",
+            "with_animation(...).replay_on(event_id)",
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            button("receive-notification", "Receive notification", true).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.notification_event =
+                                        this.notification_event.wrapping_add(1);
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(
+                            button(
+                                "notification-motion",
+                                if reduced {
+                                    "Reduced motion on"
+                                } else {
+                                    "Reduced motion off"
+                                },
+                                false,
+                            )
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                let reduced = !cx.reduce_motion();
+                                cx.set_reduce_motion(reduced);
+                            })),
+                        ),
+                )
+                .when(self.notification_event != 0, |content| {
+                    content.child(
+                        div()
+                            .id("notification-row")
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .p_3()
+                            .rounded_md()
+                            .border_1()
+                            .child("Build succeeded")
+                            .child(
+                                button("open-activity", "Open activity", false)
+                                    .role(Role::Button)
+                                    .track_focus(&self.activity_focus)
+                                    .focus_style(|style| style.border_color(rgb(ACCENT)))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.activity_open = !this.activity_open;
+                                        cx.notify();
+                                    })),
+                            )
+                            .with_animation(
+                                "notification-pulse",
+                                Animation::new(
+                                    Motion::new(millis(240))
+                                        .with_reverse_pass(MotionPass::new(millis(420)))
+                                        .iterations(2)
+                                        .alternate()
+                                        .with_easing(ease_in_out),
+                                ),
+                                |row, value| {
+                                    row.bg(rgb(INSET).lerp(&rgb(0x365587), value))
+                                        .border_color(rgb(BORDER).lerp(&rgb(ACCENT), value))
+                                },
+                            )
+                            .replay_on(self.notification_event),
+                    )
+                })
+                .when(self.activity_open, |content| {
+                    content.child("Activity shows the latest build succeeded.")
+                }),
+        );
+
         div()
             .id("motion-showcase")
             .size_full()
@@ -690,6 +780,7 @@ impl Render for MotionShowcase {
                     .font_weight(FontWeight::BOLD)
                     .child("Motion showcase"),
             )
+            .child(replay_panel)
             .child(
                 div()
                     .flex()
@@ -795,7 +886,7 @@ fn main() {
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {
                 window.set_window_title("Motion showcase");
-                cx.new(|_| MotionShowcase::new())
+                cx.new(MotionShowcase::new)
             },
         )
         .expect("Failed to open window");
