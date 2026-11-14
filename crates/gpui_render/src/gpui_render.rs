@@ -14,4 +14,4 @@ pub use target_stack::TargetStack;
 mod swash_glyph_rasterizer;
 
 #[cfg(feature = "swash")]
-pub use swash_glyph_rasterizer::{BitmapFallbackGlyphRasterizer, SwashGlyphRasterizer};
+pub use swash_glyph_rasterizer::SwashGlyphRasterizer;
