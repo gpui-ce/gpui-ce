@@ -18,39 +18,57 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
 
     let r#gen = quote! {
-        impl #impl_generics gpui::AppContext for #type_name #type_generics
+        impl #impl_generics gpui::context::AppContext for #type_name #type_generics
+        #where_clause
+        {}
+
+        impl #impl_generics gpui::app_borrow::UpgradeApp for #type_name #type_generics
         #where_clause
         {
-            fn new<T: 'static>(
-                &mut self,
-                build_entity: impl FnOnce(&mut gpui::Context<'_, T>) -> T,
-            ) -> gpui::Entity<T> {
-                self.#app_variable.new(build_entity)
+            fn upgrade(&self) -> impl gpui::app_borrow::BorrowApp {
+                self
             }
 
-            fn reserve_entity<T: 'static>(&mut self) -> gpui::Reservation<T> {
-                self.#app_variable.reserve_entity()
+            fn upgrade_mut(&mut self) -> impl gpui::app_borrow::BorrowAppMut {
+                self
             }
-
-            fn insert_entity<T: 'static>(
-                &mut self,
-                reservation: gpui::Reservation<T>,
-                build_entity: impl FnOnce(&mut gpui::Context<'_, T>) -> T,
-            ) -> gpui::Entity<T> {
-                self.#app_variable.insert_entity(reservation, build_entity)
+        }
+        impl #impl_generics gpui::app_borrow::BorrowApp for &#type_name #type_generics
+        #where_clause
+        {
+            fn borrow(&self) -> impl std::ops::Deref<Target = gpui::App> {
+                <#type_name as std::ops::Deref>::deref(self)
             }
-
-            fn update_entity<T, R>(
-                &mut self,
-                handle: &gpui::Entity<T>,
-                update: impl FnOnce(&mut T, &mut gpui::Context<'_, T>) -> R,
-            ) -> R
-            where
-                T: 'static,
-            {
-                self.#app_variable.update_entity(handle, update)
+        }
+        impl #impl_generics gpui::app_borrow::BorrowAppMut for &mut #type_name #type_generics
+        #where_clause
+        {
+            fn borrow_mut(&mut self) -> impl std::ops::DerefMut<Target = gpui::App> {
+                <#type_name as std::ops::DerefMut>::deref_mut(self)
             }
+        }
+        impl #impl_generics std::ops::Deref for #type_name #type_generics
+        #where_clause
+        {
+            type Target = gpui::App;
+            fn deref(&self) -> &Self::Target {
+                self.#app_variable
+            }
+        }
+        impl #impl_generics std::ops::DerefMut for #type_name #type_generics
+        #where_clause
+        {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                self.#app_variable
+            }
+        }
 
+        impl #impl_generics gpui::context::ImpliedAppEntity for #type_name #type_generics
+        #where_clause
+        {}
+        impl #impl_generics gpui::context::AppContextBorrowEntity for #type_name #type_generics
+        #where_clause
+        {
             fn as_mut<'y, 'z, T>(
                 &'y mut self,
                 handle: &'z gpui::Entity<T>,
@@ -60,83 +78,16 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
             {
                 self.#app_variable.as_mut(handle)
             }
-
-            fn read_entity<T, R>(
-                &self,
-                handle: &gpui::Entity<T>,
-                read: impl FnOnce(&T, &gpui::App) -> R,
-            ) -> R
-            where
-                T: 'static,
-            {
-                self.#app_variable.read_entity(handle, read)
-            }
-
-            fn notify(&mut self, entity_id: gpui::EntityId) {
-                self.#app_variable.notify(entity_id);
-            }
-
-            fn emit<EntityType, EventType>(&mut self, entity: &gpui::Entity<EntityType>, event: EventType)
-            where
-                EntityType: gpui::EventEmitter<EventType>,
-                EventType: 'static,
-            {
-                self.#app_variable.emit(entity, event)
-            }
-
-            fn update_window<T, F>(&mut self, window: gpui::AnyWindowHandle, f: F) -> gpui::Result<T>
-            where
-                F: FnOnce(gpui::AnyView, &mut gpui::Window, &mut gpui::App) -> T,
-            {
-                self.#app_variable.update_window(window, f)
-            }
-
-            fn with_window<R>(
-                &mut self,
-                entity_id: gpui::EntityId,
-                f: impl FnOnce(&mut gpui::Window, &mut gpui::App) -> R,
-            ) -> Option<R>
-            {
-                self.#app_variable.with_window(entity_id, f)
-            }
-
-            fn read_window<T, R>(
-                &self,
-                window: &gpui::WindowHandle<T>,
-                read: impl FnOnce(gpui::Entity<T>, &gpui::App) -> R,
-            ) -> gpui::Result<R>
-            where
-                T: 'static,
-            {
-                self.#app_variable.read_window(window, read)
-            }
-
-            fn background_spawn<R>(&self, future: impl std::future::Future<Output = R> + Send + 'static) -> gpui::Task<R>
-            where
-                R: Send + 'static,
-            {
-                self.#app_variable.background_spawn(future)
-            }
-
-            fn read_global<G, R>(&self, callback: impl FnOnce(&G, &gpui::App) -> R) -> R
-            where
-                G: gpui::Global,
-            {
-                self.#app_variable.read_global(callback)
-            }
-
-            fn insert_global_entity<T: 'static>(&mut self, entity: gpui::Entity<T>) {
-                self.#app_variable.insert_global_entity(entity)
-            }
-
-            fn remove_global_entity<T: 'static>(&mut self, entity: &gpui::Entity<T>) {
-                self.#app_variable.remove_global_entity(entity)
-            }
-
-            fn global_entities<T: 'static>(&self) -> impl Iterator<Item = gpui::Entity<T>> {
-                self.#app_variable.global_entities()
-            }
         }
+        impl #impl_generics gpui::context::ImpliedAppWindow for #type_name #type_generics
+        #where_clause
+        {}
+        impl #impl_generics gpui::context::ImpliedAppTask for #type_name #type_generics
+        #where_clause
+        {}
+        impl #impl_generics gpui::context::ImpliedAppGlobals for #type_name #type_generics
+        #where_clause
+        {}
     };
 
     r#gen.into()

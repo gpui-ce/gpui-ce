@@ -9,6 +9,7 @@ extern crate self as gpui;
 mod action;
 mod animated;
 mod app;
+pub mod app_borrow;
 
 mod arena;
 mod asset_cache;
@@ -17,13 +18,12 @@ mod bounds_tree;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+pub mod context;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 mod element;
 mod elements;
 mod executor;
-mod platform_scheduler;
-pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
 mod gestures;
 mod global;
@@ -36,6 +36,7 @@ mod lerp;
 mod motion;
 mod path_builder;
 mod platform;
+mod platform_scheduler;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
 pub mod profiler;
@@ -103,6 +104,7 @@ pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use color::*;
+pub use context::AppContext;
 pub use ctor::ctor;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;
@@ -116,6 +118,7 @@ pub use gpui_macros::{
     AppContext, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, VisualContext, bench, property_test, register_action, test,
 };
+pub(crate) use platform_scheduler::PlatformScheduler;
 pub use resize::*;
 pub use spring::*;
 
@@ -161,14 +164,12 @@ pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use refineable::*;
 pub use scene::*;
 pub use shared_uri::*;
-use std::{any::Any, future::Future};
 pub use style::*;
 pub use style_transitions::*;
 pub use styled::*;
 pub use subscription::*;
 pub use svg_renderer::*;
 pub(crate) use tab_stop::*;
-use taffy::TaffyLayoutEngine;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]
 pub use test::*;
@@ -181,103 +182,8 @@ pub use window::*;
 #[cfg(not(target_family = "wasm"))]
 pub use pollster::block_on;
 
-/// The context trait, allows the different contexts in GPUI to be used
-/// interchangeably for certain operations.
-pub trait AppContext {
-    /// Create a new entity in the app context.
-    #[expect(
-        clippy::wrong_self_convention,
-        reason = "`App::new` is an ubiquitous function for creating entities"
-    )]
-    fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T>;
-
-    /// Reserve a slot for a entity to be inserted later.
-    /// The returned [Reservation] allows you to obtain the [EntityId] for the future entity.
-    fn reserve_entity<T: 'static>(&mut self) -> Reservation<T>;
-
-    /// Insert a new entity in the app context based on a [Reservation] previously obtained from [`reserve_entity`].
-    ///
-    /// [`reserve_entity`]: Self::reserve_entity
-    fn insert_entity<T: 'static>(
-        &mut self,
-        reservation: Reservation<T>,
-        build_entity: impl FnOnce(&mut Context<T>) -> T,
-    ) -> Entity<T>;
-
-    /// Update a entity in the app context.
-    fn update_entity<T, R>(
-        &mut self,
-        handle: &Entity<T>,
-        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
-    ) -> R
-    where
-        T: 'static;
-
-    /// Update a entity in the app context.
-    fn as_mut<'a, T>(&'a mut self, handle: &Entity<T>) -> GpuiBorrow<'a, T>
-    where
-        T: 'static;
-
-    /// Read a entity from the app context.
-    fn read_entity<T, R>(&self, handle: &Entity<T>, read: impl FnOnce(&T, &App) -> R) -> R
-    where
-        T: 'static;
-
-    /// Tell GPUI that an entity has changed and observers of it should be notified.
-    fn notify(&mut self, entity_id: EntityId);
-
-    /// Emit an event of the specified type, which can be handled by other entities that have subscribed via `subscribe` methods on their respective contexts.
-    /// A globally-callable equivalent to `Context::emit` without requiring an entity update.
-    fn emit<EntityType, EventType>(&mut self, entity: &Entity<EntityType>, event: EventType)
-    where
-        EntityType: EventEmitter<EventType>,
-        EventType: 'static;
-
-    /// Update a window for the given handle.
-    fn update_window<T, F>(&mut self, window: AnyWindowHandle, f: F) -> Result<T>
-    where
-        F: FnOnce(AnyView, &mut Window, &mut App) -> T;
-
-    /// Run `f` against the entity's *current* window — the most recently
-    /// rendered window that referenced the entity. Returns `None` if the
-    /// entity has no current window or that window is unavailable. See
-    /// [`App::with_window`] for the underlying lookup.
-    fn with_window<R>(
-        &mut self,
-        entity_id: EntityId,
-        f: impl FnOnce(&mut Window, &mut App) -> R,
-    ) -> Option<R>;
-
-    /// Read a window off of the application context.
-    fn read_window<T, R>(
-        &self,
-        window: &WindowHandle<T>,
-        read: impl FnOnce(Entity<T>, &App) -> R,
-    ) -> Result<R>
-    where
-        T: 'static;
-
-    /// Spawn a future on a background thread
-    fn background_spawn<R>(&self, future: impl Future<Output = R> + Send + 'static) -> Task<R>
-    where
-        R: Send + 'static;
-
-    /// Read a global from this app context
-    fn read_global<G, R>(&self, callback: impl FnOnce(&G, &App) -> R) -> R
-    where
-        G: Global;
-
-    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
-    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_entity`].
-    fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>);
-
-    /// Removes the entity from global storage. If no other entities are holding reference to it,
-    /// it will be dropped in the very near future.
-    fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>);
-
-    /// Returns an iterator of all globally-stored entities which match the provided type.
-    fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>>;
-}
+use std::any::Any;
+use taffy::TaffyLayoutEngine;
 
 /// Returned by [Context::reserve_entity] to later be passed to [Context::insert_entity].
 /// Allows you to obtain the [EntityId] for a entity before it is created.
@@ -292,7 +198,7 @@ impl<T: 'static> Reservation<T> {
 
 /// This trait is used for the different visual contexts in GPUI that
 /// require a window to be present.
-pub trait VisualContext: AppContext {
+pub trait VisualContext: context::AppContextWindow {
     /// The result type for window operations.
     type Result<T>;
 

@@ -1,6 +1,3 @@
-#[cfg(test)]
-use gpui::{AppContext, TestAppContext};
-
 use gpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 use std::time::Duration;
@@ -117,6 +114,7 @@ impl Caret {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{TestAppContext, context::AppContextEntity};
 
     struct CaretEventEmitter;
     impl EventEmitter<CaretNotify> for CaretEventEmitter {}

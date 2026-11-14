@@ -383,8 +383,8 @@ fn ephemeral_id(mut index: usize) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AnyWindowHandle, AppContext as _, Context, InteractiveElement as _, IntoElement,
-        ParentElement as _, Render, StatefulInteractiveElement as _, TestAppContext, Window, div,
+        AnyWindowHandle, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+        StatefulInteractiveElement as _, TestAppContext, Window, context::AppContextWindow, div,
         util::FluentBuilder as _,
     };
     use accesskit::{Role, TreeUpdate};

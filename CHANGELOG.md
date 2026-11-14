@@ -89,6 +89,7 @@ Items are sorted by issue or pull request number.
   - Removed `Window::with_filter_layer_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::with_filter_layer`
   - Removed `Window::paint_quad_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_quad`
   - Removed `Window::paint_image_with_corner_smoothing` & Added `corner_smoothing: f32` to `Window::paint_image`
+- `AppContext` split into multiple traits: `AppContextEntity`, `AppContextBorrowEntity`, `AppContextWindow`, `AppContextTask`, `AppContextGlobal`. Each has been added to `gpui::prelude::*` and `gpui::context::*`. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Additions
 
@@ -227,6 +228,7 @@ Changelog established.
 - Rendering rehauled to support WGPU/WGSL renderer. [#215](https://github.com/gpui-ce/gpui-ce/pull/215)
   - Added feature flags `gpui_apple/runtime_shaders`, `gpui_macos/runtime_shaders`, `gpui_platform/runtime_shaders`
   - Linux/FreeBSD screen capture was incorporated at some point.
+- Added `UpgradeApp` and `BorrowApp[Mut]` traits to support blanket implementation of `AppContext` traits. [#TODO](https://github.com/gpui-ce/gpui-ce/pull/?)
 
 ### Removals
 

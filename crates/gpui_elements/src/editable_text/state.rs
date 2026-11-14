@@ -140,7 +140,7 @@ impl EditableTextState {
     ///
     /// Expected to be called via [`AppContext::new`] such as:
     /// ```
-    /// # use gpui::{AppContext, Window, App, Entity};
+    /// # use gpui::{context::*, Window, App, Entity};
     /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
     /// # fn new(_window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
     /// cx.new(|cx| EditableTextState::new(StringStorage::default(), cx))
@@ -1434,16 +1434,15 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 ///     permutations of: single and multiline fields, wrap vs no-wrap, overflow scroll vs no scroll
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
-
     use super::*;
     use crate::editable_text::StringStorage;
     use gpui::{
-        AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
-        TextSystem, WindowHandle, WindowTextSystem, div, font, px,
+        Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun, TextSystem,
+        WindowHandle, WindowTextSystem, context::AppContextEntity, div, font, px,
     };
     use gpui_parley::ParleyTextSystem;
     use gpui_render::SwashGlyphRasterizer;
+    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
     type TestMovementAction =
         fn(&mut EditableTextState, &mut Window, &mut Context<'_, EditableTextState>);
