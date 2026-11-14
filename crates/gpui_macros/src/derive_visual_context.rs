@@ -39,14 +39,14 @@ pub fn derive_visual_context(input: TokenStream) -> TokenStream {
                 entity: &gpui::Entity<T>,
                 update: impl FnOnce(&mut T, &mut gpui::Window, &mut gpui::Context<T>) -> R,
             ) -> R {
-                gpui::AppContext::update_entity(self.#app_variable, entity, |entity, cx| update(entity, self.#window_variable, cx))
+                gpui::context::AppContextEntity::update_entity(self.#app_variable, entity, |entity, cx| update(entity, self.#window_variable, cx))
             }
 
             fn new_window_entity<T: 'static>(
                 &mut self,
                 build_entity: impl FnOnce(&mut gpui::Window, &mut gpui::Context<'_, T>) -> T,
             ) -> gpui::Entity<T> {
-                gpui::AppContext::new(self.#app_variable, |cx| build_entity(self.#window_variable, cx))
+                gpui::context::AppContextEntity::new(self.#app_variable, |cx| build_entity(self.#window_variable, cx))
             }
 
             fn replace_root_view<V>(

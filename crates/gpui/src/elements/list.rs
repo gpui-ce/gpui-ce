@@ -6,12 +6,11 @@
 //! on your own views, so that your code can coordinate directly with the list element's cached state.
 //!
 //! If all of your elements are the same height, see [`crate::UniformList`] for a simpler API
-
 use crate::{
-    AnyElement, App, AppContext, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges,
-    Element, EntityId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    IntoElement, Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style,
-    StyleRefinement, Styled, Window, point, px, size,
+    AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
+    FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
+    Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
+    Window, context::AppContextEntity, point, px, size,
 };
 use collections::VecDeque;
 use refineable::Refineable as _;
@@ -596,7 +595,7 @@ impl ListState {
 
     /// Scroll the list to the very end (past the last item).
     ///
-    /// Unlike [`scroll_to_reveal_item`], this uses the total item count as the
+    /// Unlike [`scroll_to_reveal_item`](Self::scroll_to_reveal_item), this uses the total item count as the
     /// anchor, so the list's layout pass will walk backwards from the end and
     /// always show the bottom of the last item — even when that item is still
     /// growing (e.g. during streaming).
@@ -1753,9 +1752,9 @@ mod test {
     use std::rc::Rc;
 
     use crate::{
-        self as gpui, AppContext, Bounds, Context, Element, FollowMode, InteractiveElement,
-        IntoElement, ListState, Render, Styled, TestAppContext, Window, canvas, div, list, point,
-        px, size,
+        self as gpui, Bounds, Context, Element, FollowMode, InteractiveElement, IntoElement,
+        ListState, Render, Styled, TestAppContext, Window, canvas, context::AppContextEntity, div,
+        list, point, px, size,
     };
 
     #[gpui::test]

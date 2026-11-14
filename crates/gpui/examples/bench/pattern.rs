@@ -4,7 +4,7 @@
 mod example_support;
 
 use gpui::{
-    App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
+    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;

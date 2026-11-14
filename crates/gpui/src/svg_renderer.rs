@@ -1,6 +1,5 @@
 use crate::{
-    AssetRegistry, DevicePixels, IsZero, RenderImage, Result, SharedString, Size,
-    swap_rgba_pa_to_bgra,
+    App, DevicePixels, IsZero, RenderImage, Result, SharedString, Size, swap_rgba_pa_to_bgra,
 };
 use image::Frame;
 use resvg::tiny_skia::Pixmap;
@@ -91,7 +90,6 @@ pub struct RenderSvgParams {
 #[derive(Clone)]
 /// A struct holding everything necessary to render SVGs.
 pub struct SvgRenderer {
-    asset_registry: Arc<AssetRegistry>,
     usvg_options: Arc<usvg::Options<'static>>,
 }
 
@@ -120,9 +118,15 @@ impl From<f32> for SvgSize {
     }
 }
 
+impl Default for SvgRenderer {
+    fn default() -> Self {
+        Self::new(Box::new(|_, _| None))
+    }
+}
+
 impl SvgRenderer {
-    /// Creates a new SVG renderer with the provided asset source.
-    pub fn new(asset_registry: Arc<AssetRegistry>) -> Self {
+    /// Creates a boxed callback that is used to resolve usvg fonts, loading bundled fonts up-front from the App's assets database.
+    pub fn new_font_resolver(cx: &App) -> usvg::FontSelectionFn<'static> {
         static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
@@ -134,15 +138,28 @@ impl SvgRenderer {
         // of the system font database for code paths that never render SVGs
         // (e.g. tests).
         let enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>> = Arc::new(OnceLock::new());
-
         let default_font_resolver = usvg::FontResolver::default_font_selector();
-        let font_resolver = Box::new({
-            let asset_database = asset_registry.clone();
+
+        // pre-resolve bundled font paths to the asset binaries
+        let bundled_font_entries = bundled_font_paths()
+            .into_iter()
+            .filter_map(|path| {
+                let entry = cx.get_asset(path.into()).cloned();
+                entry.map(|entry| (path, entry))
+            })
+            .collect::<Vec<_>>();
+
+        Box::new({
             move |font: &usvg::Font, db: &mut Arc<usvg::fontdb::Database>| {
                 if db.is_empty() {
                     let fontdb = enriched_fontdb.get_or_init(|| {
                         let mut db = (**SYSTEM_FONT_DB).clone();
-                        load_bundled_fonts(&asset_database, &mut db);
+                        for (path, entry) in &bundled_font_entries {
+                            match entry.load() {
+                                Some(data) => db.load_font_data(data.into_owned()),
+                                None => log::warn!("Bundled font not found: {path}"),
+                            }
+                        }
                         fix_generic_font_families(&mut db);
                         Arc::new(db)
                     });
@@ -160,7 +177,11 @@ impl SvgRenderer {
                 db.query(&sans_query)
                     .or_else(|| db.faces().next().map(|f| f.id))
             }
-        });
+        })
+    }
+
+    /// Creates a new SVG renderer with the provided asset source.
+    pub fn new(font_resolver: usvg::FontSelectionFn<'static>) -> Self {
         let default_fallback_selection = usvg::FontResolver::default_fallback_selector();
         let fallback_selection = Box::new(
             move |ch: char, fonts: &[usvg::fontdb::ID], db: &mut Arc<usvg::fontdb::Database>| {
@@ -182,7 +203,6 @@ impl SvgRenderer {
             ..Default::default()
         };
         Self {
-            asset_registry,
             usvg_options: Arc::new(options),
         }
     }
@@ -235,33 +255,32 @@ impl SvgRenderer {
         &self,
         params: &RenderSvgParams,
         bytes: Option<&[u8]>,
+        cx: &App,
     ) -> Result<Option<(Size<DevicePixels>, Vec<u8>)>> {
         anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
 
-        let render_pixmap = |bytes| {
-            let pixmap = self.render_pixmap(bytes, SvgSize::Size(params.size))?;
-
-            // Convert the pixmap's pixels into an alpha mask.
-            let size = Size::new(
-                DevicePixels(pixmap.width() as i32),
-                DevicePixels(pixmap.height() as i32),
-            );
-            let alpha_mask = pixmap
-                .pixels()
-                .iter()
-                .map(|p| p.alpha())
-                .collect::<Vec<_>>();
-
-            Ok(Some((size, alpha_mask)))
-        };
-
-        if let Some(bytes) = bytes {
-            render_pixmap(bytes)
-        } else if let Some(bytes) = self.asset_registry.load(&params.path) {
-            render_pixmap(&bytes)
-        } else {
-            Ok(None)
+        let mut bytes = bytes.map(|bytes| std::borrow::Cow::Borrowed(bytes));
+        if bytes.is_none() {
+            let entry = cx.get_asset(params.path.clone());
+            bytes = entry.map(|entry| entry.load()).flatten();
         }
+        let Some(bytes) = bytes else { return Ok(None) };
+        let bytes = bytes.as_ref();
+
+        let pixmap = self.render_pixmap(bytes, SvgSize::Size(params.size))?;
+
+        // Convert the pixmap's pixels into an alpha mask.
+        let size = Size::new(
+            DevicePixels(pixmap.width() as i32),
+            DevicePixels(pixmap.height() as i32),
+        );
+        let alpha_mask = pixmap
+            .pixels()
+            .iter()
+            .map(|p| p.alpha())
+            .collect::<Vec<_>>();
+
+        Ok(Some((size, alpha_mask)))
     }
 
     fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
@@ -309,17 +328,11 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
     Ok(pixmap)
 }
 
-fn load_bundled_fonts(asset_database: &AssetRegistry, db: &mut usvg::fontdb::Database) {
-    let font_paths = [
+fn bundled_font_paths() -> [&'static str; 2] {
+    [
         "fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf",
         "fonts/lilex/Lilex-Regular.ttf",
-    ];
-    for path in font_paths {
-        match asset_database.load(path) {
-            Some(data) => db.load_font_data(data.into_owned()),
-            None => log::warn!("Bundled font not found: {path}"),
-        }
-    }
+    ]
 }
 
 // fontdb defaults generic families to Microsoft fonts ("Arial", "Times New Roman")
@@ -362,7 +375,7 @@ mod tests {
 
     #[test]
     fn renders_parsed_svg_at_requested_size() -> Result<()> {
-        let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
+        let renderer = SvgRenderer::default();
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
@@ -375,7 +388,7 @@ mod tests {
 
     #[test]
     fn preserves_aspect_ratio_for_width_constrained_size() -> Result<()> {
-        let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
+        let renderer = SvgRenderer::default();
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;

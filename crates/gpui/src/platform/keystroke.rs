@@ -113,7 +113,7 @@ impl Keystroke {
     }
 
     /// key syntax is:
-    /// [secondary-][ctrl-][alt-][shift-][cmd-][fn-]key[->key_char]
+    /// `[secondary-][ctrl-][alt-][shift-][cmd-][fn-]key[->key_char]`
     /// key_char syntax is only used for generating test events,
     /// secondary means "cmd" on macOS and "ctrl" on other platforms
     /// when matching a key with an key_char set will be matched without it.

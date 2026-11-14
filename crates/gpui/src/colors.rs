@@ -1,4 +1,4 @@
-use crate::{App, Global, Window, WindowAppearance, rgb};
+use crate::{App, Window, WindowAppearance, rgb};
 use palette::rgb::Rgba;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -7,6 +7,9 @@ use std::sync::Arc;
 ///
 /// These are used for styling base components, examples and more.
 #[derive(Clone, Debug)]
+#[deprecated(
+    note = "migrating to entity-based globals. replaced by App::insert_color / App::get_color"
+)]
 pub struct Colors {
     /// Text color
     pub text: Rgba,
@@ -26,12 +29,14 @@ pub struct Colors {
     pub container: Rgba,
 }
 
+#[allow(deprecated)]
 impl Default for Colors {
     fn default() -> Self {
         Self::light()
     }
 }
 
+#[allow(deprecated)]
 impl Colors {
     /// Returns the default colors for the given window appearance.
     pub fn for_appearance(window: &Window) -> Self {
@@ -77,8 +82,13 @@ impl Colors {
 
 /// Get [Colors] from the global state
 #[derive(Clone, Debug)]
+#[deprecated(
+    note = "migrating to entity-based globals. replaced by App::insert_color / App::get_color"
+)]
+#[allow(deprecated)]
 pub struct GlobalColors(pub Arc<Colors>);
 
+#[allow(deprecated)]
 impl Deref for GlobalColors {
     type Target = Arc<Colors>;
 
@@ -87,14 +97,18 @@ impl Deref for GlobalColors {
     }
 }
 
-impl Global for GlobalColors {}
+#[allow(deprecated)]
+impl crate::Global for GlobalColors {}
 
 /// Implement this trait to allow global [Colors] access via `cx.default_colors()`.
+#[deprecated(note = "replaced by global entity color api")]
+#[allow(deprecated)]
 pub trait DefaultColors {
     /// Returns the default [`Colors`]
     fn default_colors(&self) -> &Arc<Colors>;
 }
 
+#[allow(deprecated)]
 impl DefaultColors for App {
     fn default_colors(&self) -> &Arc<Colors> {
         &self.global::<GlobalColors>().0

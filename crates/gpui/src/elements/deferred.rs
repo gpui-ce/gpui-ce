@@ -1,6 +1,6 @@
 use crate::{
     AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, Window,
+    IntoElement, LayoutId, Pixels, Window, context::*,
 };
 
 /// Builds a `Deferred` element, which delays the layout and paint of its child.
@@ -15,7 +15,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 /// An element which delays the painting of its child until after all of
 /// its ancestors, while keeping its layout as part of the current element tree.
 ///
-/// Per [`Window::prepaint_deferred_draws`], deferred elements causing additional deferred elements
+/// Per `Window::prepaint_deferred_draws`, deferred elements causing additional deferred elements
 /// should be constrained to limited circumstances and will stop processing after some depth
 /// (otherwise the renderer would be subject to an infinite loop when processing deferred draws).
 #[derive(derive_setters::Setters)]
@@ -135,16 +135,17 @@ pub(crate) struct DeferredPriorityStackCache(Vec<usize>);
 impl crate::Global for DeferredPriorityStackCache {}
 impl DeferredPriorityStackCache {
     pub(crate) fn push(priority: usize, cx: &mut App) {
-        cx.default_global::<Self>().0.push(priority);
+        let entity = cx.get_global_or_insert_default::<Self>();
+        entity.as_mut(cx).0.push(priority);
     }
 
     pub(crate) fn pop(cx: &mut App) {
-        cx.default_global::<Self>().0.pop();
+        let entity = cx.get_global_or_insert_default::<Self>();
+        entity.as_mut(cx).0.pop();
     }
 
     fn current_depth(cx: &App) -> Option<usize> {
-        let cache = cx.try_global::<Self>()?;
-        cache.0.last().copied()
+        cx.try_read_global::<Self>()?.0.last().copied()
     }
 }
 

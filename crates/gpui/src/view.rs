@@ -1,8 +1,8 @@
 use crate::{
-    AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
-    Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
-    Pixels, PrepaintStateIndex, Render, RenderOnce, ResolvedDirection, Style, StyleRefinement,
-    TextStyle, UnicodeBidi, WeakEntity,
+    AnyElement, AnyEntity, AnyWeakEntity, App, AsEntityId, Bounds, ContentMask, Context, Element,
+    ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
+    PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, ResolvedDirection, Style,
+    StyleRefinement, TextStyle, UnicodeBidi, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -60,6 +60,12 @@ impl<V: Render> From<Entity<V>> for AnyView {
     }
 }
 
+impl AsEntityId for AnyView {
+    fn entity_id(&self) -> EntityId {
+        self.entity.entity_id()
+    }
+}
+
 impl AnyView {
     /// Returns this view as an element that reuses its last frame's output, laid out at `style`.
     ///
@@ -100,11 +106,6 @@ impl AnyView {
     /// Returns the [`TypeId`] of the view's type.
     pub fn entity_type(&self) -> TypeId {
         self.entity.entity_type
-    }
-
-    /// Returns the [`EntityId`] of the entity that backs this view.
-    pub fn entity_id(&self) -> EntityId {
-        self.entity.entity_id()
     }
 }
 
@@ -152,6 +153,12 @@ impl IntoElement for AnyView {
 pub struct AnyWeakView {
     entity: AnyWeakEntity,
     render: fn(&AnyView, &mut Window, &mut App) -> AnyElement,
+}
+
+impl AsEntityId for AnyWeakView {
+    fn entity_id(&self) -> EntityId {
+        self.entity.entity_id()
+    }
 }
 
 impl AnyWeakView {
