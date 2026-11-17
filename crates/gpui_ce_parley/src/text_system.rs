@@ -27,6 +27,7 @@ use parley::{
 use skrifa::instance::NormalizedCoord;
 use std::{
     borrow::Cow,
+    cmp::Reverse,
     collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
     ops::Range,
@@ -219,6 +220,32 @@ struct SourceMap {
 }
 
 impl SourceMap {
+    fn identity(len: usize) -> Self {
+        Self {
+            source_to_backend: (0..=len).collect(),
+            backend_to_source: (0..=len).collect(),
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Reserved for composing preparation stages.")
+    )]
+    fn then(&self, next: &Self) -> Self {
+        Self {
+            source_to_backend: self
+                .source_to_backend
+                .iter()
+                .map(|idx| next.backend_index(*idx))
+                .collect(),
+            backend_to_source: next
+                .backend_to_source
+                .iter()
+                .map(|idx| self.source_index(*idx))
+                .collect(),
+        }
+    }
+
     fn source_index(&self, backend_idx: usize) -> usize {
         self.backend_to_source
             .get(backend_idx)
@@ -253,6 +280,41 @@ impl SourceMap {
 
     fn backend_range(&self, range: Range<usize>) -> Range<usize> {
         self.backend_index(range.start)..self.backend_index(range.end)
+    }
+
+    fn remap_runs(&self, text: &str, source_runs: &[TextRun]) -> (Vec<TextRun>, Vec<usize>) {
+        let last_source_byte = self.source_to_backend.len().saturating_sub(2);
+        let mut source_end = 0;
+        let mut backend_end = 0;
+
+        source_runs
+            .iter()
+            .enumerate()
+            .filter_map(|(run_idx, run)| {
+                source_end += run.len;
+                let start = backend_end;
+
+                // Clamp trailing controls to the final source byte, as for leading controls.
+                backend_end = if run_idx + 1 == source_runs.len() {
+                    text.len()
+                } else {
+                    text.ceil_char_boundary(
+                        self.backend_to_source[..text.len()]
+                            .partition_point(|idx| (*idx).min(last_source_byte) < source_end),
+                    )
+                };
+
+                (backend_end > start).then(|| {
+                    (
+                        TextRun {
+                            len: backend_end - start,
+                            ..run.clone()
+                        },
+                        run_idx,
+                    )
+                })
+            })
+            .unzip()
     }
 }
 
@@ -496,41 +558,57 @@ struct PreparedBidiText {
     map: SourceMap,
 }
 
-#[derive(Clone)]
-struct BidiControls {
-    start: usize,
-    end: usize,
-    open: Vec<char>,
-    close: Vec<char>,
+impl PreparedBidiText {
+    fn remap(
+        text: String,
+        map: SourceMap,
+        source_runs: &[TextRun],
+        text_styles: &[InlineTextStyle],
+        inline_boxes: &[InlineBoxRequest],
+    ) -> Self {
+        let (runs, run_sources) = map.remap_runs(&text, source_runs);
+
+        Self {
+            text,
+            runs,
+            run_sources,
+            text_styles: text_styles
+                .iter()
+                .map(|style| InlineTextStyle {
+                    range: map.backend_range(style.range.clone()),
+                    ..style.clone()
+                })
+                .collect(),
+            inline_boxes: inline_boxes
+                .iter()
+                .map(|inline_box| InlineBoxRequest {
+                    index: map.backend_index(inline_box.index),
+                    ..*inline_box
+                })
+                .collect(),
+            map,
+        }
+    }
 }
 
 fn controls_for_scope(
-    range: Range<usize>,
     direction: ResolvedDirection,
     unicode_bidi: UnicodeBidi,
-) -> Option<BidiControls> {
-    let (directional_embed, directional_isolate, directional_override) = match direction {
-        ResolvedDirection::LeftToRight => ('\u{202a}', '\u{2066}', '\u{202d}'),
-        ResolvedDirection::RightToLeft => ('\u{202b}', '\u{2067}', '\u{202e}'),
-    };
-    let (open, close) = match unicode_bidi {
+) -> Option<(&'static str, &'static str)> {
+    let (ltr, rtl, close) = match unicode_bidi {
         UnicodeBidi::Normal => return None,
-        UnicodeBidi::Embed => (vec![directional_embed], vec!['\u{202c}']),
-        UnicodeBidi::Isolate => (vec![directional_isolate], vec!['\u{2069}']),
-        UnicodeBidi::BidiOverride => (vec![directional_override], vec!['\u{202c}']),
-        UnicodeBidi::IsolateOverride => (
-            vec![directional_isolate, directional_override],
-            vec!['\u{202c}', '\u{2069}'],
-        ),
-        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+        UnicodeBidi::Embed => ("\u{202a}", "\u{202b}", "\u{202c}"),
+        UnicodeBidi::Isolate => ("\u{2066}", "\u{2067}", "\u{2069}"),
+        UnicodeBidi::BidiOverride => ("\u{202d}", "\u{202e}", "\u{202c}"),
+
+        UnicodeBidi::IsolateOverride => {
+            ("\u{2066}\u{202d}", "\u{2067}\u{202e}", "\u{202c}\u{2069}")
+        }
+
+        UnicodeBidi::Plaintext => ("\u{2068}", "\u{2068}", "\u{2069}"),
     };
 
-    Some(BidiControls {
-        start: range.start,
-        end: range.end,
-        open,
-        close,
-    })
+    Some((if direction.is_rtl() { rtl } else { ltr }, close))
 }
 
 fn prepare_bidi_text(
@@ -547,159 +625,88 @@ fn prepare_bidi_text(
         ParagraphDirection::LeftToRight => Some(ResolvedDirection::LeftToRight),
         ParagraphDirection::RightToLeft => Some(ResolvedDirection::RightToLeft),
     };
-    let mut controls = bidi_scopes
+
+    let root_scope = root_direction.map(|direction| InlineBidiScope {
+        range: 0..text.len(),
+        direction,
+        unicode_bidi,
+    });
+
+    // Opens nest outermost first. Nonempty closes precede opens, and empty closes follow.
+    let mut insertions = bidi_scopes
         .iter()
         .filter(|scope| text.contains_range(&scope.range))
-        .filter_map(|scope| {
-            controls_for_scope(scope.range.clone(), scope.direction, scope.unicode_bidi)
+        .chain(root_scope.iter())
+        .enumerate()
+        .filter_map(|(scope_idx, scope)| {
+            controls_for_scope(scope.direction, scope.unicode_bidi)
+                .map(|controls| (scope_idx, &scope.range, controls))
+        })
+        .flat_map(|(scope_idx, range, (open, close))| {
+            let closing_phase = if range.end == text.len() || range.is_empty() {
+                2
+            } else {
+                0
+            };
+
+            let closing_order = if range.is_empty() && range.end < text.len() {
+                scope_idx
+            } else {
+                usize::MAX - scope_idx
+            };
+
+            [
+                (range.start, 1, Reverse(range.end), scope_idx, open),
+                (
+                    range.end,
+                    closing_phase,
+                    Reverse(range.start),
+                    closing_order,
+                    close,
+                ),
+            ]
         })
         .collect::<Vec<_>>();
 
-    if let Some(root_direction) = root_direction
-        && let Some(root) = controls_for_scope(0..text.len(), root_direction, unicode_bidi)
+    insertions.sort_by_key(|insertion| (insertion.0, insertion.1, insertion.2, insertion.3));
+
+    let mut prepared = match root_direction {
+        Some(ResolvedDirection::LeftToRight) => "\u{200e}",
+        Some(ResolvedDirection::RightToLeft) => "\u{200f}",
+        None => "",
+    }
+    .to_owned();
+
+    let mut map = SourceMap::identity(0);
+    map.source_to_backend[0] = prepared.len();
+    map.backend_to_source.resize(prepared.len() + 1, 0);
+
+    let mut source_start = 0;
+
+    for (source_idx, phase, _boundary, _order, control) in insertions
+        .into_iter()
+        .chain(std::iter::once((text.len(), 2, Reverse(0), 0, "")))
     {
-        controls.push(root);
-    }
+        let backend_start = prepared.len();
+        prepared.push_str(&text[source_start..source_idx]);
 
-    controls.sort_by_key(|scope| (scope.start, std::cmp::Reverse(scope.end)));
+        map.source_to_backend
+            .extend(backend_start + 1..=prepared.len());
 
-    let mut prepared = String::new();
-    let mut backend_to_source = vec![0];
-    let mut source_to_backend = vec![0; text.len() + 1];
+        map.backend_to_source.extend(source_start + 1..=source_idx);
+        prepared.push_str(control);
 
-    let append_synthetic = |character: char,
-                            source_idx: usize,
-                            prepared: &mut String,
-                            backend_to_source: &mut Vec<usize>| {
-        prepared.push(character);
-        backend_to_source.extend(std::iter::repeat_n(source_idx, character.len_utf8()));
-    };
+        map.backend_to_source
+            .extend(std::iter::repeat_n(source_idx, control.len()));
 
-    if let Some(root_direction) = root_direction {
-        let marker = match root_direction {
-            ResolvedDirection::LeftToRight => '\u{200e}',
-            ResolvedDirection::RightToLeft => '\u{200f}',
-        };
-        append_synthetic(marker, 0, &mut prepared, &mut backend_to_source);
-    }
-
-    for (source_idx, character) in text
-        .char_indices()
-        .chain(std::iter::once((text.len(), '\0')))
-    {
-        for scope in controls.iter().rev().filter(|scope| {
-            scope.start < scope.end && scope.end == source_idx && scope.end < text.len()
-        }) {
-            for control in &scope.close {
-                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
-            }
+        if phase <= 1 {
+            map.source_to_backend[source_idx] = prepared.len();
         }
 
-        for scope in controls.iter().filter(|scope| scope.start == source_idx) {
-            for control in &scope.open {
-                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
-            }
-        }
-
-        source_to_backend[source_idx] = prepared.len();
-
-        if source_idx == text.len() {
-            break;
-        }
-
-        for scope in controls
-            .iter()
-            .filter(|scope| scope.start == source_idx && scope.end == source_idx)
-        {
-            for control in &scope.close {
-                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
-            }
-        }
-
-        prepared.push(character);
-        for byte_offset in 1..=character.len_utf8() {
-            backend_to_source.push(source_idx + byte_offset);
-            source_to_backend[source_idx + byte_offset] =
-                prepared.len() - character.len_utf8() + byte_offset;
-        }
+        source_start = source_idx;
     }
 
-    for scope in controls
-        .iter()
-        .rev()
-        .filter(|scope| scope.end == text.len())
-    {
-        for control in &scope.close {
-            append_synthetic(*control, text.len(), &mut prepared, &mut backend_to_source);
-        }
-    }
-
-    let map = SourceMap {
-        source_to_backend,
-        backend_to_source,
-    };
-    let (runs, run_sources) = remap_runs(&prepared, &map, runs, text.len());
-    let text_styles = text_styles
-        .iter()
-        .map(|style| InlineTextStyle {
-            range: map.backend_range(style.range.clone()),
-            ..style.clone()
-        })
-        .collect();
-    let inline_boxes = inline_boxes
-        .iter()
-        .map(|inline_box| InlineBoxRequest {
-            index: map.backend_index(inline_box.index),
-            ..*inline_box
-        })
-        .collect();
-
-    PreparedBidiText {
-        text: prepared,
-        runs,
-        run_sources,
-        text_styles,
-        inline_boxes,
-        map,
-    }
-}
-
-fn remap_runs(
-    text: &str,
-    map: &SourceMap,
-    source_runs: &[TextRun],
-    source_len: usize,
-) -> (Vec<TextRun>, Vec<usize>) {
-    let mut run_ends = Vec::with_capacity(source_runs.len());
-    let mut end = 0;
-
-    for run in source_runs {
-        end += run.len;
-        run_ends.push(end);
-    }
-
-    let mut runs: Vec<TextRun> = Vec::new();
-    let mut run_sources = Vec::new();
-
-    for (backend_idx, character) in text.char_indices() {
-        let source_idx = map
-            .source_index(backend_idx)
-            .min(source_len.saturating_sub(1));
-        let source_run = run_ends
-            .partition_point(|run_end| *run_end <= source_idx)
-            .min(source_runs.len().saturating_sub(1));
-
-        if run_sources.last().copied() == Some(source_run) {
-            runs.last_mut().unwrap().len += character.len_utf8();
-        } else if let Some(run) = source_runs.get(source_run) {
-            let mut run = run.clone();
-            run.len = character.len_utf8();
-            runs.push(run);
-            run_sources.push(source_run);
-        }
-    }
-
-    (runs, run_sources)
+    PreparedBidiText::remap(prepared, map, runs, text_styles, inline_boxes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -757,6 +764,15 @@ struct ParleyLayoutResult {
     inline_lines: Vec<InlineVisualLine>,
     inline_boxes: Vec<PositionedInlineBox>,
     size: Size<Pixels>,
+}
+
+impl ParleyLayoutResult {
+    fn apply_source_runs(&mut self, runs: &[TextRun], sources: &[usize]) {
+        for fragment in &mut self.layout.paint_fragments {
+            fragment.source_run = sources[fragment.source_run];
+            fragment.style = PaintStyle::from(&runs[fragment.source_run]);
+        }
+    }
 }
 
 fn inline_alignment_offset(
@@ -1887,9 +1903,7 @@ impl ParleyTextSystem {
         };
 
         if let Some(mut result) = self.paragraph_result_cache.lock().get(&result_cache_key) {
-            for fragment in &mut result.layout.paint_fragments {
-                fragment.style = PaintStyle::from(&source_runs[fragment.source_run]);
-            }
+            result.apply_source_runs(source_runs, &prepared.run_sources);
 
             return Ok(result);
         }
@@ -2251,14 +2265,14 @@ impl ParleyTextSystem {
                 };
 
                 let start = px(glyph_run.offset()) - line_x;
-                let source_run = prepared.run_sources[glyph_run.style().brush.source_run];
+                let source_run = glyph_run.style().brush.source_run;
                 paint_fragments.push(PaintFragment {
                     source_run,
                     font_id,
                     font_size: px(run.font_size()),
                     glyphs,
                     x_range: start..start + px(glyph_run.advance()),
-                    style: PaintStyle::from(&source_runs[source_run]),
+                    style: PaintStyle::default(),
                     // Parley reports font metrics y-up (an underline below the
                     // baseline is negative); gpui adds these to `baseline_y` in
                     // y-down space, so flip them.
@@ -2343,15 +2357,19 @@ impl ParleyTextSystem {
             platform_layout,
         };
 
-        let result = ParleyLayoutResult {
+        let mut result = ParleyLayoutResult {
             layout: line_layout,
             inline_lines,
             inline_boxes: positioned_inline_boxes,
             size,
         };
+
+        // Keep prepared run indices in the cache, independent of authored empty runs.
         self.paragraph_result_cache
             .lock()
             .insert(result_cache_key, result.clone());
+
+        result.apply_source_runs(source_runs, &prepared.run_sources);
 
         Ok(result)
     }
@@ -3106,58 +3124,148 @@ mod tests {
     }
 
     #[test]
-    fn bidi_scope_controls_preserve_source_byte_indices() {
-        let system = test_system();
-        let text = "A אב B";
-        let hebrew = text.find('א').unwrap()..text.find('ב').unwrap() + 'ב'.len_utf8();
-        let runs = [text_run(text, "IBM Plex Sans")];
-        let scopes = [InlineBidiScope {
-            range: hebrew,
-            direction: ResolvedDirection::RightToLeft,
-            unicode_bidi: UnicodeBidi::IsolateOverride,
-        }];
-        let layout = system.layout_inline(InlineLayoutRequest {
-            text,
-            font_size: px(16.0),
-            runs: &runs,
-            boxes: &[],
-            text_styles: &[],
-            line_height: px(24.0),
-            text_metrics: InlineTextMetrics::default(),
-            options: TextLayoutOptions {
-                alignment_width: Some(px(240.0)),
-                direction: ParagraphDirection::LeftToRight,
-                ..Default::default()
-            },
-            bidi_scopes: &scopes,
-        });
+    fn source_maps_compose_multibyte_removal_and_inserted_controls() {
+        let source = "é  中";
+        let intermediate = "é 中";
 
-        assert_eq!(layout.layout.len, text.len());
-        assert_eq!(layout.layout.platform_layout.len(), text.len());
-        assert_eq!(
-            layout
-                .layout
-                .platform_layout
-                .logical_cluster_after(CaretPosition::attached_to_next_cluster(0)),
-            Some(0..1)
+        let first = SourceMap {
+            source_to_backend: vec![0, 1, 2, 3, 3, 4, 5, 6],
+            backend_to_source: vec![0, 1, 2, 4, 5, 6, 7],
+        };
+
+        let next = prepare_bidi_text(
+            intermediate,
+            &[text_run(intermediate, IBM_PLEX.family)],
+            &[],
+            &[],
+            ParagraphDirection::LeftToRight,
+            UnicodeBidi::Isolate,
+            &[],
         );
 
-        for (idx, _) in text
-            .char_indices()
-            .chain(std::iter::once((text.len(), '\0')))
-        {
-            let caret = layout
-                .layout
-                .platform_layout
-                .normalized_caret(CaretPosition::attached_to_next_cluster(idx));
-            assert!(caret.index <= text.len());
+        let composed = first.then(&next.map);
+
+        assert_eq!(composed.source_to_backend, [6, 7, 8, 9, 9, 10, 11, 12]);
+
+        assert_eq!(
+            composed.backend_to_source,
+            [0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 5, 6, 7, 7, 7, 7]
+        );
+
+        for map in [SourceMap::identity(0), composed.clone()] {
+            let source_identity = SourceMap::identity(map.source_to_backend.len() - 1);
+            let backend_identity = SourceMap::identity(map.backend_to_source.len() - 1);
+
+            assert_eq!(source_identity.then(&map), map);
+            assert_eq!(map.then(&backend_identity), map);
         }
 
-        let selection = layout
-            .layout
-            .platform_layout
-            .selection_bounds(0..text.len(), px(24.0));
-        assert!(!selection.is_empty());
+        assert_eq!(composed.backend_index(usize::MAX), 12);
+        assert_eq!(composed.source_index(usize::MAX), source.len());
+
+        let runs = ["é", " ", " ", "中"].map(|text| text_run(text, IBM_PLEX.family));
+
+        let mut styles = [InlineTextStyle {
+            range: 4..source.len(),
+            font_size: px(20.),
+            line_height: px(28.),
+        }];
+
+        let mut boxes = [InlineBoxRequest {
+            id: 42,
+            index: 4,
+            size: size(px(12.), px(16.)),
+            vertical_align: VerticalAlign::Baseline,
+        }];
+
+        let prepared = PreparedBidiText::remap(next.text, composed, &runs, &styles, &boxes);
+
+        assert_eq!(prepared.run_sources, [0, 1, 3]);
+
+        assert_eq!(
+            prepared.runs.iter().map(|run| run.len).collect::<Vec<_>>(),
+            [8, 1, 6]
+        );
+
+        styles[0].range = 9..12;
+        boxes[0].index = 9;
+        assert_eq!(prepared.text_styles, styles);
+        assert_eq!(prepared.inline_boxes, boxes);
+    }
+
+    #[test]
+    fn bidi_scope_overrides_reverse_visual_order_and_preserve_source_indices() {
+        let system = test_system();
+
+        for (text, range, alignment_width) in
+            [("A אב B", 2..6, Some(px(240.0))), ("abc", 0..3, None)]
+        {
+            let runs = [text_run(text, IBM_PLEX.family)];
+
+            let scopes = [InlineBidiScope {
+                range: range.clone(),
+                direction: ResolvedDirection::RightToLeft,
+                unicode_bidi: UnicodeBidi::IsolateOverride,
+            }];
+
+            let layout = system.layout_inline(InlineLayoutRequest {
+                text,
+                font_size: px(16.0),
+                runs: &runs,
+                boxes: &[],
+                text_styles: &[],
+                line_height: px(24.0),
+                text_metrics: InlineTextMetrics::default(),
+                options: TextLayoutOptions {
+                    alignment_width,
+                    direction: ParagraphDirection::LeftToRight,
+                    ..Default::default()
+                },
+                bidi_scopes: &scopes,
+            });
+
+            let native = &layout.layout.platform_layout;
+            assert_eq!(layout.layout.len, text.len(), "{text:?}");
+            assert_eq!(native.len(), text.len(), "{text:?}");
+
+            assert_eq!(
+                native.logical_cluster_after(CaretPosition::attached_to_next_cluster(0)),
+                Some(0..1),
+                "{text:?}"
+            );
+
+            for (idx, _character) in text
+                .char_indices()
+                .chain(std::iter::once((text.len(), '\0')))
+            {
+                let caret = native.normalized_caret(CaretPosition::attached_to_next_cluster(idx));
+                assert!(text.is_char_boundary(caret.index), "{text:?}: {caret:?}");
+            }
+
+            assert!(
+                !native.selection_bounds(0..text.len(), px(24.0)).is_empty(),
+                "{text:?}"
+            );
+
+            let positions = text[range.clone()]
+                .char_indices()
+                .map(|(idx, character)| {
+                    let start = range.start + idx;
+
+                    native
+                        .inline_geometry(start..start + character.len_utf8())
+                        .unwrap()[0]
+                        .bounds
+                        .origin
+                        .x
+                })
+                .collect::<Vec<_>>();
+
+            assert!(
+                positions.windows(2).all(|pair| pair[0] > pair[1]),
+                "{text:?}: {positions:?}"
+            );
+        }
     }
 
     #[test]
@@ -3188,45 +3296,6 @@ mod tests {
         assert_eq!(explicit.platform_layout.len(), 1);
         assert_eq!(authored_control.len, source.len());
         assert_eq!(authored_control.platform_layout.len(), source.len());
-    }
-
-    #[test]
-    fn rtl_bidi_override_reverses_visual_cluster_positions() {
-        let system = test_system();
-        let text = "abc";
-        let runs = [text_run(text, "IBM Plex Sans")];
-        let scopes = [InlineBidiScope {
-            range: 0..text.len(),
-            direction: ResolvedDirection::RightToLeft,
-            unicode_bidi: UnicodeBidi::IsolateOverride,
-        }];
-        let layout = system.layout_inline(InlineLayoutRequest {
-            text,
-            font_size: px(16.0),
-            runs: &runs,
-            boxes: &[],
-            text_styles: &[],
-            line_height: px(24.0),
-            text_metrics: InlineTextMetrics::default(),
-            options: TextLayoutOptions {
-                direction: ParagraphDirection::LeftToRight,
-                ..Default::default()
-            },
-            bidi_scopes: &scopes,
-        });
-        let positions = [0..1, 1..2, 2..3].map(|range| {
-            layout
-                .layout
-                .platform_layout
-                .inline_geometry(range)
-                .unwrap()[0]
-                .bounds
-                .origin
-                .x
-        });
-
-        assert!(positions[0] > positions[1]);
-        assert!(positions[1] > positions[2]);
     }
 
     #[test]
@@ -4395,45 +4464,76 @@ mod tests {
         }
     }
 
+    fn paint_geometry(layout: &LineLayout, runs: &[TextRun]) -> Vec<(Range<usize>, PaintFragment)> {
+        let ranges = run_ranges(runs);
+        let mut painted = vec![false; runs.len()];
+
+        let geometry = layout
+            .paint_fragments
+            .iter()
+            .map(|fragment| {
+                let run_idx = fragment.source_run;
+
+                assert_eq!(
+                    fragment.style,
+                    PaintStyle::from(&runs[run_idx]),
+                    "paint for run {run_idx}"
+                );
+
+                painted[run_idx] = true;
+
+                (
+                    ranges[run_idx].clone(),
+                    PaintFragment {
+                        source_run: 0,
+                        style: PaintStyle::default(),
+                        ..fragment.clone()
+                    },
+                )
+            })
+            .collect();
+
+        for (run_idx, run) in runs.iter().enumerate() {
+            assert_eq!(painted[run_idx], run.len > 0, "authored run {run_idx}");
+        }
+
+        geometry
+    }
+
     #[test]
     fn paint_changes_preserve_geometry_cache_identity_and_authored_run_boundaries() {
         let system = test_system();
         let text = "office café العربية";
-        let first_end = "office ".len();
-        let second_end = first_end + "café ".len();
-        let mut first_font = font(SOURCE_SERIF.family);
-        first_font.features = GpuiFontFeatures::disable_ligatures();
-        first_font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+
+        let mut base_runs =
+            ["office ", "café ", "العربية"].map(|text| text_run(text, IBM_PLEX.family));
+
+        base_runs[0].font = font(SOURCE_SERIF.family);
+        base_runs[0].font.features = GpuiFontFeatures::disable_ligatures();
+
+        base_runs[0].font.fallbacks = Some(FontFallbacks::from_fonts(vec![
             IBM_PLEX.family.into(),
             NOTO_COLOR_EMOJI.family.into(),
         ]));
-        let base_runs = vec![
-            TextRun {
-                len: first_end,
-                font: first_font,
-                letter_spacing: Some(px(0.4)),
-                color: hsla(0.0, 0.8, 0.4, 1.0),
-                ..Default::default()
-            },
-            TextRun {
-                len: second_end - first_end,
-                font: font(IBM_PLEX.family).bold(),
-                color: hsla(0.35, 0.7, 0.35, 1.0),
-                ..Default::default()
-            },
-            TextRun {
-                len: text.len() - second_end,
-                font: font(IBM_PLEX.family),
-                color: hsla(0.6, 0.8, 0.45, 1.0),
-                ..Default::default()
-            },
-        ];
+
+        base_runs[0].letter_spacing = Some(px(0.4));
+        base_runs[1].font = base_runs[1].font.clone().bold();
+
         let mut left = text_run("left ", NOTO_SANS.family);
         left.font.width = gpui::FontWidth::CONDENSED;
         let right = text_run("right", IBM_PLEX.family);
 
         for (name, text, original_runs, font_size) in [
-            ("styled document", text, base_runs, px(20.)),
+            ("styled document", text, base_runs.to_vec(), px(20.)),
+            (
+                "multibyte bidi controls",
+                "café  \tאב 🦀",
+                vec![
+                    text_run("café  \t", IBM_PLEX.family),
+                    text_run("אב 🦀", IBM_PLEX.family),
+                ],
+                px(18.),
+            ),
             (
                 "identical paint boundaries",
                 "left right",
@@ -4444,57 +4544,69 @@ mod tests {
             let mut decorated_runs = original_runs.clone();
 
             for (idx, run) in decorated_runs.iter_mut().enumerate() {
-                run.color = hsla(idx as f32 * 0.3, 0.8, 0.4, 1.0);
+                run.color = hsla(idx as f32 * 0.3 + 0.1, 0.8, 0.4, 1.0);
             }
 
             decorated_runs[0].background_color = Some(hsla(0.1, 0.5, 0.5, 0.3));
+
             decorated_runs[0].underline = Some(UnderlineStyle {
                 thickness: px(1.5),
                 color: None,
                 wavy: true,
             });
+
             decorated_runs[1].strikethrough = Some(StrikethroughStyle {
                 thickness: px(1.0),
                 color: None,
             });
 
-            let original = layout_line(&system, text, font_size, &original_runs);
-            let decorated = layout_line(&system, text, font_size, &decorated_runs);
-            let geometry = |layout: &LineLayout| {
-                layout
-                    .paint_fragments
-                    .iter()
-                    .flat_map(|fragment| {
-                        fragment.glyphs.iter().map(move |glyph| {
-                            (
-                                fragment.source_run,
-                                fragment.font_id,
-                                glyph.id,
-                                glyph.position,
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(original.width, decorated.width, "{name}");
-            assert_eq!(geometry(&original), geometry(&decorated), "{name}");
-            assert!(
-                Arc::ptr_eq(&original.platform_layout, &decorated.platform_layout),
-                "{name}"
-            );
+            let empty = text_run("", SOURCE_SERIF.family);
 
-            for (idx, run) in decorated_runs.iter().enumerate() {
-                let fragments = decorated
-                    .paint_fragments
-                    .iter()
-                    .filter(|fragment| fragment.source_run == idx)
-                    .collect::<Vec<_>>();
-                assert!(!fragments.is_empty(), "{name}: missing authored run {idx}");
-                assert!(
-                    fragments
-                        .iter()
-                        .all(|fragment| fragment.style == PaintStyle::from(run)),
-                    "{name}: lost paint style for run {idx}"
+            let padded_runs = decorated_runs
+                .iter()
+                .flat_map(|run| [empty.clone(), empty.clone(), run.clone()])
+                .chain(std::iter::once(empty.clone()))
+                .collect::<Vec<_>>();
+
+            let variants = [padded_runs, original_runs, decorated_runs];
+            let shaped_paragraphs = system.paragraph_cache.lock().entries.len();
+            let cached_results = system.paragraph_result_cache.lock().entries.len();
+
+            for (width_idx, wrap_width) in [None, Some(px(75.))].into_iter().enumerate() {
+                let options = TextLayoutOptions {
+                    direction: ParagraphDirection::LeftToRight,
+                    unicode_bidi: UnicodeBidi::Isolate,
+                    text_align: TextAlign::Left,
+                    wrap_width,
+                    ..Default::default()
+                };
+
+                // Change authored boundaries when the new width reuses shaping.
+                let original =
+                    layout_with_options(&system, text, font_size, &variants[width_idx], options);
+
+                let expected_geometry = paint_geometry(&original, &variants[width_idx]);
+
+                for runs in variants.iter().cycle().take(6) {
+                    let layout = layout_with_options(&system, text, font_size, runs, options);
+
+                    assert_eq!(layout.width, original.width, "{name}");
+                    assert_eq!(paint_geometry(&layout, runs), expected_geometry, "{name}");
+
+                    assert!(
+                        Arc::ptr_eq(&layout.platform_layout, &original.platform_layout),
+                        "{name}"
+                    );
+                }
+
+                assert_eq!(
+                    system.paragraph_cache.lock().entries.len(),
+                    shaped_paragraphs + 1
+                );
+
+                assert_eq!(
+                    system.paragraph_result_cache.lock().entries.len(),
+                    cached_results + width_idx + 1
                 );
             }
         }
