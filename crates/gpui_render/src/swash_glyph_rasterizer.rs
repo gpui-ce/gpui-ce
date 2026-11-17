@@ -1,10 +1,9 @@
 use anyhow::{Context as _, Result, bail};
 use gpui::{
-    Bounds, ColorGlyphClassifier, ColorGlyphKind, FontId, ForegroundDependency, GlyphId,
-    GlyphRasterizer, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect, RasterFace,
-    RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, apply_pixel_opacity,
-    multiply_alpha, point, size, swap_rgba_pa_to_bgra,
+    Bounds, ColorGlyphClassifier, ColorGlyphKind, ForegroundDependency, GlyphId, GlyphRasterizer,
+    GlyphRenderMode, PreparedRasterStyle, RasterColorEffect, RasterFace, RasterStyleRequest,
+    RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y, apply_pixel_opacity, multiply_alpha, point, size, swap_rgba_pa_to_bgra,
 };
 use skrifa::{
     FontRef, GlyphId as SkrifaGlyphId, MetadataProvider as _, Tag,
@@ -13,7 +12,6 @@ use skrifa::{
     outline::{DrawSettings, OutlinePen},
     raw::TableProvider as _,
 };
-use std::collections::{HashMap, hash_map::Entry};
 use swash::{
     FontRef as SwashFontRef,
     scale::{
@@ -237,58 +235,6 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
     }
 }
 
-/// Uses Swash for CBDT-only faces and a platform rasterizer for every other face.
-pub struct BitmapFallbackGlyphRasterizer<Native> {
-    native: Native,
-    portable: SwashGlyphRasterizer,
-    portable_faces: HashMap<FontId, bool>,
-}
-
-impl<Native> BitmapFallbackGlyphRasterizer<Native> {
-    /// Adds portable CBDT support to a platform glyph rasterizer.
-    pub fn new(native: Native) -> Self {
-        Self {
-            native,
-            portable: SwashGlyphRasterizer::default(),
-            portable_faces: HashMap::default(),
-        }
-    }
-}
-
-impl<Native> GlyphRasterizer for BitmapFallbackGlyphRasterizer<Native>
-where
-    Native: GlyphRasterizer,
-{
-    fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-        kind == ColorGlyphKind::Cbdt || self.native.supports_color_glyph(kind)
-    }
-
-    fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
-        self.native.prepare_style(request)
-    }
-
-    fn rasterize(
-        &mut self,
-        face: RasterFace<'_>,
-        params: &RenderGlyphParams,
-    ) -> Result<RasterizedGlyph> {
-        let use_portable = match self.portable_faces.entry(face.font_id) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => *entry.insert(requires_portable_bitmap_rasterization(&face)?),
-        };
-
-        if use_portable {
-            return self.portable.rasterize(face, params);
-        }
-
-        self.native.rasterize(face, params)
-    }
-
-    fn recommended_mode(&self) -> TextRenderingMode {
-        self.native.recommended_mode()
-    }
-}
-
 #[derive(Default)]
 struct DrawablePathPen {
     has_segments: bool,
@@ -439,17 +385,6 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
     }
 
     Ok(true)
-}
-
-fn requires_portable_bitmap_rasterization(face: &RasterFace<'_>) -> Result<bool> {
-    let font = FontRef::from_index(face.data(), face.face_index)
-        .context("cannot inspect color tables in the selected face")?;
-
-    let has_table = |tag| font.table_data(Tag::new(tag)).is_some();
-
-    Ok(has_table(b"CBDT")
-        && has_table(b"CBLC")
-        && ![b"COLR", b"sbix", b"SVG "].into_iter().any(has_table))
 }
 
 #[cfg(test)]
@@ -607,91 +542,6 @@ mod tests {
             visible,
             "{case}: missing visible {expected_format:?} pixels"
         );
-    }
-
-    #[derive(Default)]
-    struct RecordingNativeRasterizer {
-        raster_calls: usize,
-    }
-
-    impl GlyphRasterizer for RecordingNativeRasterizer {
-        fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-            kind == ColorGlyphKind::ColrV0
-        }
-
-        fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
-            PreparedRasterStyle::independent(request.requested_mode)
-        }
-
-        fn rasterize(
-            &mut self,
-            _face: RasterFace<'_>,
-            params: &RenderGlyphParams,
-        ) -> Result<RasterizedGlyph> {
-            self.raster_calls += 1;
-
-            Ok(RasterizedGlyph::empty(
-                params.raster_style.mode.rasterized_format(),
-            ))
-        }
-    }
-
-    #[test]
-    fn bitmap_fallback_routes_complete_cbdt_faces_and_preserves_native_faces() {
-        let mut rasterizer =
-            BitmapFallbackGlyphRasterizer::new(RecordingNativeRasterizer::default());
-
-        assert!(rasterizer.supports_color_glyph(ColorGlyphKind::Cbdt));
-        assert!(rasterizer.supports_color_glyph(ColorGlyphKind::ColrV0));
-        assert!(!rasterizer.supports_color_glyph(ColorGlyphKind::Sbix));
-
-        for (idx, (fixture, characters, mode, native_calls)) in [
-            (NOTO_COLOR_EMOJI, "😀 ", Color, 0),
-            (SOURCE_SERIF, "A", Grayscale, 1),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let source = FontDataBlob::from(fixture.data.to_vec());
-            let font = FontRef::new(source.as_ref()).unwrap();
-            let face = RasterFace {
-                font_id: FontId(idx + 1),
-                ..raster_face(&source, 0)
-            };
-
-            for character in characters.chars() {
-                let glyph_id = GlyphId(font.charmap().map(character).unwrap().to_u32());
-                let params = raster_params(face.font_id, glyph_id, mode);
-
-                if character == '😀' {
-                    assert_eq!(
-                        rasterizer
-                            .requested_color_glyph_kind(&face, &params)
-                            .unwrap(),
-                        Some(ColorGlyphKind::Cbdt)
-                    );
-
-                    for mode in [Grayscale, Subpixel] {
-                        let request = raster_params(face.font_id, glyph_id, mode);
-
-                        assert_eq!(
-                            rasterizer
-                                .requested_color_glyph_kind(&face, &request)
-                                .unwrap(),
-                            None
-                        );
-                    }
-                }
-
-                rasterizer.rasterize(face, &params).unwrap();
-
-                assert_eq!(
-                    rasterizer.native.raster_calls, native_calls,
-                    "{} {character:?} {mode:?}",
-                    fixture.family
-                );
-            }
-        }
     }
 
     #[test]
