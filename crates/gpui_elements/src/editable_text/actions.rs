@@ -103,14 +103,14 @@ gpui::actions!(
 /// Creates the default keystroke bindings for editable-text actions.
 /// See [`ActionBindingCollection`](gpui::ActionBindingCollection) for how bindings are built.
 ///
-/// On macOS, Command-arrow bindings handle line and document navigation. On Linux and
-/// Windows, Home and End handle line navigation, while Ctrl+Home and Ctrl+End handle
-/// document navigation. Enter and Tab are bound on every platform, but single-line fields
-/// propagate them to the parent view.
+/// On macOS, Command-arrow bindings handle line and document navigation. On other targets,
+/// Home and End handle line navigation, while Ctrl+Home and Ctrl+End handle document navigation.
+/// Enter and Tab are bound on every platform, but single-line fields propagate them to the
+/// parent view.
 /// In the bindings below, `secondary` means Command on macOS and Control on
 /// other platforms.
 ///
-/// | Action                | All         | Linux & Windows           | macOS           |
+/// | Action                | All         | Other targets             | macOS           |
 /// | --------------------- | ----------- | ------------------------- | --------------- |
 /// | Escape                | escape      |                           |                 |
 /// | Enter                 | enter       |                           |                 |
@@ -320,8 +320,8 @@ pub trait EditableTextActionHandler<Context>: Sized {
         window.show_character_palette();
     }
 
-    /// Called on a mouse-down over the text. `text_position` is the pointer
-    /// position relative to the top-left of the text.
+    /// Called when the left mouse button is pressed inside the field. `text_position`
+    /// is the pointer position relative to the top-left of the text.
     fn on_mouse_down(
         &mut self,
         _event: &gpui::MouseDownEvent,
@@ -330,10 +330,10 @@ pub trait EditableTextActionHandler<Context>: Sized {
         _cx: &mut Context,
     ) {
     }
-    /// Called when a mouse button is released over the field.
+    /// Called when the left mouse button is released in the window, even outside the field.
     fn on_mouse_up(&mut self, _event: &gpui::MouseUpEvent, _w: &mut Window, _cx: &mut Context) {}
-    /// Called when the pointer moves over the field. `text_position` is the
-    /// pointer position relative to the top-left of the text.
+    /// Called when the pointer moves in the window, including beyond the field while dragging
+    /// a selection. `text_position` is relative to the top-left of the text.
     fn on_mouse_move(
         &mut self,
         _event: &gpui::MouseMoveEvent,
