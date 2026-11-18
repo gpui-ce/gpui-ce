@@ -1605,10 +1605,10 @@ impl App {
         })
     }
 
-    /// Brings the app to the front.
+    /// Requests app activation from the platform.
     ///
-    /// Pass `ignoring_other_apps: true` to activate the app even when another app is in front.
-    /// Use it sparingly, because it moves the user's focus.
+    /// On macOS, pass `true` to request activation even when another app is in front.
+    /// The Windows, Linux and web backends ignore this request.
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
     }
