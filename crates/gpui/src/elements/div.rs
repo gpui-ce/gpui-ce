@@ -2528,10 +2528,11 @@ pub struct Div {
 }
 
 impl Div {
-    /// Runs `listener` after the children have been prepainted, with their bounds in order.
+    /// Runs `listener` after the children have been prepainted, with their layout bounds in child order.
     ///
-    /// Use it to record where children ended up, for example to scroll to one of them later. The bounds are in window
-    /// coordinates. The listener runs once per frame.
+    /// The bounds include ancestor offsets and exclude this `Div`'s own scroll offset. Use them to
+    /// locate children in the scrollable content, for example to scroll to one later. The listener
+    /// runs on each prepaint of this `Div` that reaches its children.
     pub fn on_children_prepainted(
         mut self,
         listener: impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static,
@@ -5245,7 +5246,8 @@ impl ScrollHandle {
         self.0.borrow().bounds
     }
 
-    /// Returns the bounds of the child at `ix`, in window coordinates, or `None` if there is no such child.
+    /// Returns the last layout bounds of the child at `ix`, or `None` if there is no such child.
+    /// The bounds include ancestor offsets and exclude this handle's own scroll offset.
     pub fn bounds_for_item(&self, ix: usize) -> Option<Bounds<Pixels>> {
         self.0.borrow().child_bounds.get(ix).cloned()
     }
