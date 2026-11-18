@@ -1493,9 +1493,9 @@ pub trait InteractiveElement: Sized {
 
     /// Applies `f`'s style while a value of type `S` is dragged over this element and the element accepts it.
     ///
-    /// The style applies only while the pointer is over the element, and only when the element has a drop listener for
-    /// `S` whose [`can_drop`](DropListener::can_drop) check passes, if it has one. Style the element differently for
-    /// each kind of drag. Use [`on_drag_over_any`](Self::on_drag_over_any) for a style that doesn't depend on the type.
+    /// This can be used by itself to style the element. If there is already a drop listener for `S`, this sets its
+    /// drag-over style. Any element-wide and type-specific drop predicates must allow the drag. Use
+    /// [`on_drag_over_any`](Self::on_drag_over_any) for a style shared by multiple drag types.
     ///
     /// # Example
     ///
@@ -1550,8 +1550,9 @@ pub trait InteractiveElement: Sized {
 
     /// Applies `f`'s style while a value of type `S` is dragged over any member of `group_name`.
     ///
-    /// Set the group with [`group`](Self::group) on the parent. The style applies only when the dragged type matches
-    /// and the group member is hovered.
+    /// Set the group with [`group`](Self::group) on the parent. The style applies when the group's hitbox is hovered
+    /// and the styled element has a drop listener for `S` that allows the drag. Any element-wide drop predicate
+    /// must also allow it.
     fn group_drag_over<S: 'static>(
         mut self,
         group_name: impl Into<SharedString>,

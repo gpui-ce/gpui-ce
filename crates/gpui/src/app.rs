@@ -2684,11 +2684,12 @@ impl App {
         })
     }
 
-    /// Calls `f` for every key-down that reaches any window of the app.
+    /// Calls `f` after key-down dispatch in the app's windows.
     ///
-    /// The callback runs after action and event handling has finished, so it sees the
-    /// keystrokes that were not handled earlier. Use [`App::intercept_keystrokes`] to
-    /// see keystrokes before they are dispatched. Keep the returned [`Subscription`] alive.
+    /// The event includes the action if a key binding handled the keystroke. Otherwise,
+    /// the callback runs if keyboard event handling lets the event propagate. Use
+    /// [`App::intercept_keystrokes`] to see keystrokes before dispatch. Keep the returned
+    /// [`Subscription`] alive.
     pub fn observe_keystrokes(
         &mut self,
         mut f: impl FnMut(&KeystrokeEvent, &mut Window, &mut App) + 'static,
@@ -2970,7 +2971,7 @@ impl App {
 
     /// Returns whether `action` would be handled if it were dispatched now.
     ///
-    /// Checks the active window's focus path and its bindings, then the global listeners
+    /// Looks for an action listener on the active window's focus path or a global listener
     /// from [`App::on_action`]. Use it to enable or disable menu items.
     pub fn is_action_available(&mut self, action: &dyn Action) -> bool {
         let mut action_available = false;
