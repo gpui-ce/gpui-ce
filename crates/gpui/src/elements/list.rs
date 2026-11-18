@@ -871,11 +871,12 @@ impl ListState {
         }
     }
 
-    /// Stops following the tail and keeps the current position, until the user scrolls back to the end.
+    /// Stops following the tail and keeps the current position.
     ///
     /// Unlike [`Self::set_follow_mode`] with [`FollowMode::Normal`], the list stays in
-    /// [`FollowMode::Tail`], so it resumes following when the view returns to the end. Does nothing
-    /// if the list isn't following.
+    /// [`FollowMode::Tail`], so layout resumes following when it finds the view at the end.
+    /// This can happen on the next layout if the list was paused while still at the end.
+    /// Does nothing if the list isn't following.
     ///
     /// Use this when something other than the user changes a row's height, such as zooming a
     /// diagram, and the position should not jump to the end.
@@ -3288,8 +3289,7 @@ mod test {
         assert!(!state.is_following_tail());
 
         // Invalidate the last item (simulates EntryUpdated calling
-        // remeasure_items). This makes items.summary().height
-        // temporarily wrong (0px for the invalidated item).
+        // remeasure_items). The old height remains a hint until the row is measured again.
         state.remeasure_items(19..20);
 
         // Paint — layout re-measures the invalidated item with its true
