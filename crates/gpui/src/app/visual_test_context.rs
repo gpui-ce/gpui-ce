@@ -20,9 +20,9 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 ///
 /// - [`TestAppContext`](crate::TestAppContext) runs on `TestPlatform`, which mocks
 ///   rendering. `VisualTestAppContext` runs on the real macOS platform, so
-///   [`VisualTestAppContext::capture_screenshot`] returns the pixels a user would see.
+///   [`VisualTestAppContext::capture_screenshot`] renders the window's last scene into an image.
 /// - Windows are opened off-screen by [`VisualTestAppContext::open_offscreen_window`],
-///   so they don't appear on the display but are still composited.
+///   so screenshots can be taken without opening a window on the display.
 /// - Input methods take the window as a parameter, not through a
 ///   `VisualTestContext`. `simulate_keystrokes` splits on whitespace, and
 ///   `simulate_input` sends a space as the space character.
@@ -51,7 +51,7 @@ impl VisualTestAppContext {
     /// The scheduler seed is read from the `SEED` environment variable, and is `0`
     /// when it's unset or isn't a number.
     ///
-    /// This uses an empty asset source, so SVG icons don't render. Use
+    /// This uses an empty asset source, so SVG icons loaded by path don't render. Use
     /// [`VisualTestAppContext::with_asset_source`] to load real assets.
     pub fn new(platform: Rc<dyn Platform>) -> Self {
         Self::with_asset_source(platform, Arc::new(()))
@@ -102,8 +102,8 @@ impl VisualTestAppContext {
 
     /// Opens a window of `size` at the origin `(-10000, -10000)`, off every display.
     ///
-    /// The window is shown and composited, so [`VisualTestAppContext::capture_screenshot`]
-    /// can capture it. It doesn't take focus.
+    /// The window is shown without taking focus. [`VisualTestAppContext::capture_screenshot`]
+    /// renders its scene directly into a texture.
     ///
     /// # Errors
     ///
