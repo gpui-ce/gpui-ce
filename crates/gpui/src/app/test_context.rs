@@ -529,8 +529,8 @@ impl TestAppContext {
 
     /// Spawns a future on the foreground executor, with an [`AsyncApp`] for this app.
     ///
-    /// The future runs when tasks run, such as during [`TestAppContext::run_until_parked`]
-    /// or a `simulate_*` method. A plain `update` doesn't run it.
+    /// The future runs when the scheduler is driven, for example by
+    /// [`TestAppContext::run_until_parked`]. A plain `update` doesn't run it.
     #[track_caller]
     pub fn spawn<Fut, R>(&self, f: impl FnOnce(AsyncApp) -> Fut) -> Task<R>
     where
@@ -676,7 +676,7 @@ impl TestAppContext {
             .clone()
     }
 
-    /// Returns a stream that yields `()` each time `entity` notifies.
+    /// Returns a stream that yields `()` for each delivered notification from `entity`.
     ///
     /// The stream ends when the entity is released.
     pub fn notifications<T: 'static>(
@@ -1100,7 +1100,8 @@ impl VisualTestContext {
 
     /// Sends `event` to the window as platform input, then runs pending tasks.
     ///
-    /// Call [`VisualTestContext::draw`] first, so that hit tests see the current layout.
+    /// Hit testing uses the window's last rendered frame. Draw the root view before sending
+    /// input if its layout has changed.
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         self.test_window(self.window)
             .simulate_input(event.to_platform_input());
