@@ -341,7 +341,7 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the whitespace of this element's text to `nowrap`, so text stays on one line.
+    /// Disables wrapping at the available width. Explicit line breaks still start new lines.
     ///
     /// [Docs](https://tailwindcss.com/docs/whitespace#nowrap)
     fn whitespace_nowrap(mut self) -> Self {
@@ -479,7 +479,8 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the flex direction to `row`, so children sit left to right.
+    /// Places flex children along the inline axis, from inline start to end.
+    /// This runs left to right in LTR and right to left in RTL.
     ///
     /// [Docs](https://tailwindcss.com/docs/flex-direction#row)
     fn flex_row(mut self) -> Self {
@@ -487,7 +488,8 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the flex direction to `row-reverse`, so children sit right to left.
+    /// Places flex children along the inline axis, from inline end to start.
+    /// This runs right to left in LTR and left to right in RTL.
     ///
     /// [Docs](https://tailwindcss.com/docs/flex-direction#row-reverse)
     fn flex_row_reverse(mut self) -> Self {
