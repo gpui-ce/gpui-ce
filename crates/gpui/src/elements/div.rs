@@ -1803,10 +1803,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
-    /// Sets whether this element is disabled, so that it rejects input.
+    /// Reports whether this element is disabled to assistive technology.
     ///
-    /// Use it for a disabled control or a group of controls. It maps to AccessKit's `Disabled` flag, which tells assistive
-    /// technology that the element is unavailable.
+    /// This sets AccessKit's `Disabled` flag. The control's input handlers still need to enforce the disabled state.
     fn aria_disabled(mut self, disabled: bool) -> Self {
         self.interactivity().aria.disabled = Some(disabled);
         self
