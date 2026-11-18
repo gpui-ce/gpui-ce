@@ -253,8 +253,8 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
     /// Returns the UTF-8 byte index of the cluster under a point in GPUI layout coordinates.
     ///
-    /// Returns `Ok` when the point is inside a visual row. Otherwise it returns
-    /// `Err` with the closest index.
+    /// Returns `Ok` when the point hits a cluster. Otherwise it returns `Err` with
+    /// the closest index, including for points beside the text on the same row.
     fn byte_index_from_pixel_point(
         &self,
         pixel_point: Point<Pixels>,

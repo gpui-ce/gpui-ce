@@ -312,8 +312,9 @@ impl UniformListScrollHandle {
 
     /// Returns the index of the first visible row.
     ///
-    /// If a scroll request is pending, this returns the row that request targets instead, so the
-    /// value is right after a request and one frame later. It is zero before the first prepaint.
+    /// A pending scroll request takes precedence and this returns its target index. Once the
+    /// request is applied, this reports the first visible row, which can differ from the target.
+    /// With no request, this returns zero before the first prepaint.
     ///
     /// Only available with the `test-support` feature, or in GPUI's own tests.
     #[cfg(any(test, feature = "test-support"))]
@@ -336,9 +337,10 @@ impl UniformListScrollHandle {
         }
     }
 
-    /// Returns whether the list shows its last row, or `None` if the list isn't scrollable.
+    /// Returns whether the viewport is at its maximum vertical scroll offset.
     ///
-    /// `None` is also returned before the first prepaint.
+    /// Returns `None` when the handle has no positive vertical scroll range, including before
+    /// the first prepaint. In a flipped list, item zero is at the bottom.
     pub fn is_scrolled_to_end(&self) -> Option<bool> {
         let state = self.0.borrow();
         let max_offset = state.base_handle.max_offset();
