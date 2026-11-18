@@ -809,8 +809,8 @@ impl Interactivity {
 
     /// Runs `listener` with `true` when the pointer enters this element and with `false` when it leaves.
     ///
-    /// Transitions caused by layout changes under a stationary pointer also run the listener. The listener does not
-    /// run while a drag is in progress.
+    /// Layout changes under a stationary pointer can also trigger the listener. Starting a drag
+    /// clears existing hover and can send `false`. Hover stays clear until the drag ends.
     pub fn on_hover(&mut self, listener: impl Fn(&bool, &mut Window, &mut App) + 'static)
     where
         Self: Sized,
@@ -2164,8 +2164,8 @@ pub trait StatefulInteractiveElement: InteractiveElement {
 
     /// Runs `listener` with `true` when the pointer enters this element and `false` when it leaves.
     ///
-    /// The listener does not run while a drag is in progress. Transitions caused by layout changes under a stationary
-    /// pointer also run it.
+    /// Layout changes under a stationary pointer can also trigger the listener. Starting a drag
+    /// clears existing hover and can send `false`. Hover stays clear until the drag ends.
     fn on_hover(mut self, listener: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self
     where
         Self: Sized,
