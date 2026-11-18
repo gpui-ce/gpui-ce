@@ -1496,6 +1496,7 @@ pub trait InteractiveElement: Sized {
     /// This can be used by itself to style the element. If there is already a drop listener for `S`, this sets its
     /// drag-over style. Any element-wide and type-specific drop predicates must allow the drag. Use
     /// [`on_drag_over_any`](Self::on_drag_over_any) for a style shared by multiple drag types.
+    /// A matching drop ends the drag and stops propagation even if no drop callback is installed.
     ///
     /// # Example
     ///
@@ -5252,9 +5253,10 @@ impl ScrollHandle {
         self.0.borrow().child_bounds.get(ix).cloned()
     }
 
-    /// Scrolls the smallest amount that makes the child at `ix` fully visible.
+    /// Scrolls the smallest amount that makes the child at `ix` fully visible when it fits.
     ///
-    /// The scroll happens during the next prepaint. If the element is not scrollable on the axis, nothing happens.
+    /// On a scrollable axis where the child is larger than the viewport, this aligns the leading edges
+    /// within the available scroll range. The request is applied in prepaint once the child has layout bounds.
     pub fn scroll_to_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {
@@ -5340,10 +5342,9 @@ impl ScrollHandle {
         *state.offset.borrow_mut() = position;
     }
 
-    /// Returns the child at the top of the viewport, and how far its top edge is above the viewport's top edge.
+    /// Returns the top item index and its signed top-edge offset from the viewport's top edge.
     ///
-    /// Use the pair to restore the same scroll position after the children change: scroll to the index, then offset by
-    /// the pixels.
+    /// A negative offset means the child's top edge is above the viewport. A positive offset can occur in a gap.
     pub fn logical_scroll_top(&self) -> (usize, Pixels) {
         let ix = self.top_item();
         let state = self.0.borrow();
@@ -5358,7 +5359,7 @@ impl ScrollHandle {
         }
     }
 
-    /// Returns the child at the bottom of the viewport, and how far its bottom edge is below the viewport's bottom edge.
+    /// Returns the bottom item index and its signed bottom-edge offset from the viewport's bottom edge.
     pub fn logical_scroll_bottom(&self) -> (usize, Pixels) {
         let ix = self.bottom_item();
         let state = self.0.borrow();
