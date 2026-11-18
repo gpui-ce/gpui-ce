@@ -2328,8 +2328,8 @@ impl App {
     ///
     /// # Panics
     ///
-    /// Panics if called after the quit handlers have started running (from
-    /// [`App::on_app_quit`]).
+    /// Panics while the app is waiting for shutdown cleanup. Quit handlers can obtain the
+    /// executor while constructing their cleanup futures.
     pub fn foreground_executor(&self) -> &ForegroundExecutor {
         if self.quitting {
             panic!("Can't spawn on main thread after on_app_quit")
