@@ -935,10 +935,11 @@ impl ListState {
         state.logical_scroll_top = Some(scroll_top);
     }
 
-    /// Scrolls the least amount that shows row `ix` fully.
+    /// Adjusts the scroll position to bring row `ix` into view.
     ///
-    /// A row above the current top is moved to the top of the viewport. A row below it is moved so
-    /// its bottom edge sits at the bottom of the viewport. The position takes effect on the next paint.
+    /// A row at or before the logical scroll top is aligned to the top. For a later row, the
+    /// list scrolls down if its measured or estimated bottom exceeds the viewport. The position
+    /// takes effect on the next paint. A row taller than the viewport can only be shown in part.
     ///
     /// # Examples
     ///
@@ -1071,8 +1072,9 @@ impl ListState {
 
     /// Returns the largest scroll distance, as a positive `y`.
     ///
-    /// This is the content height minus the viewport height, using the heights measured so far and
-    /// any height hints. During a scrollbar drag it keeps the value from when the drag started.
+    /// This is the total row height minus the viewport height, clamped at zero. Row heights include
+    /// measurements and hints. During a scrollbar drag, the row height total is frozen while the
+    /// viewport height can still change.
     pub fn max_offset_for_scrollbar(&self) -> Point<Pixels> {
         let state = self.0.borrow();
         point(Pixels::ZERO, state.max_scroll_offset())
