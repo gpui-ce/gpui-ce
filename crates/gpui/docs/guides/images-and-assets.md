@@ -58,11 +58,13 @@ the image occupies it:
 Use [`StyledImage::with_loading`] for a loading placeholder and
 [`StyledImage::with_fallback`] for missing assets, HTTP errors, or corrupt bytes.
 GPUI waits `200ms` ([`LOADING_DELAY`]) before rendering `with_loading` so cached
-or fast loads never flash a skeleton:
+or fast loads never flash a skeleton. Give the image an ID to retain the loading
+state across frames:
 
 ```rust
 # use gpui::*;
 let photo = img("https://example.com/photo.jpg")
+    .id("photo")
     .size(px(240.))
     .object_fit(ObjectFit::Cover)
     .with_loading(|| div().size(px(240.)).bg(rgb(0xe5e7eb)).into_any_element())
@@ -164,8 +166,9 @@ the gallery or changing its ID releases its cached references (encoded
 `Arc<Image>` sources still use the app-wide decode cache). Custom [`ImageCache`]
 implementations can also attach to individual elements via [`Img::image_cache`].
 
+Give an animated image an ID to retain its current frame and playback time.
 Animated GIF and WebP resources loaded from URLs, paths, or [`AssetRegistry`]
-loop automatically while the window is active and [`App::reduce_motion`] is
+then loop while the window is active and [`App::reduce_motion`] is
 `false`. Animated GIFs passed via `Image::from_bytes` also animate; animated
 WebP passed via `Image::from_bytes` decodes only the first frame.
 

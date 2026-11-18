@@ -217,9 +217,9 @@ pub trait StyledImage: Sized {
 
     /// Sets the closure that builds a placeholder to show while the image loads.
     ///
-    /// The placeholder appears only if loading takes longer than [`LOADING_DELAY`], so a quick load
-    /// never shows it. The placeholder and the fallback are children of the image element, so the
-    /// element's own size and style still apply.
+    /// Give the image an ID so it can track the load across frames. The placeholder appears if
+    /// the image is still loading after [`LOADING_DELAY`]. The placeholder and fallback are
+    /// children of the image element, so the element's own size and style still apply.
     ///
     /// # Examples
     ///
@@ -274,8 +274,8 @@ pub struct Img {
 
 /// Creates an image element that draws `source`.
 ///
-/// Building the element does no work. The image starts loading the first time the element is laid
-/// out, on a background thread. Until it loads, the element has no size unless you set one, and it
+/// Building the element does no work. For resources and encoded bytes, the first layout starts a
+/// load on the background executor. Until it loads, the element has no intrinsic image size, and it
 /// draws nothing unless you set a [`StyledImage::with_loading`] placeholder. Once the image loads,
 /// the element takes the image's natural size. If you set only a width or only a height, the other
 /// dimension follows the aspect ratio.
@@ -306,10 +306,10 @@ pub fn img(source: impl Into<ImageSource>) -> Img {
 }
 
 impl Img {
-    /// Returns the file extensions that `img` can decode, in lowercase and without the dot.
+    /// Returns recognized image file extensions, in lowercase and without the dot.
     ///
-    /// The list is the extensions of `image::ImageFormat` plus `svg`. gpui decides whether a file
-    /// loads by reading its bytes, not its extension, so the list is a guide.
+    /// The list is the extensions of `image::ImageFormat` plus `svg`. Raster decoding depends
+    /// on the enabled image codecs. GPUI guesses the file format from its bytes.
     ///
     /// # Examples
     ///
@@ -544,7 +544,7 @@ impl Element for Img {
                             if let Some(state) = &mut state {
                                 if let Some((started_loading, _)) = state.started_loading {
                                     if cx.background_executor().now() - started_loading
-                                        > LOADING_DELAY
+                                        >= LOADING_DELAY
                                         && let Some(loading) = self.style.loading.as_ref()
                                     {
                                         let mut element = loading();
@@ -768,8 +768,9 @@ impl Asset for ImageDecoder {
 ///
 /// The bytes come from the source. URLs go through the HTTP client and must return a success
 /// status. Paths are read from disk. Registry names are read from the [`crate::AssetRegistry`]. The format
-/// is then guessed from the bytes. Anything the `image` crate recognizes is decoded, and every
-/// frame that decodes is kept for GIF and animated WebP. Anything else is parsed as SVG.
+/// is then guessed from the bytes. A recognized raster format is decoded if its codec is enabled.
+/// GIF and animated WebP keep every frame that decodes. If no raster format matches, the loader
+/// tries to parse the bytes as SVG.
 #[derive(Clone)]
 pub enum ImageAssetLoader {}
 
@@ -1070,6 +1071,36 @@ mod tests {
                 "after {elapsed_ms} ms"
             );
         }
+    }
+
+    #[gpui::test]
+    fn loading_placeholder_appears_at_the_delay(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        struct PendingImage(Rc<Cell<bool>>);
+
+        impl Render for PendingImage {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let shown = self.0.clone();
+                img(|_: &mut Window, _: &mut App| None)
+                    .id(TEST_IMG_ID)
+                    .with_loading(move || {
+                        shown.set(true);
+                        div().into_any_element()
+                    })
+            }
+        }
+
+        let shown = Rc::new(Cell::new(false));
+        let (_, window) = cx.add_window_view({
+            let shown = shown.clone();
+            move |_, _| PendingImage(shown)
+        });
+
+        assert!(!shown.get());
+        window.cx.background_executor.advance_clock(LOADING_DELAY);
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(shown.get());
     }
 
     /// Overwrites the cached `frame_index` of the sibling `img` during paint.
