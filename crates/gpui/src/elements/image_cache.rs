@@ -13,8 +13,9 @@ use std::{collections::HashMap, fmt, sync::Arc};
 /// Scopes an image cache to the [`img`](crate::img) elements below it.
 ///
 /// Each image in the children uses the cache that `image_cache_provider` returns, instead of the
-/// app-wide cache. Pass an `Entity` of an [`ImageCache`] to share one cache, or [`retain_all`] to get
-/// a cache that lives with this element's state. The provider is called on every layout and paint.
+/// app-wide resource cache. Pass an `Entity` of an [`ImageCache`] to share one cache, or
+/// [`retain_all`] to get a cache that lives with this element's state. The provider is called
+/// during request layout and paint.
 ///
 /// Only [`crate::ImageSource::Resource`] sources use the cache. See [`crate::Img::image_cache`].
 ///
@@ -263,7 +264,9 @@ impl<T: ImageCache> ImageCacheProvider for Entity<T> {
 /// the cache.
 ///
 /// Create one with [`RetainAllImageCache::new`], or let [`retain_all`] create one for an element.
-/// Loads run on the background executor, and the view that asked is notified when each finishes.
+/// Loads run on the background executor. Completion schedules a notification for the view
+/// that started the load, on that window's next frame. Other views sharing the cache can read
+/// the result on their next draw.
 /// Dropping the cache drops its decoded images from the windows.
 pub struct RetainAllImageCache(HashMap<u64, ImageCacheItem>);
 
