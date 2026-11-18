@@ -79,9 +79,9 @@ pub fn svg() -> Svg {
 impl Svg {
     /// Sets the SVG from bytes that are already in memory, such as one included with `include_bytes!`.
     ///
-    /// The bytes are copied into the element. The rasterized icon is cached under a hash of the
-    /// bytes, so the same data is rasterized once. Calling this again replaces the bytes. When
-    /// several sources are set, this one wins.
+    /// The bytes are copied into the element. The raster cache keys on both the data hash and
+    /// the requested size. Calling this again replaces the bytes. When several sources are set,
+    /// this one wins.
     pub fn data(mut self, data: &[u8]) -> Self {
         // Generate a unique deterministic path based on the data hash for caching
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

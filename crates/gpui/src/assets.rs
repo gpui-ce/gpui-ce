@@ -32,10 +32,10 @@ pub trait AssetSource: 'static + Send + Sync {
     /// Each returned path is one that [`AssetSource::load`] accepts.
     fn list(&self, path: &str) -> Result<Vec<SharedString>>;
 
-    /// Loads every asset now and yields each one as an [`AssetEntry::PreLoaded`].
+    /// Lists the assets now and loads each one as the iterator advances.
     ///
-    /// It lists everything with `list("")`, loads each path, and skips the paths that fail or are
-    /// missing. Pass the result to [`AssetRegistry::extend`].
+    /// It calls `list("")`, yields each successful load as an [`AssetEntry::PreLoaded`], and
+    /// skips paths that fail or are missing. Pass the result to [`AssetRegistry::extend`].
     fn iter_preloaded(&self) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)> + '_> {
         let paths = self.list("").unwrap_or_default();
         let iter = paths.into_iter().filter_map(move |path| {
@@ -295,6 +295,7 @@ impl RenderImage {
     ///
     /// The frames are moved in, not copied. Pass a `SmallVec<[Frame; 1]>`, or anything that converts
     /// into one, such as a `Vec<Frame>`.
+    /// Store the pixels in BGRA channel order, even though the frame buffer uses the `Rgba` type.
     ///
     /// # Examples
     ///
@@ -302,7 +303,7 @@ impl RenderImage {
     /// # use gpui::*;
     /// use image::{Frame, ImageBuffer, Rgba};
     ///
-    /// let pixels = ImageBuffer::from_pixel(2, 3, Rgba([255u8, 0, 0, 255]));
+    /// let pixels = ImageBuffer::from_pixel(2, 3, Rgba([0u8, 0, 255, 255]));
     /// let image = RenderImage::new(vec![Frame::new(pixels)]);
     ///
     /// assert_eq!(image.frame_count(), 1);
