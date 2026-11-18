@@ -645,12 +645,11 @@ impl<V: 'static + Render> TestAppWindow<V> {
         }
     }
 
-    /// Types `input` by sending one keystroke per character, then runs pending tasks.
+    /// Types `input` by sending one keystroke per character and running pending tasks after each.
     ///
-    /// Each character is sent as a keystroke whose key is that character, so text
-    /// inputs receive the text. Uppercase letters are sent with shift held. A space
-    /// is sent with the key `" "`, not `"space"`, so a binding for `space` doesn't
-    /// match it. Use [`TestAppWindow::simulate_keystroke`] for named keys.
+    /// Each character goes through the keystroke parser. ASCII uppercase letters are sent
+    /// as lowercase keys with Shift held. A literal space has the key `" "`. To trigger a
+    /// binding for the named `space` key, use [`TestAppWindow::simulate_keystroke`].
     ///
     /// # Example
     ///

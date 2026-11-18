@@ -392,8 +392,9 @@ impl VisualTestAppContext {
 
     /// Waits until `predicate` returns `true` for `entity`, or until `timeout` passes.
     ///
-    /// The predicate is checked between polls, which are 10 milliseconds apart. The
-    /// timeout is measured in real time, not simulated time.
+    /// After an unsuccessful check, this drains pending tasks and waits on a 10-millisecond
+    /// timer on the simulated clock. The timeout is checked in real time when the future is
+    /// polled again, so the scheduler must keep advancing for this wait to finish.
     ///
     /// # Errors
     ///
