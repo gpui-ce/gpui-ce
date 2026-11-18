@@ -271,9 +271,9 @@ pub trait EditableTextActionHandler<Context>: Sized {
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, _cx: &mut Context) {}
     /// Handles NavDocumentEnd. The standard state moves to the document end.
     fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavWordLeft. The standard state moves to the preceding word boundary.
+    /// Handles NavWordLeft. With current layout, the standard state moves one word visually left.
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavWordRight. The standard state moves to the following word boundary.
+    /// Handles NavWordRight. With current layout, the standard state moves one word visually right.
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, _cx: &mut Context) {}
 
     /// Handles SelectAll. The standard state selects the entire document.
@@ -290,9 +290,9 @@ pub trait EditableTextActionHandler<Context>: Sized {
     fn select_start(&mut self, _: &SelectDocumentStart, _w: &mut Window, _cx: &mut Context) {}
     /// Handles SelectDocumentEnd. The standard state extends the selection to document end.
     fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectWordLeft. The standard state extends the selection to the preceding word boundary.
+    /// Handles SelectWordLeft. With current layout, the standard state extends the selection one word visually left.
     fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectWordRight. The standard state extends the selection to the following word boundary.
+    /// Handles SelectWordRight. With current layout, the standard state extends the selection one word visually right.
     fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 
     /// Handles Cut. The standard state cuts the selection, or the current hard line and an
