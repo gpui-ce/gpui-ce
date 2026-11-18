@@ -27,8 +27,8 @@ use collections::HashMap;
 slotmap::new_key_type! {
     /// Identifies an entity within the app.
     ///
-    /// Two entities never share an id, even after one has been released and its slot is reused. Get the
-    /// id of a handle with [`Entity::entity_id`] or [`AnyEntity::entity_id`].
+    /// The id includes a slot and its generation, so reusing a slot normally gives the new entity a
+    /// different id. Get the id of a handle with [`Entity::entity_id`] or [`AnyEntity::entity_id`].
     pub struct EntityId;
 }
 
@@ -41,10 +41,8 @@ impl From<u64> for EntityId {
 impl EntityId {
     /// Returns the id as a [`NonZeroU64`](std::num::NonZeroU64).
     ///
-    /// # Panics
-    ///
-    /// Panics if the id's value is zero. GPUI never assigns that value, but an id built from `0` with
-    /// `From<u64>` does have it.
+    /// The encoded slot-map key has a nonzero generation, even when the id was constructed with
+    /// `From<u64>`.
     pub fn as_non_zero_u64(self) -> NonZeroU64 {
         NonZeroU64::new(self.0.as_ffi()).unwrap()
     }
@@ -495,7 +493,7 @@ impl<T: 'static> Entity<T> {
 
     /// Returns the id of the entity.
     ///
-    /// Two handles have the same id exactly when they refer to the same entity.
+    /// Compare ids within the same app. Different apps can assign the same id.
     #[inline]
     pub fn entity_id(&self) -> EntityId {
         self.any_entity.entity_id
