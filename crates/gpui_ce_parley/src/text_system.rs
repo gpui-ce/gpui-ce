@@ -2601,6 +2601,32 @@ mod tests {
     }
 
     #[test]
+    fn zero_wrap_width_reports_the_widest_unbreakable_word() {
+        let system = test_system();
+        let text = "short longer";
+        let font_size = px(18.);
+        let layout = layout_wrapped(
+            &system,
+            text,
+            font_size,
+            &[text_run(text, IBM_PLEX.family)],
+            Pixels::ZERO,
+            None,
+        );
+        let longest = "longer";
+        let word = layout_with_options(
+            &system,
+            longest,
+            font_size,
+            &[text_run(longest, IBM_PLEX.family)],
+            TextLayoutOptions::default(),
+        );
+
+        assert_eq!(layout.visual_lines.len(), 2);
+        assert_eq!(layout.width, word.width);
+    }
+
+    #[test]
     fn decoration_offsets_are_y_down_from_the_baseline() {
         let system = test_system();
         for family in [IBM_PLEX.family, SOURCE_SERIF.family, LILEX.family] {

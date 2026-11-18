@@ -890,8 +890,9 @@ impl TextLayoutTruncation {
 impl TextLayout {
     /// Returns the width that text wraps at, or `None` when it doesn't wrap.
     ///
-    /// Text does not wrap when `white_space` is [`WhiteSpace::Nowrap`]. Otherwise
-    /// the width comes from [`TextLayout::evaluate_alignment_width`].
+    /// With [`WhiteSpace::Normal`], a known width takes precedence over available space.
+    /// A min-content probe with no known width uses zero to wrap at every opportunity.
+    /// Max-content probes with no known width and [`WhiteSpace::Nowrap`] do not wrap.
     pub fn evaluate_wrap_width(
         white_space: &WhiteSpace,
         known_dimensions: Size<Option<Pixels>>,
@@ -959,10 +960,11 @@ impl TextLayout {
             _ => resolved_direction.into(),
         };
         let options = TextLayoutOptions {
-            wrap_width: match text_style.white_space {
-                WhiteSpace::Normal => alignment_width,
-                WhiteSpace::Nowrap => None,
-            },
+            wrap_width: Self::evaluate_wrap_width(
+                &text_style.white_space,
+                known_dimensions,
+                available_space,
+            ),
             line_clamp: text_style.line_clamp,
             alignment_width,
             text_align: text_style.text_align,
@@ -2255,6 +2257,29 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[gpui::test]
+    fn text_layout_uses_intrinsic_wrap_width_without_collapsing_measurement(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+
+        cx.draw(Point::default(), size(px(240.), px(100.)), |window, cx| {
+            let layout = TextLayout::default();
+            let text = SharedString::from("Measure these words");
+            let layout_id = layout.layout(text, None, window, cx);
+            window.compute_layout(
+                layout_id,
+                size(AvailableSpace::MinContent, AvailableSpace::MaxContent),
+                cx,
+            );
+
+            let state = layout.0.layout.borrow();
+            let state = state.as_ref().unwrap();
+            assert_eq!(state.options.wrap_width, Some(Pixels::ZERO));
+            assert_eq!(state.options.alignment_width, None);
+            assert!(window.layout_bounds(layout_id).size.width > Pixels::ZERO);
+            div()
+        });
     }
 
     #[gpui::test]

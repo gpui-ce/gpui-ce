@@ -716,9 +716,11 @@ impl ShapedTextLayout {
         self.layout.platform_layout.len()
     }
 
-    /// Returns the width of the widest line, capped at the wrap width.
+    /// Returns the width of the widest line, capped at a nonzero wrap width.
+    /// A zero wrap width requests minimum-content wrapping and reports the natural line width.
     pub fn width(&self) -> Pixels {
         self.wrap_width
+            .filter(|width| *width != Pixels::ZERO)
             .unwrap_or(Pixels::MAX)
             .min(self.layout.width)
     }
