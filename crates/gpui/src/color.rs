@@ -41,10 +41,7 @@ pub fn rgba(hex: u32) -> Rgba {
     Rgba::new(r, g, b, a)
 }
 
-/// Converts an sRGB [`Rgba`] color to [`Hsla`], keeping the alpha.
-///
-/// Use it at an API boundary that stores [`Hsla`], such as [`Styled::bg`](crate::Styled::bg),
-/// when the value you have is [`Rgba`].
+/// Converts an sRGB [`Rgba`] color to [`Hsla`], preserving alpha.
 pub fn rgb_to_hsla(color: Rgba) -> Hsla {
     color.into_color()
 }

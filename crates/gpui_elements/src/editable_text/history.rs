@@ -65,8 +65,8 @@ impl EditableTextHistory {
     ///
     /// The edit replaced `old_text` at `range` with `new_text_len` bytes. A
     /// contiguous edit that arrives within the grouping interval of the last
-    /// entry extends that entry. Otherwise the edit starts a new entry. A new
-    /// entry clears the redo stack. Every new edit clears it, including one that joins an entry.
+    /// entry extends that entry; otherwise the edit starts a new entry. Every
+    /// recorded edit clears the redo stack.
     pub fn record(
         &mut self,
         range: Range<usize>,

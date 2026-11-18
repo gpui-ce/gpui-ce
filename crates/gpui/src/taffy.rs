@@ -1127,18 +1127,7 @@ pub enum AvailableSpace {
 }
 
 impl AvailableSpace {
-    /// Returns a `Size` with both width and height set to `AvailableSpace::MinContent`.
-    ///
-    /// Use it when an element should be measured at its smallest content size on both axes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use gpui::AvailableSpace;
-    /// let min_content_size = AvailableSpace::min_size();
-    /// assert_eq!(min_content_size.width, AvailableSpace::MinContent);
-    /// assert_eq!(min_content_size.height, AvailableSpace::MinContent);
-    /// ```
+    /// Returns a `Size` with both axes set to [`Self::MinContent`].
     pub const fn min_size() -> Size<Self> {
         Size {
             width: Self::MinContent,

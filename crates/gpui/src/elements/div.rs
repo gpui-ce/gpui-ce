@@ -1,10 +1,11 @@
 //! [`Div`] is GPUI's general-purpose container for layout, styling, and input.
 //!
-//! A [`Div`] lays out its children with flexbox and can respond to mouse, keyboard, drag, and
-//! accessibility events. Create one with [`div`]. Custom elements can reuse the same behavior through
-//! [`Interactivity`], [`InteractiveElement`], and [`StatefulInteractiveElement`]. The
-//! [elements concept](crate::_documentation::concepts::elements) explains when to use a div, and the
-//! [input dispatch concept](crate::_documentation::concepts::input_dispatch) explains how events reach its handlers.
+//! A [`Div`] lays out its children in block flow by default (or flexbox and grid via [`Styled`])
+//! and handles mouse, keyboard, drag, focus, scroll, and accessibility events. Construct one with
+//! [`div`]. Custom elements can embed [`Interactivity`] and implement [`InteractiveElement`] and
+//! [`StatefulInteractiveElement`] to reuse the same behavior; see
+//! [elements, components and views](crate::_documentation::concepts::elements) and
+//! [input dispatch](crate::_documentation::concepts::input_dispatch).
 //!
 //! # Example
 //!
@@ -18,11 +19,6 @@
 //!     .on_click(|_, _, _| {})
 //!     .child("Hello");
 //! ```
-//!
-//! # Build your own element
-//!
-//! [`Interactivity`] holds listeners, styles, and state. The traits above expose it as a fluent API,
-//! and [`Div`] combines it with a [`StyleRefinement`] and a list of children.
 
 #[cfg(debug_assertions)]
 use crate::{PaintQuad, TextAlign};
@@ -154,7 +150,7 @@ impl Interactivity {
     /// Runs `listener` when `button` is pressed over this element.
     ///
     /// The listener runs in the bubble phase, and only if the pointer is over the element's hitbox.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_down`]. Prefer the fluent method
+    /// Prefer the fluent method
     /// when you are building an element in a single chain.
     pub fn on_mouse_down(
         &mut self,
@@ -175,7 +171,7 @@ impl Interactivity {
     /// Runs `listener` for a press of any button over this element, during the capture phase.
     ///
     /// Use it to see a press before the element on top handles it. The listener runs only while the pointer is over
-    /// the element. This is the imperative equivalent of [`InteractiveElement::capture_any_mouse_down`].
+    /// the element.
     pub fn capture_any_mouse_down(
         &mut self,
         listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -190,7 +186,7 @@ impl Interactivity {
 
     /// Runs `listener` for a press of any button over this element, during the bubble phase.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::on_any_mouse_down`].
+    ///
     pub fn on_any_mouse_down(
         &mut self,
         listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -206,7 +202,7 @@ impl Interactivity {
     /// Runs `listener` for pressure changes over this element, during the bubble phase.
     ///
     /// Pressure events come from force-sensitive trackpads, which report them only on macOS today. The listener runs only while the pointer is over the element.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_pressure`].
+    ///
     pub fn on_mouse_pressure(
         &mut self,
         listener: impl Fn(&MousePressureEvent, &mut Window, &mut App) + 'static,
@@ -222,7 +218,7 @@ impl Interactivity {
     /// Runs `listener` for pressure changes over this element, during the capture phase.
     ///
     /// The listener runs only while the pointer is over the element.
-    /// This is the imperative equivalent of [`InteractiveElement::capture_mouse_pressure`].
+    ///
     pub fn capture_mouse_pressure(
         &mut self,
         listener: impl Fn(&MousePressureEvent, &mut Window, &mut App) + 'static,
@@ -289,7 +285,7 @@ impl Interactivity {
     /// Runs `listener` for a press of any button outside this element, during the capture phase.
     ///
     /// The listener does not run while a window prompt is open. Use it to close a popover when the user clicks elsewhere.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_down_out`].
+    ///
     pub fn on_mouse_down_out(
         &mut self,
         listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -308,7 +304,7 @@ impl Interactivity {
     /// Runs `listener` for every mouse press, in both phases, whether or not the pointer is over the element.
     ///
     /// The listener receives the phase, the element's hitbox, and the event. Check the phase yourself.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_down_all`].
+    ///
     pub fn on_mouse_down_all(
         &mut self,
         listener: impl Fn(&MouseDownEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
@@ -319,7 +315,7 @@ impl Interactivity {
     /// Runs `listener` when `button` is released outside this element, during the capture phase.
     ///
     /// The listener runs only if the pointer is not over the element's hitbox at the time of the release.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_up_out`].
+    ///
     pub fn on_mouse_up_out(
         &mut self,
         button: MouseButton,
@@ -339,7 +335,7 @@ impl Interactivity {
     /// Runs `listener` for every mouse release, in both phases, whether or not the pointer is over the element.
     ///
     /// The listener receives the phase, the element's hitbox, and the event. Check the phase yourself.
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_up_all`].
+    ///
     pub fn on_mouse_up_all(
         &mut self,
         listener: impl Fn(&MouseUpEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static,
@@ -377,7 +373,7 @@ impl Interactivity {
 
     /// Runs `listener` when the pointer leaves the window while it is over this element.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::on_mouse_exit`].
+    ///
     pub fn on_mouse_exit(
         &mut self,
         listener: impl Fn(&MouseExitEvent, &mut Window, &mut App) + 'static,
@@ -393,7 +389,7 @@ impl Interactivity {
     /// Runs `listener` for pointer moves during a drag of type `T`, in the capture phase.
     ///
     /// The listener runs for every move while a drag of type `T` is active, including moves outside this element.
-    /// This is the imperative equivalent of [`InteractiveElement::on_drag_move`].
+    ///
     pub fn on_drag_move<T>(
         &mut self,
         listener: impl Fn(&DragMoveEvent<T>, &mut Window, &mut App) + 'static,
@@ -424,7 +420,7 @@ impl Interactivity {
     ///
     /// The innermost element runs first. The event continues to ancestors unless a listener calls
     /// [`App::stop_propagation`], and elements behind an [`occlude`](InteractiveElement::occlude) hitbox don't receive it.
-    /// This is the imperative equivalent of [`InteractiveElement::on_scroll_wheel`].
+    ///
     pub fn on_scroll_wheel(
         &mut self,
         listener: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
@@ -452,7 +448,7 @@ impl Interactivity {
 
     /// Runs `listener` for pinch gestures during the capture phase, whether or not the pointer is over the element.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::capture_pinch`].
+    ///
     pub fn capture_pinch(
         &mut self,
         listener: impl Fn(&PinchEvent, &mut Window, &mut App) + 'static,
@@ -532,7 +528,7 @@ impl Interactivity {
     ///
     /// Use this when the action type is only known at runtime, such as when a component accepts actions from its
     /// caller. The listener receives the `action` value passed here, not the dispatched action, so only its type is
-    /// used for matching. This is the imperative equivalent of [`InteractiveElement::on_boxed_action`].
+    /// used for matching.
     pub fn on_boxed_action(
         &mut self,
         action: &dyn Action,
@@ -552,7 +548,7 @@ impl Interactivity {
     /// Runs `listener` for key presses, during the bubble phase.
     ///
     /// The listener runs only if no action bound to the keystroke handled it. The element must be on the focus path.
-    /// This is the imperative equivalent of [`InteractiveElement::on_key_down`].
+    ///
     pub fn on_key_down(
         &mut self,
         listener: impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static,
@@ -568,7 +564,7 @@ impl Interactivity {
     /// Runs `listener` for key presses during the capture phase. Like [`on_key_down`](Self::on_key_down), it runs only
     /// if no action bound to the keystroke handled it.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::capture_key_down`].
+    ///
     pub fn capture_key_down(
         &mut self,
         listener: impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static,
@@ -583,7 +579,7 @@ impl Interactivity {
 
     /// Runs `listener` for key releases, during the bubble phase.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::on_key_up`].
+    ///
     pub fn on_key_up(&mut self, listener: impl Fn(&KeyUpEvent, &mut Window, &mut App) + 'static) {
         self.key_up_listeners
             .push(Box::new(move |event, phase, window, cx| {
@@ -595,7 +591,7 @@ impl Interactivity {
 
     /// Runs `listener` for key releases during the capture phase.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::capture_key_up`].
+    ///
     pub fn capture_key_up(
         &mut self,
         listener: impl Fn(&KeyUpEvent, &mut Window, &mut App) + 'static,
@@ -625,7 +621,7 @@ impl Interactivity {
     /// Runs `listener` when a drag of type `T` is released over this element.
     ///
     /// The drop runs whether or not the drag started on this element. Use [`InteractiveElement::can_drop`] or a
-    /// [`DropListener`] to refuse drops. This is the imperative equivalent of [`InteractiveElement::on_drop`].
+    /// [`DropListener`] to refuse drops.
     pub fn on_drop<T: 'static>(&mut self, listener: impl Fn(&T, &mut Window, &mut App) + 'static) {
         let type_id = TypeId::of::<T>();
         let on_drop = Box::new(
@@ -653,7 +649,7 @@ impl Interactivity {
 
     /// Attaches a [`DropListener`] that handles drags of type `T` over this element.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::on_drop_alt`].
+    ///
     pub fn on_drop_alt<T: 'static>(&mut self, listener: DropListener<T>) {
         self.drop_listeners
             .push((TypeId::of::<T>(), listener.into_any()));
@@ -671,7 +667,7 @@ impl Interactivity {
     /// Sets a predicate that decides whether this element accepts the value being dragged.
     ///
     /// The predicate runs only while the pointer is over the element, and it receives the dragged value.
-    /// This is the imperative equivalent of [`InteractiveElement::can_drop`].
+    ///
     pub fn can_drop(
         &mut self,
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
@@ -701,7 +697,7 @@ impl Interactivity {
     /// A mouse click fires when the left button is pressed and released over the element without the pointer
     /// moving far enough to start a drag. A keyboard click fires when Enter or Space is pressed and released while
     /// the element is focused and no other key is pressed in between. The listener receives a [`ClickEvent`].
-    /// This is the imperative equivalent of [`StatefulInteractiveElement::on_click`]. It requires an element id.
+    /// It requires an element id.
     pub fn on_click(&mut self, listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
     where
         Self: Sized,
@@ -713,7 +709,7 @@ impl Interactivity {
 
     /// Runs `listener` for clicks with a button other than the left one.
     ///
-    /// This is the imperative equivalent of [`StatefulInteractiveElement::on_aux_click`]. It requires an element id.
+    /// It requires an element id.
     pub fn on_aux_click(&mut self, listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
     where
         Self: Sized,
@@ -728,7 +724,7 @@ impl Interactivity {
     ///
     /// The `constructor` runs when the drag starts. It receives the value and the cursor offset from the element's
     /// origin, and returns the view that is drawn under the pointer. Any dragged value must be `'static`.
-    /// This is the imperative equivalent of [`StatefulInteractiveElement::on_drag`].
+    ///
     pub fn on_drag<T, W>(
         &mut self,
         value: T,
@@ -755,7 +751,7 @@ impl Interactivity {
     ///
     /// The function receives the cursor offset and the cursor style, and returns an [`AnyDrag`]. Use
     /// [`Interactivity::on_drag`] unless you need to build the [`AnyDrag`] yourself.
-    /// This is the imperative equivalent of [`StatefulInteractiveElement::on_drag_alt`].
+    ///
     pub fn on_drag_alt<F>(&mut self, listener: F)
     where
         Self: Sized,
@@ -814,7 +810,7 @@ impl Interactivity {
     /// Runs `listener` with `true` when the pointer enters this element and with `false` when it leaves.
     ///
     /// Transitions caused by layout changes under a stationary pointer also run the listener. The listener does not
-    /// run while a drag is in progress. This is the imperative equivalent of [`StatefulInteractiveElement::on_hover`].
+    /// run while a drag is in progress.
     pub fn on_hover(&mut self, listener: impl Fn(&bool, &mut Window, &mut App) + 'static)
     where
         Self: Sized,
@@ -880,7 +876,7 @@ impl Interactivity {
     /// Sets a function that builds a tooltip view that stays open while the pointer is over it.
     ///
     /// This is the same as [`Interactivity::tooltip`], except the pointer can move into the tooltip without closing it.
-    /// This is the imperative equivalent of [`StatefulInteractiveElement::hoverable_tooltip`].
+    ///
     ///
     /// # Panics
     ///
@@ -912,7 +908,7 @@ impl Interactivity {
     /// Stops the mouse from reaching elements behind this element.
     ///
     /// Use [`Interactivity::block_mouse_except_scroll`] for most cases, because it still lets scroll events reach
-    /// the elements behind. This is the imperative equivalent of [`InteractiveElement::occlude`].
+    /// the elements behind.
     pub fn occlude_mouse(&mut self) {
         self.hitbox_behavior = HitboxBehavior::BlockMouse;
     }
@@ -920,14 +916,14 @@ impl Interactivity {
     /// Marks this element's bounds as a window control area, such as a title bar button.
     ///
     /// The platform uses `area` to decide what clicks and drags here do, such as moving or closing the window.
-    /// This is the imperative equivalent of [`InteractiveElement::window_control_area`].
+    ///
     pub fn window_control_area(&mut self, area: WindowControlArea) {
         self.window_control = Some(area);
     }
 
     /// Stops mouse interactions from reaching elements behind this element, but lets scroll events through.
     ///
-    /// This is the imperative equivalent of [`InteractiveElement::block_mouse_except_scroll`].
+    ///
     pub fn block_mouse_except_scroll(&mut self) {
         self.hitbox_behavior = HitboxBehavior::BlockMouseExceptScroll;
     }
@@ -2987,12 +2983,13 @@ pub(crate) struct AriaProperties {
     pub(crate) live_atomic: Option<bool>,
 }
 
-/// The interactivity state of an element: its listeners, styles, focus and scroll state.
+/// Shared listener, style, focus, and scroll storage for interactive elements.
 ///
-/// [`Div`] and [`Stateful`] keep one of these. Use it directly when you build your own element and want the same
-/// mouse, keyboard, drag and styling behavior as [`div`]. See the
-/// [elements concept](crate::_documentation::concepts::elements) and the
-/// [custom drawing guide](crate::_documentation::guides::custom_drawing).
+/// [`Div`] and [`Stateful`] embed an `Interactivity` and expose its methods as fluent builders
+/// through [`InteractiveElement`] and [`StatefulInteractiveElement`]; the `&mut self` methods on
+/// `Interactivity` itself are their imperative counterparts for custom elements. See
+/// [elements, components and views](crate::_documentation::concepts::elements) and
+/// [custom drawing](crate::_documentation::guides::custom_drawing).
 #[derive(Default)]
 pub struct Interactivity {
     /// The element's id, if it has one. Elements that keep state between frames need an id.
