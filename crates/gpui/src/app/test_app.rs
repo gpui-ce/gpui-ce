@@ -609,9 +609,9 @@ impl<V: 'static + Render> TestAppWindow<V> {
 
     /// Sends each keystroke in a space-separated list, in order, then runs pending tasks after each one.
     ///
-    /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`]. A space
-    /// character in the list is a separator, so use `simulate_keystroke("space")` to
-    /// press the space bar. Two spaces in a row send an empty keystroke.
+    /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`]. Use the
+    /// token `space` for the space bar, as in `"tab space"`. A literal space is a
+    /// separator, and two spaces in a row leave an empty part.
     ///
     /// # Panics
     ///
