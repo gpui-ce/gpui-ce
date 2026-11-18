@@ -10,6 +10,9 @@ pub use indexmap::Equivalent;
 pub use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 pub use std::collections::*;
 
+mod any;
 pub mod vecmap;
 #[cfg(test)]
 mod vecmap_tests;
+
+pub use any::*;

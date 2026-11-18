@@ -100,7 +100,7 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
 #[cfg(all(test, feature = "test-support", target_os = "macos"))]
 mod tests {
     use super::*;
-    use gpui::{AppContext, Empty, VisualTestAppContext};
+    use gpui::{Empty, VisualTestAppContext};
     use std::cell::RefCell;
     use std::time::Duration;
 
@@ -174,6 +174,7 @@ mod tests {
     #[test]
     #[ignore] // Requires macOS main thread - window creation fails on test threads
     fn test_window_spawn_uses_test_dispatcher() {
+        use gpui::context::*;
         let mut cx = VisualTestAppContext::new(current_platform(false));
 
         let task_ran = Rc::new(RefCell::new(false));

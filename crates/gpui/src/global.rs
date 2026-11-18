@@ -1,4 +1,4 @@
-use crate::{App, BorrowAppContext};
+use crate::App;
 
 /// A marker trait for types that can be stored in GPUI's global state.
 ///
@@ -19,6 +19,7 @@ use crate::{App, BorrowAppContext};
 /// [`Global`] and holds the global state. Then create a newtype struct that wraps
 /// the global type and create custom accessor methods to expose the desired subset
 /// of operations.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait Global: 'static {
     // This trait is intentionally left empty, by virtue of being a marker trait.
     //
@@ -27,6 +28,7 @@ pub trait Global: 'static {
 }
 
 /// A trait for reading a global value from the context.
+#[deprecated(note = "migrating to entity-based globals")]
 pub trait ReadGlobal {
     /// Returns the global instance of the implementing type.
     ///
@@ -34,6 +36,7 @@ pub trait ReadGlobal {
     fn global(cx: &App) -> &Self;
 }
 
+#[allow(deprecated)]
 impl<T: Global> ReadGlobal for T {
     fn global(cx: &App) -> &Self {
         cx.global::<T>()
@@ -41,26 +44,29 @@ impl<T: Global> ReadGlobal for T {
 }
 
 /// A trait for updating a global value in the context.
+#[deprecated(note = "migrating to entity-based globals")]
+#[allow(deprecated)]
 pub trait UpdateGlobal {
     /// Updates the global instance of the implementing type using the provided closure.
     ///
     /// This method provides the closure with mutable access to the context and the global simultaneously.
     fn update_global<C, F, R>(cx: &mut C, update: F) -> R
     where
-        C: BorrowAppContext,
+        C: crate::BorrowAppContext,
         F: FnOnce(&mut Self, &mut C) -> R;
 
     /// Set the global instance of the implementing type.
     fn set_global<C>(cx: &mut C, global: Self)
     where
-        C: BorrowAppContext;
+        C: crate::BorrowAppContext;
 }
 
+#[allow(deprecated)]
 impl<T: Global> UpdateGlobal for T {
     #[track_caller]
     fn update_global<C, F, R>(cx: &mut C, update: F) -> R
     where
-        C: BorrowAppContext,
+        C: crate::BorrowAppContext,
         F: FnOnce(&mut Self, &mut C) -> R,
     {
         cx.update_global(update)
@@ -68,7 +74,7 @@ impl<T: Global> UpdateGlobal for T {
 
     fn set_global<C>(cx: &mut C, global: Self)
     where
-        C: BorrowAppContext,
+        C: crate::BorrowAppContext,
     {
         cx.set_global(global)
     }
