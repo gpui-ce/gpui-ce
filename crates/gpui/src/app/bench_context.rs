@@ -506,7 +506,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
     ///
     /// # Panics
     ///
-    /// Panics if the platform isn't built with [`bench_platform`].
+    /// Panics if the platform's background executor lacks a [`ThreadedDispatcher`].
     pub fn new(
         platform: Rc<dyn Platform>,
         benchmark_name: Option<&'static str>,
@@ -522,7 +522,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
     ///
     /// # Panics
     ///
-    /// Panics if the platform isn't built with [`bench_platform`].
+    /// Panics if the platform's background executor lacks a [`ThreadedDispatcher`].
     #[doc(hidden)]
     pub fn new_with_platform_and_report(
         platform: Rc<dyn Platform>,
@@ -817,7 +817,8 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
     /// Opens a window with an empty root view, runs queued work, and returns a [`BenchWindowContext`] for it.
     ///
-    /// The window uses the maximized bounds of the test display.
+    /// The window opens in windowed mode with the bounds of the primary display, or the
+    /// fallback bounds from [`Bounds::maximized`] when no display is available.
     ///
     /// # Panics
     ///
