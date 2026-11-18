@@ -100,6 +100,8 @@ pub trait UnicodeTextStorage {
     /// Moving back from the start, or forward from the end, returns the same
     /// offset. A `boundary` of `Cluster` moves one grapheme cluster, and
     /// `Document` moves to the start or end of the content.
+    ///
+    /// Pass `caret` on a UTF-8 character boundary. The default navigation may panic otherwise.
     fn offset_from_caret(
         &self,
         caret: usize,
@@ -169,10 +171,11 @@ pub trait UnicodeTextStorage {
         }
     }
 
-    /// Returns the range of the word that contains `position`.
+    /// Returns the range of the word containing `position` or ending at it.
     ///
-    /// If `position` is not inside a word, returns the empty range at
-    /// `position`. `position` is clamped to the content length.
+    /// If two words share that boundary, returns the earlier one. If neither
+    /// case applies, returns the empty range at `position`.
+    /// `position` is clamped to the content length.
     fn word_range_at(&self, position: usize) -> Range<usize> {
         let offset = position.min(self.content_utf8().len());
 

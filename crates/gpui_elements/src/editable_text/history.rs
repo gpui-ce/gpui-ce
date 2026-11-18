@@ -2,7 +2,8 @@ use gpui::CaretSelection;
 use std::{ops::Range, time::Duration};
 use web_time::Instant;
 
-/// The most entries an undo stack keeps. The oldest entry is dropped when a new one would exceed it.
+/// The undo stack limit enforced when [`EditableTextHistory::record`] adds an entry.
+/// Recording drops the oldest entry when the stack is already at the limit.
 pub const MAX_HISTORY_LEN: usize = 1000;
 
 /// The default time window in which consecutive edits are grouped into one undo entry.
@@ -129,6 +130,8 @@ impl EditableTextHistory {
     }
 
     /// Pushes `entry` onto the given stack.
+    ///
+    /// Use [`Self::record`] to enforce the undo limit and clear the redo stack for a new edit.
     pub fn push(&mut self, kind: HistoryKind, entry: HistoryEntry) {
         self.stack_mut(kind).push(entry);
     }
