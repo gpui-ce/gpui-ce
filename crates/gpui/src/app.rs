@@ -2356,8 +2356,8 @@ impl App {
     ///
     /// # Panics
     ///
-    /// In debug builds this panics if called after the quit handlers have started
-    /// running. Release builds log a debug message and continue.
+    /// In debug builds this panics while the app is waiting for shutdown cleanup.
+    /// Release builds log a debug message and continue.
     ///
     /// # Examples
     ///
@@ -2616,12 +2616,12 @@ impl App {
         subscription
     }
 
-    /// Calls `on_new` each time an entity of type `T` is created.
+    /// Calls `on_new` for entities of type `T` created with [`AppContext::new`].
     ///
     /// The callback receives the new state, the [`Window`] if the entity was created with
-    /// one, and a [`Context`] for it. Use it to set up behavior for every instance of a
-    /// type, such as registering an observer. Keep the returned [`Subscription`] alive
-    /// for the callback to keep running.
+    /// one, and a [`Context`] for it. For entities created through
+    /// [`AppContext::insert_entity`], register any observers in the builder.
+    /// Keep the returned [`Subscription`] alive for the callback to keep running.
     pub fn observe_new<T: 'static>(
         &self,
         on_new: impl 'static + Fn(&mut T, Option<&mut Window>, &mut Context<T>),
