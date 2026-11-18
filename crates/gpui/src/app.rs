@@ -1515,7 +1515,7 @@ impl App {
     }
 
     /// Sets the GPU device requirements (extra features and limits) for the renderer.
-    /// Only macOS uses them.
+    /// The Wayland and X11 backends use these requirements, as does macOS with the `wgpu` feature.
     ///
     /// Call this before opening any window. The argument must be a
     /// `gpui_wgpu::WgpuDeviceRequirements` boxed as `Box<dyn Any>`.
