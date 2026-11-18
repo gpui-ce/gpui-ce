@@ -1,20 +1,21 @@
 # Show long lists and scroll
 
-Start with the cost of building one frame. A short list can render all its
-children directly. For many equal-height rows, [`uniform_list`] creates only
-the rows in the viewport. For rows whose heights differ or change, [`list`]
-uses [`ListState`] to keep geometry and renders the viewport plus configured
-overdraw. Measurement and a focused off-screen row can make that range larger.
+Choose the scrolling container that matches your item count and row heights:
 
-Ordinary scrolling uses a stable [`ElementId`] and a [`ScrollHandle`] retained
-by the view. The handle reads positions from the last frame; changing it
-requests work for the next frame. A variable-height list likewise depends on
-`ListState` matching the row data.
+| Container | Handle | Best for |
+| --- | --- | --- |
+| `div().id(...).overflow_y_scroll()` | [`ScrollHandle`] | Short lists or arbitrary mixed children laid out every frame |
+| [`uniform_list`] | [`UniformListScrollHandle`] | Large lists where every row has the same height |
+| [`list`] | [`ListState`] | Large lists where row heights vary, stream in, or anchor to the bottom |
 
-## Render a simple scrolling container
+All three keep persistent row data on your view or model, because elements
+themselves live for one frame only.
 
-Give a [`Div`] an ID, set its overflow to scroll, and track it with the view's
-[`ScrollHandle`]:
+## Scroll a `div` with `ScrollHandle`
+
+Give a [`Div`] a stable [`ElementId`], a bounded height, and
+[`overflow_y_scroll`](StatefulInteractiveElement::overflow_y_scroll), then
+attach a [`ScrollHandle`] stored on the view:
 
 ```rust
 # use gpui::*;
@@ -37,29 +38,19 @@ impl Render for Log {
 }
 ```
 
-Every child is laid out on every frame. This keeps ordinary layout simple and
-works well for a short list, but frame cost grows with row count and row render
-cost. If profiling identifies full-list construction or layout as the bottleneck,
-move to a virtualized element; the useful threshold depends on the content and
-device.
+[`ScrollHandle`] reads geometry from the most recently drawn frame and queues
+programmatic scroll changes for the next frame:
 
-## Read a position or request a scroll
-
-[`ScrollHandle`] reports the position computed by the last frame. A setter or a
-scroll request queues work for the next frame, so read it after drawing when
-you need the resulting offset:
-
-- [`ScrollHandle::offset`] is the distance from the container's top to the top
-  of its content. It starts at zero and becomes more negative as you scroll down.
-- [`ScrollHandle::max_offset`] is how far the content can scroll, as a positive
-  distance.
-- [`ScrollHandle::set_offset`] sets the offset directly.
-- [`ScrollHandle::scroll_to_bottom`] and [`ScrollHandle::scroll_to_item`] are
-  applied when the next frame is prepared. `scroll_to_item` scrolls the least
-  amount that makes the child fully visible. [`ScrollHandle::scroll_to_top_of_item`]
-  puts the child at the top instead.
-- [`ScrollHandle::top_item`] and [`ScrollHandle::bottom_item`] return the indices
-  of the children at the edges of the viewport.
+* [`ScrollHandle::offset`] returns the content origin relative to the container:
+  `px(0.)` at the top, becoming negative as you scroll down.
+* [`ScrollHandle::max_offset`] returns the maximum scrollable distance as
+  positive coordinates, and [`ScrollHandle::set_offset`] sets the offset
+  directly.
+* [`ScrollHandle::scroll_to_bottom`], [`ScrollHandle::scroll_to_item`] (minimum
+  movement to reveal a child), and [`ScrollHandle::scroll_to_top_of_item`] take
+  effect on the next draw.
+* [`ScrollHandle::top_item`] and [`ScrollHandle::bottom_item`] return the
+  indices of children at the viewport edges.
 
 ```rust
 # use gpui::*;
@@ -83,14 +74,12 @@ window.draw();
 window.read(|log, _| assert!(log.scroll.offset().y < px(0.)));
 ```
 
-## Virtualize equal-height rows with `uniform_list`
+## Equal-height rows with `uniform_list`
 
-[`uniform_list`] asks its callback for the visible range and places each row at
-`index * measured_height`. It measures one row during layout and prepaint, then
-does no layout for rows outside the viewport. This suits a 10,000-row contact
-table with 32-pixel rows, provided every returned row has the measured height.
-Use [`Context::processor`] when the callback needs to read the view that owns
-the data:
+[`uniform_list`] measures a single sample row, computes every row's vertical
+offset as `index * row_height`, and builds elements only for the visible index
+range. Use [`Context::processor`] when the row builder needs `&mut Self` and
+`&mut Context<Self>`:
 
 ```rust
 # use gpui::*;
@@ -124,39 +113,22 @@ impl Render for Contacts {
 # window.draw();
 ```
 
-Keep the [`UniformListScrollHandle`] on the view and pass a [`ScrollStrategy`]
-to [`UniformListScrollHandle::scroll_to_item`]. The strategy matters when the
-list needs to move:
+Drive keyboard or programmatic scrolling through [`UniformListScrollHandle`]:
 
-- [`ScrollStrategy::Nearest`] moves the least amount. Use it for keyboard selection.
-- [`ScrollStrategy::Top`], [`ScrollStrategy::Center`] and [`ScrollStrategy::Bottom`]
-  put the row at that edge of the viewport, or as close as the list allows.
-- [`UniformListScrollHandle::scroll_to_item`] does nothing when the row is
-  already fully visible. [`UniformListScrollHandle::scroll_to_item_strict`]
-  applies the strategy every time, even then.
+* [`ScrollStrategy::Nearest`] moves the viewport only when the target row lies
+  outside it, making it the standard choice for arrow-key selection.
+* [`ScrollStrategy::Top`], [`ScrollStrategy::Center`], and
+  [`ScrollStrategy::Bottom`] align the row with that part of the viewport.
+* [`UniformListScrollHandle::scroll_to_item`] leaves already-visible rows in
+  place; [`UniformListScrollHandle::scroll_to_item_strict`] applies the
+  alignment unconditionally.
 
-```rust
-# use gpui::*;
-# struct Contacts {
-#     scroll: UniformListScrollHandle,
-# }
-# impl Contacts {
-fn select_row(&mut self, ix: usize, cx: &mut Context<Self>) {
-    self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
-    cx.notify();
-}
-# }
-```
+## Variable-height rows with `list`
 
-## Virtualize variable-height rows with `list`
-
-[`list`] measures each row as it renders it and stores measurements and scroll
-state in [`ListState`]. Its callback receives the viewport and overdraw range.
-The state must follow the data mutation: use [`ListState::reset`] for a complete
-replacement, [`ListState::splice`] when rows are inserted, removed, or moved,
-and [`ListState::remeasure_items`] when existing rows change height. Without the
-matching operation, old positions remain in use and the scrollbar can describe
-the wrong content:
+[`list`] pairs with a [`ListState`] stored on your view (cloning `ListState` is
+cheap and shares the underlying state). It renders the visible viewport plus an
+overdraw margin in pixels on each side to reduce pop-in, caching each row's
+measured height as it renders:
 
 ```rust
 # use gpui::*;
@@ -199,77 +171,42 @@ impl Render for Feed {
 # window.read(|feed, _| assert_eq!(feed.state.item_count(), 2));
 ```
 
-When row count, order, or height changes, update the data and `ListState`
-together, then call `cx.notify()`, as `push` does above. Notification schedules
-the render; the state update keeps geometry consistent. A content-only change
-that preserves row geometry needs notification without remeasurement.
+Whenever your backing collection changes count, order, or item heights, update
+`ListState` in the same update as the data and call `cx.notify()`:
 
-A [`ListState`] is cheap to clone because clones share the same state. Keep one
-on the view and pass a clone to [`list`]. The overdraw passed to
-[`ListState::new`] adds a band above and below the viewport. Those rows are
-laid out and measured before entering view, reducing visible popping; the
-callback can therefore receive more rows than the viewport shows.
+* [`ListState::splice`] inserts, deletes, or replaces an index range while
+  preserving surrounding measurements and scroll position
+  (`splice(len..len, 1)` appends one item). Use [`ListState::splice_focusable`]
+  when inserted rows can hold keyboard focus so focused rows stay rendered even
+  while scrolled out of view.
+* [`ListState::reset`] replaces the entire list and jumps back to the start (for
+  [`ListAlignment::Top`]) or end (for [`ListAlignment::Bottom`]).
+* [`ListState::remeasure_items`] invalidates cached heights for an index range
+  whose content grew or shrank in place (for example streaming markdown), and
+  [`ListState::remeasure`] invalidates all heights when a container font size
+  changes.
 
-Choose the state operation by what changed. Each one controls measurements and
-the resulting scroll position:
+Three details matter when tuning variable-height lists:
 
-- [`ListState::splice`] replaces a range of items with a number of new ones. Use
-  it when items are added, removed or moved. `splice(old_count..old_count, 1)`
-  appends one.
-- [`ListState::reset`] replaces every item and resets the position to the start
-  for [`ListAlignment::Top`], or the end for [`ListAlignment::Bottom`]. It also
-  clears pending scroll events. Use `splice` when a replacement should retain
-  the current position.
-- [`ListState::remeasure_items`] marks a range for re-measurement when its content
-  changes height but the items stay, such as streaming text. It keeps the scroll
-  position. [`ListState::splice`] changes the row count; it does not remeasure an
-  existing row whose height changed, so call both when one operation does both.
-- [`ListState::remeasure`] re-measures everything and keeps the position
-  proportionally, for when the font size changes.
-
-Other methods:
-
-- [`ListAlignment::Bottom`] anchors the list to the bottom, as a chat log does.
-  With [`FollowMode::Tail`], set through [`ListState::set_follow_mode`], the list
-  keeps the newest item in view until the user scrolls up.
-- [`ListState::scroll_to_reveal_item`] scrolls one item fully into view.
-- [`ListState::scroll_to_end`] scrolls past the last item. Use it when that item
-  is still growing.
-- [`ListState::logical_scroll_top`] returns the current [`ListOffset`].
-
-## Know what virtualization retains
-
-`uniform_list` renders and paints only the viewport range. It measures one row
-and derives every other position from that height, so it cannot represent rows
-whose heights differ. Rows outside the viewport are not created. Keep row data
-on the view because row elements are dropped as they scroll away.
-
-`list` renders and paints the viewport plus the overdraw from `ListState::new`.
-It measures each rendered row and uses those measurements to locate later rows.
-The extra rows reduce visible popping, but a variable-height list may measure
-more rows as content enters the overdraw region.
-
-That flexibility has three consequences:
-
-- [`list`] does not know a row's height until it renders it. An unmeasured row
-  contributes zero pixels, so the scrollbar thumb can change as you scroll.
-  [`ListState::measure_all`] measures every row on the first frame, which is
-  expensive for a large list. [`ListState::with_uniform_item_height`] and
-  [`ListState::reset_with_uniform_height`] supply an estimate for rows that have
-  not been rendered. As those rows are measured, their actual heights replace
-  the estimates, which can change the scrollbar's proportions.
-- When a row leaves the rendered range, its element state can be dropped. Keep
-  persistent row data in your model; an element represents one frame, not durable
-  row storage.
-- A row that holds keyboard focus stays rendered while it is off screen, if you
-  add it with [`ListState::splice_focusable`].
+* **Bottom-anchored timelines**: [`ListAlignment::Bottom`] anchors items to the
+  bottom edge like a chat transcript. Pair it with
+  [`ListState::set_follow_mode`]`(`[`FollowMode::Tail`]`)` to stay pinned to new
+  messages until the user scrolls upward, or call [`ListState::scroll_to_end`] /
+  [`ListState::scroll_to_reveal_item`] explicitly.
+* **Scrollbar thumb stability**: Unmeasured rows contribute `0px` until
+  rendered. Supply an estimated height with
+  [`ListState::with_uniform_item_height`] (or
+  [`ListState::reset_with_uniform_height`]) so scrollbar proportions stay steady
+  before every row has been visited; avoid [`ListState::measure_all`] on large
+  lists because it lays out every row up front.
+* **Reading scroll position**: [`ListState::logical_scroll_top`] returns the
+  current [`ListOffset`] (`item_ix` and pixel `offset_in_item`).
 
 ## See also
 
-- [List example](crate::_documentation::examples::list), a 10,000-row
-  `uniform_list` with keyboard selection. Run it with `cargo run --example list`.
-- [Layout and style](crate::_documentation::concepts::layout_and_style) for how
-  a container's size is decided.
-- [The frame](crate::_documentation::concepts::the_frame) for when layout and
-  paint run.
-- [Performance](crate::_documentation::guides::performance) for finding slow frames.
+* [List example](crate::_documentation::examples::list) — a 10,000-row
+  `uniform_list` with keyboard selection (`cargo run --example list`).
+* [Layout and style](crate::_documentation::concepts::layout_and_style) — how
+  bounded container heights interact with flex layouts.
+* [Performance](crate::_documentation::guides::performance) — profiling frame
+  times on large views.

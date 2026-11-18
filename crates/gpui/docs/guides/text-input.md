@@ -1,19 +1,15 @@
 # Accept text input
 
-An editable field has two parts: an `EditableTextState` entity that survives
-between frames, and an element that lays out and paints it. Store the entity
-in your view. It holds the text, selection, undo history, focus handle and
-input-method composition while `render` rebuilds the element.
+The `gpui_ce_elements` crate provides `editable_text::text_input`
+for single-line fields and `editable_text::text_area`
+for multi-line editors. Both render an `EditableTextElement` backed by an
+`EditableTextState` entity that owns the text buffer, selection, undo history,
+IME composition range, and [`FocusHandle`](gpui::FocusHandle).
 
-The `gpui_ce_elements` crate supplies `text_input` for a single line and
-`text_area` for several lines. They share the state type, so a form can use
-either without changing how it reads the value or subscribes to edits.
+## Hold state and install editing bindings
 
-## Hold the state
-
-Create the entity once in the view's constructor and pass it to the field
-when rendering. This field starts with `"Ada"`; `StringStorage::default()`
-would start empty:
+Create `EditableTextState` once when constructing your view and pass a weak
+handle (`state.downgrade()`) plus a stable element ID to `text_input`:
 
 ```rust
 # use gpui::{AppContext as _, Context, Entity, Window, div, prelude::*};
@@ -32,26 +28,18 @@ div().child(text_input("name").state(self.name.downgrade()))
 # }
 ```
 
-The field takes a [`WeakEntity`](gpui::WeakEntity); `Profile::name` keeps the
-strong handle alive. Creating a replacement entity on every render would also
-replace its selection, history, composition and [`FocusHandle`](gpui::FocusHandle).
-Retaining a handle does not itself focus the field: the element tracks the
-handle, and the app selects it with `window.focus`, as in the submit example.
-Give the field an ID unique within the view (`"name"` here).
+If surrounding code never reads or mutates the buffer directly, omit `.state(...)`
+(or call `EditableTextState::use_keyed` / `use_keyed_init` during `render`) so
+the window retains the state entity under the element's ID for as long as that
+ID remains mounted. `StringStorage` wraps a `String` for everyday forms;
+implement `UnicodeTextStorage` over a rope when editing large documents so
+`len_utf16` does not scan the full string.
 
-If only the element needs the state, `EditableTextState::use_keyed` can retain
-it under that ID instead. Call it during `render`; it finds the existing state
-or creates it, and retains it while the keyed element is rendered.
-`use_keyed_init` supplies initial content. Its initializer runs on creation,
-not on every render, so later changes to that initializer do not replace the
-user's text.
-
-## Install the editing keys
-
-Typing can work even when Backspace and undo do nothing. Text comes through
-the platform input handler; editing commands come through key bindings. The
-element sets the `EditableText` key context, but the app must install its
-`default_bindings()`. Do this once at startup, before opening a window:
+Typed characters arrive through the platform input handler automatically, while
+Backspace, Delete, arrow navigation, selection, clipboard commands, and
+Undo/Redo dispatch as GPUI actions scoped to `DEFAULT_INPUT_CONTEXT`
+(`"EditableText"`). Register the default editing keymap once at startup before
+opening windows:
 
 ```rust
 # use gpui::App;
@@ -62,43 +50,31 @@ cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
 # }
 ```
 
-The [keystroke guide](crate::_documentation::guides::keyboard) explains how
-GPUI chooses a binding from the focused path. The `default_bindings` reference
-lists the editing shortcuts for each platform.
+Always pass `Some(DEFAULT_INPUT_CONTEXT)` so editing bindings activate only
+while a text field lies on the focus path (`secondary` in those bindings maps to
+`Cmd` on macOS and `Ctrl` elsewhere).
 
-## Read and replace the text
+## Read, replace, subscribe, and submit
 
-Read the entity and call `EditableTextState::as_str` to obtain the current
-value. To replace it from application code, call `EditableTextState::emplace`.
-Clearing a submitted field with `emplace("")` is an edit: it moves the caret
-to the end, records undo history and emits a change event. Use `emplace` for
-later programmatic changes, including changes to a field created with
-`use_keyed_init`.
+Read the current string with `EditableTextState::as_str`. Replace it from
+application code with `EditableTextState::emplace`, which swaps the buffer,
+moves the caret to the end, pushes an undo entry, emits `TextChanged`, and
+notifies the entity (bypassing `accepts_input(false)` and single-line newline
+stripping). Programmatic caret and selection methods—`move_to`, `select_to`,
+`select_document`, and `select_linear`—take **UTF-8 byte offsets** into
+`as_str`, clamping offsets past the end.
 
-## React to changes
+Subscribe to `TextChanged` with `cx.subscribe` and store the
+[`Subscription`](gpui::Subscription) on your view. Because `TextChanged` fires
+after each edit (including intermediate IME composition steps) and carries no
+payload, read `as_str` inside the callback and guard against recursion if you
+call `emplace` in response.
 
-An edit, undo, redo or `emplace` emits `TextChanged`. A `cx.subscribe` callback
-can read `as_str` to update a count, enable a button, start a search or display
-validation feedback. Keep its [`Subscription`](gpui::Subscription) in the view;
-dropping the subscription unregisters the callback. The form below uses one
-to request a new render as the user types.
-
-A change subscriber sees the value after mutation and cannot veto that edit.
-Calling `emplace` there causes a second edit and a second event, so any such
-correction needs a guard against recursion. Validate application-supplied
-values before calling `emplace`. To filter typed input before mutation, write
-an [input handler](#implement-your-own-text-element), including its selection
-and input-method protocol.
-
-## Submit with Enter
-
-A single-line field's Enter action calls `propagate`, allowing GPUI to try the
-next binding for the keystroke. Add an Enter binding in the enclosing view's
-key context to submit the form. A multi-line area handles Enter by inserting
-a newline instead.
-
-Here Enter appends the name to a list and clears the field. The test installs
-both sets of bindings, focuses the field, types `Ada` and submits it:
+On a single-line `text_input`, both `Enter` and `Tab` call `cx.propagate()`,
+letting an enclosing form handle submission and focus traversal. (`Escape`
+collapses the selection and blurs the field.) On a multi-line `text_area`,
+`Enter` inserts `\n`, `Tab` inserts `\t`, and `Up`/`Down` move across wrapped
+visual lines:
 
 ```standalone_crate
 use gpui::{
@@ -178,81 +154,58 @@ window.simulate_keystrokes("enter");
 assert_eq!(window.read(|form, _| form.submitted.clone()), ["Ada"]);
 assert_eq!(window.read(|form, cx| form.name.read(cx).as_str().to_string()), "");
 
-// `emplace` is an edit, so the default Undo action restores the previous text.
 window.simulate_keystrokes("secondary-z");
 assert_eq!(window.read(|form, cx| form.name.read(cx).as_str().to_string()), "Ada");
 ```
 
-The handler operates on `SignUp::name`, the entity used by the element.
-Its final assertion exercises the undo consequence: clearing via `emplace`
-leaves an edit that Undo can reverse.
+## Field styling, read-only mode, and IME composition
 
-## Style the field
+Alongside [`Styled`](gpui::Styled) box and typography methods, editable fields
+expose field-specific setters:
 
-Padding, borders, size and colors use the usual element styles. For the
-editing parts, use these setters:
+* `placeholder` and `placeholder_color` style the hint shown when storage is
+  empty.
+* `caret_color`, `caret_w` (default `2px`), `caret_h` (default `relative(1.)` of
+  line height), and `caret_blink_interval_500ms` configure the cursor (blinking
+  is off until an interval is set).
+* `selection_color` and `marked_color` color the selection highlight and the
+  underline drawn beneath active IME pre-edit text.
+* `accepts_input(false)` makes the field read-only: typing, paste, cut, delete,
+  pointer focus/selection, and IME registration are disabled, while programmatic
+  focus (`window.focus`), arrow navigation, Copy, Undo/Redo, and single-line
+  `Enter`/`Tab` propagation remain active.
 
-- `placeholder` supplies the empty-field hint; `placeholder_color` colors it.
-- `caret_color`, `selection_color` and `caret_w` style the caret and selection.
-- `caret_blink_interval_500ms` blinks the caret. Without an interval, the caret
-  remains visible.
-- `accepts_input(false)` makes the field read-only while leaving it focusable,
-  so the user can still select and copy its text. Typing, paste, cut, delete,
-  and, in a multi-line field, Enter and Tab do nothing until input is enabled
-  again.
+Neither `text_input` nor `text_area` sets overflow clipping automatically: add
+`whitespace_nowrap().overflow_x_scroll()` on single-line inputs that can exceed
+their width, and pair `text_area` with a bounded height and
+`overflow_y_scroll()`.
 
-Set `whitespace_nowrap()` on a single-line field to keep its content on one
-line. A multi-line area wraps by default; give it a height, or minimum and
-maximum heights, and use `overflow_y_scroll()` when more text can fit than
-the height allows.
+During IME composition (such as Japanese kana-to-kanji or dead-key accents),
+the platform calls `replace_and_mark_text_in_range` for each pre-edit step and
+finishes with `replace_text_in_range` or `unmark_text`. `EditableTextState`
+suppresses per-keystroke undo entries while a marked range is active so
+committing a composition records cleanly on the undo stack.
 
-## Use a multi-line area
+## Implement a custom `EntityInputHandler`
 
-Switch to `text_area` when the value can contain several lines. It accepts the
-same setters and state as `text_input`; Enter inserts a newline and the arrow
-keys move between lines. The [text input example](crate::_documentation::examples::text_input)
-puts both controls in one form.
+When building an editor that cannot use `EditableTextState`, implement
+[`EntityInputHandler`](gpui::EntityInputHandler) on your view and register an
+[`ElementInputHandler`](gpui::ElementInputHandler) with
+[`Window::handle_input`](gpui::Window::handle_input) on every paint frame while
+focused.
 
-## Input methods
+Every offset and range in [`EntityInputHandler`](gpui::EntityInputHandler) is
+measured in **UTF-16 code units** to match macOS, Windows, and web IME APIs,
+whereas Rust strings slice on **UTF-8 byte offsets**. Convert at the boundary
+with [`utf16_to_utf8_offset`](gpui::utf16_to_utf8_offset) and
+[`utf8_to_utf16_offset`](gpui::utf8_to_utf16_offset). Note two protocol rules:
 
-`EditableTextState` implements [`EntityInputHandler`](gpui::EntityInputHandler)
-for input methods: it maintains marked text while the platform displays
-candidates and eventually commits a choice. Composition can emit several
-`TextChanged` events before that commit. Replacing an existing marked range
-does not create a separate undo step for every update.
-
-Subscribers must therefore accept intermediate text. A `TextChanged` event
-alone is not evidence that composition has finished; submit through an
-explicit action, and let validation feedback tolerate an unfinished value.
-
-The default bindings map Cmd-Space on macOS and Ctrl-Space elsewhere to
-`ShowCharacterPalette`, which asks the platform to open its character palette.
-The host may reserve that shortcut before the app receives it.
-
-## Implement your own text element
-
-Use the supplied fields unless the editing behavior requires a custom one.
-For a custom field, implement [`EntityInputHandler`](gpui::EntityInputHandler)
-on the view and register it during paint with
-[`ElementInputHandler`](gpui::ElementInputHandler). The window can then send
-typed text and IME updates to that view.
-
-The sketch below demonstrates registration and range conversion only. It
-reports the caret at the end and ignores the selection requested within an
-IME composition (`new_selected_range`). It is incomplete as an editor: a
-working field must retain and honor the selection, including that argument.
-
-The Rust string uses UTF-8 byte offsets; the platform input protocol uses
-UTF-16 code units. Convert at the handler boundary with
-[`utf8_to_utf16_offset`](gpui::utf8_to_utf16_offset) and
-[`utf16_to_utf8_offset`](gpui::utf16_to_utf8_offset). The two units are not
-interchangeable. In particular, `selected_text_range` and
-`marked_text_range` return UTF-16 ranges, while `replace_text_in_range` and
-`replace_and_mark_text_in_range` receive UTF-16 replacement ranges. Convert
-those inputs before slicing `self.text`, and convert the model's byte positions
-back before returning selections or marked ranges to the platform. The
-`new_selected_range` argument is also UTF-16 units within `new_text`; it is not
-a byte range into the model.
+* When `range` is `None` in `replace_text_in_range` or
+  `replace_and_mark_text_in_range`, replace the current `marked` range if one
+  exists, or the current `selection` otherwise.
+* In `replace_and_mark_text_in_range`, `new_selected_range` is measured in
+  UTF-16 code units *relative to `new_text`*, not from the start of the
+  document—convert it against `new_text` and add the replacement's start byte.
 
 ```rust
 use std::ops::Range;
@@ -265,31 +218,34 @@ use gpui::{
 struct RawField {
     focus_handle: FocusHandle,
     text: String,
+    selection: Range<usize>,
     marked: Option<Range<usize>>,
 }
 
 impl RawField {
-    fn utf8_range(&self, range: Option<Range<usize>>) -> Range<usize> {
+    fn to_utf8_range(&self, range: Option<Range<usize>>) -> Range<usize> {
         match range {
-            Some(range) => {
-                utf16_to_utf8_offset(&self.text, range.start)
-                    ..utf16_to_utf8_offset(&self.text, range.end)
-            }
-            None => self.marked.clone().unwrap_or(self.text.len()..self.text.len()),
+            Some(r) => utf16_to_utf8_offset(&self.text, r.start)..utf16_to_utf8_offset(&self.text, r.end),
+            None => self.marked.clone().unwrap_or_else(|| self.selection.clone()),
         }
+    }
+
+    fn to_utf16_range(&self, range: &Range<usize>) -> Range<usize> {
+        utf8_to_utf16_offset(&self.text, range.start)..utf8_to_utf16_offset(&self.text, range.end)
     }
 }
 
 impl EntityInputHandler for RawField {
     fn text_for_range(
         &mut self,
-        range: Range<usize>,
+        range_utf16: Range<usize>,
         adjusted_range: &mut Option<Range<usize>>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        *adjusted_range = Some(range.clone());
-        self.text.get(self.utf8_range(Some(range))).map(str::to_string)
+        let range = self.to_utf8_range(Some(range_utf16));
+        *adjusted_range = Some(self.to_utf16_range(&range));
+        self.text.get(range).map(str::to_string)
     }
 
     fn selected_text_range(
@@ -298,14 +254,14 @@ impl EntityInputHandler for RawField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let end = utf8_to_utf16_offset(&self.text, self.text.len());
-        Some(UTF16Selection { range: end..end, reversed: false })
+        Some(UTF16Selection {
+            range: self.to_utf16_range(&self.selection),
+            reversed: false,
+        })
     }
 
     fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked.as_ref().map(|range| {
-            utf8_to_utf16_offset(&self.text, range.start)..utf8_to_utf16_offset(&self.text, range.end)
-        })
+        self.marked.as_ref().map(|range| self.to_utf16_range(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -314,35 +270,44 @@ impl EntityInputHandler for RawField {
 
     fn replace_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        range_utf16: Option<Range<usize>>,
         text: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = self.utf8_range(range);
+        let range = self.to_utf8_range(range_utf16);
+        let caret = range.start + text.len();
         self.text.replace_range(range, text);
+        self.selection = caret..caret;
         self.marked = None;
         cx.notify();
     }
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _new_selected_range: Option<Range<usize>>,
+        new_selected_range_utf16: Option<Range<usize>>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = self.utf8_range(range);
+        let range = self.to_utf8_range(range_utf16);
         let start = range.start;
         self.text.replace_range(range, new_text);
-        self.marked = Some(start..start + new_text.len());
+        self.marked = (!new_text.is_empty()).then_some(start..start + new_text.len());
+        self.selection = match new_selected_range_utf16 {
+            Some(sel) => {
+                (start + utf16_to_utf8_offset(new_text, sel.start))
+                    ..(start + utf16_to_utf8_offset(new_text, sel.end))
+            }
+            None => (start + new_text.len())..(start + new_text.len()),
+        };
         cx.notify();
     }
 
     fn bounds_for_range(
         &mut self,
-        _range: Range<usize>,
+        _range_utf16: Range<usize>,
         element_bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -356,7 +321,7 @@ impl EntityInputHandler for RawField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(utf8_to_utf16_offset(&self.text, self.text.len()))
+        Some(utf8_to_utf16_offset(&self.text, self.selection.end))
     }
 }
 
@@ -377,20 +342,15 @@ impl Render for RawField {
 }
 ```
 
-`handle_input` must run during paint on every frame, and the registered handler
-is active only while its focus handle is focused. The window queries it for
-text, selection and composition state, then calls its replacement methods to
-insert text. See [`EntityInputHandler`](gpui::EntityInputHandler) for each
-method's contract before extending this sketch.
+In a full custom field, `bounds_for_range` and `character_index_for_point` query
+your [`TextLayout`](gpui::TextLayout) so IME candidate windows anchor to the
+caret and pointer clicks place the cursor accurately.
 
 ## See also
 
-- [Handle keyboard shortcuts](crate::_documentation::guides::keyboard) covers the
-  bindings that Enter and the editing keys use.
-- [Manage focus](crate::_documentation::guides::focus) covers how a field takes
-  focus, and why Tab belongs to it.
-- [Input and dispatch](crate::_documentation::concepts::input_dispatch) explains how
-  typed text reaches the focused input handler.
-- The [text input example](crate::_documentation::examples::text_input) and the
-  [tutorial's text input chapter](crate::_documentation::tutorial) build a working
-  form step by step.
+* [Handle keyboard shortcuts](crate::_documentation::guides::keyboard) — key
+  contexts, bindings, and action propagation.
+* [Manage focus](crate::_documentation::guides::focus) — `FocusHandle`s and
+  `Tab` traversal across form fields.
+* [Text input example](crate::_documentation::examples::text_input) — a runnable
+  form combining `text_input` and `text_area`.

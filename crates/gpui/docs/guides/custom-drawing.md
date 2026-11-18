@@ -1,15 +1,22 @@
 # Draw custom graphics
 
-Use [`canvas`] when the built-in elements do not express the geometry you need. A canvas
-takes two closures: prepaint computes data that depends on final bounds, and paint turns
-that data into primitives through a [`Window`]. Both closures receive the canvas's
-[`Bounds`] in window coordinates, so the value returned by prepaint connects layout to
-painting without storing state in the canvas.
+Use [`canvas`] when [`div`], [`svg`], and [`img`] cannot express the geometry
+you need—for example a sparkline, waveform, custom meter, or debug overlay. It
+gives you an element's laid-out [`Bounds`] in window coordinates and direct
+access to [`Window`]'s painting methods without defining a custom [`Element`]
+type.
 
-## Draw into a canvas
+`canvas` takes two `FnOnce` closures that run in the frame that builds it:
 
-The value that prepaint returns is handed to paint. Use it to pass computed
-geometry from one phase to the other:
+1. **Prepaint** runs once layout has resolved the element's bounds. Compute
+   geometry, insert hitboxes, and return any state needed for painting.
+2. **Paint** receives the same bounds alongside prepaint's return value and
+   submits primitives to the scene.
+
+Because a canvas has no children to give it an intrinsic size, size it explicitly
+with [`Styled`] methods such as `.size_full()` or `.w_full().h(px(12.))`. Its
+own style paints around your callback: drop shadows first, then background and
+inset shadows, then your `paint` closure, and finally borders.
 
 ```rust
 # use gpui::*;
@@ -35,20 +42,20 @@ div().p_4().child(meter)
 # window.draw();
 ```
 
-Both closures run once per frame. A canvas has no ID and no state of its own; keep the
-data it needs on the view and move a copy into the closures.
-
 ## Paint rectangles with `paint_quad`
 
-[`Window::paint_quad`] draws a [`PaintQuad`], and three functions build one:
+[`Window::paint_quad`] adds a [`PaintQuad`] during the paint phase (debug builds
+assert the phase). Three constructors cover common rectangles:
 
-- [`fill`] paints a background with no border.
-- [`outline`] paints a 1px border with no background.
-- [`quad`] takes every part: corner radii, background, border widths, border
-  color and [`BorderStyle`].
+* [`fill`] sets a background fill with no border.
+* [`outline`] sets a `1px` border over a transparent background.
+* [`quad`] configures bounds, corner radii, background, border widths, border
+  color, and [`BorderStyle`] together.
 
-A quad's corners can be rounded and its border dashed. Use builder methods
-on [`PaintQuad`] to adjust a quad from [`fill`] or [`outline`]:
+All three return a [`PaintQuad`] with builder methods for `corner_radii`,
+`corner_smoothing`, `border_widths`, `border_color`, `border_style`,
+`border_dashed_length`, and `border_dashed_gap` (dashed lengths and gaps are
+multiples of the border width):
 
 ```rust
 # use gpui::*;
@@ -62,17 +69,25 @@ window.paint_quad(card);
 # }
 ```
 
-Corner radii larger than half the quad's size produce sharp corners where the
-arcs meet. Use `Corners::clamp_radii_for_quad_size` when the radii must fit the quad.
+`paint_quad` does not clamp oversized corner radii automatically; if a radius
+can exceed half the shorter side, clamp it first with
+[`Corners::clamp_radii_for_quad_size`] so corner arcs do not overlap.
 
 ## Draw lines and curves with `PathBuilder`
 
-[`PathBuilder`] builds a [`Path`] from commands. Use [`PathBuilder::stroke`] for
-lines, which needs a width, and [`PathBuilder::fill`] for closed shapes. Commands
-are `move_to`, `line_to`, [`PathBuilder::curve_to`] for a quadratic curve,
-[`PathBuilder::cubic_bezier_to`] for a cubic one, and `close`. Call
-[`PathBuilder::build`], which returns a `Result`, and then
-[`Window::paint_path`] with a color:
+[`PathBuilder`] tessellates lines, quadratic curves ([`PathBuilder::curve_to`]),
+cubic Béziers ([`PathBuilder::cubic_bezier_to`]), arcs, and polygons into GPU
+triangles:
+
+* [`PathBuilder::stroke`] takes a line width in logical pixels and supports
+  dashed strokes via [`PathBuilder::dash_array`] (alternating dash and gap
+  lengths in logical pixels; odd-length slices repeat to form an even cycle).
+* [`PathBuilder::fill`] fills the interior using the even-odd rule, closing open
+  sub-paths automatically.
+
+Compute points in window coordinates from the canvas `bounds`, call
+[`PathBuilder::build`] to tessellate a [`Path`], and pass it to
+[`Window::paint_path`]:
 
 ```rust
 # use gpui::*;
@@ -97,112 +112,102 @@ canvas(
 .size_full();
 ```
 
-`build` can fail for a degenerate path or invalid dash pattern, so check the result. A
-dash pattern goes on the builder with
-[`PathBuilder::dash_array`]. A stroke is tessellated into triangles in `build`,
-so build a path once and reuse it while its shape stays the same, rather than
-rebuilding every frame.
+`build` fails if coordinates or tolerances contain `NaN`, if the tessellated
+mesh exceeds `u16::MAX` vertices, or if a `dash_array` is empty, non-positive,
+or non-finite. Because tessellation runs in
+`build`, cache and `.clone()` complex [`Path`]s whose geometry does not change
+between frames rather than rebuilding them every paint.
 
-## Draw shadows
+## Shadows, images, text, and clipping
 
-[`Window::paint_drop_shadows`] paints one or more [`BoxShadow`]s behind a shape,
-and [`Window::paint_inset_shadows`] paints them inside it. Each shadow has a
-color, an offset, a blur radius, a spread radius and an `inset` flag. The drop
-call ignores shadows marked `inset`.
+Primitives composite in the order you submit them:
 
-```rust
-# use gpui::*;
-# fn paint(bounds: Bounds<Pixels>, window: &mut Window) {
-let shadow = BoxShadow {
-    color: rgba(0x00000033).into(),
-    offset: point(px(0.), px(4.)),
-    blur_radius: px(12.),
-    spread_radius: px(0.),
-    inset: false,
-};
-window.paint_drop_shadows(bounds, Corners::all(px(8.)), &[shadow]);
-window.paint_quad(fill(bounds, rgb(0xffffff)).corner_radii(px(8.)));
-# }
-```
+* **Shadows**: Paint [`Window::paint_drop_shadows`] *before* the shape's fill and
+  [`Window::paint_inset_shadows`] *after* it. Both take bounds, corner radii,
+  corner smoothing (`0.0..=1.0`), and a `&[BoxShadow]` slice, filtering for
+  shadows whose `inset` flag matches the call:
 
-Paint the shadow before its shape: primitives are composited in call order, so the later
-shape covers the shadow where they overlap.
+  ```rust
+  # use gpui::*;
+  # fn paint(bounds: Bounds<Pixels>, window: &mut Window) {
+  let shadow = BoxShadow {
+      color: rgba(0x00000033).into(),
+      offset: point(px(0.), px(4.)),
+      blur_radius: px(12.),
+      spread_radius: px(0.),
+      inset: false,
+  };
+  window.paint_drop_shadows(bounds, Corners::all(px(8.)), 0.0, &[shadow]);
+  window.paint_quad(fill(bounds, rgb(0xffffff)).corner_radii(px(8.)));
+  # }
+  ```
 
-## Draw images and text
+* **Images**: Load a [`RenderImage`] with [`Window::use_asset`] and
+  [`ImgResourceLoader`], then draw it with [`Window::paint_image`]. `use_asset`
+  returns `None` while loading in the background and notifies the view for a
+  later frame once ready; pass a valid `frame_index` (`0..image.frame_count()`):
 
-[`Window::paint_image`] draws a decoded [`RenderImage`] into `image_bounds`. Only
-the part inside `bounds` is visible, and `corner_radii` applies to `bounds`. It
-returns a `Result`, and it takes the frame index for animated images. Get the image with
-[`Window::use_asset`] and [`ImgResourceLoader`], the same loader [`img`] uses,
-so the image is loaded once and shared:
+  ```rust
+  # use gpui::*;
+  # use std::path::PathBuf;
+  fn paint_thumbnail(path: PathBuf, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+      if let Some(Ok(image)) = window.use_asset::<ImgResourceLoader>(&Resource::from(path), cx) {
+          let _ = window.paint_image(bounds, bounds, Corners::all(px(6.)), 0.0, image, 0, false);
+      }
+  }
+  ```
 
-```rust
-# use gpui::*;
-# use std::path::PathBuf;
-fn paint_thumbnail(path: PathBuf, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
-    if let Some(Ok(image)) = window.use_asset::<ImgResourceLoader>(&Resource::from(path), cx) {
-        let _ = window.paint_image(bounds, bounds, Corners::all(px(6.)), image, 0, false);
-    }
-}
-```
+* **Text**: Shape single-line text with [`WindowTextSystem::shape_line`] (or
+  multi-line text with [`WindowTextSystem::shape_text`]) and call `paint`. If a
+  run carries a background color, call `paint_background` before `paint`. See
+  the [text guide](mod@crate::_documentation::guides::text) for run formatting
+  and measurement:
 
-`use_asset` returns `None` while the image loads, and asks for a redraw when it
-is ready. Nothing is drawn until then.
+  ```rust
+  # use gpui::*;
+  # fn paint(bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+  let text = "Peak 42 ms";
+  let style = window.text_style();
+  let font_size = style.font_size.to_pixels(window.rem_size());
+  let line_height = window.line_height();
+  let runs = [style.to_run(text.len())];
+  let line = window.text_system().shape_line(text.into(), font_size, &runs);
+  let _ = line.paint(bounds.origin, line_height, TextAlign::Left, None, window, cx);
+  # }
+  ```
 
-To draw text, shape it with [`WindowTextSystem::shape_line`] and paint the
-[`ShapedLine`] at an origin. The [`text`](mod@crate::_documentation::guides::text)
-guide covers shaping and measuring in detail:
+* **Clipping**: [`Window::with_content_mask`] intersects a [`ContentMask`] with
+  the active clip rectangle for the duration of a closure, clipping both painted
+  primitives and hitboxes inserted inside it (`fade_out` fades edges instead of
+  hard-clipping):
 
-```rust
-# use gpui::*;
-# fn paint(bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
-let text = "Peak 42 ms";
-let style = window.text_style();
-let font_size = style.font_size.to_pixels(window.rem_size());
-let line_height = window.line_height();
-let runs = [style.to_run(text.len())];
-let line = window.text_system().shape_line(text.into(), font_size, &runs);
-let _ = line.paint(bounds.origin, line_height, TextAlign::Left, None, window, cx);
-# }
-```
+  ```rust
+  # use gpui::*;
+  # fn paint(bounds: Bounds<Pixels>, window: &mut Window) {
+  let inner = Bounds::new(
+      point(bounds.origin.x + px(8.), bounds.origin.y + px(8.)),
+      size(bounds.size.width - px(16.), bounds.size.height - px(16.)),
+  );
 
-## Clip what you draw
-
-[`Window::with_content_mask`] limits everything painted inside its closure to a
-rectangle. The mask is intersected with the mask already in effect, so a clip
-can only shrink the visible area. Pass `None` to keep the current mask:
-
-```rust
-# use gpui::*;
-# fn paint(bounds: Bounds<Pixels>, window: &mut Window) {
-let inner = Bounds::new(
-    point(bounds.origin.x + px(8.), bounds.origin.y + px(8.)),
-    size(bounds.size.width - px(16.), bounds.size.height - px(16.)),
-);
-
-window.with_content_mask(Some(ContentMask { bounds: inner, ..Default::default() }), |window| {
-    window.paint_quad(fill(bounds, rgb(0xef4444)));
-});
-# }
-```
-
-Anything outside `inner` is not drawn.
+  window.with_content_mask(Some(ContentMask { bounds: inner, ..Default::default() }), |window| {
+      window.paint_quad(fill(bounds, rgb(0xef4444)));
+  });
+  # }
+  ```
 
 ## Make a canvas interactive
 
-A canvas has no ID, so it cannot use `on_click` or `on_hover` like a [`Div`]. Connect it
-to input in two steps:
+`canvas` does not wrap [`Interactivity`], so pointer input uses two low-level
+window calls:
 
-1. In prepaint, insert a hitbox with [`Window::insert_hitbox`] and return it.
-   Hitboxes are how the window decides which element is under the pointer.
-2. In paint, register a listener with [`Window::on_mouse_event`]. Listeners are
-   removed at the start of the next frame, so register them on every paint.
-   Set a cursor with [`Window::set_cursor_style`] while you are there.
+1. In **prepaint**, call [`Window::insert_hitbox`] and return the [`Hitbox`].
+2. In **paint**, call [`Window::on_mouse_event`] (and optionally
+   [`Window::set_cursor_style`]).
 
-A listener is called in the capture and bubble phases. Check the
-[`DispatchPhase`], and check [`Hitbox::is_hovered`] so that a click on an
-overlapping element above the canvas is ignored. To change view state, keep a
-[`WeakEntity`] for the view and update it from the listener:
+Window mouse listeners receive every event of their type anywhere in the window
+across both [`DispatchPhase::Capture`] and [`DispatchPhase::Bubble`]. Filter on
+both the phase and [`Hitbox::is_hovered`] so clicks outside the canvas, occluded
+by an overlay, or in the second phase do not fire your handler:
 
 ```rust
 # use gpui::*;
@@ -243,35 +248,21 @@ impl Render for Pad {
 # window.read(|pad, _| assert_eq!(pad.clicks, 1));
 ```
 
-The same pattern works for dragging. Listen for [`MouseMoveEvent`] and
-[`MouseUpEvent`] as well, and record the press in your view state so that a drag
-that leaves the canvas still ends correctly.
+For drags, record the press in view state when `hitbox.is_hovered(window)` is
+true, then handle [`MouseMoveEvent`] and [`MouseUpEvent`] *without* requiring
+`is_hovered`, so dragging continues smoothly when the pointer leaves the bounds
+and releases outside the canvas still end the drag.
 
-## Implement `Element` instead
-
-A canvas is convenient, but it is a closure pair with no state of its own. Write
-a type that implements [`Element`] when you need one of these:
-
-- Child elements that the element lays out itself.
-- State that persists between frames in the element, not in the view.
-- Full control over the three phases, or your own [`ElementId`] for
-  accessibility.
-
-An element goes through three phases. [`Element::request_layout`] asks the layout
-engine for a size, and returns a [`LayoutId`] and any state it needs later.
-[`Element::prepaint`] runs once the size is known. It inserts hitboxes and computes
-anything that depends on the bounds. [`Element::paint`] draws, sets the cursor and
-registers listeners. The [elements concept page](crate::_documentation::concepts::elements)
-explains where each type fits, and the [custom element example](crate::_documentation::examples::custom_element)
-builds a slider from these phases.
+When custom drawing also needs custom layout measurement, child elements, an
+[`ElementId`] for retained state, or an accessibility node, implement
+[`Element`] directly instead; see [elements, components and views](crate::_documentation::concepts::elements#custom-elements)
+and the [`custom_element` example](crate::_documentation::examples::custom_element).
 
 ## See also
 
-- [Canvas example](crate::_documentation::examples::canvas), a chart drawn from
-  paths and quads. Run it with `cargo run --example canvas`.
-- [Custom element example](crate::_documentation::examples::custom_element), a
-  slider written against the `Element` trait.
-- [The frame](crate::_documentation::concepts::the_frame) for when prepaint and
-  paint run relative to layout and input.
-- [Images and assets](crate::_documentation::guides::images_and_assets) for
-  loading images that you paint yourself.
+* [Canvas example](crate::_documentation::examples::canvas) — a chart built from
+  paths and quads (`cargo run --example canvas`).
+* [Custom element example](crate::_documentation::examples::custom_element) — a
+  slider implementing [`Element`] across layout, prepaint, and paint.
+* [The frame](crate::_documentation::concepts::the_frame) — how layout,
+  prepaint, and paint fit into a frame.

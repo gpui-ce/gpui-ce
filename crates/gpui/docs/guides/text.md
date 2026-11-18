@@ -1,15 +1,18 @@
 # Display and style text
 
-A label is usually just a child: `div().child("Saved")` lays out and paints
-the string. The container supplies its font and color; the text wraps to the
-available width and contributes its measured size to the parent layout.
+Pass a string to [`ParentElement::child`] and GPUI shapes, wraps, measures, and
+paints it using the container's inherited text style. Reach for [`StyledText`]
+when byte ranges inside a single paragraph need distinct styling,
+[`InteractiveText`] when those ranges should respond to clicks or hover, and
+[`WindowTextSystem`] when custom layout or painting code needs glyph metrics
+directly.
 
-## Show a string
+## Render strings and accessible labels
 
-The direct string child is a string literal (`&'static str`). For dynamic text,
-pass an owned `String` or a [`SharedString`] to [`ParentElement::child`]. A
-borrowed `&str` with a shorter lifetime cannot be retained as an element, so
-copy it into an owned string first:
+`IntoElement` is implemented for `&'static str`, `String`, `Cow<'static, str>`,
+and [`SharedString`]. Borrowed `&str` slices with shorter lifetimes must be
+converted into `String` or `SharedString` because the element tree outlives the
+`render` call that builds it:
 
 ```rust
 # use gpui::*;
@@ -17,19 +20,18 @@ let label = div().child("Saved");
 let count = div().child(format!("{} files", 3));
 ```
 
-Plain string children have no accessibility node, which suits a button whose
-parent supplies the accessible name. Give standalone text its own node with
-[`text!`], keeping the generated ID and its ancestors stable across frames.
-One macro invocation always generates the same ID; in a loop, choose an ID for
-each item with `text!(id = ..., ...)`. The
-[accessibility guide](crate::_documentation::guides::accessibility) explains
-how those IDs form the node's identity.
+Bare string children omit an accessibility node, which is right inside a button
+or row that already exposes its own accessible label. For standalone copy that
+screen readers should announce on its own, use [`text!`] (which derives a stable
+compile-time ID from source location, or takes `text!(id = ..., ...)` inside
+loops) or [`Text::new`]; [`Text::new_inaccessible`] constructs a `Text` element
+without an accessibility node. See the
+[accessibility guide](crate::_documentation::guides::accessibility) for details.
 
-## Set a base style, then override it
+## Inherit and override text styles
 
-Set shared properties on the container and refine them on a child. Here both
-lines inherit the report card's small, semibold gray style, while the draft
-line adds italics:
+Text styles cascade down the element tree field by field: a child that sets
+`.italic()` keeps the color, size, and weight set on its ancestors:
 
 ```rust
 # use gpui::*;
@@ -42,67 +44,51 @@ let card = div()
     .child(div().italic().child("Draft, not yet reviewed"));
 ```
 
-These [`Styled`] methods work on either the container or the child being
-refined:
-
-| Method | Sets |
+| [`Styled`] method | Controls |
 | --- | --- |
-| [`Styled::text_color`] | The color of the text |
-| [`Styled::text_xs`] to [`Styled::text_3xl`] | A size from the scale (`text_sm` is `0.875rem`, `text_base` is `1rem`) |
-| [`Styled::text_size`] | An exact size, such as `px(15.)` or a `rems` value |
-| [`Styled::font_weight`] | A [`FontWeight`] such as `FontWeight::BOLD` |
-| [`Styled::italic`] and [`Styled::not_italic`] | The font style |
-| [`Styled::font_family`] | A font family by name |
-| [`Styled::line_height`] | A [`DefiniteLength`], such as `relative(1.5)` or `px(22.)` |
-| [`Styled::letter_spacing`] | Extra spacing in logical pixels |
-| [`Styled::text_transform`] | Uppercase or lowercase rendering |
+| [`text_color`](Styled::text_color) | Foreground glyph color |
+| [`text_xs`](Styled::text_xs) .. [`text_3xl`](Styled::text_3xl) | Scaled rem sizes (`text_sm` = `0.875rem`, `text_base` = `1rem`) |
+| [`text_size`](Styled::text_size) | Exact size in [`rems`] or [`px`] |
+| [`font_weight`](Styled::font_weight), [`italic`](Styled::italic), [`not_italic`](Styled::not_italic) | Weight and posture |
+| [`font_family`](Styled::font_family) | Font family name from the font's `name` table |
+| [`line_height`](Styled::line_height) | Line box height, e.g. `relative(1.5)` or `px(22.)` |
+| [`letter_spacing`](Styled::letter_spacing) | Extra tracking in logical pixels |
+| [`text_transform`](Styled::text_transform) | Uppercase, lowercase, or title-case transform |
 
-Sizes such as `text_sm` follow the window's root rem size. With the default
-16px root, `0.875rem` is 14px; changing the root changes that label too. An
-explicit `text_size(rems(...))` follows the same rule. Choose `text_size(px(...))`
-when the size should stay fixed as the rem scale changes.
+Scale helpers like `text_sm` store [`rems`], so they respond to
+[`Window::set_rem_size`]; pass `text_size(px(...))` when a label must stay at a
+fixed pixel size regardless of root scaling.
 
-## Decorate and align
+## Decorations, alignment, wrapping, and truncation
 
-[`Styled::underline`] and [`Styled::line_through`] add a 1px line. The link
-below also sets a blue decoration color; the price gets a strike-through:
-
-```rust
-# use gpui::*;
-let row = div()
-    .child(div().underline().text_decoration_color(rgb(0x2563eb)).child("Terms"))
-    .child(div().line_through().child("Old price"));
-```
-
-[`Styled::text_decoration_wavy`] and [`Styled::text_decoration_solid`] change
-the underline's shape. Call decoration setters after `underline`: `underline`
-replaces the entire underline record, including its color.
-[`Styled::text_decoration_none`] clears an underline previously set on the
-same element; an inherited underline still applies. If some children must
-remain plain, put the underline on the children that need it rather than on
-their shared parent.
-
-Use [`Styled::text_left`] and [`Styled::text_right`] for physical edges. The
-logical [`Styled::text_start`] and [`Styled::text_end`] swap sides in a
-right-to-left block, while [`Styled::text_center`] is direction-independent:
+[`Styled::underline`] and [`Styled::line_through`] configure independent `1px`
+decorations. Call [`Styled::text_decoration_color`] *after* `underline`, because
+`underline()` replaces the entire underline record (including any previously set
+color). [`Styled::text_decoration_wavy`] and [`Styled::text_decoration_solid`]
+set line shape without setting thickness, so pair them with `underline()` or
+`text_decoration_1()`. [`Styled::text_decoration_none`] clears an underline set
+on the same element; it does not cancel an underline inherited from an ancestor.
 
 ```rust
 # use gpui::*;
+let terms = div().underline().text_decoration_color(rgb(0x2563eb)).child("Terms");
 let heading = div().w_full().text_center().child("Settings");
 ```
 
-## Wrap, truncate and clamp
+For horizontal alignment, [`Styled::text_left`] and [`Styled::text_right`] pick
+physical edges, [`Styled::text_start`] and [`Styled::text_end`] follow the
+resolved writing direction, and [`Styled::text_center`] centers each line.
 
-A narrow label wraps by default. Choose a line policy and, when text is hidden,
-whether it should be marked with an ellipsis:
+Text wraps at container width by default:
 
-- [`Styled::truncate`] turns off wrapping, hides overflow and puts an ellipsis
-  at the end. Use it for a single line, such as a title in a toolbar.
-- [`Styled::whitespace_nowrap`] turns off wrapping without any ellipsis.
-  [`Styled::whitespace_normal`] turns wrapping back on.
-- [`Styled::line_clamp`] shows at most `n` lines and drops the rest. It hides
-  overflow but adds no ellipsis by itself. Add [`Styled::text_ellipsis`] to put
-  an ellipsis at the end of the last visible line.
+* [`Styled::truncate`] disables wrapping, hides overflow, and appends `…`
+  (shorthand for `overflow_hidden().whitespace_nowrap().text_ellipsis()`).
+* [`Styled::text_ellipsis_start`] and [`Styled::text_ellipsis_middle`] keep the
+  tail or both ends of paths and identifiers when paired with
+  `overflow_hidden().whitespace_nowrap()`. [`Styled::text_overflow`] accepts a
+  custom [`TextOverflow`] marker.
+* [`Styled::line_clamp`] caps soft wrapping at `n` lines per `\n`-delimited
+  paragraph; combine it with `text_ellipsis()` to append `…` at the cut:
 
 ```rust
 # use gpui::*;
@@ -115,16 +101,11 @@ let summary = div()
     .child("A paragraph long enough to need more than two lines of space.");
 ```
 
-For paths, [`Styled::text_ellipsis_start`] keeps the end; for names where both
-ends matter, [`Styled::text_ellipsis_middle`] keeps both. Other policies go
-through [`Styled::text_overflow`] and a [`TextOverflow`] value.
+## Rich spans and clickable ranges
 
-## Mix styles in one paragraph
-
-Keep a paragraph as one [`StyledText`] when only ranges need different styles.
-In this example, the first four bytes become bold and bytes 21–28 red. Each
-[`HighlightStyle`] supplies only its overrides; the paragraph and ancestor
-styles fill in everything else:
+[`StyledText`] shapes a single string while applying [`HighlightStyle`]
+overrides to sorted, non-overlapping **UTF-8 byte ranges** that start and end on
+`char` boundaries:
 
 ```rust
 # use gpui::*;
@@ -149,33 +130,16 @@ div().text_base().child(message)
 # app.open_window(|_, _| Demo);
 ```
 
-The ASCII example makes byte offsets look like character counts. They diverge
-for other text: `é` occupies two UTF-8 bytes, so the next character starts at
-byte 2, not 1. Supply sorted, non-overlapping byte ranges whose endpoints are
-Rust `char` boundaries inside the string. Convert character, grapheme or
-UTF-16 offsets first. Debug builds check bounds; invalid ordering can produce
-a wrong layout or panic even in release builds. Uncovered bytes retain the
-inherited style.
+[`StyledText::with_highlights`] resolves runs against the inherited container
+style during layout; [`StyledText::with_default_highlights`] resolves against an
+explicit [`TextStyle`] immediately, and [`StyledText::with_runs`] accepts raw
+[`TextRun`]s whose byte lengths sum to `text.len()`.
+[`StyledText::with_font_family_overrides`] swaps the font family on runs fully
+contained within sorted byte ranges (include highlight or run boundaries at the
+override endpoints so runs split there).
 
-Shaping adds another boundary: a base character and combining mark, or several
-emoji code points, can form one visual cluster. Caret placement, selection and
-hit testing must use the layout's cluster-aware APIs rather than inventing a
-byte offset. See [Measure text](#measure-text) for those mappings.
-
-[`StyledText::with_default_highlights`] supplies a base [`TextStyle`],
-[`StyledText::with_runs`] supplies all [`TextRun`]s, and
-[`StyledText::with_font_family_overrides`] changes a range's family without
-constructing runs. The override ranges must be sorted, non-overlapping and on
-`char` boundaries. They affect only runs wholly inside a range; the method
-does not split a run at either endpoint. A partial override therefore needs
-matching run boundaries from highlights or `with_runs`.
-
-## Make ranges clickable
-
-[`InteractiveText`] makes selected [`StyledText`] ranges clickable. Give it an
-[`ElementId`], the byte ranges and a listener. A press and release in a range
-passes that range's index in the list. Reuse the same list for styling and hit
-testing, as the example does:
+Wrap a [`StyledText`] in [`InteractiveText`] with a sibling-unique [`ElementId`]
+to make byte ranges clickable or hoverable:
 
 ```rust
 # use gpui::*;
@@ -185,22 +149,18 @@ testing, as the example does:
 let text = "Read the docs or file an issue.";
 let links = vec![5..13, 25..30];
 
-let link_style = |_range: &std::ops::Range<usize>| HighlightStyle {
-    underline: Some(UnderlineStyle {
-        thickness: px(1.),
-        ..Default::default()
-    }),
-    ..HighlightStyle::from(rgb(0x2563eb))
-};
-
-let styled = StyledText::new(text).with_highlights(
-    links
-        .iter()
-        .map(|range| (range.clone(), link_style(range))),
-);
+let styled = StyledText::new(text).with_highlights(links.iter().map(|range| {
+    (
+        range.clone(),
+        HighlightStyle {
+            underline: Some(UnderlineStyle { thickness: px(1.), ..Default::default() }),
+            ..HighlightStyle::from(rgb(0x2563eb))
+        },
+    )
+}));
 
 InteractiveText::new("links", styled).on_click(links, |link_index, _window, _cx| {
-    // `link_index` is 0 for "the docs" and 1 for "issue".
+    // `link_index` is the index into `links` (`0` for "the docs", `1` for "issue").
     let _ = link_index;
 })
 #     }
@@ -209,23 +169,18 @@ InteractiveText::new("links", styled).on_click(links, |link_index, _window, _cx|
 # app.open_window(|_, _| Demo);
 ```
 
-The click callback receives `0` or `1`, not a string offset. Hover and tooltip
-callbacks use a different unit: [`InteractiveText::on_hover`] reports the
-UTF-8 byte index at the logical start of the cluster under the pointer, or
-`None` when the pointer is inside the element but outside the text. It does
-not fire when the pointer leaves the element. [`InteractiveText::tooltip`]
-passes that byte index to a builder that may return an [`AnyView`].
+Notice the callback units: `on_click` passes the **index into the `ranges`
+vec** where both mouse-down and mouse-up landed, whereas
+[`InteractiveText::on_hover`] and [`InteractiveText::tooltip`] pass the **UTF-8
+byte offset** of the grapheme cluster under the pointer (`Option<usize>` on
+hover).
 
-Tie ranges to the string used to calculate them, and keep the element ID unique
-among siblings. If the string changes, stale ranges can put a click target on
-different text from the displayed link.
+## Custom fonts
 
-## Load your own fonts
-
-Register bundled font bytes through [`App::text_system`] and
-[`TextSystem::add_fonts`] before the first layout requests the family. A
-fallback shaped first can enter the layout cache. Pass one byte buffer per
-font file:
+Register `.ttf` or `.otf` byte buffers on [`App::text_system`] via
+[`TextSystem::add_fonts`] before opening windows, then reference the embedded
+family name (from the font's `name` table, not its filename) with
+[`Styled::font_family`]:
 
 ```rust,no_run
 # use gpui::*;
@@ -237,60 +192,25 @@ fn load_fonts(cx: &mut App) -> anyhow::Result<()> {
 }
 ```
 
-Select the family with [`Styled::font_family`] after loading. Use the family
-name from the font's name table, not its filename. A missing face or glyph can
-still trigger fallback through the platform text backend.
+Registering fonts after windows have rendered still works and invalidates cached
+layouts, at the cost of one frame drawn with fallback glyphs. On web targets the
+font database starts empty apart from `.SystemUIFont`, so bundle and register
+every font your UI uses at startup. [`TextSystem::all_font_names`] lists all
+resolvable families.
 
-```rust
-# use gpui::*;
-let note = div().font_family("Inter").child("Set in the font you loaded");
-```
+## Measure text and hit-test clusters
 
-If a file cannot be parsed, `add_fonts` returns an error; later calls can add
-other fonts. [`TextSystem::all_font_names`] reports the family names the
-platform currently knows.
-
-## Measure text
-
-To reserve width before painting, shape the same text and style that painting
-will use. [`Window::text_system`] needs runs covering the string, and
-[`Window::text_style`] and [`TextStyle::to_run`] inherit the tree style and use
-the string's byte length:
+To measure text manually, resolve [`Window::text_style`] (which reflects the
+ancestor style stack during layout/paint, or defaults outside a frame), build
+[`TextRun`]s covering `text.len()` bytes, and call
+[`WindowTextSystem::shape_line`] for single-line strings (no `\n`) or
+[`WindowTextSystem::shape_text`] for wrapped paragraphs:
 
 ```rust
 # use gpui::*;
 # struct Demo;
 # impl Render for Demo {
-#     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-#         div()
-#     }
-# }
-# let mut app = TestApp::new();
-# let mut window = app.open_window(|_, _| Demo);
-window.update(|_, window, _cx| {
-    let text = "Measure me";
-    let style = window.text_style();
-    let runs = [style.to_run(text.len())];
-    let line = window
-        .text_system()
-        .shape_line(text.into(), style.font_size.to_pixels(window.rem_size()), &runs);
-    assert!(line.width() > px(0.));
-});
-```
-
-[`WindowTextSystem::shape_line`] returns a [`ShapedLine`]; its
-[`ShapedLine::width`] is the width to reserve. It accepts one line and panics in
-debug builds on a newline. For a paragraph, use
-[`WindowTextSystem::shape_text`] with the wrap width and pass the painted line
-height to `ShapedText::size`:
-
-```rust
-# use gpui::*;
-# struct Demo;
-# impl Render for Demo {
-#     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-#         div()
-#     }
+#     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
 # }
 # let mut app = TestApp::new();
 # let mut window = app.open_window(|_, _| Demo);
@@ -304,46 +224,38 @@ window.update(|_, window, _cx| {
         .text_system()
         .shape_text(text, font_size, &runs, Some(px(160.)), None)
         .expect("text shapes");
-    // One line height for each line the text wrapped onto.
-    let height = shaped.size(line_height).height;
-    assert_eq!(height, line_height * shaped.line_count());
+    assert_eq!(shaped.size(line_height).height, line_height * shaped.line_count());
 });
 ```
 
-Using the same shaping and wrapping rules makes this value suitable for the
-current window. Another platform can choose a different fallback face or
-rasterizer, so it is layout input rather than a portable pixel snapshot.
+Window text layouts are cached by text, font size, run metrics, and wrap width;
+color and decoration changes reuse cached glyph positions. For a rendered
+[`StyledText`], clone its [`StyledText::layout`] handle and query it in event
+handlers after layout/prepaint:
 
-[`StyledText::layout`] returns a shared [`TextLayout`]. Clone it while
-constructing the element, then query it from an event handler or after the
-frame has been drawn: layout and prepaint populate its state, and querying it
-before then panics. [`TextLayout::index_for_position`] maps a point to a byte
-index; [`TextLayout::position_for_index`] maps an index back to a glyph
-position. Together they provide an editor's hit-test result and caret position.
+* [`TextLayout::index_for_position`] maps a window-coordinate point to a UTF-8
+  byte offset (`Ok(ix)` inside a glyph cluster, `Err(ix)` for the nearest
+  offset outside the text bounds).
+* [`TextLayout::position_for_index`] maps a UTF-8 byte offset back to the
+  caret's top-left window coordinate, snapping mid-cluster bytes to the start of
+  their grapheme cluster.
 
 ## Bidirectional text
 
-Text containing English and Arabic has two orders to account for. The source
-string keeps its logical byte order; the Unicode bidirectional algorithm places
-the shaped text in visual order. A pointer follows the visual layout, but hit
-testing returns a boundary in the original string. Use that byte index for a
-link or style range instead of deriving one from a glyph's visual position.
-
-Set the paragraph direction with [`Styled::rtl`] or [`Styled::ltr`]; it also
-decides which physical edge `text_start` and `text_end` use. Use
-[`Styled::unicode_bidi`] only for explicit embedding control; ordinary mixed
-direction text can use the Unicode algorithm's resolution.
+Strings stay in logical UTF-8 byte order while the Unicode bidirectional
+algorithm reorders glyphs visually, so hit-testing through [`TextLayout`]
+always hands back logical byte offsets ready for slicing or highlight ranges.
+[`Styled::rtl`] and [`Styled::ltr`] set inherited paragraph direction;
+[`Styled::unicode_bidi`] adds explicit isolate, override, or `Plaintext`
+(first-strong per-paragraph) behavior when mixing scripts.
 
 ## See also
 
-- [Text example](crate::_documentation::examples::text), which covers the scale,
-  weights, decorations, wrapping and a styled paragraph. Run it with
-  `cargo run --example text`.
-- [Accessibility](crate::_documentation::guides::accessibility) for the `text!`
-  macro and IDs.
-- [Layout and style](crate::_documentation::concepts::layout_and_style) for how
-  styles cascade and how an element's size is decided.
-- [Images and assets](crate::_documentation::guides::images_and_assets) for
-  icons that sit next to text.
+* [Text example](crate::_documentation::examples::text) — type scale, weights,
+  decorations, wrapping, and highlighted runs (`cargo run --example text`).
+* [Accept text input](crate::_documentation::guides::text_input) — editable
+  fields and UTF-16 platform IME conversion.
+* [Layout and style](crate::_documentation::concepts::layout_and_style) — how
+  inherited styles and `rems` resolve.
 
 [`text!`]: crate::text
