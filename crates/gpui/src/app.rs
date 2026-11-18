@@ -2225,10 +2225,11 @@ impl App {
         });
     }
 
-    /// Runs `f` with the window that most recently drew the entity `entity_id`.
+    /// Runs `f` with the window that most recently tracked the entity `entity_id` during a frame.
     ///
-    /// If the entity has not been drawn yet, the window it was created in is used. The
-    /// callback receives the [`Window`] and the [`App`]. Returns `None` if the entity has
+    /// Creating an entity in a window or registering a window-bound observer can also
+    /// associate the entity with a window before a frame tracks it. The callback receives
+    /// the [`Window`] and the [`App`]. Returns `None` if the entity has
     /// no current window, if that window has closed, or if the window is already being
     /// updated higher up the call stack.
     pub fn with_window<R>(

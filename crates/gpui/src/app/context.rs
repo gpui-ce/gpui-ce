@@ -582,11 +582,12 @@ impl<'a, T: 'static> Context<'a, T> {
         window.on_next_frame(move |window, cx| view.update(cx, |view, cx| f(view, window, cx)));
     }
 
-    /// Runs `f` with this entity and `window` at the end of the current effect cycle.
+    /// Runs `f` with this entity and its current window at the end of the current effect cycle.
     ///
     /// Use it to change this entity from code that is still on the stack, such as a method called from
     /// inside this entity's own update. The callback runs after the outermost update finishes, when the
-    /// entity is no longer borrowed. It doesn't run if this entity has been released.
+    /// entity is no longer borrowed. `window` provides the initial association if the entity has
+    /// no current window. The callback requires a live entity and an available window.
     pub fn defer_in(
         &mut self,
         window: &Window,
@@ -604,8 +605,9 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Calls `on_notify` when `observed` calls [`Context::notify`], and passes it the window.
     ///
-    /// Pass the window that displays this entity. If that window has been closed, the callback
-    /// does not run.
+    /// `window` provides the initial association if the observing entity has no current window.
+    /// Each notification looks up that entity's current window. The callback is skipped if the
+    /// window is unavailable.
     pub fn observe_in<V2>(
         &mut self,
         observed: &Entity<V2>,
@@ -639,8 +641,9 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Calls `on_event` when `emitter` emits an event of type `Evt`, and passes it the window.
     ///
-    /// Pass the window that displays this entity. If that window has been closed, the callback
-    /// does not run.
+    /// `window` provides the initial association if the subscribing entity has no current window.
+    /// Each event looks up that entity's current window. The callback is skipped if the window is
+    /// unavailable.
     pub fn subscribe_in<Emitter, Evt>(
         &mut self,
         emitter: &Entity<Emitter>,
