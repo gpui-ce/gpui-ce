@@ -717,12 +717,11 @@ impl TestAppContext {
         rx
     }
 
-    /// Waits until `predicate` returns `true` for `entity`, checking after each notification.
+    /// Checks `predicate` on the first poll, and then again after each notification from `entity`.
     ///
     /// # Panics
     ///
-    /// Panics if the predicate isn't true within 3 seconds of simulated time, or if
-    /// the entity is released while waiting.
+    /// Panics if the predicate hasn't succeeded when the three-second simulated timer fires.
     pub async fn condition<T: 'static>(
         &mut self,
         entity: &Entity<T>,
