@@ -1624,9 +1624,8 @@ impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> BoundaryWindow<Bound
     }
 }
 
-/// Returns the largest fitting candidate with its measured output, or the marker-only
-/// candidate when none fits. The starting `keep` is only an estimate; a candidate that
-/// doesn't fit narrows the search.
+/// Binary-searches the retained grapheme count and returns the best fitting candidate
+/// measured, with its layout. If the search finds no fit, it returns the marker-only candidate.
 pub(crate) fn truncate_with_measured_candidates<Layout>(
     text: &str,
     boundaries: impl DoubleEndedIterator<Item = usize> + Clone,
