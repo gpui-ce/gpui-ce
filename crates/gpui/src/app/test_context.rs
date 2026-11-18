@@ -618,8 +618,8 @@ impl TestAppContext {
     /// Sends each keystroke in a space-separated list to `window`, then runs pending tasks.
     ///
     /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`](crate::TestAppWindow::simulate_keystroke).
-    /// The space bar is the key `"space"`, which can't appear in this list, because
-    /// a space separates keystrokes. Two spaces in a row send an empty keystroke.
+    /// Use `"space"` for the space bar, as in `"a space b"`. A literal space separates
+    /// keystrokes, and two consecutive spaces send an empty keystroke.
     ///
     /// # Panics
     ///
