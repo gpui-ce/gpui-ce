@@ -17,9 +17,10 @@ use super::{Context, WeakEntity};
 /// [`App`] can't be borrowed across an `.await`, because the rest of the application
 /// needs it while your future waits. `AsyncApp` is the alternative: you get one as
 /// the argument of a future started with [`App::spawn`], or from [`App::to_async`].
-/// Each method borrows the app for the length of one call, runs a complete update,
-/// and releases the borrow. Entity methods are on the [`AppContext`] trait, which
-/// `AsyncApp` implements, so helpers written against that trait work here too.
+/// Access to app state is scoped to one call. Use [`AsyncApp::update`] to group
+/// operations and flush their effects before returning. For example, to dispatch
+/// a notification or event directly, call `notify` or `emit` on the `App` in
+/// that update. Entity methods are available through [`AppContext`].
 ///
 /// `AsyncApp` holds a weak reference to the app, so it doesn't keep the app alive.
 /// Most methods panic if the app has been released. The `AppContext` methods that return a
@@ -225,7 +226,7 @@ impl AsyncApp {
         lock.update(|cx| cx.refresh_windows());
     }
 
-    /// Returns the [`BackgroundExecutor`], for running work on other threads.
+    /// Returns the [`BackgroundExecutor`]. It uses worker threads on native targets.
     pub fn background_executor(&self) -> &BackgroundExecutor {
         &self.background_executor
     }
@@ -331,6 +332,10 @@ impl AsyncApp {
 
     /// Like [`AsyncApp::read_global`], but returns `None` instead of panicking when no
     /// global of type `G` is set, or when the app is quitting.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has been released or is already borrowed.
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let app = self.app();
         let app = app.borrow_mut();
@@ -469,8 +474,8 @@ impl AsyncWindowContext {
     ///
     /// # Errors
     ///
-    /// Returns an error if the window has closed, or if the app is quitting or already
-    /// borrowed.
+    /// Returns an error if the window has closed or the app has been released, is
+    /// quitting, or is already borrowed.
     pub fn update<R>(&mut self, update: impl FnOnce(&mut Window, &mut App) -> R) -> Result<R> {
         self.app
             .update_window(self.window, |_, window, cx| update(window, cx))
@@ -488,11 +493,8 @@ impl AsyncWindowContext {
         self.app.update_window(self.window, update)
     }
 
-    /// Runs `f` before the window draws its next frame. Does nothing if the window has
-    /// closed.
-    ///
-    /// Schedules the callback like [`Window::on_next_frame`], but tolerates a window that has
-    /// already been closed.
+    /// Schedules `f` at the start of the next platform frame, like [`Window::on_next_frame`].
+    /// If the update fails, such as when the window has closed, `f` is discarded.
     pub fn on_next_frame(&mut self, f: impl FnOnce(&mut Window, &mut App) + 'static) {
         self.app
             .update_window(self.window, |_, window, _| window.on_next_frame(f))
