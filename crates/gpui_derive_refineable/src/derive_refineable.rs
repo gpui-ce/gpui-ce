@@ -480,7 +480,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         impl #impl_generics #refinement_ident #ty_generics
             #where_clause
         {
-            /// Returns `true` if any field is `Some`.
+            /// Returns `true` if any field or nested refinement contains an override.
             pub fn is_some(&self) -> bool {
                 #(
                     if self.#field_names.is_some() {

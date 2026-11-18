@@ -10,9 +10,9 @@ use refineable::Refineable;
 
 /// The frame that a [`Surface`] shows.
 ///
-/// Each variant exists only on the platforms that can show it. On macOS, pass a `CVPixelBuffer`.
-/// On Windows, pass a Windows Graphics Capture frame. On Linux and FreeBSD, or with the
-/// `custom-gpu` feature, pass a GPU texture.
+/// On macOS, pass a `CVPixelBuffer`. On Windows, pass a Windows Graphics Capture frame.
+/// GPU textures are available on Linux and FreeBSD, and on macOS and WebAssembly with
+/// the `custom-gpu` feature and a compatible renderer.
 #[derive(Clone)]
 pub enum SurfaceSource {
     /// A macOS image buffer from CoreVideo.

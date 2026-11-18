@@ -44,8 +44,8 @@ impl From<Arc<Path>> for Resource {
 ///
 /// Implement it on a type that holds no data, such as an empty enum. Then call
 /// [`crate::Window::use_asset`] or [`crate::Window::get_asset`] to load it. The first call for a
-/// source starts the load and returns `None`. Later calls share that load and return its output
-/// once it is ready. [`App::remove_asset`] discards the app-level entry so the next fetch starts a
+/// source starts the load. Calls share that load and return `None` while it is pending or its
+/// output once it is ready. [`App::remove_asset`] discards the app-level entry so the next fetch starts a
 /// new load.
 pub trait Asset: 'static {
     /// The key that identifies the asset. Equal keys share one cache entry.
