@@ -45,9 +45,10 @@ layout does not jump when decoding finishes.
 
 ## Size, fit, placeholders, and fallbacks
 
-Setting one dimension (`w` or `h`) scales the other to preserve aspect ratio.
-Setting both defines a fixed box, and [`StyledImage::object_fit`] controls how
-the image occupies it:
+Setting one dimension (`w` or `h`) in pixels or rems scales the other to
+preserve the aspect ratio. With a relative dimension such as `w_full()`, the
+unset dimension keeps the image's natural size. Set both dimensions to control
+the box, and use [`StyledImage::object_fit`] to control how the image occupies it:
 
 * [`ObjectFit::Contain`] *(default)* — scales to fit inside the box without cropping.
 * [`ObjectFit::Cover`] — scales to fill the box, cropping excess edges.

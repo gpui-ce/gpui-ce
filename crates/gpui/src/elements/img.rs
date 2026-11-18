@@ -277,8 +277,9 @@ pub struct Img {
 /// Building the element does no work. For resources and encoded bytes, the first layout starts a
 /// load on the background executor. Until it loads, the element has no intrinsic image size, and it
 /// draws nothing unless you set a [`StyledImage::with_loading`] placeholder. Once the image loads,
-/// the element takes the image's natural size. If you set only a width or only a height, the other
-/// dimension follows the aspect ratio.
+/// unset dimensions default to the image's natural size. If you set only one dimension in pixels
+/// or rems, the other follows the aspect ratio. A relative dimension, such as `w_full()`, leaves
+/// the unset dimension at its natural size.
 ///
 /// `source` is anything that converts into an [`ImageSource`]. That type explains how a string is
 /// read.
