@@ -64,9 +64,9 @@ impl EditableTextHistory {
     /// Records an edit so that it can be undone.
     ///
     /// The edit replaced `old_text` at `range` with `new_text_len` bytes. A
-    /// contiguous edit that arrives within the grouping interval of the last
-    /// entry extends that entry; otherwise the edit starts a new entry. Every
-    /// recorded edit clears the redo stack.
+    /// change that starts at the end of the latest entry extends it if the time
+    /// since that entry's first change is less than the grouping interval.
+    /// Other changes start a new entry. Every recorded edit clears the redo stack.
     pub fn record(
         &mut self,
         range: Range<usize>,
@@ -155,10 +155,10 @@ impl HistoryEntry {
         true
     }
 
-    /// Returns the range that this entry covers in the current content.
+    /// Returns the byte range that this entry covers in the current content.
     ///
-    /// The end is clamped to `max_len`, so the range stays valid if the content
-    /// has shrunk since the edit.
+    /// The end is clamped to `max_len`. The caller must ensure the start is in
+    /// bounds and both endpoints are UTF-8 character boundaries before slicing.
     pub fn char_range(&self, max_len: usize) -> Range<usize> {
         let undo_start = self.range.start;
         let undo_end = (self.range.start + self.new_text_len).min(max_len);
