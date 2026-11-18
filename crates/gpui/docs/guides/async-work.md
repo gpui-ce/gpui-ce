@@ -3,21 +3,20 @@
 It's frequent that an application will need to load data, or compute a result,
 while its window is responsible for working with input. The preferred way of handling this
 is through starting such work as a task, and then later updating the entity
-when the result is ready. 
+when the result is ready.
 
 The examples use Rust's `async` blocks and `.await`. If these are new to you,
-start with [the Rust Book's introduction to
-async](https://doc.rust-lang.org/book/ch17-01-futures-and-syntax.html). A future
-describes work that an executor advances by polling it. When an awaited future
+start with [the Rust Book's introduction to async](https://doc.rust-lang.org/book/ch17-01-futures-and-syntax.html).
+A future describes work that an executor advances by polling it. When an awaited future
 is not ready, the task yields so other work can run; awaiting an already-ready
 future does not yield.
 
 ## Choose an executor
 
-GPUI presents consumers with TWO consumers. The foreground executor runs tasks on the main thread
-and gives them access to entities through an async context. This is preferred for say, waiting on a
-timer or an asynchronous network response, then updating the interface. The
-background executor runs tasks on native worker threads. Use it for synchronous
+GPUI provides two executors. The foreground executor runs tasks on the main
+thread and gives them access to entities through an async context. Use it to
+wait for a timer or an asynchronous network response, then update the interface.
+The background executor runs tasks on native worker threads. Use it for synchronous
 work such as parsing a large file, passing owned input and returning an owned
 result. Marking a computation `async` does not move it off the main thread.
 
@@ -193,7 +192,7 @@ you.
 
 Use [`FutureExt::with_timeout`] to stop waiting after a deadline. It returns
 `Ok(output)` if the future completes first, or `Err(Timeout)` if the timer wins.
-Pass `cx.background_executor()` to use GPUI's timers.
+Pass `cx.background_executor()` as the executor to use GPUI's timers.
 
 When the timeout wins, the wrapped future is dropped. As with task cancellation,
 this does not interrupt synchronous code already running in a poll or cancel
@@ -361,9 +360,9 @@ app.update(|cx| assert_eq!(ticker.read(cx).ticks, 3));
 ```
 
 Each [`TestApp::update`] flushes queued effects before returning. Run the
-scheduled work, then check the result in a later update. The [testing
-guide](crate::_documentation::guides::testing) covers seeds and `#[gpui::test]`,
-which runs a test with many random task orderings.
+scheduled work, then check the result in a later update. The
+[testing guide](crate::_documentation::guides::testing) covers seeds and
+`#[gpui::test]`, which runs a test with many random task orderings.
 
 ## See also
 

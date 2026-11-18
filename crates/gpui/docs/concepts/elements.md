@@ -195,6 +195,5 @@ method per [phase of the frame](crate::_documentation::concepts::the_frame):
 
 The associated types carry data from one phase to the next. For one-off custom
 drawing, [`canvas`] is simpler: it gives you prepaint and paint callbacks
-without a new type. The [custom drawing
-guide](crate::_documentation::guides::custom_drawing) and the `custom_element`
-example walk through a complete element.
+without a new type. The [custom drawing guide](crate::_documentation::guides::custom_drawing)
+and the `custom_element` example walk through a complete element.

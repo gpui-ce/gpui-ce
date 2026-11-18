@@ -20,8 +20,10 @@ not replace the app context.
 ## `App`: the application
 
 [`App`](crate::App) is the application-wide context. It owns entities and
-windows, key bindings, global values and the connection to the operating system.
-A function that takes `&mut App` can use those application-wide services:
+windows, key bindings, global values and a connection to platform services.
+GPUI uses a [`Platform`](crate::Platform) implementation for each supported
+platform to connect to services such as windowing and input. A function that
+takes `&mut App` can use those application-wide services:
 
 ```standalone_crate,no_run
 use gpui::{App, KeyBinding, actions};
@@ -39,8 +41,7 @@ fn main() {
 ```
 
 This starts the platform event loop and registers a quit action. To open a
-window too, follow [Hello,
-window](crate::_documentation::tutorial::ch1_hello_window).
+window too, follow [Hello, window](crate::_documentation::tutorial::ch1_hello_window).
 
 ## `Context<T>`: working on one entity
 
@@ -79,9 +80,9 @@ assert_eq!(clock.read(cx).ticks, 1);
 # });
 ```
 
-Methods that change an entity's state and need GPUI services conventionally take
-`&mut self` and `cx: &mut Context<Self>`, as `tick` does. Call them inside an
-entity update.
+Entity methods like `tick` conventionally take `&mut self` to change their own
+state and `cx: &mut Context<Self>` when they also need GPUI services. Call them
+inside an entity update.
 
 ## `Window`: one window
 
