@@ -36,8 +36,8 @@ Setting the same property twice replaces the earlier value. Additive methods say
 so in their docs: [`Styled::blur`] appends to the filter list, whereas a later
 [`Styled::filter`] replaces the list wholesale.
 
-Interaction states reuse the same refinement system. [`hover`](InteractiveElement::hover)
-and [`active`](StatefulInteractiveElement::active) take a closure that receives a fresh
+Interaction states reuse the same refinement system. [`hover_style`](InteractiveElement::hover_style)
+and [`active_style`](StatefulInteractiveElement::active_style) take a closure that receives a fresh
 `StyleRefinement` and returns the overrides to apply while the pointer hovers or
 presses the element:
 
@@ -47,8 +47,8 @@ presses the element:
 div()
     .id("save")
     .bg(rgb(0x2563eb))
-    .hover(|style| style.bg(rgb(0x1d4ed8)))
-    .active(|style| style.opacity(0.8))
+    .hover_style(|style| style.bg(rgb(0x1d4ed8)))
+    .active_style(|style| style.opacity(0.8))
     .child("Save")
 # }
 ```
@@ -56,7 +56,7 @@ div()
 GPUI evaluates these closures once when building the element and merges the
 stored refinement while the state is active. To style a child when its parent
 row or card is hovered, mark the ancestor with [`group`](InteractiveElement::group)
-and style the descendant with [`group_hover`](InteractiveElement::group_hover).
+and style the descendant with [`group_hover_style`](InteractiveElement::group_hover_style).
 
 ## Lengths
 

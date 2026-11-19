@@ -11,16 +11,14 @@ use std::{
 use anyhow::{Context as _, Result, ensure};
 use collections::HashMap;
 use gpui::{
-    Bounds, DevicePixels, Font, FontId, FontMetrics, GlyphId, GlyphRenderMode, InlineLayout,
-    InlineLayoutRequest, LineLayout, Pixels, PlatformTextSystem, PreparedRasterStyle,
-    RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Rgba8,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextLayoutRequest, TextRenderingMode, point,
-    size,
+    Bounds, ColorGlyphKind, DevicePixels, Font, FontDataBlob, FontId, FontMetrics, GlyphId,
+    GlyphRasterizer, GlyphRenderMode, InlineLayout, InlineLayoutRequest, LineLayout, Pixels,
+    PlatformTextSystem, PreparedRasterStyle, RasterColorEffect, RasterFace, RasterStyleRequest,
+    RasterizedGlyph, RenderGlyphParams, Rgba8, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size,
+    TextLayoutRequest, TextRenderingMode, apply_pixel_opacity, multiply_alpha, point, size,
 };
-use gpui_parley::{
-    BitmapFallbackGlyphRasterizer, ColorGlyphKind, FontDataBlob, GlyphRasterizer, ParleyTextSystem,
-    RasterFace, SystemFonts,
-};
+use gpui_parley::ParleyTextSystem;
+use gpui_render::BitmapFallbackGlyphRasterizer;
 use parking_lot::RwLock;
 use windows::{
     Win32::{
@@ -86,12 +84,12 @@ impl DirectWriteTextSystem {
 
     fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
-        let parley = ParleyTextSystem::new_with_rasterizer(
-            SystemFonts::Load,
-            "Segoe UI",
-            BitmapFallbackGlyphRasterizer::new(SharedDirectWriteRenderer(renderer.clone())),
-        )
-        .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]);
+        let parley = ParleyTextSystem::new(BitmapFallbackGlyphRasterizer::new(
+            SharedDirectWriteRenderer(renderer.clone()),
+        ))
+        .with_system_fallback_family("Segoe UI")
+        .with_fallback_families(["Segoe UI", "Lilex", "IBM Plex Sans", "Arial"])
+        .with_system_fonts();
 
         Ok(Self { parley, renderer })
     }
@@ -412,7 +410,7 @@ impl DirectWriteGlyphRenderer {
             pixels = pixels
                 .into_iter()
                 .flat_map(|coverage| {
-                    let alpha = ((coverage as u16 * foreground.alpha as u16 + 127) / 255) as u8;
+                    let alpha = multiply_alpha(coverage, foreground.alpha);
 
                     if alpha == 0 {
                         [0; 4]
@@ -931,19 +929,15 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
     // Retain the original alpha for division to avoid quantizing the scaled RGB twice.
     for pixel in pixels.chunks_exact_mut(4) {
         let coverage = pixel[3] as u16;
-        let scaled_alpha = ((coverage * alpha as u16 + 127) / 255) as u8;
+        apply_pixel_opacity(pixel, alpha);
 
-        if scaled_alpha == 0 {
-            pixel.fill(0);
-
+        if pixel[3] == 0 {
             continue;
         }
 
         for channel in &mut pixel[..3] {
             *channel = ((*channel as u16 * 255 + coverage / 2) / coverage).min(255) as u8;
         }
-
-        pixel[3] = scaled_alpha;
     }
 
     Ok(pixels)
@@ -953,10 +947,10 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
 mod tests {
     use super::*;
     use gpui::{
-        FontStyle, FontWeight, FontWidth, ForegroundDependency, Point, RasterizedGlyphFormat, Rgba,
-        font, px, rgba,
+        FontStyle, FontSynthesis, FontWeight, FontWidth, ForegroundDependency, Point,
+        RasterizedGlyphFormat, Rgba, font, px, rgba,
     };
-    use gpui_parley::FontSynthesis;
+    use gpui_fonts::test_collection;
     use std::collections::BTreeMap;
 
     #[test]
@@ -1798,38 +1792,6 @@ mod tests {
             scale_factor,
             raster_style,
         })
-    }
-
-    fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
-        let header_len = 12 + faces.len() * 4;
-        let mut collection = vec![0; header_len];
-        collection[..4].copy_from_slice(b"ttcf");
-        collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
-        collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
-
-        for (face_idx, face) in faces.iter().enumerate() {
-            while collection.len() % 4 != 0 {
-                collection.push(0);
-            }
-
-            let face_offset = collection.len();
-            let offset_position = 12 + face_idx * 4;
-            collection[offset_position..offset_position + 4]
-                .copy_from_slice(&(face_offset as u32).to_be_bytes());
-            collection.extend_from_slice(face);
-
-            let table_count = read_u16(face, 4).expect("font has an SFNT table count") as usize;
-            for table_idx in 0..table_count {
-                let table_offset_position = face_offset + 12 + table_idx * 16 + 8;
-                let table_offset = read_u32(&collection, table_offset_position)
-                    .expect("font has an SFNT table offset");
-                let collection_offset = table_offset + face_offset as u32;
-                collection[table_offset_position..table_offset_position + 4]
-                    .copy_from_slice(&collection_offset.to_be_bytes());
-            }
-        }
-
-        collection
     }
 
     fn read_u16(data: &[u8], offset: usize) -> Option<u16> {

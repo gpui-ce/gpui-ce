@@ -10,7 +10,6 @@ use std::{
 use crate::{
     PathStyle,
     abs_path::{AbsPath, AbsPathBuf},
-    is_absolute,
 };
 
 /// A file system path that is guaranteed to be relative and normalized.
@@ -73,7 +72,7 @@ impl RelPath {
             path = prefix;
         }
 
-        if is_absolute(path, path_style) {
+        if path_style.has_root(Path::new(&path)) {
             return Err(anyhow!("absolute path not allowed: {path:?}"));
         }
 
@@ -89,7 +88,7 @@ impl RelPath {
 
         if result
             .components()
-            .any(|component| component.is_empty() || component == "." || component == "..")
+            .any(|component| component == "" || component == "." || component == "..")
         {
             let mut normalized = RelPathBuf::new();
             for component in result.components() {
@@ -188,10 +187,12 @@ impl RelPath {
         if other.is_empty() {
             return true;
         }
-        if let Some(suffix) = self.0.strip_suffix(&other.0)
-            && (suffix.ends_with('/') || suffix.is_empty())
-        {
-            return true;
+        if let Some(suffix) = self.0.strip_suffix(&other.0) {
+            if suffix.ends_with('/') {
+                return true;
+            } else if suffix.is_empty() {
+                return true;
+            }
         }
         false
     }
@@ -245,7 +246,7 @@ impl RelPath {
         RelPathBuf(self.0.to_string())
     }
 
-    pub fn to_arc(&self) -> Arc<Self> {
+    pub fn into_arc(&self) -> Arc<Self> {
         Arc::from(self)
     }
 
@@ -322,12 +323,6 @@ impl fmt::Debug for RelPath {
 impl fmt::Debug for RelPathBuf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl Default for RelPathBuf {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

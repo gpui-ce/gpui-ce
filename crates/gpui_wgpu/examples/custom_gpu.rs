@@ -18,7 +18,11 @@
 ))]
 mod custom_gpu {
     use std::borrow::Cow;
+    #[cfg(target_family = "wasm")]
+    use std::cell::RefCell;
 
+    #[cfg(target_family = "wasm")]
+    use gpui::ApplicationHandle;
     use gpui::{
         App, AppContext, Bounds, Context, ParentElement, Render, Styled, TitlebarOptions, Window,
         WindowBounds, WindowOptions, div, px, size,
@@ -26,6 +30,11 @@ mod custom_gpu {
     use gpui_ce_wgpu::{WgpuContextHandle, WgpuRenderTarget};
     use gpui_platform::application;
     use wgpu::util::DeviceExt;
+
+    #[cfg(target_family = "wasm")]
+    thread_local! {
+        static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
+    }
 
     const SHADER: &str = r#"
 struct Uniforms {
@@ -328,7 +337,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     pub fn run() {
         env_logger::init();
-        application().run(|cx: &mut App| {
+        let application_handle = application().run(|cx: &mut App| {
             cx.open_window(
                 WindowOptions::new()
                     .titlebar(Some(TitlebarOptions {
@@ -345,6 +354,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             .unwrap();
             cx.activate(true);
         });
+
+        #[cfg(target_family = "wasm")]
+        APPLICATION.set(Some(application_handle));
+        #[cfg(not(target_family = "wasm"))]
+        drop(application_handle);
     }
 }
 

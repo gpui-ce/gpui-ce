@@ -320,7 +320,7 @@ impl DataTable {
             .h(SCROLLBAR_THUMB_HEIGHT)
             .w(SCROLLBAR_THUMB_WIDTH)
             .bg(rgb(0xC0C0C0))
-            .hover(|this| this.bg(rgb(0xA0A0A0)))
+            .hover_style(|this| this.bg(rgb(0xA0A0A0)))
             .rounded_lg()
             .child(
                 canvas(

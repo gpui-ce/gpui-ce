@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_windows"
-version = "0.1.0"
+version = "0.4.0"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -18,8 +18,8 @@ test-support = ["gpui/test-support"]
 screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
-gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
-gpui_render.workspace = true
+gpui = { path = "../gpui", version = "0.4.0", package = "gpui-ce", default-features = false }
+gpui_render = { workspace = true, features = ["swash"] }
 wgsl-rs.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -47,4 +47,4 @@ windows-numerics = "0.3"
 windows-registry = "0.6.1"
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }

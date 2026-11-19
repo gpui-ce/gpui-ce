@@ -15,7 +15,7 @@
 //!     .id("card")
 //!     .p_3()
 //!     .bg(rgb(0xffffff))
-//!     .hover(|style| style.bg(rgb(0xf3f4f6)))
+//!     .hover_style(|style| style.bg(rgb(0xf3f4f6)))
 //!     .on_click(|_, _, _| {})
 //!     .child("Hello");
 //! ```
@@ -972,7 +972,7 @@ impl Interactivity {
 ///     .id("toggle")
 ///     .px_2()
 ///     .bg(rgb(0xe5e7eb))
-///     .hover(|style| style.bg(rgb(0xd1d5db)))
+///     .hover_style(|style| style.bg(rgb(0xd1d5db)))
 ///     .on_click(|_, _, _| {});
 /// ```
 pub trait InteractiveElement: Sized {
@@ -980,6 +980,23 @@ pub trait InteractiveElement: Sized {
     ///
     /// Every other method on this trait is implemented by calling this one, so implement it by returning a field.
     fn interactivity(&mut self) -> &mut Interactivity;
+
+    /// Disable this element's event callbacks and report its disabled state to assistive technology.
+    fn disabled(mut self, disabled: bool) -> Self {
+        let interactivity = self.interactivity();
+        interactivity.disabled = disabled;
+        interactivity.aria.disabled = Some(disabled);
+
+        self
+    }
+
+    /// Apply the given style when this element is disabled.
+    /// Disabled styles take precedence over other interaction styles.
+    fn disabled_style(mut self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.interactivity().disabled_style = Some(Box::new(style(StyleRefinement::default())));
+
+        self
+    }
 
     /// Animates changes to this element's style properties over time.
     ///
@@ -1002,8 +1019,8 @@ pub trait InteractiveElement: Sized {
 
     /// Adds this element to a named group, so that group-level styles can react to any member.
     ///
-    /// Members of the group share a name. Other elements can then use [`group_hover`](Self::group_hover),
-    /// [`group_active`](StatefulInteractiveElement::group_active) or [`group_drag_over`](Self::group_drag_over)
+    /// Members of the group share a name. Other elements can then use [`group_hover_style`](Self::group_hover_style),
+    /// [`group_active_style`](StatefulInteractiveElement::group_active_style) or [`group_drag_over_style`](Self::group_drag_over_style)
     /// with that name to style themselves when any member is hovered, pressed or has a dragged value over it.
     /// The group name must match exactly.
     fn group(mut self, group: impl Into<SharedString>) -> Self {
@@ -1035,7 +1052,7 @@ pub trait InteractiveElement: Sized {
     /// Makes this element focusable with the given [`FocusHandle`], and styles it with the focus styles when focused.
     ///
     /// The element joins the focus path when the handle is focused, so keyboard input reaches it. Focus styles set with
-    /// [`focus`](Self::focus), [`in_focus`](Self::in_focus) and [`focus_visible`](Self::focus_visible) apply only to
+    /// [`focus_style`](Self::focus_style), [`in_focus_style`](Self::in_focus_style) and [`focus_visible_style`](Self::focus_visible_style) apply only to
     /// elements that track a handle. Use [`focusable`](StatefulInteractiveElement::focusable) when you don't need to
     /// hold the handle. See the [focus guide](crate::_documentation::guides::focus).
     fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
@@ -1108,9 +1125,9 @@ pub trait InteractiveElement: Sized {
     /// let button = div()
     ///     .id("save")
     ///     .bg(rgb(0x2563eb))
-    ///     .hover(|style| style.bg(rgb(0x1d4ed8)));
+    ///     .hover_style(|style| style.bg(rgb(0x1d4ed8)));
     /// ```
-    fn hover(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+    fn hover_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
         debug_assert!(
             self.interactivity().hover_style.is_none(),
             "hover style already set"
@@ -1119,11 +1136,17 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Apply the given style to this element when the mouse hovers over it
+    #[deprecated(note = "Use InteractiveElement::hover_style instead.")]
+    fn hover(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.hover_style(style)
+    }
+
     /// Applies `f`'s style to this element while any member of `group_name` is hovered.
     ///
     /// Set the group with [`group`](Self::group) on the parent. The style does not apply during a drag or after
     /// keyboard input.
-    fn group_hover(
+    fn group_hover_style(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -1133,6 +1156,16 @@ pub trait InteractiveElement: Sized {
             style: Box::new(f(StyleRefinement::default())),
         });
         self
+    }
+
+    /// Apply the given style to this element when the mouse hovers over a group member
+    #[deprecated(note = "Use InteractiveElement::group_hover_style instead.")]
+    fn group_hover(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_hover_style(group_name, style)
     }
 
     /// Runs `listener` when `button` is pressed over this element, during the bubble phase.
@@ -1484,6 +1517,7 @@ pub trait InteractiveElement: Sized {
     /// Applies `f`'s style while a value of type `S` is dragged over this element.
     ///
     /// Same as [`on_drag_over`](Self::on_drag_over).
+    #[deprecated(note = "use [`on_drag_over`]")]
     fn drag_over<S: 'static>(
         mut self,
         f: impl 'static + Fn(StyleRefinement, &S, &mut Window, &mut App) -> StyleRefinement,
@@ -1554,7 +1588,7 @@ pub trait InteractiveElement: Sized {
     /// Set the group with [`group`](Self::group) on the parent. The style applies when the group's hitbox is hovered
     /// and the styled element has a drop listener for `S` that allows the drag. Any element-wide drop predicate
     /// must also allow it.
-    fn group_drag_over<S: 'static>(
+    fn group_drag_over_style<S: 'static>(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -1567,6 +1601,16 @@ pub trait InteractiveElement: Sized {
             },
         ));
         self
+    }
+
+    /// Apply the given style when the given data type is dragged over this element's group
+    #[deprecated(note = "Use InteractiveElement::group_drag_over_style instead.")]
+    fn group_drag_over<Drag: 'static>(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_drag_over_style::<Drag>(group_name, style)
     }
 
     /// Runs `listener` when a drag of type `T` is released over this element.
@@ -1634,8 +1678,8 @@ pub trait InteractiveElement: Sized {
     ///
     /// The element must track a focus handle with [`track_focus`](Self::track_focus). The style applies whenever the
     /// element is focused, whether focus came from the mouse or the keyboard. To style only keyboard focus, use
-    /// [`focus_visible`](Self::focus_visible).
-    fn focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    /// [`focus_visible_style`](Self::focus_visible_style).
+    fn focus_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -1643,17 +1687,31 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Set the given styles to be applied when this element, specifically, is focused.
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::focus_style instead.")]
+    fn focus(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.focus_style(style)
+    }
+
     /// Applies `f`'s style when this element or one of its ancestors has focus.
     ///
     /// This tests [`FocusHandle::within_focused`]. To style a parent while its child has focus,
     /// query [`FocusHandle::contains_focused`] during rendering and choose the style from that result.
     /// The element must track a focus handle with [`track_focus`](Self::track_focus).
-    fn in_focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn in_focus_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
         self.interactivity().in_focus_style = Some(Box::new(f(StyleRefinement::default())));
         self
+    }
+
+    /// Set the given styles to be applied when this element is inside another element that is focused.
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::in_focus_style instead.")]
+    fn in_focus(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.in_focus_style(style)
     }
 
     /// Applies `f`'s style when this element has focus and the last input was from the keyboard.
@@ -1666,14 +1724,23 @@ pub trait InteractiveElement: Sized {
     /// ```
     /// # use gpui::{div, prelude::*, rgb};
     /// let button = div()
-    ///     .focus_visible(|style| style.border_2().border_color(rgb(0x2563eb)));
+    ///     .focus_visible_style(|style| style.border_2().border_color(rgb(0x2563eb)));
     /// ```
-    fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn focus_visible_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
         self.interactivity().focus_visible_style = Some(Box::new(f(StyleRefinement::default())));
         self
+    }
+
+    /// Set the given styles to be applied when this element is focused via keyboard navigation.
+    /// This is similar to CSS's `:focus-visible` pseudo-class - it only applies when the element
+    /// is focused AND the user is navigating via keyboard (not mouse clicks).
+    /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
+    #[deprecated(note = "Use InteractiveElement::focus_visible_style instead.")]
+    fn focus_visible(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.focus_visible_style(style)
     }
 
     /// Resolves this element's cursor from pointer position and bounds.
@@ -1804,9 +1871,8 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
-    /// Reports whether this element is disabled to assistive technology.
-    ///
-    /// This sets AccessKit's `Disabled` flag. The control's input handlers still need to enforce the disabled state.
+    /// Set the disabled state exposed to assistive technology, using AccessKit's `Disabled` flag.
+    /// Use [`InteractiveElement::disabled`] to also suppress event callbacks.
     fn aria_disabled(mut self, disabled: bool) -> Self {
         self.interactivity().aria.disabled = Some(disabled);
         self
@@ -2013,7 +2079,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     ///
     /// The style applies after a press that started on the element and until the button is released. It does not apply
     /// after keyboard input.
-    fn active(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn active_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -2021,10 +2087,16 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set the given styles to be applied when this element is active.
+    #[deprecated(note = "Use StatefulInteractiveElement::active_style instead.")]
+    fn active(self, style: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+        self.active_style(style)
+    }
+
     /// Applies `f`'s style while the mouse button is held down on any member of `group_name`.
     ///
     /// Set the group with [`group`](InteractiveElement::group) on the parent.
-    fn group_active(
+    fn group_active_style(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -2037,6 +2109,16 @@ pub trait StatefulInteractiveElement: InteractiveElement {
             style: Box::new(f(StyleRefinement::default())),
         });
         self
+    }
+
+    /// Set the given styles to be applied when this element's group is active.
+    #[deprecated(note = "Use StatefulInteractiveElement::group_active_style instead.")]
+    fn group_active(
+        self,
+        group_name: impl Into<SharedString>,
+        style: impl FnOnce(StyleRefinement) -> StyleRefinement,
+    ) -> Self {
+        self.group_active_style(group_name, style)
     }
 
     /// Runs `listener` when this element is clicked, or activated from the keyboard.
@@ -2999,7 +3081,7 @@ pub struct Interactivity {
     /// Whether the mouse button is pressed on this element, as of its most recent prepaint.
     ///
     /// This is `None` until the element has been prepainted with a state that tracks presses, such as an
-    /// [`on_click`](StatefulInteractiveElement::on_click) listener or an [`active`](StatefulInteractiveElement::active) style.
+    /// [`on_click`](StatefulInteractiveElement::on_click) listener or an [`active_style`](StatefulInteractiveElement::active_style) style.
     pub active: Option<bool>,
     /// Whether the pointer is over this element, as of its most recent paint.
     ///
@@ -3009,6 +3091,7 @@ pub struct Interactivity {
     pub(crate) content_size: Size<Pixels>,
     pub(crate) key_context: Option<KeyContext>,
     pub(crate) focusable: bool,
+    pub(crate) disabled: bool,
     pub(crate) tracked_focus_handle: Option<FocusHandle>,
     pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
     pub(crate) scroll_anchor: Option<ScrollAnchor>,
@@ -3019,6 +3102,7 @@ pub struct Interactivity {
     /// by focus, active, etc.
     pub base_style: Box<StyleRefinement>,
     pub(crate) style_transitions: Option<Box<StyleTransitions>>,
+    pub(crate) disabled_style: Option<Box<StyleRefinement>>,
     pub(crate) focus_style: Option<Box<StyleRefinement>>,
     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
     pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
@@ -3515,6 +3599,10 @@ impl Interactivity {
                         let node_id = global_id.accesskit_node_id();
 
                         for (action, listener) in self.a11y_action_listeners.drain(..) {
+                            if self.disabled {
+                                continue;
+                            }
+
                             window.on_a11y_action(node_id, action, listener);
                         }
                     }
@@ -3686,6 +3774,8 @@ impl Interactivity {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let disabled = self.disabled;
+
         let is_focused = self
             .tracked_focus_handle
             .as_ref()
@@ -3713,6 +3803,10 @@ impl Interactivity {
         for listener in self.mouse_down_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3720,6 +3814,10 @@ impl Interactivity {
         for listener in self.mouse_up_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3727,6 +3825,10 @@ impl Interactivity {
         for listener in self.mouse_pressure_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MousePressureEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3734,6 +3836,10 @@ impl Interactivity {
         for listener in self.mouse_move_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3741,6 +3847,10 @@ impl Interactivity {
         for listener in self.mouse_exit_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseExitEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3748,6 +3858,10 @@ impl Interactivity {
         for listener in self.scroll_wheel_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3755,6 +3869,10 @@ impl Interactivity {
         for listener in self.pinch_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &PinchEvent, phase, window, cx| {
+                if disabled {
+                    return;
+                }
+
                 listener(event, phase, &hitbox, window, cx);
             })
         }
@@ -3821,6 +3939,10 @@ impl Interactivity {
             let hitbox = hitbox.clone();
             window.on_mouse_event({
                 move |evt: &MouseUpEvent, phase, window, cx| {
+                    if disabled {
+                        return;
+                    }
+
                     if !phase.bubble() {
                         return;
                     }
@@ -3898,6 +4020,10 @@ impl Interactivity {
                     let hitbox = hitbox.clone();
                     let has_aux_click_listeners = !aux_click_listeners.is_empty();
                     move |event: &MouseDownEvent, phase, window, _cx| {
+                        if disabled {
+                            return;
+                        }
+
                         if phase == DispatchPhase::Bubble
                             && (event.button == MouseButton::Left || has_aux_click_listeners)
                             && hitbox.is_hovered(window)
@@ -3912,6 +4038,10 @@ impl Interactivity {
                     let pending_mouse_down = pending_mouse_down.clone();
                     let hitbox = hitbox.clone();
                     move |event: &MouseMoveEvent, phase, window, cx| {
+                        if disabled {
+                            return;
+                        }
+
                         if phase == DispatchPhase::Capture || drag_listener.is_none() {
                             return;
                         }
@@ -3951,6 +4081,10 @@ impl Interactivity {
                     window.on_key_event({
                         let pending_keyboard_down = pending_keyboard_down.clone();
                         move |event: &KeyDownEvent, phase, window, _cx| {
+                            if disabled {
+                                return;
+                            }
+
                             if phase.bubble() && !window.default_prevented() {
                                 let stroke = &event.keystroke;
                                 let is_activation_key = (stroke.key.eq("enter")
@@ -3967,6 +4101,10 @@ impl Interactivity {
                         let click_listeners = click_listeners.clone();
                         let hitbox = hitbox.clone();
                         move |event: &KeyUpEvent, phase, window, cx| {
+                            if disabled {
+                                return;
+                            }
+
                             if phase.bubble() && !window.default_prevented() {
                                 let stroke = &event.keystroke;
                                 let keyboard_button = if stroke.key.eq("enter") {
@@ -4008,44 +4146,50 @@ impl Interactivity {
                 window.on_mouse_event({
                     let mut captured_mouse_down = None;
                     let hitbox = hitbox.clone();
-                    move |event: &MouseUpEvent, phase, window, cx| match phase {
-                        // Clear the pending mouse down during the capture phase,
-                        // so that it happens even if another event handler stops
-                        // propagation.
-                        DispatchPhase::Capture => {
-                            let mut pending_mouse_down = pending_mouse_down.borrow_mut();
-                            if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
-                                captured_mouse_down = pending_mouse_down.take();
-                                window.refresh();
-                            } else if pending_mouse_down.is_some() {
-                                // Clear the pending mouse down event (without firing click handlers)
-                                // if the hitbox is not being hovered.
-                                // This avoids dragging elements that changed their position
-                                // immediately after being clicked.
-                                // See https://github.com/zed-industries/zed/issues/24600 for more details
-                                pending_mouse_down.take();
-                                window.refresh();
-                            }
+                    move |event: &MouseUpEvent, phase, window, cx| {
+                        if disabled {
+                            return;
                         }
-                        // Fire click handlers during the bubble phase.
-                        DispatchPhase::Bubble => {
-                            if let Some(mouse_down) = captured_mouse_down.take() {
-                                let btn = mouse_down.button;
 
-                                let mouse_click = ClickEvent::Mouse(MouseClickEvent {
-                                    down: mouse_down,
-                                    up: event.clone(),
-                                });
+                        match phase {
+                            // Clear the pending mouse down during the capture phase,
+                            // so that it happens even if another event handler stops
+                            // propagation.
+                            DispatchPhase::Capture => {
+                                let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                                if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                    captured_mouse_down = pending_mouse_down.take();
+                                    window.refresh();
+                                } else if pending_mouse_down.is_some() {
+                                    // Clear the pending mouse down event (without firing click handlers)
+                                    // if the hitbox is not being hovered.
+                                    // This avoids dragging elements that changed their position
+                                    // immediately after being clicked.
+                                    // See https://github.com/zed-industries/zed/issues/24600 for more details
+                                    pending_mouse_down.take();
+                                    window.refresh();
+                                }
+                            }
+                            // Fire click handlers during the bubble phase.
+                            DispatchPhase::Bubble => {
+                                if let Some(mouse_down) = captured_mouse_down.take() {
+                                    let btn = mouse_down.button;
 
-                                match btn {
-                                    MouseButton::Left => {
-                                        for listener in &click_listeners {
-                                            listener(&mouse_click, window, cx);
+                                    let mouse_click = ClickEvent::Mouse(MouseClickEvent {
+                                        down: mouse_down,
+                                        up: event.clone(),
+                                    });
+
+                                    match btn {
+                                        MouseButton::Left => {
+                                            for listener in &click_listeners {
+                                                listener(&mouse_click, window, cx);
+                                            }
                                         }
-                                    }
-                                    _ => {
-                                        for listener in &aux_click_listeners {
-                                            listener(&mouse_click, window, cx);
+                                        _ => {
+                                            for listener in &aux_click_listeners {
+                                                listener(&mouse_click, window, cx);
+                                            }
                                         }
                                     }
                                 }
@@ -4066,6 +4210,10 @@ impl Interactivity {
                         .get_or_insert_with(Default::default)
                         .clone();
                     window.on_pointer_change(move |change, window, cx| {
+                        if disabled {
+                            return;
+                        }
+
                         let layout_changed = change.cause == PointerChangeCause::Layout;
                         if layout_changed && pending_mouse_down.borrow().is_some() {
                             return;
@@ -4168,6 +4316,10 @@ impl Interactivity {
     }
 
     fn paint_keyboard_listeners(&mut self, window: &mut Window, _cx: &mut App) {
+        if self.disabled {
+            return;
+        }
+
         let key_down_listeners = mem::take(&mut self.key_down_listeners);
         let key_up_listeners = mem::take(&mut self.key_up_listeners);
         let modifiers_changed_listeners = mem::take(&mut self.modifiers_changed_listeners);
@@ -4382,13 +4534,23 @@ impl Interactivity {
                 let can_drop_without_listener = self
                     .can_drop_predicate
                     .as_ref()
-                    .map(|predicate| predicate(drag.value.as_ref(), hitbox, window, cx))
+                    .map(|predicate| {
+                        if self.disabled {
+                            return false;
+                        }
+
+                        predicate(drag.value.as_ref(), hitbox, window, cx)
+                    })
                     .unwrap_or(true);
                 let relevant_drop_listener = match can_drop_without_listener {
                     false => None,
                     true => {
                         let mut iter = self.drop_listeners.iter();
                         iter.find(|(drop_state_type, listener)| {
+                            if self.disabled {
+                                return false;
+                            }
+
                             if *drop_state_type != drag_state_type {
                                 return false;
                             }
@@ -4444,6 +4606,12 @@ impl Interactivity {
             {
                 style.refine(active_style)
             }
+        }
+
+        if self.disabled
+            && let Some(disabled_style) = self.disabled_style.as_ref()
+        {
+            style.refine(disabled_style);
         }
 
         if let Some(element_state) = element_state {
@@ -4556,12 +4724,18 @@ impl Interactivity {
                 node.clear_live_atomic();
             }
         }
-        if !self.click_listeners.is_empty() {
-            node.add_action(accesskit::Action::Click);
-        }
         if self.tracked_focus_handle.is_some() || self.focusable {
             node.add_action(accesskit::Action::Focus);
         }
+
+        if self.disabled {
+            return;
+        }
+
+        if !self.click_listeners.is_empty() {
+            node.add_action(accesskit::Action::Click);
+        }
+
         for (action, _) in &self.a11y_action_listeners {
             node.add_action(*action);
         }
@@ -5629,7 +5803,7 @@ mod tests {
                             .absolute()
                             .size_full()
                             .invisible()
-                            .group_hover("hover-group", |style| style.visible())
+                            .group_hover_style("hover-group", |style| style.visible())
                             .child(canvas(
                                 |_, _, _| {},
                                 move |_, _, _, _| {
@@ -5644,7 +5818,7 @@ mod tests {
                             .top_0()
                             .left_0()
                             .size(px(10.))
-                            .group_hover("hover-group", |style| style.size(px(20.)))
+                            .group_hover_style("hover-group", |style| style.size(px(20.)))
                             .child(
                                 canvas(
                                     move |bounds, _, _| stateful_width.set(bounds.size.width),
@@ -6548,6 +6722,98 @@ mod tests {
         assert!(!node.is_disabled());
         assert!(!node.is_modal());
         assert!(!node.is_live_atomic());
+    }
+
+    struct DisabledCallbackProbe {
+        disabled: bool,
+        aria_disabled: bool,
+        callbacks: [usize; 4],
+        a11y_callbacks: usize,
+        prepaints: usize,
+    }
+
+    impl Render for DisabledCallbackProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let probe = cx.weak_entity();
+
+            div()
+                .id("disabled-callback-probe")
+                .role(accesskit::Role::Button)
+                .aria_label("Disabled callback probe")
+                .size(px(100.))
+                .focusable()
+                .disabled(self.disabled)
+                .aria_disabled(self.aria_disabled)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _event, _window, _cx| view.callbacks[0] += 1),
+                )
+                .on_click(cx.listener(|view, _event, _window, _cx| view.callbacks[1] += 1))
+                .on_hover(cx.listener(|view, _hovered, _window, _cx| view.callbacks[2] += 1))
+                .on_key_down(cx.listener(|view, _event, _window, _cx| view.callbacks[3] += 1))
+                .on_a11y_action(accesskit::Action::Increment, move |_data, _window, cx| {
+                    probe
+                        .update(cx, |probe, _cx| probe.a11y_callbacks += 1)
+                        .unwrap();
+                })
+                .on_prepaint(cx.listener(|view, _info, _window, _cx| view.prepaints += 1))
+        }
+    }
+
+    #[gpui::test]
+    fn disabled_callbacks_are_independent_of_aria_disabled(cx: &mut TestAppContext) {
+        for (disabled, aria_disabled) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let (view, cx) = cx.add_window_view(move |_window, _cx| DisabledCallbackProbe {
+                disabled,
+                aria_disabled,
+                callbacks: [0; 4],
+                a11y_callbacks: 0,
+                prepaints: 0,
+            });
+
+            cx.update(|window, cx| {
+                window.set_a11y_forced(true);
+                window.draw(cx).clear(cx);
+            });
+            cx.simulate_mouse_move(point(px(150.), px(150.)), None, Default::default());
+            view.update(cx, |view, _cx| view.callbacks = [0; 4]);
+            cx.simulate_mouse_move(point(px(10.), px(10.)), None, Default::default());
+            cx.simulate_click(point(px(10.), px(10.)), Default::default());
+            cx.simulate_keystrokes("enter");
+
+            cx.update(|window, cx| {
+                let probe = view.read(cx);
+                assert_eq!(
+                    probe.callbacks.map(|count| count == 0),
+                    [disabled; 4],
+                    "disabled={disabled}, aria_disabled={aria_disabled}",
+                );
+                assert!(probe.prepaints > 0);
+
+                let (_node_id, node) = window
+                    .a11y_tree()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_id, node)| node.label() == Some("Disabled callback probe"))
+                    .unwrap();
+
+                assert_eq!(node.is_disabled(), aria_disabled);
+                assert_eq!(node.supports_action(accesskit::Action::Click), !disabled);
+                assert_eq!(
+                    node.supports_action(accesskit::Action::Increment),
+                    !disabled
+                );
+
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    window.perform_a11y_action(*_node_id, accesskit::Action::Increment, None, cx);
+                    assert_eq!(view.read(cx).a11y_callbacks, usize::from(!disabled));
+                }
+            });
+        }
     }
 
     /// Two focusable, clickable elements ("a" and "b") used to exercise the

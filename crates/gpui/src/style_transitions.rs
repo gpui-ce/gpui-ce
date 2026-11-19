@@ -1510,8 +1510,8 @@ mod tests {
                     .when(self.transitions_enabled, |element| {
                         element.transitions(|transitions| transitions.w(Duration::from_millis(200)))
                     })
-                    .hover(|style| style.w(px(200.0)))
-                    .active(|style| style.w(px(50.0)))
+                    .hover_style(|style| style.w(px(200.0)))
+                    .active_style(|style| style.w(px(50.0)))
                     .child(
                         canvas(
                             move |bounds, _, _| presented_width.set(bounds.size.width),
@@ -1650,7 +1650,7 @@ mod tests {
                         .w(px(100.0))
                         .h(px(50.0))
                         .track_focus(&self.target_focus)
-                        .hover(move |style| style.w(hover_width))
+                        .hover_style(move |style| style.w(hover_width))
                         .transitions(|transitions| {
                             transitions.w(Duration::from_millis(120).with_easing(ease_in_out))
                         })

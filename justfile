@@ -381,6 +381,62 @@ clean:
     cargo clean
 
 
+[doc('Print the committed gpui-ce version (the release being worked towards)')]
+[group('release')]
+release-version:
+    @nu scripts/release/release.nu version
+
+[doc('Record VERSION on every crate and internal pin, without touching the CHANGELOG')]
+[group('release')]
+release-sync version:
+    @nu scripts/release/release.nu sync '{{ version }}'
+
+[doc('Bump every crate to VERSION and roll the CHANGELOG [Unreleased] section into it')]
+[group('release')]
+release-prepare version:
+    @nu scripts/release/release.nu prepare '{{ version }}'
+
+[doc('Verify the tree is a coherent, unpublished release (tag_free="true" also asks crates.io)')]
+[group('release')]
+release-check tag_free="false":
+    #!/usr/bin/env nu
+    if '{{ tag_free }}' == "true" { nu scripts/release/release.nu check --tag-free } else { nu scripts/release/release.nu check }
+
+[doc('Fail if a publishable crate depends on something crates.io cannot resolve')]
+[group('release')]
+publishable:
+    @nu scripts/release/release.nu publishable
+
+[doc('CI: a release PR must have the release/vX.Y.Z branch and the release label')]
+[group('release')]
+release-pr-check head_ref labels:
+    @nu scripts/release/release.nu pr-check '{{ head_ref }}' '{{ labels }}'
+
+[doc('CI: open the release PR for VERSION (bump, roll the changelog, refresh the lockfile)')]
+[group('release')]
+release-pr-open version:
+    @nu scripts/release/release.nu pr-open '{{ version }}'
+
+[doc('CI: after a push to main, tag the release if it merged a release PR')]
+[group('release')]
+release-tag:
+    @nu scripts/release/release.nu tag
+
+[doc('CI: allocate the next crates.io alpha for the given main commit')]
+[group('release')]
+alpha-version sha:
+    @nu scripts/release/release.nu alpha-version '{{ sha }}'
+
+[doc('CI: publish every crate as the given alpha, in dependency order')]
+[group('release')]
+alpha-publish version sha:
+    @nu scripts/release/release.nu alpha-publish '{{ version }}' '{{ sha }}'
+
+[doc('CI: compile a fresh consumer crate against a published alpha')]
+[group('release')]
+alpha-smoke version:
+    @nu scripts/release/release.nu alpha-smoke '{{ version }}'
+
 [doc('Publish GPUI crates to crates.io in dependency order (dry="true" for a dry run)')]
 [group('release')]
 publish dry="false":
@@ -396,37 +452,14 @@ publish dry="false":
         error make {msg: "CARGO_REGISTRY_TOKEN is not set"}
     }
 
-    # Topological publish order. Vendored support crates first, then core,
-    # then renderers/platform leaves, with gpui_platform LAST (it has
-    # target-conditional deps on every platform crate).
-    let crates = [
-        "crates/gpui_ce_util/Cargo.toml"
-        "crates/gpui_collections/Cargo.toml"
-        "crates/gpui_derive_refineable/Cargo.toml"
-        "crates/gpui_refineable/Cargo.toml"
-        "crates/gpui_sum_tree/Cargo.toml"
-        "crates/gpui_scheduler/Cargo.toml"
-        "crates/gpui_media/Cargo.toml"
-        "crates/gpui_path/Cargo.toml"
-        "crates/gpui_zed_util/Cargo.toml"
-
-        # core
-        "crates/gpui_shared_string/Cargo.toml"
-        "crates/gpui_macros/Cargo.toml"
-        "crates/gpui/Cargo.toml"
-
-        # renderers / platform leaves
-        "crates/gpui_wgpu/Cargo.toml"
-        "crates/gpui_tokio/Cargo.toml"
-        "crates/gpui_macos/Cargo.toml"
-        "crates/gpui_linux/Cargo.toml"
-        "crates/gpui_windows/Cargo.toml"
-        "crates/gpui_web/Cargo.toml"
-        "crates/gpui_elements/Cargo.toml"
-
-        "crates/gpui_platform/Cargo.toml"
-
-    ]
+    # Dependency order (and which crates cannot be verified in isolation) is
+    # computed from cargo metadata, so a new workspace crate cannot be forgotten.
+    let release = (^nu scripts/release/release.nu publish-order | from json)
+    let crates = ($release | get manifest)
+    ^nu scripts/release/release.nu publishable
+    if $env.LAST_EXIT_CODE != 0 {
+        error make {msg: "A publishable crate depends on something crates.io cannot resolve"}
+    }
 
     let dry_flag = if $dry_run { ["--dry-run"] } else { [] }
 
@@ -487,13 +520,9 @@ publish dry="false":
         } else {
             []
         }
-        # `gpui-ce` has test/example-only edges to `gpui_ce_platform`, while the
-        # Windows platform implementation has the reciprocal `gpui-ce` edge.
-        # Cargo cannot represent the packaged crate and that local cycle in a
-        # single verification lockfile. The release CI builds every target in
-        # the workspace before this recipe; package the archive here and leave
-        # its all-target compilation to that complete workspace check.
-        let no_verify = if $name == "gpui" { ["--no-verify"] } else { [] }
+        # A versioned dev-dependency on a crate published later (gpui-ce <->
+        # gpui_ce_platform)
+        let no_verify = if ($release | where manifest == $manifest | first | get no_verify) { ["--no-verify"] } else { [] }
         run-external "cargo" "publish" "--manifest-path" $manifest "--allow-dirty" ...$dry_flag ...$no_verify ...$patch_flags
         if $env.LAST_EXIT_CODE != 0 {
             error make {msg: $"Failed to publish ($name)"}

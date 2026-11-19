@@ -303,7 +303,7 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> gpui::Statefu
         .bg(rgb(fill))
         .text_color(rgb(if primary { SURFACE } else { TEXT }))
         .cursor_pointer()
-        .hover(move |style| style.bg(rgb(if primary { 0xc2d5ff } else { 0x2a3850 })))
+        .hover_style(move |style| style.bg(rgb(if primary { 0xc2d5ff } else { 0x2a3850 })))
         .child(label)
 }
 

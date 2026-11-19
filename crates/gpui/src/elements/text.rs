@@ -2259,7 +2259,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn text_layout_uses_intrinsic_wrap_width_without_collapsing_measurement(cx: &mut TestAppContext) {
+    fn text_layout_uses_intrinsic_wrap_width_without_collapsing_measurement(
+        cx: &mut TestAppContext,
+    ) {
         let cx = cx.add_empty_window();
 
         cx.draw(Point::default(), size(px(240.), px(100.)), |window, cx| {

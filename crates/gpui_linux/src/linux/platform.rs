@@ -32,6 +32,10 @@ use gpui::{
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui::{Pixels, Point, px};
+#[cfg(any(feature = "wayland", feature = "x11"))]
+use gpui_parley::ParleyTextSystem;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+use gpui_render::SwashGlyphRasterizer;
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) const SCROLL_LINES: f32 = 3.0;
@@ -132,19 +136,20 @@ impl LinuxCommon {
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            gpui_parley::ParleyTextSystem::new_with_system_font(
-                gpui_parley::SystemFonts::Load,
-                "IBM Plex Sans",
-            )
-            .with_fallback_families([
-                "Lilex",
-                "Ubuntu",
-                "Cantarell",
-                "Noto Sans",
-                "DejaVu Sans",
-                "Arial",
-            ]),
+            ParleyTextSystem::new(SwashGlyphRasterizer::default())
+                .with_system_fallback_family("IBM Plex Sans")
+                .with_fallback_families([
+                    "IBM Plex Sans",
+                    "Lilex",
+                    "Ubuntu",
+                    "Cantarell",
+                    "Noto Sans",
+                    "DejaVu Sans",
+                    "Arial",
+                ])
+                .with_system_fonts(),
         );
+
         #[cfg(not(any(feature = "wayland", feature = "x11")))]
         let text_system = Arc::new(gpui::NoopTextSystem::new());
 

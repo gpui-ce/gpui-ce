@@ -50,7 +50,7 @@ impl Render for GradientViewer {
                                 .bg(gpui::black())
                                 .text_color(gpui::white())
                                 .child(format!("{}", color_space))
-                                .active(|this| this.opacity(0.8))
+                                .active_style(|this| this.opacity(0.8))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.color_space = match this.color_space {
                                         ColorSpace::Oklab => ColorSpace::Srgb,

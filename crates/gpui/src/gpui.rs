@@ -174,7 +174,7 @@ pub use taffy::{AvailableSpace, LayoutId};
 pub use test::*;
 pub use text_system::*;
 pub use transition::*;
-pub use util::{FutureExt, Timeout};
+pub use util::{FutureExt, TextRangeExt, Timeout};
 pub use view::*;
 pub use window::*;
 

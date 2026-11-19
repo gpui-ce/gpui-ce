@@ -1,6 +1,6 @@
 [package]
 name = "gpui_ce_parley"
-version = "0.1.0"
+version = "0.4.0"
 description.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -13,22 +13,23 @@ workspace = true
 default = ["system-fonts"]
 system-fonts = ["fontique/system", "parley/system"]
 fontconfig-dlopen = ["fontique/fontconfig-dlopen"]
+test-support = ["gpui/test-support", "dep:gpui_fonts"]
 
 [dependencies]
 anyhow.workspace = true
 fontique = { workspace = true, features = ["std"] }
-gpui = { path = "../gpui", version = "0.2.2", package = "gpui-ce", default-features = false }
+gpui = { path = "../gpui", version = "0.4.0", package = "gpui-ce", default-features = false }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts", optional = true }
 parking_lot.workspace = true
 parley = { workspace = true, features = ["complex-scripts"] }
 skrifa = { workspace = true, features = ["std"] }
-swash.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
 collections.workspace = true
 criterion.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
 
 [[bench]]
 name = "text_pipeline"

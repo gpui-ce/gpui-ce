@@ -151,7 +151,7 @@ impl Render for HelloWorld {
                                     .children(["🎊", "✈️", "🎉", "🎈", "🎁", "🎂"].map(|emoji| {
                                         div()
                                             .child(emoji.to_string())
-                                            .hover(|style| style.opacity(0.5))
+                                            .hover_style(|style| style.opacity(0.5))
                                     })),
                             )
                             .child(img("image/black-cat-typing.gif").size_12()),

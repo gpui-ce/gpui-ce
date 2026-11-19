@@ -36,7 +36,7 @@ impl Render for Scrollable {
                                     .w(px(2000.))
                                     .h(px(150.))
                                     .bg(gpui::green().with_alpha(0.1))
-                                    .hover(|this| this.bg(gpui::green().with_alpha(0.2)))
+                                    .hover_style(|this| this.bg(gpui::green().with_alpha(0.2)))
                                     .border_1()
                                     .border_color(gpui::green())
                                     .p_4()

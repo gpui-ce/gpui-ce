@@ -36,8 +36,8 @@ fn interactive_button(
         .bg(accent)
         .text_color(text)
         .text_sm()
-        .hover(move |style| style.bg(accent_hover))
-        .active(move |style| style.bg(accent_active))
+        .hover_style(move |style| style.bg(accent_hover))
+        .active_style(move |style| style.bg(accent_active))
         .child(label)
 }
 
@@ -65,9 +65,9 @@ fn focus_button(
         .text_sm()
         .border_2()
         .border_color(gpui::transparent_black())
-        .hover(move |style| style.bg(surface_hover))
-        .focus(move |style| style.border_color(accent))
-        .focus_visible(move |style| style.border_color(focus_ring).shadow_sm())
+        .hover_style(move |style| style.bg(surface_hover))
+        .focus_style(move |style| style.border_color(accent))
+        .focus_visible_style(move |style| style.border_color(focus_ring).shadow_sm())
         .child(label)
 }
 
@@ -156,7 +156,7 @@ fn list_item(
         .when(!is_disabled && !is_selected, move |el| {
             el.bg(surface)
                 .text_color(text)
-                .hover(move |style| style.bg(surface_hover))
+                .hover_style(move |style| style.bg(surface_hover))
         })
         .child(label)
 }
@@ -222,7 +222,7 @@ fn card_with_group_hover(
         .border_1()
         .border_color(border)
         .cursor_pointer()
-        .hover(move |style| style.border_color(accent))
+        .hover_style(move |style| style.border_color(accent))
         .child(
             div()
                 .flex()
@@ -240,7 +240,7 @@ fn card_with_group_hover(
                         .text_xs()
                         .text_color(text_muted)
                         .opacity(0.)
-                        .group_hover("card", |style| style.opacity(1.))
+                        .group_hover_style("card", |style| style.opacity(1.))
                         .child("→"),
                 ),
         )

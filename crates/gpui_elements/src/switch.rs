@@ -109,13 +109,18 @@ impl RenderOnce for BaseSwitch {
             .role(Role::Switch)
             .refine_style(&self.style)
             .aria_toggled(Toggled::from(checked))
-            .aria_disabled(disabled)
+            .disabled(disabled)
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .when(!disabled, |this| this.track_focus(&focus_handle))
             .when(disabled, |this| {
-                this.on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                    cx.stop_propagation();
-                })
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation()
+                        }),
+                )
             })
             .children(self.children);
 

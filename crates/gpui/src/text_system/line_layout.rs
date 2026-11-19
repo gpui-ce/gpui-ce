@@ -1,7 +1,8 @@
 use crate::{
     Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
-    InlineTextStyle, Pixels, PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle,
-    TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
+    InlineTextMetrics, InlineTextStyle, InlineVisualLine, Pixels, PlatformTextSystem, Point,
+    SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
+    UnderlineStyle, VerticalAlign,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -42,28 +43,6 @@ pub struct LineLayout {
     pub len: usize,
     /// The backend's interaction model, used for caret movement and hit testing.
     pub platform_layout: Arc<dyn PlatformTextLayout>,
-}
-
-/// Font metrics that set the vertical extent of an inline line.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct InlineTextMetrics {
-    /// The distance from the baseline up to the top of the tallest glyphs.
-    pub ascent: Pixels,
-    /// The distance from the baseline down to the bottom of the lowest glyphs.
-    pub descent: Pixels,
-    /// The height of a lowercase `x` in the container's font.
-    pub x_height: Pixels,
-}
-
-/// One row of an inline layout, positioned relative to the layout's origin.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct InlineVisualLine {
-    /// The top-left corner of the row, relative to the inline layout.
-    pub origin: Point<Pixels>,
-    /// The size of the row, including the room that atomic boxes need.
-    pub size: Size<Pixels>,
-    /// The baseline of the row, measured down from `origin.y`.
-    pub baseline: Pixels,
 }
 
 /// An atomic box from an inline layout, with the position the layout gave it.
@@ -459,6 +438,17 @@ pub struct PaintStyle {
     pub underline: Option<UnderlineStyle>,
     /// Optional strikethrough style.
     pub strikethrough: Option<StrikethroughStyle>,
+}
+
+impl From<&TextRun> for PaintStyle {
+    fn from(run: &TextRun) -> Self {
+        Self {
+            color: run.color,
+            background_color: run.background_color,
+            underline: run.underline,
+            strikethrough: run.strikethrough,
+        }
+    }
 }
 
 /// A run of glyphs that share one font and one style, positioned on a visual line.

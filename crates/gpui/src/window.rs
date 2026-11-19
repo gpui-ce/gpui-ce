@@ -5225,7 +5225,7 @@ impl Window {
                 frame_index,
             };
 
-            self.sprite_atlas.remove(&params.clone().into());
+            self.sprite_atlas.remove(&params.into());
         }
 
         Ok(())
@@ -8032,6 +8032,43 @@ impl PaintQuad {
             ..self
         }
     }
+}
+
+/// Creates a quad with the given parameters.
+#[deprecated(note = "replaced with builder syntax for PaintQuad")]
+pub fn quad(
+    bounds: Bounds<Pixels>,
+    corner_radii: impl Into<Corners<Pixels>>,
+    background: impl Into<Background>,
+    border_widths: impl Into<Edges<Pixels>>,
+    border_color: impl Into<Background>,
+    border_style: BorderStyle,
+) -> PaintQuad {
+    PaintQuad::new(bounds)
+        .corner_radii(corner_radii)
+        .background(background)
+        .border_widths(border_widths)
+        .border_color(border_color)
+        .border_style(border_style)
+}
+
+/// Creates a filled quad with the given bounds and background color.
+#[deprecated(note = "replaced with builder syntax for PaintQuad")]
+pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>) -> PaintQuad {
+    PaintQuad::new(bounds).background(background)
+}
+
+/// Creates a rectangle outline with the given bounds, border color, and a 1px border width
+#[deprecated(note = "replaced with builder syntax for PaintQuad")]
+pub fn outline(
+    bounds: impl Into<Bounds<Pixels>>,
+    border_color: impl Into<Background>,
+    border_style: BorderStyle,
+) -> PaintQuad {
+    PaintQuad::new(bounds)
+        .border_widths(1f32)
+        .border_color(border_color)
+        .border_style(border_style)
 }
 
 #[cfg(test)]

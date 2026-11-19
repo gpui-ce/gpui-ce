@@ -76,8 +76,8 @@ impl HapticFeedbackExample {
             .rounded_md()
             .bg(color)
             .cursor_pointer()
-            .hover(move |s| s.bg(color.opacity(0.8)))
-            .active(move |s| s.bg(color.opacity(0.6)))
+            .hover_style(move |s| s.bg(color.opacity(0.8)))
+            .active_style(move |s| s.bg(color.opacity(0.6)))
             .child(
                 div()
                     .text_base()

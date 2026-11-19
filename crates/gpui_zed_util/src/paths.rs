@@ -56,31 +56,7 @@ pub trait PathExt {
     where
         Self: From<&'a Path>,
     {
-        #[cfg(target_family = "wasm")]
-        {
-            std::str::from_utf8(bytes)
-                .map(Path::new)
-                .map(Into::into)
-                .map_err(Into::into)
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::prelude::OsStrExt;
-            Ok(Self::from(Path::new(OsStr::from_bytes(bytes))))
-        }
-        #[cfg(windows)]
-        {
-            use anyhow::Context;
-            use tendril::fmt::{Format, WTF8};
-            WTF8::validate(bytes)
-                .then(|| {
-                    // Safety: bytes are valid WTF-8 sequence.
-                    Self::from(Path::new(unsafe {
-                        OsStr::from_encoded_bytes_unchecked(bytes)
-                    }))
-                })
-                .with_context(|| format!("Invalid WTF-8 sequence: {bytes:?}"))
-        }
+        path::try_from_bytes(bytes)
     }
 
     /// Converts a local path to one that can be used inside of WSL.
@@ -378,16 +354,7 @@ impl Display for RemotePathBuf {
 }
 
 pub fn is_absolute(path_like: &str, path_style: PathStyle) -> bool {
-    path_like.starts_with('/')
-        || path_style == PathStyle::Windows
-            && (path_like.starts_with('\\')
-                || path_like
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic())
-                    && path_like[1..]
-                        .strip_prefix(':')
-                        .is_some_and(|path| path.starts_with('/') || path.starts_with('\\')))
+    path_style.is_absolute(Path::new(path_like))
 }
 
 #[derive(Debug, PartialEq)]
@@ -1390,7 +1357,7 @@ impl UrlExt for url::Url {
 
             let path = String::from_utf8(bytes).map_err(|_| ToFilePathError)?;
             debug_assert!(
-                PathStyle::Unix.is_absolute(&path),
+                PathStyle::Unix.is_absolute(Path::new(&path)),
                 "to_file_path() failed to produce an absolute Path"
             );
 
@@ -1463,7 +1430,7 @@ impl UrlExt for url::Url {
                 );
             }
             debug_assert!(
-                PathStyle::Windows.is_absolute(&string),
+                PathStyle::Windows.is_absolute(Path::new(&string)),
                 "to_file_path() failed to produce an absolute Path"
             );
             let path = PathBuf::from(string);
@@ -1476,7 +1443,6 @@ impl UrlExt for url::Url {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use path::rel_path::rel_path;
     // perf annotations replaced with #[test]
 
     #[test]
@@ -3050,86 +3016,36 @@ mod tests {
 
     #[test]
     fn test_strip_prefix() {
-        let expected = [
-            (
-                PathStyle::Unix,
-                "/a/b/c",
-                "/a/b",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Unix,
-                "/a/b/c",
-                "/a/b/",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Unix,
-                "/a/b/c",
-                "/",
-                Some(rel_path("a/b/c").to_arc()),
-            ),
-            (PathStyle::Unix, "/a/b/c", "", None),
-            (PathStyle::Unix, "/a/b//c", "/a/b/", None),
+        let cases = [
+            (PathStyle::Unix, "/a/b/c", "/a/b", Some("c")),
+            (PathStyle::Unix, "/a/b/c", "/a/b/", Some("c")),
+            (PathStyle::Unix, "/a/b/c", "/", Some("a/b/c")),
+            (PathStyle::Unix, "/a/b/c", "", Some("/a/b/c")),
+            (PathStyle::Unix, "/a/b//c", "/a/b/", Some("c")),
             (PathStyle::Unix, "/a/bc", "/a/b", None),
-            (
-                PathStyle::Unix,
-                "/a/b/c",
-                "/a/b/c",
-                Some(rel_path("").to_arc()),
-            ),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b\\c",
-                "C:\\a\\b",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b\\c",
-                "C:\\a\\b\\",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b\\c",
-                "C:\\",
-                Some(rel_path("a/b/c").to_arc()),
-            ),
-            (PathStyle::Windows, "C:\\a\\b\\c", "", None),
-            (PathStyle::Windows, "C:\\a\\b\\\\c", "C:\\a\\b\\", None),
-            (PathStyle::Windows, "C:\\a\\bc", "C:\\a\\b", None),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b/c",
-                "C:\\a\\b",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b/c",
-                "C:\\a\\b\\",
-                Some(rel_path("c").to_arc()),
-            ),
-            (
-                PathStyle::Windows,
-                "C:\\a\\b/c",
-                "C:\\a\\b/",
-                Some(rel_path("c").to_arc()),
-            ),
+            (PathStyle::Unix, "/a/b/c", "/a/b/c", Some("")),
+            (PathStyle::Windows, r"C:\a\b\c", r"C:\a\b", Some("c")),
+            (PathStyle::Windows, r"C:\a\b\c", r"C:\a\b\", Some("c")),
+            (PathStyle::Windows, r"C:\a\b\c", r"C:\", Some(r"a\b\c")),
+            (PathStyle::Windows, r"C:\a\b\c", "", Some(r"C:\a\b\c")),
+            (PathStyle::Windows, r"C:\a\b\\c", r"C:\a\b\", Some("c")),
+            (PathStyle::Windows, r"C:\a\bc", r"C:\a\b", None),
+            (PathStyle::Windows, r"C:\a\b/c", r"C:\a\b", Some("c")),
+            (PathStyle::Windows, r"C:\a\b/c", r"C:\a\b\", Some("c")),
+            (PathStyle::Windows, r"C:\a\b/c", "C:\\a\\b/", Some("c")),
         ];
-        let actual = expected.clone().map(|(style, child, parent, _)| {
-            (
-                style,
-                child,
-                parent,
-                style
-                    .strip_prefix(child.as_ref(), parent.as_ref())
-                    .map(|rel_path| rel_path.to_arc()),
-            )
-        });
-        pretty_assertions::assert_eq!(actual, expected);
+
+        for (style, child, parent, expected) in cases {
+            let actual = style.strip_prefix(Path::new(child), Path::new(parent));
+
+            assert_eq!(
+                actual.ok(),
+                expected.map(Path::new),
+                "{style:?}: strip {parent:?} from {child:?}"
+            );
+        }
     }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_wsl_path() {

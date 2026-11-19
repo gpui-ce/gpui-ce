@@ -1,6 +1,6 @@
 [package]
 name = "gpui-ce"
-version = "0.2.2"
+version = "0.4.0"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
 description = "A community fork of Zed's GPU-accelerated UI framework"
@@ -34,8 +34,8 @@ bench-support = ["profiler", "dep:criterion"]
 bench = ["bench-support"]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
-wayland = []
-x11 = []
+wayland = ["gpui_platform/wayland"]
+x11 = ["gpui_platform/x11"]
 screen-capture = ["dep:windows-capture"]
 windows-manifest = ["dep:embed-resource"]
 profiler = ["dep:hdrhistogram"]
@@ -94,6 +94,7 @@ resvg = { version = "0.48.1", default-features = false, features = [
 rust-embed = { version = "8.12", optional = true }
 usvg = { version = "0.48.1", default-features = false }
 skrifa.workspace = true
+linebender_resource_handle.workspace = true
 schemars.workspace = true
 seahash = "4.1"
 serde.workspace = true
@@ -158,8 +159,8 @@ smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 gpui_ce_elements = { path = "../gpui_elements" }
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
-gpui_fonts = { path = "../gpui_ce_fonts", version = "0.2.2", package = "gpui-ce-fonts" }
+gpui_platform = { workspace = true, features = ["font-kit"] }
+gpui_fonts = { path = "../gpui_ce_fonts", version = "0.4.0", package = "gpui-ce-fonts" }
 gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }
 rand.workspace = true

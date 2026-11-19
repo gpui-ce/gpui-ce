@@ -104,13 +104,13 @@ or after [`TestAppWindow::draw`](crate::TestAppWindow::draw).
 
 Elements that track a handle can style focus states declaratively:
 
-* [`focus`](crate::InteractiveElement::focus) applies when the element itself is
+* [`focus_style`](crate::InteractiveElement::focus_style) applies when the element itself is
   focused.
-* [`in_focus`](crate::InteractiveElement::in_focus) applies when the element or
+* [`in_focus_style`](crate::InteractiveElement::in_focus_style) applies when the element or
   an ancestor is focused (matching `within_focused`). To highlight a parent
   container when a *child* has focus, branch on `handle.contains_focused(window, cx)`
   in `render`.
-* [`focus_visible`](crate::InteractiveElement::focus_visible) applies when the
+* [`focus_visible_style`](crate::InteractiveElement::focus_visible_style) applies when the
   element is focused *and* [`Window::last_input_was_keyboard`] is `true`, hiding
   focus rings after pointer clicks:
 
@@ -123,8 +123,8 @@ div()
     .track_focus(&self.focus_handle)
     .border_2()
     .border_color(rgb(0x3b3b3b))
-    .focus(|style| style.border_color(rgb(0x3b82f6)))
-    .focus_visible(|style| style.bg(rgb(0x1e3a8a)))
+    .focus_style(|style| style.border_color(rgb(0x3b82f6)))
+    .focus_visible_style(|style| style.bg(rgb(0x1e3a8a)))
     .child("Name")
 #     }
 # }

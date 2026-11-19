@@ -1,0 +1,30 @@
+name: Release check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Release PRs are identified by their branch, matching `just release-pr-open`
+    if: startsWith(github.head_ref, 'release/v') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+      LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+      - uses: extractions/setup-just@v2
+      - name: Branch, label and version agree
+        run: just release-pr-check "$HEAD_REF" "$LABELS"
+      - name: Changelog, lockstep versions and crates.io availability
+        run: just release-check true
+      - name: Dry-run publish of the whole crate graph
+        run: just publish true

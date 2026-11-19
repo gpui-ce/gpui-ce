@@ -35,7 +35,7 @@ source_url = f'https://raw.githubusercontent.com/google/fonts/{commit}/ofl/notos
 source = urlopen(source_url + 'NotoSans%5Bwdth%2Cwght%5D.ttf').read()
 assert sha256(source).hexdigest() == 'bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d'
 
-asset_dir = Path('assets/fonts/noto-sans')
+asset_dir = Path('crates/gpui_ce_fonts/fonts/noto-sans')
 asset_dir.mkdir(parents=True, exist_ok=True)
 license_text = urlopen(source_url + 'OFL.txt').read().decode()
 (asset_dir / 'OFL.txt').write_text('\n'.join(line.rstrip() for line in license_text.splitlines()) + '\n')

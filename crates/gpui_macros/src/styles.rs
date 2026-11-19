@@ -147,7 +147,7 @@ fn canonical_style_transition_fields(
             );
         }
 
-        field_indices.insert(key.clone(), fields.len());
+        field_indices.insert(key, fields.len());
         fields.push(CanonicalStyleTransitionField {
             config_name,
             path: field.path.clone(),

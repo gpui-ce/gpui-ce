@@ -334,7 +334,7 @@ impl Render for DrawingCanvas {
                             .text_sm()
                             .text_color(text)
                             .cursor_pointer()
-                            .hover(move |s| s.bg(error_hover))
+                            .hover_style(move |s| s.bg(error_hover))
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clear(cx);
