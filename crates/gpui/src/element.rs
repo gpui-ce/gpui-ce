@@ -6,8 +6,9 @@
 //! # Element basics
 //!
 //! GPUI builds the element tree by calling [`Render::render`] on the root view of a window. It
-//! then lays the tree out with Taffy and paints it, one [`Element`] at a time. When the frame is
-//! done, the tree and the callbacks it registered are dropped, and the next frame builds a new one.
+//! then lays the tree out with Taffy and paints it, one [`Element`] at a time. The next frame
+//! builds a new tree. Input callbacks remain available between frames and may be reused by
+//! cached views.
 //! [The frame](crate::_documentation::concepts::the_frame) describes this sequence in full.
 //!
 //! Elements hold no state between frames, because they are rebuilt every frame. State that
@@ -1051,8 +1052,8 @@ impl AnyElement {
 
     /// Runs the prepaint phase on the wrapped element, with the bounds that layout gave it.
     ///
-    /// Returns the [`FocusHandle`] of a focused element in this subtree, if one became focused
-    /// during this call. Otherwise returns `None`.
+    /// Returns the focused element's [`FocusHandle`] if this call was the first to record it for
+    /// the frame. The element may already have held focus before prepaint.
     pub fn prepaint(&mut self, window: &mut Window, cx: &mut App) -> Option<FocusHandle> {
         let focus_assigned = window.next_frame.focus.is_some();
 
@@ -1088,8 +1089,7 @@ impl AnyElement {
     /// Runs the prepaint phase with `origin` as the element's origin, in window coordinates.
     ///
     /// Call [`AnyElement::layout_as_root`] first, or use [`AnyElement::prepaint_as_root`], which
-    /// does both. Returns the focus handle of a focused element in the subtree that became focused
-    /// during this call, if any.
+    /// does both. The return value follows [`AnyElement::prepaint`].
     pub fn prepaint_at(
         &mut self,
         origin: Point<Pixels>,
@@ -1102,8 +1102,7 @@ impl AnyElement {
     /// Lays out this element as a root within `available_space`, then prepaints it at `origin`.
     ///
     /// Use it for an element that sits outside its parent's layout, such as a popover placed at a
-    /// window position. Returns the focus handle of a focused element in the subtree that became
-    /// focused during this call, if any.
+    /// window position. The return value follows [`AnyElement::prepaint`].
     pub fn prepaint_as_root(
         &mut self,
         origin: Point<Pixels>,

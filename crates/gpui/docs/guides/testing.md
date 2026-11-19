@@ -47,8 +47,6 @@ impl Render for Counter {
 let mut app = TestApp::new();
 let mut window = app.open_window(|_, _| Counter { count: 0 });
 
-// Lay out and paint the view once, so the click has bounds to hit.
-window.draw();
 window.simulate_click(point(px(10.), px(10.)), MouseButton::Left);
 
 window.read(|counter, _| assert_eq!(counter.count, 1));
@@ -58,9 +56,10 @@ Each `TestAppWindow` method flushes the effects it causes before returning. The
 click invokes `on_click`; `cx.notify()` schedules a redraw, and the final `read`
 observes the updated view.
 
-Positions are in window coordinates, so the click above lands inside the 100-pixel square
-at the window's origin. Call `draw` before clicking: hit testing uses the last painted
-frame.
+Positions are in window coordinates, so the click above lands inside the 100-pixel
+square at the window's origin. Opening the window draws its initial frame. Call
+`draw` before sending input that needs to hit newly laid-out elements after a state
+change, because hit testing uses the last painted frame.
 
 ### Simulate input
 
@@ -76,8 +75,9 @@ frame.
 | [`simulate_resize`][TestAppWindow::simulate_resize] | Resizing the window. |
 | [`draw`][TestAppWindow::draw] | A forced frame, so later hit tests see the current layout. |
 
-`simulate_keystrokes` splits on spaces, so you can't use the space key in it.
-Use `simulate_keystroke("space")` for that.
+Use the token `space` for the space bar in a sequence such as
+`simulate_keystrokes("tab space")`. To type a literal space into a text field,
+use `simulate_input(" ")`.
 
 Keyboard tests use the same dispatch path as the application. Bind keys with
 [`App::bind_keys`], focus the element you want, and send the keystroke:

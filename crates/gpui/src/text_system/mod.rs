@@ -36,10 +36,15 @@ pub use text_run::*;
 pub use text_system::*;
 pub use window_text_system::*;
 
-/// Number of subpixel glyph variants along the X axis.
+/// The number of horizontal subpixel positions each glyph is rasterized at.
+///
+/// Glyphs are rasterized at quarter-pixel offsets along the X axis so that
+/// positions which fall between device pixels stay sharp.
 pub const SUBPIXEL_VARIANTS_X: u8 = 4;
 
-/// Number of subpixel glyph variants along the Y axis.
+/// The number of vertical subpixel positions each glyph is rasterized at.
+///
+/// Glyphs are not offset vertically, so there is one variant along the Y axis.
 pub const SUBPIXEL_VARIANTS_Y: u8 = 1;
 
 #[cfg(test)]

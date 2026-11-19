@@ -1,25 +1,28 @@
-//! Implementation for editable-text elements (gpui equivalent of html
+//! Implementation for editable-text elements, GPUI's equivalent of HTML
 //! [`<input>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/input) and
 //! [`<textarea>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/textarea)).
 //!
 //! Both [`text_input`] and [`text_area`] create an [`EditableTextElement`]. This element supports:
-//! - navigating via keyboard & mouse (by character, word, line, and document)
-//! - highlight selection via keyboard & mouse (holding shift, double/triple click mouse, mouse drag)
-//! - typing using an InputMethodEditor (IME) for writing Chinese, Japanese, and Korean utf-16
-//! - inserting newlines (`\n`) and tabs (`\t`)
+//! - navigating with the keyboard and mouse by character, word, line, or document
+//! - selecting text with Shift, double- or triple-click, and mouse dragging
+//! - typing with an Input Method Editor (IME), including Chinese, Japanese, and Korean UTF-16 input
+//! - inserting newlines (`\n`) and tabs (`\t`) in multi-line fields
 //! - cut/copy/paste
 //! - caret / text cursor that can blink
 //! - simple undo/redo within a single field
+//! - a single-line mode, where Enter and Tab are passed to the surrounding view, so a form can
+//!   submit or move focus; see [`text_input`]
+//! - exposing its text and selection to accessibility APIs while an assistive technology is active
 //!
 //! For all input actions, see documentation in the [`actions`] module.
 //!
-//! Editable text elements will default to using [`String`] as the storage medium (see [`StringStorage`]).
-//! Standard library strings are not ideal though for large text documents. For such uses,
-//! it is encouraged that implementers consider rolling their own [`UnicodeTextStorage`] medium.
+//! Editable text elements use [`String`] by default (see [`StringStorage`]).
+//! A standard library string is not ideal for a large document. For those documents, implement
+//! [`UnicodeTextStorage`] with a storage structure such as a rope.
 //!
-//! Unlike other elements, editable text internally owns its [`FocusHandle`](gpui::FocusHandle).
-//! This is required due to limitations of the [`Interactivity`](gpui::Interactivity) api and
-//! that a user cannot interact with a text-input field if it cannot be focused.
+//! Unlike other elements, editable text owns its [`FocusHandle`](gpui::FocusHandle) internally.
+//! The field must be focusable before a user can interact with it, and
+//! [`Interactivity`](gpui::Interactivity) cannot provide that handle on its own.
 //!
 //! ### Usage Samples
 //!
@@ -70,9 +73,8 @@
 //! ```
 //!
 //! The user-inputted text can be accessed via event callbacks on the element.
-//! There is no callback representing the concept of "user is done editing". Its recommended that
-//! users write a [debounce](https://developer.mozilla.org/en-US/docs/Glossary/Debounce)
-//! or some way to detect "focus lost" to signify the user leaving the field.
+//! There is no callback for "editing finished." Debounce [`TextChanged`] events or observe focus
+//! changes when you need to detect that the user has left the field.
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
@@ -95,7 +97,7 @@
 //! # }
 //! ```
 //!
-//! You can configure the default value of the editable text by using [`use_keyed_init`]:
+//! You can configure the default value of the editable text by using [`EditableTextState::use_keyed_init`]:
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # use gpui_ce_elements::editable_text::{text_input, EditableTextState, StringStorage};
@@ -107,10 +109,8 @@
 //! let _state = EditableTextState::use_keyed_init(id.clone(), window, cx,
 //!     |_window, _cx| StringStorage::from("this is some default text content"));
 //!
-//! // Its also plausible to omit the state function call. The element will try to find the state
-//! // according to its id (which we are trusting here was guaranteed to be at that id above).
-//! // Despite this functionality, its recommended that callers which construct a state explicitly
-//! // provide it to the element, at least for clarity and debugging.
+//! // You can omit the state call: the element looks up state by id. Passing the
+//! // state explicitly makes the connection clear and helps when debugging.
 //! text_input(id)
 //! # }
 //! ```
@@ -153,18 +153,21 @@
 //! Full-text examples can be found in the [examples folder](https://github.com/gpui-ce/gpui-ce/tree/main/crates/gpui_elements/examples)
 //!
 //! ### Backlog of not-yet implemented features:
-//! - detecting focus being lost on an EditableText field
-//! - text sanitation & validation (see no-op implementation of [`EditableTextState::validate_incoming_text`])
-//! - nav & select via PageUp/PageDown
-//! - screen reader support via a11y
+//! - a public callback for when a field loses focus (the state clears its selection on blur, but
+//!   emits no event)
+//! - text sanitization and validation beyond removing line breaks from single-line fields. The
+//!   private `validate_incoming_text` method of `EditableTextState` is where this would go.
+//! - navigation and selection via PageUp/PageDown
+//! - fuller screen reader support, beyond the text and selection exposed while an assistive
+//!   technology is active
 //! - masking text (e.g. for passwords)
-//! - disabling `insert_tab` if favor of tab being used to change focus between elements (i.e. escaping the field)
 //!
 
 pub mod actions;
 mod caret;
 mod element;
 mod history;
+pub use history::*;
 mod layout;
 mod state;
 mod storage;

@@ -5,7 +5,7 @@ use crate::{
 use derive_more::Deref;
 use std::hash::{Hash, Hasher};
 
-/// An identifier for a specific glyph, as returned by [`WindowTextSystem::layout_line`].
+/// An identifier for a specific glyph, as returned by [`crate::WindowTextSystem::layout_line`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[repr(C)]
 pub struct GlyphId(pub u32);

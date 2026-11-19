@@ -609,9 +609,9 @@ impl<V: 'static + Render> TestAppWindow<V> {
 
     /// Sends each keystroke in a space-separated list, in order, then runs pending tasks after each one.
     ///
-    /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`]. A space
-    /// character in the list is a separator, so use `simulate_keystroke("space")` to
-    /// press the space bar. Two spaces in a row send an empty keystroke.
+    /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`]. Use the
+    /// token `space` for the space bar, as in `"tab space"`. A literal space is a
+    /// separator, and two spaces in a row leave an empty part.
     ///
     /// # Panics
     ///
@@ -645,12 +645,11 @@ impl<V: 'static + Render> TestAppWindow<V> {
         }
     }
 
-    /// Types `input` by sending one keystroke per character, then runs pending tasks.
+    /// Types `input` by sending one keystroke per character and running pending tasks after each.
     ///
-    /// Each character is sent as a keystroke whose key is that character, so text
-    /// inputs receive the text. Uppercase letters are sent with shift held. A space
-    /// is sent with the key `" "`, not `"space"`, so a binding for `space` doesn't
-    /// match it. Use [`TestAppWindow::simulate_keystroke`] for named keys.
+    /// Each character goes through the keystroke parser. ASCII uppercase letters are sent
+    /// as lowercase keys with Shift held. A literal space has the key `" "`. To trigger a
+    /// binding for the named `space` key, use [`TestAppWindow::simulate_keystroke`].
     ///
     /// # Example
     ///

@@ -162,7 +162,8 @@ impl HeadlessAppContext {
         self.dispatcher.allow_parking();
     }
 
-    /// Turns off the parking mode from [`HeadlessAppContext::allow_parking`], returning to deterministic execution.
+    /// Disables waiting in real time. If parking was previously allowed, the scheduler
+    /// still permits notifications from other threads.
     pub fn forbid_parking(&self) {
         self.dispatcher.forbid_parking();
     }

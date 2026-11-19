@@ -1,6 +1,8 @@
-//! A container query element, in the spirit of CSS container queries.
-//! The element's own size is determined solely by its style and the space
-//! offered by its parent.
+//! An element that builds its contents from its laid-out size.
+//!
+//! [`container_query`] measures the element first, then calls its closure with that size. The
+//! closure's contents cannot change the size that triggered the call; use the surrounding style
+//! when the container itself needs a different size.
 
 use refineable::Refineable as _;
 
@@ -10,25 +12,52 @@ use crate::{
     Window, relative,
 };
 
-/// Construct a container query element with the given render callback.
-/// The callback receives the size the element was assigned during layout and
-/// returns the contents to display within it.
+/// Creates a [`ContainerQuery`] whose contents depend on the size it is given.
 ///
-/// By default the element fills its parent (equivalent to `.size_full()`);
-/// use the [`Styled`] methods to size it differently. Because the contents
-/// don't exist until after layout, they cannot influence the element's size.
+/// Use it when a component should change its layout to fit the space its parent gives it, rather
+/// than the window's size. `render` receives the element's size, after layout has placed it, and
+/// returns the contents. The contents can't change the element's own size, because they are built
+/// after layout.
+///
+/// By default the element fills its parent, as `.size_full()` does. Use the [`Styled`] methods to
+/// size it differently.
 ///
 /// # Example
 ///
 /// ```
-/// # use gpui::{container_query, div, px, IntoElement, ParentElement};
-/// container_query(|size, _window, _cx| {
-///     if size.width < px(240.) {
-///         div().child("Narrow layout")
-///     } else {
-///         div().child("Wide layout")
+/// use std::{cell::Cell, rc::Rc};
+///
+/// use gpui::{
+///     Context, IntoElement, Pixels, Render, TestApp, Window, container_query, div, prelude::*, px,
+/// };
+///
+/// struct Responsive {
+///     width: Rc<Cell<Option<Pixels>>>,
+/// }
+///
+/// impl Render for Responsive {
+///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+///         let width = self.width.clone();
+///         container_query(move |size, _window, _cx| {
+///             width.set(Some(size.width));
+///             if size.width < px(240.) {
+///                 div().child("Narrow layout")
+///             } else {
+///                 div().child("Wide layout")
+///             }
+///         })
 ///     }
+/// }
+///
+/// let width = Rc::new(Cell::new(None));
+/// let mut app = TestApp::new();
+/// let mut window = app.open_window({
+///     let width = width.clone();
+///     move |_window, _cx| Responsive { width }
 /// });
+///
+/// window.draw();
+/// assert!(width.get().is_some_and(|width| width > px(0.)));
 /// ```
 pub fn container_query<E>(
     render: impl 'static + FnOnce(Size<Pixels>, &mut Window, &mut App) -> E,

@@ -1500,7 +1500,7 @@ impl App {
     }
 
     /// Sets the GPU device requirements (extra features and limits) for the renderer.
-    /// Only macOS uses them.
+    /// The Wayland and X11 backends use these requirements, as does macOS with the `wgpu` feature.
     ///
     /// Call this before opening any window. The argument must be a
     /// `gpui_wgpu::WgpuDeviceRequirements` boxed as `Box<dyn Any>`.
@@ -1590,10 +1590,10 @@ impl App {
         })
     }
 
-    /// Brings the app to the front.
+    /// Requests app activation from the platform.
     ///
-    /// Pass `ignoring_other_apps: true` to activate the app even when another app is in front.
-    /// Use it sparingly, because it moves the user's focus.
+    /// On macOS, pass `true` to request activation even when another app is in front.
+    /// The Windows, Linux and web backends ignore this request.
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
     }
@@ -2210,10 +2210,11 @@ impl App {
         });
     }
 
-    /// Runs `f` with the window that most recently drew the entity `entity_id`.
+    /// Runs `f` with the window that most recently tracked the entity `entity_id` during a frame.
     ///
-    /// If the entity has not been drawn yet, the window it was created in is used. The
-    /// callback receives the [`Window`] and the [`App`]. Returns `None` if the entity has
+    /// Creating an entity in a window or registering a window-bound observer can also
+    /// associate the entity with a window before a frame tracks it. The callback receives
+    /// the [`Window`] and the [`App`]. Returns `None` if the entity has
     /// no current window, if that window has closed, or if the window is already being
     /// updated higher up the call stack.
     pub fn with_window<R>(
@@ -2312,8 +2313,8 @@ impl App {
     ///
     /// # Panics
     ///
-    /// Panics if called after the quit handlers have started running (from
-    /// [`App::on_app_quit`]).
+    /// Panics while the app is waiting for shutdown cleanup. Quit handlers can obtain the
+    /// executor while constructing their cleanup futures.
     pub fn foreground_executor(&self) -> &ForegroundExecutor {
         if self.quitting {
             panic!("Can't spawn on main thread after on_app_quit")
@@ -2340,8 +2341,8 @@ impl App {
     ///
     /// # Panics
     ///
-    /// In debug builds this panics if called after the quit handlers have started
-    /// running. Release builds log a debug message and continue.
+    /// In debug builds this panics while the app is waiting for shutdown cleanup.
+    /// Release builds log a debug message and continue.
     ///
     /// # Examples
     ///
@@ -2600,12 +2601,12 @@ impl App {
         subscription
     }
 
-    /// Calls `on_new` each time an entity of type `T` is created.
+    /// Calls `on_new` for entities of type `T` created with [`AppContext::new`].
     ///
     /// The callback receives the new state, the [`Window`] if the entity was created with
-    /// one, and a [`Context`] for it. Use it to set up behavior for every instance of a
-    /// type, such as registering an observer. Keep the returned [`Subscription`] alive
-    /// for the callback to keep running.
+    /// one, and a [`Context`] for it. For entities created through
+    /// [`AppContext::insert_entity`], register any observers in the builder.
+    /// Keep the returned [`Subscription`] alive for the callback to keep running.
     pub fn observe_new<T: 'static>(
         &self,
         on_new: impl 'static + Fn(&mut T, Option<&mut Window>, &mut Context<T>),
@@ -2668,11 +2669,12 @@ impl App {
         })
     }
 
-    /// Calls `f` for every key-down that reaches any window of the app.
+    /// Calls `f` after key-down dispatch in the app's windows.
     ///
-    /// The callback runs after action and event handling has finished, so it sees the
-    /// keystrokes that were not handled earlier. Use [`App::intercept_keystrokes`] to
-    /// see keystrokes before they are dispatched. Keep the returned [`Subscription`] alive.
+    /// The event includes the action if a key binding handled the keystroke. Otherwise,
+    /// the callback runs if keyboard event handling lets the event propagate. Use
+    /// [`App::intercept_keystrokes`] to see keystrokes before dispatch. Keep the returned
+    /// [`Subscription`] alive.
     pub fn observe_keystrokes(
         &mut self,
         mut f: impl FnMut(&KeystrokeEvent, &mut Window, &mut App) + 'static,
@@ -2954,7 +2956,7 @@ impl App {
 
     /// Returns whether `action` would be handled if it were dispatched now.
     ///
-    /// Checks the active window's focus path and its bindings, then the global listeners
+    /// Looks for an action listener on the active window's focus path or a global listener
     /// from [`App::on_action`]. Use it to enable or disable menu items.
     pub fn is_action_available(&mut self, action: &dyn Action) -> bool {
         let mut action_available = false;

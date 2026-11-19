@@ -529,8 +529,8 @@ impl TestAppContext {
 
     /// Spawns a future on the foreground executor, with an [`AsyncApp`] for this app.
     ///
-    /// The future runs when tasks run, such as during [`TestAppContext::run_until_parked`]
-    /// or a `simulate_*` method. A plain `update` doesn't run it.
+    /// The future runs when the scheduler is driven, for example by
+    /// [`TestAppContext::run_until_parked`]. A plain `update` doesn't run it.
     #[track_caller]
     pub fn spawn<Fut, R>(&self, f: impl FnOnce(AsyncApp) -> Fut) -> Task<R>
     where
@@ -618,8 +618,8 @@ impl TestAppContext {
     /// Sends each keystroke in a space-separated list to `window`, then runs pending tasks.
     ///
     /// Each part is parsed as in [`TestAppWindow::simulate_keystroke`](crate::TestAppWindow::simulate_keystroke).
-    /// The space bar is the key `"space"`, which can't appear in this list, because
-    /// a space separates keystrokes. Two spaces in a row send an empty keystroke.
+    /// Use `"space"` for the space bar, as in `"a space b"`. A literal space separates
+    /// keystrokes, and two consecutive spaces send an empty keystroke.
     ///
     /// # Panics
     ///
@@ -676,7 +676,7 @@ impl TestAppContext {
             .clone()
     }
 
-    /// Returns a stream that yields `()` each time `entity` notifies.
+    /// Returns a stream that yields `()` for each delivered notification from `entity`.
     ///
     /// The stream ends when the entity is released.
     pub fn notifications<T: 'static>(
@@ -717,12 +717,11 @@ impl TestAppContext {
         rx
     }
 
-    /// Waits until `predicate` returns `true` for `entity`, checking after each notification.
+    /// Checks `predicate` on the first poll, and then again after each notification from `entity`.
     ///
     /// # Panics
     ///
-    /// Panics if the predicate isn't true within 3 seconds of simulated time, or if
-    /// the entity is released while waiting.
+    /// Panics if the predicate hasn't succeeded when the three-second simulated timer fires.
     pub async fn condition<T: 'static>(
         &mut self,
         entity: &Entity<T>,
@@ -1101,7 +1100,8 @@ impl VisualTestContext {
 
     /// Sends `event` to the window as platform input, then runs pending tasks.
     ///
-    /// Call [`VisualTestContext::draw`] first, so that hit tests see the current layout.
+    /// Hit testing uses the window's last rendered frame. Draw the root view before sending
+    /// input if its layout has changed.
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         self.test_window(self.window)
             .simulate_input(event.to_platform_input());

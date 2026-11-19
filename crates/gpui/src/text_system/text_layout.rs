@@ -28,7 +28,8 @@ impl From<ResolvedDirection> for ParagraphDirection {
 pub struct TextLayoutOptions {
     /// Optional soft-wrap width.
     pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
+    /// Soft-wrap line budget. Hard paragraph breaks are preserved; `Some(0)` behaves
+    /// like `Some(1)`. See [`WindowTextSystem::shape_text`].
     pub line_clamp: Option<usize>,
     /// Width used for horizontal alignment, independently of wrapping.
     pub alignment_width: Option<Pixels>,

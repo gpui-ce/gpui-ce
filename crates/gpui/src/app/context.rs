@@ -269,7 +269,7 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Calls `on_release` when GPUI releases this entity.
     ///
-    /// GPUI releases an entity at the end of the update in which its last strong handle was dropped.
+    /// GPUI releases an entity during the effect flush after its last strong handle is dropped.
     /// The callback runs then, while the value still exists, and receives it mutably together with the
     /// app. Use it to tear down resources the entity holds outside GPUI.
     ///
@@ -548,8 +548,8 @@ impl<'a, T: 'static> Context<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if the guard is dropped while the app is already borrowed, for example inside another
-    /// update of the same app, and the entity is still alive. Drop the guard from a later update instead.
+    /// Panics if the entity is still alive and the guard is dropped while the app is borrowed,
+    /// including during an update of the same app. Drop the guard after the app borrow ends.
     pub fn on_drop(
         &self,
         f: impl FnOnce(&mut T, &mut Context<T>) + 'static,
@@ -570,7 +570,7 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Runs `f` with this entity and `window` on the next frame of `window`.
     ///
-    /// The callback runs once, during the next frame. It doesn't run if this entity has been released.
+    /// The callback holds a strong handle to the entity until it runs or the window discards it.
     pub fn on_next_frame(
         &self,
         window: &mut Window,
@@ -582,11 +582,12 @@ impl<'a, T: 'static> Context<'a, T> {
         window.on_next_frame(move |window, cx| view.update(cx, |view, cx| f(view, window, cx)));
     }
 
-    /// Runs `f` with this entity and `window` at the end of the current effect cycle.
+    /// Runs `f` with this entity and its current window at the end of the current effect cycle.
     ///
     /// Use it to change this entity from code that is still on the stack, such as a method called from
     /// inside this entity's own update. The callback runs after the outermost update finishes, when the
-    /// entity is no longer borrowed. It doesn't run if this entity has been released.
+    /// entity is no longer borrowed. `window` provides the initial association if the entity has
+    /// no current window. The callback requires a live entity and an available window.
     pub fn defer_in(
         &mut self,
         window: &Window,
@@ -604,8 +605,9 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Calls `on_notify` when `observed` calls [`Context::notify`], and passes it the window.
     ///
-    /// Pass the window that displays this entity. If that window has been closed, the callback
-    /// does not run.
+    /// `window` provides the initial association if the observing entity has no current window.
+    /// Each notification looks up that entity's current window. The callback is skipped if the
+    /// window is unavailable.
     pub fn observe_in<V2>(
         &mut self,
         observed: &Entity<V2>,
@@ -639,8 +641,9 @@ impl<'a, T: 'static> Context<'a, T> {
 
     /// Calls `on_event` when `emitter` emits an event of type `Evt`, and passes it the window.
     ///
-    /// Pass the window that displays this entity. If that window has been closed, the callback
-    /// does not run.
+    /// `window` provides the initial association if the subscribing entity has no current window.
+    /// Each event looks up that entity's current window. The callback is skipped if the window is
+    /// unavailable.
     pub fn subscribe_in<Emitter, Evt>(
         &mut self,
         emitter: &Entity<Emitter>,
