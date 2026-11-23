@@ -1213,8 +1213,7 @@ impl PlatformTextLayout for ParleyLayout {
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
         // The cursor's top edge can sit on the previous line's block range, so use its midpoint.
-        let line_index =
-            self.line_index_at_block(((geometry.y0 + geometry.y1) * 0.5) as f32);
+        let line_index = self.line_index_at_block(((geometry.y0 + geometry.y1) * 0.5) as f32);
 
         Some(Bounds::from_corners(
             point(px(geometry.x0 as f32), line_height * line_index),
