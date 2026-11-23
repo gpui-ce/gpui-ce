@@ -65,16 +65,18 @@ impl TextSystem {
     /// # Examples
     ///
     /// ```
-    /// # use gpui::TestApp;
-    /// # use std::borrow::Cow;
-    /// # let mut app = TestApp::new();
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/../../assets/fonts/lilex/Lilex-Regular.ttf"
-    /// ));
-    /// app.text_system()
-    ///     .add_fonts(vec![Cow::Borrowed(bytes.as_slice())])
-    ///     .expect("Lilex is a valid font");
+    /// use gpui::TextSystem;
+    /// use std::borrow::Cow;
+    ///
+    /// fn load_lilex(text_system: &TextSystem) {
+    ///     let bytes = include_bytes!(concat!(
+    ///         env!("CARGO_MANIFEST_DIR"),
+    ///         "/../gpui_ce_fonts/fonts/lilex/Lilex-Regular.ttf"
+    ///     ));
+    ///     text_system
+    ///         .add_fonts(vec![Cow::Borrowed(bytes.as_slice())])
+    ///         .expect("Lilex is a valid font");
+    /// }
     /// ```
     ///
     /// See [text](crate::_documentation::guides::text) for how fonts are chosen.

@@ -77,9 +77,9 @@ or [`rtl`](Styled::rtl) on a container applies to every descendant that leaves
 that property unset. Box properties — padding, margins, dimensions, backgrounds,
 and borders — are self-scoped: they apply only to the element where you set them.
 
-Each setter's documentation states its scope when the distinction matters. When a
-CSS property you know is inherited, look for the method on [`TextStyle`] (or the
-matching `Styled` method) rather than on [`Style`] directly.
+Each setter's documentation states its scope when the distinction matters. When
+you know a CSS property is inherited, look for the method on [`TextStyle`] (or
+the matching `Styled` method) rather than on [`Style`] directly.
 
 ## Lengths
 
@@ -89,7 +89,7 @@ parameter type restricts which units make sense there. They all convert into
 
 | Constructor | Meaning |
 | --- | --- |
-| [`px`] | Logical pixels, scaled by the display's scale factor and snapped to the device pixel grid. |
+| [`px`] | Logical pixels; GPUI multiplies them by the window's scale factor and snaps to the device pixel grid when painting. |
 | [`rems`] | Multiples of the window's root font size, which starts at [`DEFAULT_REM_SIZE`] and changes with [`Window::set_rem_size`]. |
 | [`relative`] | Fraction of the parent's size on that axis (`relative(0.5)` is `50%`). |
 | [`auto`](crate::auto) | Deferred to the layout algorithm. |
