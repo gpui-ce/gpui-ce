@@ -1,28 +1,7 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-    rc::Rc,
-    sync::Arc,
-};
-#[cfg(any(feature = "wayland", feature = "x11"))]
-use std::{
-    ffi::OsString,
-    fs::File,
-    io::Read as _,
-    os::fd::{AsFd, AsRawFd},
-    time::Duration,
-};
-
-#[cfg(any(feature = "wayland", feature = "x11"))]
-use anyhow::ensure;
+use crate::linux::{LinuxDispatcher, PriorityQueueCalloopReceiver};
 use anyhow::{Context as _, anyhow};
 use calloop::{LoopSignal, channel::Sender};
 use futures::channel::oneshot;
-use gpui_util::{ResultExt as _, new_std_command};
-#[cfg(any(feature = "wayland", feature = "x11"))]
-use xkbcommon::xkb::{self, Keycode, Keysym, State};
-
-use crate::linux::{LinuxDispatcher, PriorityQueueCalloopReceiver};
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DisplayId,
     ForegroundExecutor, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform,
@@ -30,12 +9,26 @@ use gpui::{
     PlatformWindow, Result, RunnableVariant, SharedString, Task, ThermalState, WindowAppearance,
     WindowButtonLayout, WindowParams,
 };
-#[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui::{Pixels, Point, px};
-#[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui_parley::ParleyTextSystem;
-#[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui_render::SwashGlyphRasterizer;
+use gpui_util::{ResultExt as _, new_std_command};
+use std::{
+    env,
+    ffi::OsString,
+    fs::File,
+    io::Read as _,
+    os::fd::{AsFd, AsRawFd},
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+use anyhow::ensure;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+use xkbcommon::xkb::{self, Keycode, Keysym, State};
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) const SCROLL_LINES: f32 = 3.0;
@@ -134,7 +127,6 @@ impl LinuxCommon {
         let (main_sender, main_receiver) = PriorityQueueCalloopReceiver::new();
         let (wake_sender, wake_receiver) = calloop::channel::channel();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
         let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
             ParleyTextSystem::new(SwashGlyphRasterizer::default())
                 .with_system_fallback_family("IBM Plex Sans")
@@ -149,9 +141,6 @@ impl LinuxCommon {
                 ])
                 .with_system_fonts(),
         );
-
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
-        let text_system = Arc::new(gpui::NoopTextSystem::new());
 
         let callbacks = PlatformHandlers::default();
 
