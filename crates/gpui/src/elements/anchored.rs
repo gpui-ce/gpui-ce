@@ -325,13 +325,17 @@ impl AnchoredPositionMode {
 
         match self {
             AnchoredPositionMode::Window => {
-                let anchor_position = anchor_position.unwrap_or(bounds.origin) + offset;
-                let bounds = Bounds::from_anchor_and_size(anchor, anchor_position, size);
+                let anchor_position = anchor_position.unwrap_or(bounds.origin);
+                let bounds = Bounds::from_anchor_and_size(anchor, anchor_position + offset, size);
                 (anchor_position, bounds)
             }
             AnchoredPositionMode::Local => {
-                let anchor_position = bounds.origin + anchor_position.unwrap_or_default() + offset;
-                let bounds = Bounds::from_anchor_and_size(anchor, anchor_position, size);
+                let anchor_position = anchor_position.unwrap_or_default();
+                let bounds = Bounds::from_anchor_and_size(
+                    anchor,
+                    bounds.origin + anchor_position + offset,
+                    size,
+                );
                 (anchor_position, bounds)
             }
         }
@@ -341,82 +345,9 @@ impl AnchoredPositionMode {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Anchor, Bounds, Context, Pixels, PlatformInput, Point, TestAppContext, Window, deferred,
-        div, point, prelude::*, px, size,
+        Context, Pixels, PlatformInput, Point, TestAppContext, Window, deferred, div, point,
+        prelude::*, px, size,
     };
-
-    /// The point returned for switching anchors must be the one the initial placement used.
-    #[test]
-    fn anchor_switch_point_includes_offset_and_parent_origin() {
-        let layout_bounds = Bounds::new(point(px(500.), px(100.)), size(px(200.), px(100.)));
-        for (mode, expected) in [
-            (
-                super::AnchoredPositionMode::Window,
-                point(px(125.), px(25.)),
-            ),
-            (
-                super::AnchoredPositionMode::Local,
-                point(px(625.), px(125.)),
-            ),
-        ] {
-            let (origin, bounds) = mode.get_position_and_bounds(
-                Some(point(px(100.), px(20.))),
-                Anchor::TopLeft,
-                size(px(200.), px(300.)),
-                layout_bounds,
-                Some(point(px(25.), px(5.))),
-            );
-            assert_eq!(origin, expected);
-            assert_eq!(bounds.origin, expected);
-        }
-    }
-
-    struct LocalAnchoredTestView;
-
-    impl Render for LocalAnchoredTestView {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(
-                div()
-                    .absolute()
-                    .left(px(500.))
-                    .top(px(100.))
-                    .child(deferred(
-                        super::anchored()
-                            .position_mode(super::AnchoredPositionMode::Local)
-                            .position(point(px(100.), px(20.)))
-                            .offset(point(px(25.), px(5.)))
-                            .child(
-                                div()
-                                    .debug_selector(|| "LOCAL_MENU".into())
-                                    .w(px(200.))
-                                    .h(px(300.)),
-                            ),
-                    )),
-            )
-        }
-    }
-
-    /// The menu would overflow the right edge at (625, 125), so it switches to the right anchor
-    /// at that same point.
-    #[gpui::test]
-    fn test_anchored_local_switch_anchor(cx: &mut TestAppContext) {
-        let window = cx.open_window(size(px(800.), px(600.)), |_, _| LocalAnchoredTestView);
-        cx.run_until_parked();
-
-        let menu_bounds = window
-            .update(cx, |_, window, _| {
-                window
-                    .rendered_frame
-                    .debug_bounds
-                    .get("LOCAL_MENU")
-                    .copied()
-            })
-            .unwrap()
-            .expect("LOCAL_MENU debug bounds not found");
-
-        assert_eq!(menu_bounds.origin, point(px(425.), px(125.)));
-        assert_eq!(menu_bounds.size, size(px(200.), px(300.)));
-    }
 
     struct AnchoredTestView {
         position: Point<Pixels>,

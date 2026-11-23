@@ -27,7 +27,7 @@ pub enum CaretNotify {
 /// [module documentation](crate::editable_text) for an example.
 #[derive(Default)]
 pub struct Caret {
-    /// The interval at which the caret blinks.
+    /// How long the caret is visible, and then invisible, while blinking.
     interval: Duration,
     generation: usize,
     /// Whether the caret is presently visible in this frame
@@ -40,25 +40,30 @@ pub struct Caret {
 }
 
 impl Caret {
-    /// Returns the time between blinks. A zero duration means the caret doesn't blink.
+    /// Returns how long the caret is visible, and then invisible, while blinking.
+    ///
+    /// A zero duration means the caret doesn't blink.
     pub fn blink_interval(&self) -> Duration {
         self.interval
     }
 
-    /// Sets the time between blinks. A zero duration turns blinking off.
+    /// Sets how long the caret is visible, and then invisible, while blinking.
+    ///
+    /// A zero duration turns blinking off.
     pub fn set_blink_interval(&mut self, interval: Duration) {
         self.interval = interval;
     }
 
     /// Returns this caret with the blink interval set to `interval`.
     ///
-    /// A zero duration turns blinking off.
+    /// A zero duration turns blinking off. The interval applies to the caret even when it is
+    /// constructed before the element that uses it.
     pub fn with_blink_interval(mut self, interval: Duration) -> Self {
         self.set_blink_interval(interval);
         self
     }
 
-    /// Returns this caret with a blink interval of 500 milliseconds.
+    /// Returns this caret with a blink interval of [`BLINK_INTERVAL_500MS`].
     ///
     /// The default caret doesn't blink, so call this for the usual blink rate.
     pub fn with_blink_interval_500ms(self) -> Self {

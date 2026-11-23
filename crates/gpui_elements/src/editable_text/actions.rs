@@ -1,23 +1,25 @@
 //! Editing actions and their default keyboard bindings.
 //!
-//! `gpui::actions!` generates command structs independently of their shortcuts. Install
-//! [`default_bindings`] at app startup; the supplied fields forward dispatched commands to
-//! [`EditableTextActionHandler`] on [`EditableTextState`](crate::editable_text::EditableTextState).
-//! Implementing the trait alone does not install key bindings.
+//! The actions are command structs; their shortcuts are defined separately by [`default_bindings`].
+//! Register that collection in the app's key bindings at startup. The supplied fields forward
+//! dispatched commands to [`EditableTextActionHandler`] on
+//! [`EditableTextState`](crate::editable_text::EditableTextState). Implementing the trait alone does
+//! not register key bindings.
 //!
-//! The standard [`EditableTextState`](crate::editable_text::EditableTextState) deletes the
-//! selection or, without one, the requested cluster, word, or hard-line range. Hard lines end
-//! at newlines, not soft wraps. With a current layout, cluster, word, and visual-line
-//! navigation follows the laid-out text; otherwise it falls back to storage boundaries.
-//! Document-start and document-end commands always use storage bounds. Deletion uses logical
-//! ranges, so in bidirectional text `DeleteLeft` need not remove the cluster that `NavLeft`
-//! would cross. Directional selection extends from the existing anchor.
+//! The standard [`EditableTextState`](crate::editable_text::EditableTextState) applies the operation
+//! named by each action:
 //!
-//! In the standard state, single-line fields propagate [`Enter`] and [`Tab`] with
-//! `cx.propagate()`, allowing a parent binding to submit the form or move focus. Multi-line
-//! fields insert the corresponding characters. With input disabled, navigation, selection, and
-//! copying a non-empty selection remain available; insertion, deletion, cut, and paste do
-//! nothing.
+//! * Deletion removes the selection. Without a selection, it removes the requested cluster, word, or
+//!   hard-line range. Hard lines end at newlines, not soft wraps.
+//! * With a current layout, cluster, word, and visual-line navigation follows the laid-out text.
+//!   Without one, it falls back to storage boundaries. Document-start and document-end commands
+//!   always use storage bounds.
+//! * Deletion uses logical ranges, so in bidirectional text `DeleteLeft` need not remove the cluster
+//!   that `NavLeft` would cross. Directional selection extends from the existing anchor.
+//! * In a single-line field, [`Enter`] and [`Tab`] do nothing. A multi-line field inserts the
+//!   corresponding character.
+//! * With input disabled, navigation, selection, and copying a non-empty selection remain
+//!   available; insertion, deletion, cut, and paste do nothing.
 use gpui::{InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
@@ -29,11 +31,9 @@ gpui::actions!(
     [
         /// Clears the selection, moves the caret to the start, and removes focus from the field.
         Escape,
-        /// Inserts a newline at the caret position. In a single-line field, the action
-        /// propagates to the surrounding view instead.
+        /// Inserts a newline at the caret position. Does nothing in a single-line field.
         Enter,
-        /// Inserts a tab character at the caret position. In a single-line field, the action
-        /// propagates to the surrounding view instead, so that Tab can move focus.
+        /// Inserts a tab character at the caret position. Does nothing in a single-line field.
         Tab,
         /// Deletes the selection, or the preceding text cluster when nothing is selected.
         DeleteLeft,
@@ -100,13 +100,12 @@ gpui::actions!(
     ]
 );
 
-/// Creates the default keystroke bindings for editable-text actions.
+/// Creates the default binding collection for editable-text actions.
 /// See [`ActionBindingCollection`](gpui::ActionBindingCollection) for how bindings are built.
 ///
 /// On macOS, Command-arrow bindings handle line and document navigation. On other targets,
 /// Home and End handle line navigation, while Ctrl+Home and Ctrl+End handle document navigation.
-/// Enter and Tab are bound on every platform, but single-line fields propagate them to the
-/// parent view.
+/// Enter and Tab are bound on every platform, but single-line fields ignore them.
 /// In the bindings below, `secondary` means Command on macOS and Control on
 /// other platforms.
 ///
@@ -150,6 +149,8 @@ gpui::actions!(
 /// The collection cannot remove a default keystroke yet; callers can add additional
 /// keystrokes with [`ActionBindingCollection::with`](gpui::ActionBindingCollection::with)
 /// before converting the collection to key bindings.
+///
+/// TODO: Collection does not supply a way to unbind a default keystroke
 pub fn default_bindings() -> gpui::ActionBindingCollection {
     let mut bindings = gpui::ActionBindingCollection::default()
         .with::<DeleteLeft>("backspace")
@@ -184,7 +185,8 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
             .with::<DeleteWordRight>("alt-delete")
             .with::<DeleteToLineStart>("cmd-backspace")
             .with::<DeleteToLineEnd>("ctrl-k")
-            // macOS uses Command-arrows for line and document navigation.
+            // Mac keyboards have no Home/End keys, so Command-arrows are the standard for line
+            // and document navigation.
             .with::<NavLineStart>("cmd-left")
             .with::<NavLineEnd>("cmd-right")
             .with::<NavDocumentStart>("cmd-up")
@@ -221,93 +223,83 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
     bindings
 }
 
-/// Handles the editable-text actions for the state entity of an element.
+/// The editing operations an editable-text element dispatches actions to.
 ///
-/// The text element installs listeners that forward dispatched actions through its state
-/// entity to these methods.
-///
-/// Editing and pointer methods do nothing by default; override the operations your state
-/// supports. [`Self::show_character_palette`] instead opens the platform palette by default.
-/// [`EditableTextState`](crate::editable_text::EditableTextState) supplies the standard editing
-/// behavior described in this module.
+/// The element installs listeners that forward dispatched actions through its state entity to
+/// these methods. Editing and pointer methods do nothing by default; override the operations your
+/// state supports. [`Self::show_character_palette`] instead opens the platform palette by default.
 pub trait EditableTextActionHandler<Context>: Sized {
-    /// Handles Escape. The standard state clears the selection, moves the caret to the start,
-    /// and blurs the window.
+    /// Clears the selection, moves the caret to the start, and removes focus from the field.
     fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles Enter. The standard state inserts a newline, or propagates the action from a
-    /// single-line field.
+    /// Inserts a newline at the caret. Single-line fields ignore it.
     fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles Tab. The standard state inserts a tab, or propagates the action from a
-    /// single-line field.
+    /// Inserts a tab at the caret. Single-line fields ignore it.
     fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles DeleteLeft. The standard state deletes the selection or the preceding text cluster.
+    /// Deletes the selection, or the preceding text cluster when nothing is selected.
     fn delete_left(&mut self, _: &DeleteLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles DeleteRight. The standard state deletes the selection or the following text cluster.
+    /// Deletes the selection, or the following text cluster when nothing is selected.
     fn delete_right(&mut self, _: &DeleteRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles DeleteWordLeft. The standard state deletes the selection or back to the preceding word boundary.
+    /// Deletes the selection, or the text back to the preceding word boundary.
     fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles DeleteWordRight. The standard state deletes the selection or forward to the following word boundary.
+    /// Deletes the selection, or the text forward to the following word boundary.
     fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles DeleteToLineStart. The standard state deletes the selection or back to the hard-line start.
+    /// Deletes the selection, or the text from the caret to the hard-line start.
     fn delete_to_line_start(&mut self, _: &DeleteToLineStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles DeleteToLineEnd. The standard state deletes the selection or forward to the hard-line end.
+    /// Deletes the selection, or the text from the caret to the hard-line end.
     fn delete_to_line_end(&mut self, _: &DeleteToLineEnd, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles NavLeft. The standard state moves one visual text cluster to the left when layout is current.
+    /// Moves the caret one visual text cluster left.
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavRight. The standard state moves one visual text cluster to the right when layout is current.
+    /// Moves the caret one visual text cluster right.
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavUp. The standard state moves up one visual line, or to the only line's start in a single-line field.
+    /// Moves up one visual line. A single-line field moves to the start of its only line.
     fn nav_up(&mut self, _: &NavUp, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavDown. The standard state moves down one visual line, or to the only line's end in a single-line field.
+    /// Moves down one visual line. A single-line field moves to the end of its only line.
     fn nav_down(&mut self, _: &NavDown, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavLineStart. The standard state moves to the current hard-line start, ignoring soft wraps.
+    /// Moves to the start of the current hard line, ignoring soft wraps.
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavLineEnd. The standard state moves to the current hard-line end, ignoring soft wraps.
+    /// Moves to the end of the current hard line, ignoring soft wraps.
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavDocumentStart. The standard state moves to the document start.
+    /// Moves to the start of the document.
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavDocumentEnd. The standard state moves to the document end.
+    /// Moves to the end of the document.
     fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavWordLeft. With current layout, the standard state moves one word visually left.
+    /// Moves one word visually left.
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles NavWordRight. With current layout, the standard state moves one word visually right.
+    /// Moves one word visually right.
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles SelectAll. The standard state selects the entire document.
+    /// Selects the entire document.
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectLeft. The standard state extends the selection one visual text cluster to the left.
+    /// Extends the selection one visual text cluster left.
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectRight. The standard state extends the selection one visual text cluster to the right.
+    /// Extends the selection one visual text cluster right.
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectUp. The standard state extends one visual line, or to the document start in a single-line field.
+    /// Extends the selection up one visual line. A single-line field extends to the document start.
     fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectDown. The standard state extends one visual line, or to the document end in a single-line field.
+    /// Extends the selection down one visual line. A single-line field extends to the document end.
     fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectDocumentStart. The standard state extends the selection to document start.
+    /// Extends the selection to the start of the document.
     fn select_start(&mut self, _: &SelectDocumentStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectDocumentEnd. The standard state extends the selection to document end.
+    /// Extends the selection to the end of the document.
     fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectWordLeft. With current layout, the standard state extends the selection one word visually left.
+    /// Extends the selection one word visually left.
     fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles SelectWordRight. With current layout, the standard state extends the selection one word visually right.
+    /// Extends the selection one word visually right.
     fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles Cut. The standard state cuts the selection, or the current hard line and an
-    /// adjacent line break when no selection exists.
+    /// Cuts the selection, or the current hard line and an adjacent line break when nothing is selected.
     fn cut(&mut self, _: &Cut, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles Copy. The standard state copies selected text and leaves the clipboard unchanged
-    /// when the selection is empty.
+    /// Copies the selection, leaving the clipboard unchanged when the selection is empty.
     fn copy(&mut self, _: &Copy, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles Paste. The standard state replaces an IME marked range or selection, or inserts
-    /// clipboard text at an empty caret.
+    /// Replaces an IME marked range or the selection with clipboard text, or inserts it at the caret.
     fn paste(&mut self, _: &Paste, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Handles Undo. The standard state undoes the last edit, grouping quick successive edits.
+    /// Undoes the last edit, grouping quick successive edits.
     fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context) {}
-    /// Handles Redo. The standard state redoes the last undone edit.
+    /// Redoes the last undone edit.
     fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context) {}
 
     /// Shows the platform character palette.

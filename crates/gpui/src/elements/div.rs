@@ -71,7 +71,8 @@ type StackSafe<T> = stacksafe::StackSafe<T>;
 type StackSafe<T> = T;
 
 const DRAG_THRESHOLD: f64 = 2.;
-const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
+/// The time the pointer must rest over an element before its tooltip appears.
+pub const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
 
 /// A style that applies to an element while a named group of elements is hovered, pressed or receives a drag.
@@ -147,11 +148,10 @@ impl Interactivity {
         }
     }
 
-    /// Runs `listener` when `button` is pressed over this element.
+    /// Runs `listener` when `button` is pressed while the pointer is over this element.
     ///
     /// The listener runs in the bubble phase, and only if the pointer is over the element's hitbox.
-    /// Prefer the fluent method
-    /// when you are building an element in a single chain.
+    /// Prefer the fluent [`InteractiveElement::on_mouse_down`] when you are building an element in a single chain.
     pub fn on_mouse_down(
         &mut self,
         button: MouseButton,
@@ -648,8 +648,6 @@ impl Interactivity {
     }
 
     /// Attaches a [`DropListener`] that handles drags of type `T` over this element.
-    ///
-    ///
     pub fn on_drop_alt<T: 'static>(&mut self, listener: DropListener<T>) {
         self.drop_listeners
             .push((TypeId::of::<T>(), listener.into_any()));
@@ -664,10 +662,9 @@ impl Interactivity {
         iter.find(|(existing_type_id, _listener)| *existing_type_id == type_id)
     }
 
-    /// Sets a predicate that decides whether this element accepts the value being dragged.
+    /// Calls the predicate while a dragged value is over this element, and uses its return value as whether the element accepts the value.
     ///
-    /// The predicate runs only while the pointer is over the element, and it receives the dragged value.
-    ///
+    /// The predicate runs while the user is dragging a value over the element, and it receives the dragged value.
     pub fn can_drop(
         &mut self,
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
@@ -682,6 +679,9 @@ impl Interactivity {
     /// The style applies only if this element has a drop listener for the dragged type. Use
     /// [`DropListener::on_drag_over`] when the style depends on the dragged type. This is the imperative equivalent of
     /// [`InteractiveElement::on_drag_over_any`].
+    ///
+    /// An element has only one any-drag style. Calling this again replaces the previous style, while
+    /// the element can keep several drop listeners, including several for the same payload type.
     pub fn on_drag_over_any(
         &mut self,
         predicate: impl Fn(StyleRefinement, &dyn Any, &mut Window, &mut App) -> StyleRefinement
@@ -723,7 +723,8 @@ impl Interactivity {
     /// Starts a drag of `value` when the left button is pressed on this element and the pointer moves.
     ///
     /// The `constructor` runs when the drag starts. It receives the value and the cursor offset from the element's
-    /// origin, and returns the view that is drawn under the pointer. Any dragged value must be `'static`.
+    /// origin, and returns the view that is drawn under the pointer. Any dragged value must be `'static`. A drag
+    /// starts once the pointer moves past the drag threshold, and it is cancelled if the button is released first.
     ///
     pub fn on_drag<T, W>(
         &mut self,
@@ -750,7 +751,8 @@ impl Interactivity {
     /// Sets the function that starts a drag from this element.
     ///
     /// The function receives the cursor offset and the cursor style, and returns an [`AnyDrag`]. Use
-    /// [`Interactivity::on_drag`] unless you need to build the [`AnyDrag`] yourself.
+    /// [`Interactivity::on_drag`] unless you need to build the [`AnyDrag`] yourself or want to affect the
+    /// cursor offset or style.
     ///
     pub fn on_drag_alt<F>(&mut self, listener: F)
     where
@@ -899,7 +901,7 @@ impl Interactivity {
 
     /// Sets how long the pointer must rest over this element before its tooltip appears.
     ///
-    /// The default is 500 milliseconds. This is the imperative equivalent of
+    /// The default is [`DEFAULT_TOOLTIP_SHOW_DELAY`]. This is the imperative equivalent of
     /// [`StatefulInteractiveElement::tooltip_show_delay`].
     pub fn tooltip_show_delay(&mut self, delay: Duration) {
         self.tooltip_show_delay = Some(delay);
@@ -917,6 +919,8 @@ impl Interactivity {
     ///
     /// The platform uses `area` to decide what clicks and drags here do, such as moving or closing the window.
     ///
+    /// Platform support is incomplete: Windows and the web backend use this area, while macOS, X11 and
+    /// Wayland ignore it for now. The element still lays out and responds to element-level input on every platform.
     pub fn window_control_area(&mut self, area: WindowControlArea) {
         self.window_control = Some(area);
     }
@@ -949,7 +953,7 @@ impl Interactivity {
     }
 }
 
-/// An element that can respond to the mouse and keyboard, style itself on state, and take focus.
+/// An element that can respond to the mouse and keyboard, apply interaction styles, and take focus.
 ///
 /// Implement this trait with [`Element`] to give a custom element the event handlers and styles of
 /// [`Div`]. Return its [`Interactivity`] from [`interactivity`](Self::interactivity); the default
@@ -957,7 +961,7 @@ impl Interactivity {
 ///
 /// Most handlers need no id. The exceptions are the ones that keep state between frames, such as clicks, starting a
 /// drag, scrolling and tooltips. Those live on [`StatefulInteractiveElement`], and are reached by calling
-/// [`id`](Self::id) first.
+/// [`id`](Self::id) first; that trait owns the element-scoped state this one only styles.
 ///
 /// Event handlers run in two phases. Capture walks from the back of the window to the front, then
 /// bubble walks from the front to the back. Methods named `capture_*` use capture; most other
@@ -967,13 +971,12 @@ impl Interactivity {
 /// # Example
 ///
 /// ```
-/// # use gpui::{div, prelude::*, rgb};
+/// # use gpui::{MouseButton, div, prelude::*, rgb};
 /// let toggle = div()
-///     .id("toggle")
 ///     .px_2()
 ///     .bg(rgb(0xe5e7eb))
 ///     .hover_style(|style| style.bg(rgb(0xd1d5db)))
-///     .on_click(|_, _, _| {});
+///     .on_mouse_down(MouseButton::Left, |_, _, _| {});
 /// ```
 pub trait InteractiveElement: Sized {
     /// Returns the [`Interactivity`] that stores this element's listeners, styles and state.
@@ -1123,7 +1126,6 @@ pub trait InteractiveElement: Sized {
     /// ```
     /// # use gpui::{div, prelude::*, rgb};
     /// let button = div()
-    ///     .id("save")
     ///     .bg(rgb(0x2563eb))
     ///     .hover_style(|style| style.bg(rgb(0x1d4ed8)));
     /// ```
@@ -1182,19 +1184,19 @@ pub trait InteractiveElement: Sized {
         self
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Sets a name for this element that tests can use to find its bounds.
     ///
     /// Pass the name to [`VisualTestContext::debug_bounds`](crate::VisualTestContext::debug_bounds) to get the bounds of
     /// the element in a test. This method is available only with the `test-support` feature or in tests; in other
     /// builds it is a no-op.
+    #[cfg(any(test, feature = "test-support"))]
     fn debug_selector(mut self, f: impl FnOnce() -> String) -> Self {
         self.interactivity().debug_selector = Some(f());
         self
     }
 
-    #[cfg(not(any(test, feature = "test-support")))]
     /// Does nothing in this build. The debug selector is available only in tests and with `test-support`.
+    #[cfg(not(any(test, feature = "test-support")))]
     #[inline]
     fn debug_selector(self, _: impl FnOnce() -> String) -> Self {
         self
@@ -1769,7 +1771,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     ///
     /// Screen readers use the role to describe the element and decide what it can do. Use the role that matches
     /// the element's behavior. [`accesskit::Role::GenericContainer`] is ignored, so use it only for layout. See the
-    /// [accessibility guide](crate::_documentation::guides::accessibility) for an overview.
+    /// [accessibility guide](crate::_documentation::guides::accessibility) for an overview, and
+    /// [AccessKit's role documentation](https://docs.rs/accesskit/latest/accesskit/enum.Role.html) for what each
+    /// role means to assistive technology.
     ///
     /// # Panics
     ///
@@ -1866,6 +1870,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 
     /// Sets the toggled state of this element, such as a checkbox that is on, off or mixed.
+    ///
+    /// See [AccessKit's `Toggled` documentation](https://docs.rs/accesskit/latest/accesskit/enum.Toggled.html)
+    /// for the states.
     fn aria_toggled(mut self, toggled: accesskit::Toggled) -> Self {
         self.interactivity().aria.toggled = Some(toggled);
         self
@@ -1915,6 +1922,8 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 
     /// Sets whether this element is laid out horizontally or vertically, such as a scrollbar or a splitter.
+    ///
+    /// See [AccessKit's `Orientation` documentation](https://docs.rs/accesskit/latest/accesskit/enum.Orientation.html).
     fn aria_orientation(mut self, orientation: accesskit::Orientation) -> Self {
         self.interactivity().aria.orientation = Some(orientation);
         self
@@ -2166,36 +2175,9 @@ pub trait StatefulInteractiveElement: InteractiveElement {
 
     /// Starts a drag of `value` when the left button is pressed on this element and the pointer moves.
     ///
-    /// A drag starts when the pointer has moved more than 2 pixels from the press, and it is cancelled if the button is
-    /// released first. The `constructor` runs at the start of the drag. It receives the value and the offset of the cursor
-    /// from the element's origin, and returns the view that is drawn under the pointer.
-    ///
-    /// Use [`on_drop`](InteractiveElement::on_drop) on another element to receive the value. Use
-    /// [`on_drag_move`](InteractiveElement::on_drag_move) to follow the pointer during the drag.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use gpui::{Context, Render, Window, div, prelude::*, rgb};
-    /// #[derive(Clone)]
-    /// struct Card(&'static str);
-    ///
-    /// struct Chip(&'static str);
-    ///
-    /// impl Render for Chip {
-    ///     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-    ///         div().px_2().bg(rgb(0xdbeafe)).child(self.0)
-    ///     }
-    /// }
-    ///
-    /// fn card(label: &'static str) -> impl IntoElement {
-    ///     div()
-    ///         .id(label)
-    ///         .on_drag(Card(label), |card, _offset, _window, cx| {
-    ///             cx.new(|_| Chip(card.0))
-    ///         })
-    /// }
-    /// ```
+    /// This needs an id and is the fluent form of [`Interactivity::on_drag`]. That method documents when a drag
+    /// starts, the arguments passed to `constructor`, and how another element receives the value with
+    /// [`on_drop`](InteractiveElement::on_drop).
     fn on_drag<T, W>(
         mut self,
         value: T,
@@ -2272,8 +2254,8 @@ pub trait StatefulInteractiveElement: InteractiveElement {
 
     /// Shows a tooltip built by `build_tooltip` while the pointer rests over this element.
     ///
-    /// The tooltip appears after the show delay, which is 500 milliseconds by default. It hides when the pointer leaves
-    /// the element, so the user cannot move onto it. It is not shown while a button is pressed on the element or after
+    /// The tooltip appears after the show delay, which defaults to [`DEFAULT_TOOLTIP_SHOW_DELAY`]. It hides when the
+    /// pointer leaves the element, so the user cannot move onto it. It is not shown while a button is pressed on the element or after
     /// keyboard input. Use [`hoverable_tooltip`](Self::hoverable_tooltip) for a tooltip that stays open. Tooltips need an
     /// id.
     ///
@@ -2321,7 +2303,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
 
     /// Sets how long the pointer must rest over this element before its tooltip appears.
     ///
-    /// The default is 500 milliseconds.
+    /// The default is [`DEFAULT_TOOLTIP_SHOW_DELAY`].
     fn tooltip_show_delay(mut self, delay: Duration) -> Self
     where
         Self: Sized,
@@ -2435,11 +2417,15 @@ pub type OnDropFn<T> = Box<dyn Fn(&T, &MouseUpEvent, &mut Window, &mut App) + 's
 /// Attach it with [`InteractiveElement::on_drop_alt`]. For the common case of one handler per type, use
 /// [`InteractiveElement::on_drop`] instead.
 pub struct DropListener<T: ?Sized> {
-    /// Decides whether a dragged value of this type can be dropped on the element. If it is `None`, a value is accepted while the pointer is over the element.
+    /// Called while a value of this type is dragged over the element. Its return value decides whether the
+    /// value can be dropped on the element. If it is `None`, a value is accepted while the pointer is over the
+    /// element.
     pub can_drop: Option<CanDropListenerFn<T>>,
-    /// Returns the style to apply while a value of this type is over the element and [`can_drop`](DropListener::can_drop) allows it.
+    /// Returns the style to apply while the user is hovering over the owning element while dragging a value of
+    /// type `T`, and [`can_drop`](DropListener::can_drop) is `None` or returns `true`.
     pub on_drag_over: Option<OnDragOverFn<T>>,
-    /// Runs when a value of this type is released over the element and [`can_drop`](DropListener::can_drop) allows it.
+    /// Called when a value of type `T` is dropped over the owning element, and [`can_drop`](DropListener::can_drop)
+    /// is `None` or returns `true`.
     pub on_drop: Option<OnDropFn<T>>,
 }
 impl<T> Default for DropListener<T> {
@@ -2452,7 +2438,8 @@ impl<T> Default for DropListener<T> {
     }
 }
 impl<T: Sized + 'static> DropListener<T> {
-    /// Sets a predicate that decides whether this handler receives drops, which runs only while the pointer is over the element.
+    /// Calls the predicate while a value of type `T` is dragged over the element, and uses its return value to
+    /// decide whether this handler receives drops.
     ///
     /// The predicate receives the dragged value and the window and app. The hitbox check is added for you, so the
     /// predicate need not check it. A predicate on a listener for another type never runs.
@@ -2465,7 +2452,8 @@ impl<T: Sized + 'static> DropListener<T> {
         })
     }
 
-    /// Sets a predicate that decides whether this handler receives drops, whether or not the pointer is over the element.
+    /// Calls the predicate while a value of type `T` is dragged anywhere in the window, and uses its return value
+    /// to decide whether this handler receives drops.
     ///
     /// The predicate receives the dragged value, the element's hitbox, and the window and app. Check
     /// [`Hitbox::is_hovered`] yourself if you need the pointer to be over the element.
@@ -2477,9 +2465,11 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// Sets the style to apply while a value of type `T` is dragged over the element.
+    /// Calls the predicate while a value of type `T` is dragged over the owning element, and returns the style
+    /// to apply.
     ///
-    /// The style applies only if [`can_drop`](DropListener::can_drop) allows the value, and only while the pointer is over the element.
+    /// The style applies only if [`can_drop`](DropListener::can_drop) is `None` or returns `true`, and only while
+    /// the pointer is over the element.
     pub fn on_drag_over(
         mut self,
         predicate: impl Fn(StyleRefinement, &T, &mut Window, &mut App) -> StyleRefinement + 'static,
@@ -2490,10 +2480,10 @@ impl<T: Sized + 'static> DropListener<T> {
         self
     }
 
-    /// Sets the function that handles a value of type `T` released over the element.
+    /// Calls the predicate when a value of type `T` is dropped over the owning element.
     ///
-    /// It runs only if [`can_drop`](DropListener::can_drop) allows the value. It receives the dragged value and the mouse
-    /// release event.
+    /// It runs only if [`can_drop`](DropListener::can_drop) is `None` or returns `true`. It receives the dragged
+    /// value and the mouse release event.
     pub fn on_drop(
         mut self,
         predicate: impl Fn(&T, &MouseUpEvent, &mut Window, &mut App) + 'static,
@@ -2504,9 +2494,8 @@ impl<T: Sized + 'static> DropListener<T> {
 
     /// Converts this typed listener into one that stores any value and checks the type at runtime.
     ///
-    /// GPUI calls this when you pass a `DropListener` to [`InteractiveElement::on_drop_alt`]. The callbacks downcast the
-    /// dragged value to `T`. `on_drag_over` and `on_drop` panic if they receive another type, so register the listener only
-    /// for the type it was written for.
+    /// The callbacks downcast the dragged value to `T`. `on_drag_over` and `on_drop` panic if they receive another
+    /// type, so register the listener only for the type it was written for.
     pub fn into_any(self) -> DropListener<dyn Any> {
         let DropListener {
             can_drop,
@@ -4744,7 +4733,7 @@ impl Interactivity {
 
 /// The state that an element with an [`ElementId`] keeps between frames, such as its focus handle and scroll offset.
 ///
-/// GPUI creates this for you. Read it only through the element's own methods.
+/// The framework creates this for you. Read it only through the element's own methods.
 #[derive(Default)]
 pub struct InteractiveElementState {
     pub(crate) focus_handle: Option<FocusHandle>,

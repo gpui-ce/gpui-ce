@@ -1,7 +1,7 @@
 use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
-    layout::{EditableTextLayoutKey, EditableTextLayoutResult, EditableTextLayoutState},
+    layout::{EditableTextLayoutResult, EditableTextLayoutState},
 };
 use gpui::{
     A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, DispatchPhase,
@@ -9,8 +9,8 @@ use gpui::{
     HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParagraphDirection, Pixels, Point,
     ShapedText, SharedString, Size, StatefulInteractiveElement, Style, StyleRefinement, Styled,
-    TextAlign, TextLayout, TextLayoutOptions, TextStyle, UnicodeBidi, WeakEntity, Window,
-    accesskit, point, px, relative, size,
+    TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity, Window, accesskit, point,
+    px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -45,10 +45,9 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
 
 /// Creates a single-line text input.
 ///
-/// Newlines are removed from inserted text. Enter and Tab are passed to the
-/// surrounding view, so a form can submit on Enter or move focus on Tab. Up and
-/// Down move to the start and end of the text, respectively. See
-/// [`EditableTextElement`] for usage.
+/// Newlines are removed from inserted text. Enter and Tab do nothing, so the
+/// field stays on one line. Up and Down move to the start and end of the text,
+/// respectively. See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(false)
@@ -79,17 +78,17 @@ pub struct EditableTextElement {
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
-    /// Sets whether the field holds several lines of text.
+    /// Whether the field holds several lines of text.
     ///
-    /// With `false`, Enter and Tab propagate to the surrounding view, and Up and
-    /// Down move to the start and end of the text. Newlines in inserted text,
-    /// including pasted text, are removed.
+    /// With `false`, Enter and Tab do nothing, and Up and Down move to the start
+    /// and end of the text. Newlines in inserted text, including pasted text, are
+    /// removed.
     #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
-    /// Sets the text shown while the field is empty.
+    /// The text shown while the field is empty.
     #[setters(generate, strip_option, into)]
     placeholder: Option<SharedString>,
-    /// Sets whether the field accepts edits.
+    /// Whether the field accepts edits.
     ///
     /// When `false`, typing, paste, cut and delete do nothing, and multi-line fields
     /// also ignore Enter and Tab. The field can still be focused, so the user can
@@ -97,19 +96,18 @@ pub struct EditableTextElement {
     #[setters(generate)]
     accepts_input: bool,
     colors: EditableTextColors,
-    /// Sets the time between caret blinks, and applies it to the field's caret.
+    /// The time between caret blinks, applied to the field's caret.
     ///
     /// A zero duration turns blinking off. The interval is applied on each frame
     /// that the element lays out, so it takes effect without any extra setup.
     #[setters(generate, strip_option)]
     caret_blink_interval: Option<Duration>,
-    /// Sets the width of the caret. The default is 2 pixels.
+    /// The width of the caret.
     #[setters(generate, rename = "caret_w", into)]
     caret_width: Pixels,
-    /// Sets the height of the caret.
+    /// The height of the caret.
     ///
-    /// Relative lengths are resolved against the current line height. The default is
-    /// `relative(1.)`, which makes the caret as tall as the line.
+    /// Relative lengths are resolved against the current line height.
     #[setters(generate, rename = "caret_h", into)]
     caret_height: DefiniteLength,
 }
@@ -155,7 +153,7 @@ impl EditableTextElement {
         self
     }
 
-    /// Sets the caret blink interval to 500 milliseconds.
+    /// Sets the caret blink interval to [`BLINK_INTERVAL_500MS`].
     pub fn caret_blink_interval_500ms(self) -> Self {
         self.caret_blink_interval(BLINK_INTERVAL_500MS)
     }
@@ -225,7 +223,6 @@ impl EditableTextActionElement<EditableTextState> for EditableTextElement {
 struct PrelayoutState {
     state: Entity<EditableTextState>,
     prev_layout_state: EditableTextLayoutState,
-    prev_layout_key: Option<EditableTextLayoutKey>,
     storage_version: u16,
     show_placeholder: bool,
     text: Option<SharedString>,
@@ -354,7 +351,6 @@ impl Element for EditableTextElement {
             let prelayout = PrelayoutState {
                 state: entity.clone(),
                 prev_layout_state: state.layout_data.state,
-                prev_layout_key: state.layout_data.layout_key.clone(),
                 show_placeholder,
                 storage_version: state.version(),
                 text,
@@ -684,17 +680,6 @@ impl PrelayoutState {
         };
 
         let text = self.text.unwrap_or_default();
-        let layout_key = EditableTextLayoutKey {
-            text_style: TextStyle {
-                color,
-                ..text_style.clone()
-            },
-            source: text.clone(),
-            font_size,
-            line_height,
-            supports_multiline: self.supports_multiline,
-            accepts_input: self.accepts_input,
-        };
 
         window.request_measured_layout(
             Default::default(),
@@ -740,7 +725,6 @@ impl PrelayoutState {
                     && truncation.width.is_none()
                     && self.storage_version == self.prev_layout_state.last_seen_storage_version
                     && self.prev_layout_state.options == options
-                    && self.prev_layout_key.as_ref() == Some(&layout_key)
                 {
                     return size;
                 }
@@ -795,7 +779,6 @@ impl PrelayoutState {
                     line_height,
                     document_offset,
                     next_scroll_offset: initial_scroll,
-                    layout_key: Some(layout_key.clone()),
                 };
 
                 // Update the state for use in prepaint, paint, and action handlers.

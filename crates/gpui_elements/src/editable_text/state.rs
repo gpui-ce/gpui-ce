@@ -43,11 +43,8 @@ struct SelectionDragVisualCaret {
 
 /// The text, selection and editing state of an editable text field.
 ///
-/// Create one with [`EditableTextState::use_keyed`] or [`EditableTextState::use_keyed_init`]
-/// to keep it across frames, or with [`EditableTextState::new`] when you hold it yourself.
-/// Attach it to an element with [`EditableTextElement::state`](crate::editable_text::EditableTextElement::state).
-/// Read the text with [`EditableTextState::as_str`], and subscribe to [`TextChanged`] to
-/// learn about edits. The state is an entity, so access it through `Entity::read` and `Entity::update`.
+/// See the [module documentation](crate::editable_text) for creating the state, attaching it to an
+/// element, and observing edits.
 pub struct EditableTextState {
     /// Backing text storage, usually `StringStorage`; custom storage can support long documents.
     storage: Box<dyn UnicodeTextStorage>,
@@ -116,8 +113,8 @@ impl EditableTextState {
 
     /// Returns the state stored under `key`, creating it with `init` on first use.
     ///
-    /// `init` runs only when the state is created. Later frames reuse the existing state,
-    /// and their calls to `init` are skipped, so the initial text is set only once.
+    /// See [`Window::use_keyed_state`] for how the state is keyed and kept across frames; `init`
+    /// follows the same one-time behavior.
     ///
     /// ```
     /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
@@ -182,7 +179,7 @@ impl EditableTextState {
         }
     }
 
-    /// Returns the current contents of the storage as a string slice.
+    /// Returns the current contents of the [`storage`] as a string slice.
     pub fn as_str(&self) -> &str {
         self.storage.content_utf8()
     }
@@ -942,17 +939,13 @@ impl EditableTextState {
 
         // Push the entry onto the redo stack so the undo can be undone
         let selection = entry.selected_range;
-        // Redo should restore the selection from after this edit, not the one it undoes.
-        let mut inverse = entry.as_inverted(removed_text);
-        inverse.selected_range = self.selection_movement.result;
         self.history
             .as_mut()
             .expect("history was available when the entry was taken")
-            .push(dst, inverse);
+            .push(dst, entry.as_inverted(removed_text));
         self.set_selection(selection);
 
         self.scroll_to_caret();
-        self.emit_text_changed(cx);
         cx.notify();
     }
 }
@@ -1138,8 +1131,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            // Let the surrounding view treat Enter as "submit", as in an HTML form.
-            cx.propagate();
             return;
         }
         if !self.layout_data.accepts_input {
@@ -1150,8 +1141,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            // Leave Tab to the surrounding view, for moving focus.
-            cx.propagate();
             return;
         }
         if !self.layout_data.accepts_input {
@@ -1454,7 +1443,7 @@ mod tests {
     use super::*;
     use crate::editable_text::StringStorage;
     use gpui::{
-        App, AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
+        AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
     use gpui_parley::ParleyTextSystem;
@@ -2570,54 +2559,6 @@ mod tests {
                 }
             ); // "hello world".len() == 11
         });
-    }
-
-    #[gpui::test]
-    fn redo_restores_the_selection_from_before_undo(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-            input.replace_text_in_range(None, "!", window, cx);
-            assert_eq!(input.selected_byte_range(), 6..6);
-
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.as_str(), "hello");
-            assert_eq!(input.selected_byte_range(), 5..5);
-
-            input.set_selection(0);
-            input.redo(&Redo, window, cx);
-            assert_eq!(input.as_str(), "hello!");
-            // The selection from after the edit, not from before it.
-            assert_eq!(input.selected_byte_range(), 6..6);
-        });
-    }
-
-    #[gpui::test]
-    fn undo_and_redo_publish_text_changes(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        let input = view.update(cx, |view, _, _| view.input.clone()).unwrap();
-        let changes = Rc::new(Cell::new(0));
-        let _subscription = cx.update(|cx| {
-            cx.subscribe(&input, {
-                let changes = changes.clone();
-                move |_: Entity<EditableTextState>, _: &TextChanged, _: &mut App| {
-                    changes.set(changes.get() + 1)
-                }
-            })
-        });
-        update_movement_input(view, cx, |input, window, cx| {
-            without_history_grouping(input);
-            input.replace_text_in_range(None, "!", window, cx);
-        });
-        let after_edit = changes.get();
-        update_movement_input(view, cx, |input, window, cx| {
-            input.undo(&Undo, window, cx);
-        });
-        assert_eq!(changes.get(), after_edit + 1);
-        update_movement_input(view, cx, |input, window, cx| {
-            input.redo(&Redo, window, cx);
-        });
-        assert_eq!(changes.get(), after_edit + 2);
     }
 
     #[gpui::test]

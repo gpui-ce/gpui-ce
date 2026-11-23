@@ -22,6 +22,11 @@ use crate::{
 /// By default the element fills its parent, as `.size_full()` does. Use the [`Styled`] methods to
 /// size it differently.
 ///
+/// This is the GPUI equivalent of a CSS [container query](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_containment/Container_queries):
+/// like a `@container` rule, it reacts to a container's size rather than the viewport's, and the
+/// queried contents cannot change the container's size. Unlike CSS, the query is a Rust closure,
+/// so it can build any element rather than selecting a stylesheet rule.
+///
 /// # Example
 ///
 /// ```

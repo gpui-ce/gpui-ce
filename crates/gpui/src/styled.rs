@@ -39,8 +39,17 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 /// Each call writes to the element's [`StyleRefinement`]. Unset properties fall back to
 /// [`Style`](crate::Style)'s defaults. Setting the same property again normally replaces its
 /// earlier value; an additive setter such as [`Styled::blur`] documents its exception.
-/// Interaction styles use refinements too: [`hover`](crate::InteractiveElement::hover) passes
-/// an empty refinement to a closure, where these methods describe the changes for that state.
+/// Interaction styles use refinements too: [`hover_style`](crate::InteractiveElement::hover_style)
+/// passes an empty refinement to a closure, where these methods describe the changes for that
+/// state.
+///
+/// # Inheritance
+///
+/// Text properties are hierarchical: color, font, size, weight, line height and direction set
+/// on an element apply to every descendant that leaves the property unset. Box properties —
+/// padding, margins, sizes, backgrounds, borders and overflow — apply only to the element they
+/// are set on. A method's documentation says which behavior it follows when the property is not
+/// obviously one of the two, so check docs.rs before assuming a value cascades.
 ///
 /// Setters record a request rather than measuring the element. Layout resolves `size`,
 /// `min_size`, `max_size` and percentages within the containing layout; painting then uses
@@ -50,8 +59,9 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 /// # Naming scale
 ///
 /// Names generally follow Tailwind CSS. Spacing, sizing and radius suffixes use a quarter-rem
-/// scale: `p_4` is 1rem of padding, and `gap_2` is a 0.5rem gap. At the default 16px root size,
-/// those lengths are 16px and 8px. The common steps are:
+/// scale: `p_4` is 1rem of padding, and `gap_2` is a 0.5rem gap. At
+/// [`DEFAULT_REM_SIZE`](crate::DEFAULT_REM_SIZE), those lengths are 16px and 8px. The common
+/// steps are:
 ///
 /// | Suffix | Length | Pixels at the default rem size |
 /// | --- | --- | --- |
@@ -70,9 +80,10 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 /// leaves the choice to layout. Each method lists its available values.
 ///
 /// Font sizes have their own scale, from [`Styled::text_xs`] (`0.75rem`) to
-/// [`Styled::text_3xl`] (`1.875rem`). For instance, `text_sm` is `0.875rem`, or 14px at the
-/// default root size. [`Window::set_rem_size`](crate::Window::set_rem_size) changes that
-/// root, scaling both these fonts and rem-based spacing.
+/// [`Styled::text_3xl`] (`1.875rem`). For instance, `text_sm` is `0.875rem`, or 14px at
+/// [`DEFAULT_REM_SIZE`](crate::DEFAULT_REM_SIZE).
+/// [`Window::set_rem_size`](crate::Window::set_rem_size) changes that root, scaling both these
+/// fonts and rem-based spacing.
 // Avoid expanding the large reflection macro while rust-analyzer indexes this trait.
 #[cfg_attr(
     all(any(feature = "inspector", debug_assertions), not(rust_analyzer)),
@@ -385,13 +396,16 @@ pub trait Styled: Sized {
 
     /// Sets how this element's text is truncated when it overflows.
     ///
-    /// See [`TextOverflow`] for the values.
+    /// See [`TextOverflow`] for the values. This is a text property, so it cascades to
+    /// descendants that leave it unset.
     fn text_overflow(mut self, overflow: TextOverflow) -> Self {
         self.text_style().text_overflow = Some(overflow);
         self
     }
 
     /// Sets the horizontal alignment of this element's text.
+    ///
+    /// This is a text property, so it cascades to descendants that leave it unset.
     fn text_align(mut self, align: TextAlign) -> Self {
         self.text_style().text_align = Some(align);
         self
@@ -1176,6 +1190,8 @@ pub trait Styled: Sized {
     }
 
     /// Sets the OpenType font features of this element and its children.
+    ///
+    /// This value cascades to its children.
     fn font_features(mut self, features: FontFeatures) -> Self {
         self.text_style().font_features = Some(features);
         self

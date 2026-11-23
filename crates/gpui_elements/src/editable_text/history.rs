@@ -1,6 +1,8 @@
 use gpui::CaretSelection;
-use std::{ops::Range, time::Duration};
-use web_time::Instant;
+use std::{
+    ops::Range,
+    time::{Duration, Instant},
+};
 
 /// The undo stack limit enforced when [`EditableTextHistory::record`] adds an entry.
 /// Recording drops the oldest entry when the stack is already at the limit.
@@ -11,6 +13,7 @@ pub const DEFAULT_GROUP_INTERVAL: Duration = Duration::from_millis(300);
 
 // TODO: Should history attach directly to storage? It is currently per field and
 // operates on both the storage and the selection.
+
 /// The undo and redo stacks of one editable text field.
 pub struct EditableTextHistory {
     /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
@@ -41,7 +44,7 @@ pub struct HistoryEntry {
     pub old_text: String,
     /// The length of the new text that replaced old_text (to know how much to remove on undo).
     pub new_text_len: usize,
-    /// The selection range before the edit. On the redo stack, it is the selection after the edit.
+    /// The selection range before the edit.
     pub selected_range: CaretSelection,
     /// Timestamp for grouping consecutive edits.
     pub timestamp: Instant,
@@ -67,7 +70,7 @@ impl EditableTextHistory {
     /// The edit replaced `old_text` at `range` with `new_text_len` bytes. A
     /// change that starts at the end of the latest entry extends it if the time
     /// since that entry's first change is less than the grouping interval.
-    /// Other changes start a new entry. Every recorded edit clears the redo stack.
+    /// Other changes start a new entry, which clears the redo stack.
     pub fn record(
         &mut self,
         range: Range<usize>,
@@ -77,9 +80,6 @@ impl EditableTextHistory {
     ) {
         let now = Instant::now();
 
-        // Any new edit invalidates the redo stack, including one that joins an earlier group.
-        self.redo_stack.clear();
-
         // Check if we should group with the last entry
         if let Some(last) = self.undo_stack.last_mut()
             && now.duration_since(last.timestamp) < self.grouping_interval
@@ -87,7 +87,7 @@ impl EditableTextHistory {
             // The change was triggered within group interval timing.
             // Try to extend the existing patch (which is a mutation).
             // If extending succeeds, then we can early-out. Otherwise the mutation is non-contiguous.
-            if last.extend(&range, old_text, new_text_len) {
+            if last.extend(&range, new_text_len) {
                 return;
             }
         }
@@ -107,6 +107,9 @@ impl EditableTextHistory {
                 timestamp: now,
             },
         );
+
+        // New edit invalidates redo stack
+        self.redo_stack.clear();
     }
 
     fn stack(&self, kind: HistoryKind) -> &Vec<HistoryEntry> {
@@ -143,7 +146,7 @@ impl EditableTextHistory {
 }
 
 impl HistoryEntry {
-    fn extend(&mut self, range: &Range<usize>, old_text: &str, new_text_len: usize) -> bool {
+    fn extend(&mut self, range: &Range<usize>, new_text_len: usize) -> bool {
         // NOTE: Could be more robust. Currently only supports human-written extensions from start towards end.
 
         // ranges must be contiguous in order to integrate/extend
@@ -153,7 +156,6 @@ impl HistoryEntry {
 
         self.range.end = range.start + new_text_len;
         self.new_text_len += new_text_len;
-        self.old_text.push_str(old_text);
 
         true
     }
@@ -181,58 +183,5 @@ impl HistoryEntry {
             selected_range: self.selected_range,
             timestamp: self.timestamp,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn record_edit(
-        history: &mut EditableTextHistory,
-        range: Range<usize>,
-        old_text: &str,
-        new_len: usize,
-    ) {
-        history.record(range, old_text, new_len, 0.into());
-    }
-
-    #[test]
-    fn adjacent_replacements_preserve_all_replaced_text() {
-        let mut history = EditableTextHistory::default();
-        // "ab" becomes "xy" through two replacements that the grouping interval merges.
-        record_edit(&mut history, 0..1, "a", 1);
-        record_edit(&mut history, 1..2, "b", 1);
-
-        let entry = history.take(HistoryKind::Undo).unwrap();
-        assert!(history.take(HistoryKind::Undo).is_none());
-        assert_eq!(entry.old_text, "ab");
-        assert_eq!(entry.char_range(usize::MAX), 0..2);
-    }
-
-    #[test]
-    fn consecutive_forward_deletions_preserve_all_removed_text() {
-        let mut history = EditableTextHistory::default();
-        // Deleting "a" and then "b" forward from the same offset.
-        record_edit(&mut history, 0..1, "a", 0);
-        record_edit(&mut history, 0..1, "b", 0);
-
-        let entry = history.take(HistoryKind::Undo).unwrap();
-        assert!(history.take(HistoryKind::Undo).is_none());
-        assert_eq!(entry.old_text, "ab");
-    }
-
-    #[test]
-    fn an_edit_that_joins_an_earlier_group_also_invalidates_redo() {
-        let mut history = EditableTextHistory::default();
-        record_edit(&mut history, 0..1, "a", 1);
-        record_edit(&mut history, 5..6, "f", 1);
-        let undone = history.take(HistoryKind::Undo).unwrap();
-        history.push(HistoryKind::Redo, undone);
-        assert!(history.has_next(HistoryKind::Redo));
-
-        // Contiguous with the first entry, so it joins that group instead of pushing a new one.
-        record_edit(&mut history, 1..2, "b", 1);
-        assert!(!history.has_next(HistoryKind::Redo));
     }
 }

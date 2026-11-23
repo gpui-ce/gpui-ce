@@ -1,9 +1,15 @@
+//! Storage for the text of an editable text field.
+//!
+//! [`UnicodeTextStorage`] is the interface an editable text element uses to read
+//! and change its text; [`StringStorage`] is the default implementation. The
+//! caret moves and selects by a [`TextBoundary`], a unit such as one user-perceived
+//! character, a word, a visual line, a hard line, or the whole document. The
+//! default storage treats both line variants as the text between `\n`
+//! characters, and doesn't wrap lines itself.
+
 /// A unit of text that the caret moves or selects by.
 ///
-/// The variants are `Cluster` (one user-perceived character, such as an emoji
-/// with modifiers), `Word`, `VisualLine`, `HardLine` and `Document`. The
-/// default storage treats both line variants as the text between `\n`
-/// characters, and doesn't wrap lines itself.
+/// Re-exported from [`gpui::TextBoundary`]; see it for the variants.
 pub use gpui::TextBoundary;
 use gpui::{NavigationDirection, utf8_to_utf16_offset, utf16_to_utf8_offset};
 use std::ops::Range;
@@ -35,9 +41,8 @@ pub trait UnicodeTextStorage {
 
     /// Replaces the text in `range` with `text`.
     ///
-    /// `range` is a range of UTF-8 byte offsets. [`StringStorage`] panics if
-    /// the range is out of bounds or doesn't start and end on a character
-    /// boundary.
+    /// `range` is a range of UTF-8 byte offsets. Increase the version, as
+    /// [`Self::version`] requires, so the element lays the text out again.
     fn replace_range(&mut self, range: Range<usize>, text: &str);
 
     /// Converts a UTF-8 byte offset to a UTF-16 offset.
@@ -190,7 +195,7 @@ pub trait UnicodeTextStorage {
     }
 }
 
-/// The default [`UnicodeTextStorage`], which keeps the content in a [`String`].
+/// [`UnicodeTextStorage`] implementation for [`String`].
 ///
 /// It is simple and fine for a text field. Each call to
 /// `UnicodeTextStorage::len_utf16` scans the whole string, so for large
@@ -234,6 +239,8 @@ impl UnicodeTextStorage for StringStorage {
         self.value.chars().map(|c| c.len_utf16()).sum()
     }
 
+    /// Panics if `range` is out of bounds or does not start and end on a
+    /// character boundary.
     fn replace_range(&mut self, range: Range<usize>, text: &str) {
         self.value.replace_range(range, &text);
         self.version = self.version.wrapping_add(1);

@@ -10,8 +10,7 @@
 //! - cut/copy/paste
 //! - caret / text cursor that can blink
 //! - simple undo/redo within a single field
-//! - a single-line mode, where Enter and Tab are passed to the surrounding view, so a form can
-//!   submit or move focus; see [`text_input`]
+//! - a single-line mode that ignores Enter and Tab; see [`text_input`]
 //! - exposing its text and selection to accessibility APIs while an assistive technology is active
 //!
 //! For all input actions, see documentation in the [`actions`] module.
