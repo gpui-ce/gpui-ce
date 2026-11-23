@@ -1140,9 +1140,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<'app, Self>) {
-        if !self.layout_data.supports_multiline {
-            return;
-        }
         if !self.layout_data.accepts_input {
             return;
         }

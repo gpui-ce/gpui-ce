@@ -16,8 +16,8 @@
 //!   always use storage bounds.
 //! * Deletion uses logical ranges, so in bidirectional text `DeleteLeft` need not remove the cluster
 //!   that `NavLeft` would cross. Directional selection extends from the existing anchor.
-//! * In a single-line field, [`Enter`] and [`Tab`] do nothing. A multi-line field inserts the
-//!   corresponding character.
+//! * In a single-line field, [`Enter`] does nothing and [`Tab`] inserts a tab. A multi-line
+//!   field inserts either character.
 //! * With input disabled, navigation, selection, and copying a non-empty selection remain
 //!   available; insertion, deletion, cut, and paste do nothing.
 use gpui::{InteractiveElement, WeakEntity, Window};
@@ -33,7 +33,7 @@ gpui::actions!(
         Escape,
         /// Inserts a newline at the caret position. Does nothing in a single-line field.
         Enter,
-        /// Inserts a tab character at the caret position. Does nothing in a single-line field.
+        /// Inserts a tab character at the caret position.
         Tab,
         /// Deletes the selection, or the preceding text cluster when nothing is selected.
         DeleteLeft,
@@ -105,7 +105,7 @@ gpui::actions!(
 ///
 /// On macOS, Command-arrow bindings handle line and document navigation. On other targets,
 /// Home and End handle line navigation, while Ctrl+Home and Ctrl+End handle document navigation.
-/// Enter and Tab are bound on every platform, but single-line fields ignore them.
+/// Enter and Tab are bound on every platform; single-line fields ignore Enter.
 /// In the bindings below, `secondary` means Command on macOS and Control on
 /// other platforms.
 ///
@@ -234,7 +234,7 @@ pub trait EditableTextActionHandler<Context>: Sized {
 
     /// Inserts a newline at the caret. Single-line fields ignore it.
     fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Context) {}
-    /// Inserts a tab at the caret. Single-line fields ignore it.
+    /// Inserts a tab at the caret.
     fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Context) {}
 
     /// Deletes the selection, or the preceding text cluster when nothing is selected.

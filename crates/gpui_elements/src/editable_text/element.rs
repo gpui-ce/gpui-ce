@@ -45,8 +45,8 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
 
 /// Creates a single-line text input.
 ///
-/// Newlines are removed from inserted text. Enter and Tab do nothing, so the
-/// field stays on one line. Up and Down move to the start and end of the text,
+/// Newlines are removed from inserted text, so the field stays on one line.
+/// Enter does nothing, and Up and Down move to the start and end of the text,
 /// respectively. See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
@@ -80,9 +80,9 @@ pub struct EditableTextElement {
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
     /// Whether the field holds several lines of text.
     ///
-    /// With `false`, Enter and Tab do nothing, and Up and Down move to the start
-    /// and end of the text. Newlines in inserted text, including pasted text, are
-    /// removed.
+    /// With `false`, Enter does nothing and Tab inserts a tab. Up and Down move
+    /// to the start and end of the text. Newlines in inserted text, including
+    /// pasted text, are removed.
     #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
     /// The text shown while the field is empty.
