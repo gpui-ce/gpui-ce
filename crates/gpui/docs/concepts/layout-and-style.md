@@ -1,15 +1,14 @@
 # Layout and style
 
-Styles describe how an element should look and where it should sit; layout turns
-those requests into positions and sizes. GPUI separates the two so that a render
-pass can describe a tree cheaply and resolve geometry once:
+Styles are the axioms which define the appearance of an element, and the place the element will lie.
+The act of taking those requests or constraints and resolving them is layouting.
 
 * [`Style`] holds the resolved defaults for an element. Text properties live in
   its [`TextStyle`], which descendants can inherit.
 * [`StyleRefinement`] holds optional overrides. Its fields are `Option`s, so an
   unset field means "keep the inherited or default value".
 * [`Styled`] is the trait that exposes the builder methods. Every element that
-  contains styling implements it, storing a `StyleRefinement` — for interactive
+  contains styling implements it, storing a `StyleRefinement`; for interactive
   elements, usually inside their [`Interactivity`].
 * Rendering a view produces a tree of elements. GPUI merges each element's
   refinement over [`Style`]'s defaults, resolves sizes and positions across the
@@ -17,14 +16,14 @@ pass can describe a tree cheaply and resolve geometry once:
   resulting bounds in logical pixels (screen-space coordinates) to prepaint and
   paint.
 
-The [`Styled`] trait documentation is the source of truth for individual
-methods; this page explains the model they share.
+You'll want to head to the [`Styled`] trait documentation for individual method definitions.
+This page is focused on the model itself, and how things fit/work together.
 
 ## Styles are method calls
 
 Every type that implements [`Styled`] exposes builder methods named after
-[Tailwind CSS](https://tailwindcss.com) utilities. GPUI does not run a CSS
-engine; each call writes a field on the element's [`StyleRefinement`]:
+[Tailwind CSS](https://tailwindcss.com) utilities. NOTABLY: GPUI does not run a CSS
+engine; it's syntax sugar over field writes on the element's [`StyleRefinement`]:
 
 ```rust
 # use gpui::{IntoElement, div, prelude::*, rgb};
@@ -40,11 +39,10 @@ div()
 # }
 ```
 
-Setting the same property twice replaces the earlier value. Additive methods say
-so in their docs: [`Styled::blur`] appends to the filter list, whereas a later
-[`Styled::filter`] replaces the list wholesale.
+As in most builder systems, if you write the same property twice, the first action will be discarded.
+Additive methods are rare, and are clearly labeled in their documentation. An example is [`Styled::blur`], which appends to the filter list, whereas a later [`Styled::filter`] replaces the list wholesale.
 
-Interaction states reuse the same refinement system. [`hover_style`](InteractiveElement::hover_style)
+This system is extended to interaction states. [`hover_style`](InteractiveElement::hover_style)
 and [`active_style`](StatefulInteractiveElement::active_style) take a closure that receives a fresh
 `StyleRefinement` and returns the overrides to apply while the pointer hovers or
 presses the element:
@@ -72,12 +70,12 @@ independent groups coexist in one subtree.
 
 ## Inheritance and scope
 
-Text properties are hierarchical. Setting color, font, size, weight, line height,
-or [`rtl`](Styled::rtl) on a container applies to every descendant that leaves
-that property unset. Box properties — padding, margins, dimensions, backgrounds,
-and borders — are self-scoped: they apply only to the element where you set them.
+The properties on text exist within a hierarchy; setting color, font, size, weight, line height,
+or [`rtl`](Styled::rtl) on a container will cascade to every descendant that leaves
+that property unset. In contrast, box properties, such as padding, margins, dimensions, backgrounds,
+and borders, are only self-scoped.
 
-Each setter's documentation states its scope when the distinction matters. When
+Again, the setter documentation will state clearly the scope if the distinction isn't clear. When
 you know a CSS property is inherited, look for the method on [`TextStyle`] (or
 the matching `Styled` method) rather than on [`Style`] directly.
 
@@ -94,10 +92,9 @@ parameter type restricts which units make sense there. They all convert into
 | [`relative`] | Fraction of the parent's size on that axis (`relative(0.5)` is `50%`). |
 | [`auto`](crate::auto) | Deferred to the layout algorithm. |
 
-Numbered spacing and sizing helpers follow Tailwind's quarter-rem scale: `p_4()`
-is `1rem`, `gap_2()` is `0.5rem`, and `0p5` steps represent `0.125rem`. The
-[`Styled`] trait documents the full naming scale, so you can read a method's
-suffix as a multiple of the root font size rather than memorising pixel values:
+Numbered spacing and sizing follow the quarter-rem scale. `p_4()`
+is `1rem`, `gap_2()` is `0.5rem`, and `0p5` steps represent `0.125rem`. Direct yourself to
+the [`Styled`] trait, as you'll find there the full naming scale!
 
 ```rust
 use gpui::{px, rems};
@@ -107,8 +104,7 @@ assert_eq!(rems(1.).to_pixels(root_font_size), px(16.));
 assert_eq!(rems(0.25).to_pixels(root_font_size), px(4.));
 ```
 
-Use [`rems`] for typography, spacing, and padding that should scale with a font
-size preference. Use [`px`] for fixed chrome dimensions such as a `220px`
+In the same CSS fashion, [`rems`] is best reserved for typography, spacing, and padding that you need to scale with a font size preference. Use [`px`] for fixed chrome dimensions such as a `220px`
 sidebar or a `1px` border, and [`relative`] when an element should take a
 proportion of its parent. [`Window::set_rem_size`] updates the root scale for
 the whole window on the next layout pass; custom elements (types that implement
@@ -138,8 +134,6 @@ specifications, so CSS reference documentation applies when debugging track
 sizing or alignment, keeping in mind GPUI's defaults below.
 
 ### Choose the layout from the behavior you want
-
-Start from the behavior, then pick the container:
 
 | Behavior | Use |
 | --- | --- |
@@ -196,13 +190,13 @@ parent already acts as the containing block.
 
 ### Why a flex row overflows its container
 
-This is the CSS pitfall that surprises most people. A flex item's automatic
+The evil CSS pitfall. A flex item's automatic
 minimum size is its `min-content` size — the width of its widest unbreakable
 word or child. By default Taffy enforces that floor, so a `flex_1` child holding a
-long URL or an unwrapped `nowrap` line can be wider than the space it was given
+long URL or an unwrapped `nowrap` line can be WIDER than the space it was given
 and overflow the row instead of shrinking.
 
-Lower that floor when the content should shrink and wrap or scroll:
+You'll want to lower that floor when the content should shrink/wrap/scroll:
 
 ```rust
 # use gpui::{IntoElement, div, prelude::*, px};
