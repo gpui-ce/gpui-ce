@@ -6,7 +6,7 @@
 //! - navigating with the keyboard and mouse by character, word, line, or document
 //! - selecting text with Shift, double- or triple-click, and mouse dragging
 //! - typing with an Input Method Editor (IME), including Chinese, Japanese, and Korean UTF-16 input
-//! - inserting newlines (`\n`) and tabs (`\t`) in multi-line fields
+//! - inserting newlines (`\n`) in multi-line fields and tabs (`\t`) in any field
 //! - cut/copy/paste
 //! - caret / text cursor that can blink
 //! - simple undo/redo within a single field
@@ -166,7 +166,9 @@ pub mod actions;
 mod caret;
 mod element;
 mod history;
-pub use history::*;
+pub use history::{
+    DEFAULT_GROUP_INTERVAL, EditableTextHistory, HistoryEntry, HistoryKind, MAX_HISTORY_LEN,
+};
 mod layout;
 mod state;
 mod storage;

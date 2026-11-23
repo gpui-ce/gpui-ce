@@ -106,8 +106,9 @@ impl PathBuilder {
     ///
     /// Values alternate between dash length and gap length, in logical pixels.
     /// An odd number of values is repeated to form an even cycle, so `[5, 3, 2]`
-    /// behaves like `[5, 3, 2, 5, 3, 2]`. The slice must not be empty, or
-    /// [`PathBuilder::build`] panics.
+    /// behaves like `[5, 3, 2, 5, 3, 2]`. On a stroked path with at least one
+    /// segment, the slice must not be empty, or [`PathBuilder::build`] panics. Filled
+    /// paths ignore the dash array.
     ///
     /// See [MDN](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Attribute/stroke-dasharray)
     /// for the pattern these values describe.

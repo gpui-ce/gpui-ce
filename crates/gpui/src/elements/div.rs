@@ -919,8 +919,9 @@ impl Interactivity {
     ///
     /// The platform uses `area` to decide what clicks and drags here do, such as moving or closing the window.
     ///
-    /// Platform support is incomplete: Windows and the web backend use this area, while macOS, X11 and
-    /// Wayland ignore it for now. The element still lays out and responds to element-level input on every platform.
+    /// Platform support is incomplete: Windows uses this area, while macOS, X11, Wayland and the web
+    /// backend ignore it for now. The element still lays out and responds to element-level input on every
+    /// platform.
     pub fn window_control_area(&mut self, area: WindowControlArea) {
         self.window_control = Some(area);
     }
@@ -1660,8 +1661,9 @@ pub trait InteractiveElement: Sized {
 
     /// Marks this element's bounds as a window control area, such as a custom title bar button.
     ///
-    /// The platform uses `area` to decide what clicks and drags here do, such as moving or closing the window. The fluent
-    /// equivalent of [`Interactivity::window_control_area`].
+    /// The platform uses `area` to decide what clicks and drags here do, such as moving or closing the window.
+    /// This is the fluent equivalent of [`Interactivity::window_control_area`], which documents current
+    /// platform support.
     fn window_control_area(mut self, area: WindowControlArea) -> Self {
         self.interactivity().window_control_area(area);
         self
@@ -1771,7 +1773,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     ///
     /// Screen readers use the role to describe the element and decide what it can do. Use the role that matches
     /// the element's behavior. [`accesskit::Role::GenericContainer`] is ignored, so use it only for layout. See the
-    /// [accessibility guide](crate::_documentation::guides::accessibility) for an overview, and
+    /// [accessibility guide](crate::_accessibility) for an overview, and
     /// [AccessKit's role documentation](https://docs.rs/accesskit/latest/accesskit/enum.Role.html) for what each
     /// role means to assistive technology.
     ///
@@ -2000,7 +2002,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// Runs `listener` when assistive technology requests `action` on this element.
     ///
     /// The listener receives the action data the client sent, if any, along with the window and the app. Use it to let a
-    /// screen reader press a button or change a value. See the [accessibility guide](crate::_documentation::guides::accessibility)
+    /// screen reader press a button or change a value. See the [accessibility guide](crate::_accessibility)
     /// for an overview.
     fn on_a11y_action(
         mut self,
@@ -2417,9 +2419,10 @@ pub type OnDropFn<T> = Box<dyn Fn(&T, &MouseUpEvent, &mut Window, &mut App) + 's
 /// Attach it with [`InteractiveElement::on_drop_alt`]. For the common case of one handler per type, use
 /// [`InteractiveElement::on_drop`] instead.
 pub struct DropListener<T: ?Sized> {
-    /// Called while a value of this type is dragged over the element. Its return value decides whether the
-    /// value can be dropped on the element. If it is `None`, a value is accepted while the pointer is over the
-    /// element.
+    /// Called while a value of this type is dragged, and again when it is dropped. Its return value decides
+    /// whether the value can be dropped on the element. [`DropListener::can_drop_within`] adds a hover check;
+    /// [`DropListener::can_drop_anywhere`] does not. If it is `None`, a value is accepted while the pointer is
+    /// over the element.
     pub can_drop: Option<CanDropListenerFn<T>>,
     /// Returns the style to apply while the user is hovering over the owning element while dragging a value of
     /// type `T`, and [`can_drop`](DropListener::can_drop) is `None` or returns `true`.
@@ -2588,8 +2591,8 @@ pub fn div() -> Div {
 
 /// The all-in-one element for building most user interfaces. Create one with [`div`].
 ///
-/// A `Div` is a flexbox container with styling, children and every event handler in
-/// [`InteractiveElement`]. It is not stateful until you give it an [`id`](InteractiveElement::id), which returns a
+/// A `Div` is a block-level container by default (switch it with `.flex()` or `.grid()`), with
+/// styling, children and every event handler in [`InteractiveElement`]. It is not stateful until you give it an [`id`](InteractiveElement::id), which returns a
 /// [`Stateful`]. Use it as the basic building block for views and components.
 pub struct Div {
     interactivity: Interactivity,

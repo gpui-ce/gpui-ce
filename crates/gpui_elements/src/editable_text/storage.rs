@@ -30,7 +30,8 @@ pub trait UnicodeTextStorage {
     /// Returns the version of the content.
     ///
     /// Increase the version on every change, so that the element knows to
-    /// lay out the text again. The version wraps around after `u16::MAX`.
+    /// lay out the text again. The version is a `u16`, so it wraps after
+    /// `u16::MAX`; [`StringStorage`] wraps it for you.
     fn version(&self) -> u16;
 
     /// Returns the content as a UTF-8 string.

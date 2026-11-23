@@ -45,9 +45,9 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
 
 /// Creates a single-line text input.
 ///
-/// Newlines are removed from inserted text, so the field stays on one line.
-/// Enter does nothing, and Up and Down move to the start and end of the text,
-/// respectively. See [`EditableTextElement`] for usage.
+/// Newlines are removed from inserted text, so typed input stays on one line.
+/// Enter does nothing, and Up and Down move by visual line. See
+/// [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(false)
@@ -80,9 +80,8 @@ pub struct EditableTextElement {
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
     /// Whether the field holds several lines of text.
     ///
-    /// With `false`, Enter does nothing and Tab inserts a tab. Up and Down move
-    /// to the start and end of the text. Newlines in inserted text, including
-    /// pasted text, are removed.
+    /// With `false`, Enter does nothing and Tab inserts a tab. Up and Down move by
+    /// visual line. Newlines in inserted text, including pasted text, are removed.
     #[setters(generate, rename = "multiline")]
     supports_multiline: bool,
     /// The text shown while the field is empty.
@@ -90,9 +89,8 @@ pub struct EditableTextElement {
     placeholder: Option<SharedString>,
     /// Whether the field accepts edits.
     ///
-    /// When `false`, typing, paste, cut and delete do nothing, and multi-line fields
-    /// also ignore Enter and Tab. The field can still be focused, so the user can
-    /// select and copy the text.
+    /// When `false`, typing, paste, cut, delete, Enter and Tab do nothing. The field
+    /// can still be focused, so the user can select and copy the text.
     #[setters(generate)]
     accepts_input: bool,
     colors: EditableTextColors,
