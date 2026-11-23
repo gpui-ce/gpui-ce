@@ -1451,7 +1451,7 @@ mod tests {
     use crate::editable_text::StringStorage;
     use gpui::{
         App, AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
-        TextSystem, WindowHandle, WindowTextSystem, div, font, px,
+        TextSystem, WindowHandle, WindowTextSystem, div, font, prelude::*, px,
     };
     use gpui_parley::ParleyTextSystem;
     use gpui_render::SwashGlyphRasterizer;
@@ -1461,6 +1461,28 @@ mod tests {
 
     struct TestView {
         input: Entity<EditableTextState>,
+    }
+
+    struct PropagationView {
+        input: Entity<EditableTextState>,
+        enters: Rc<Cell<usize>>,
+        tabs: Rc<Cell<usize>>,
+    }
+
+    impl Render for PropagationView {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let enters = self.enters.clone();
+            let tabs = self.tabs.clone();
+            div()
+                .size_full()
+                .on_action(cx.listener(move |_, _: &Enter, _, _| enters.set(enters.get() + 1)))
+                .on_action(cx.listener(move |_, _: &Tab, _, _| tabs.set(tabs.get() + 1)))
+                .child(
+                    crate::editable_text::text_input("input")
+                        .state(self.input.downgrade())
+                        .size(px(180.)),
+                )
+        }
     }
 
     struct WrappingStorage {
@@ -2511,12 +2533,57 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_single_line_enter_does_nothing(cx: &mut TestAppContext) {
+    fn single_line_enter_leaves_text_unchanged(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello", 5);
         update_movement_input(view, cx, |input, window, cx| {
             input.insert_enter(&Enter, window, cx);
             assert_eq!(input.as_str(), "hello");
             assert_eq!(input.caret_selection(), 5.into());
+        });
+    }
+
+    #[gpui::test]
+    fn single_line_enter_and_tab_propagate_to_ancestor_actions(cx: &mut TestAppContext) {
+        let enters = Rc::new(Cell::new(0));
+        let tabs = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let enters = enters.clone();
+            let tabs = tabs.clone();
+            move |_window, cx| {
+                let input = cx.new(|cx| default_state("hello", cx));
+                PropagationView {
+                    input,
+                    enters,
+                    tabs,
+                }
+            }
+        });
+
+        cx.update(|window, cx| {
+            window.activate();
+            let focus_handle = view.read(cx).input.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+
+        // The single-line field propagates both actions to the ancestor div.
+        cx.dispatch_action(Enter);
+        cx.dispatch_action(Tab);
+
+        cx.update(|_, cx| {
+            let view = view.read(cx);
+            assert_eq!(
+                enters.get(),
+                1,
+                "Enter should reach the ancestor action handler"
+            );
+            assert_eq!(
+                tabs.get(),
+                1,
+                "Tab should reach the ancestor action handler"
+            );
+            assert_eq!(view.input.read(cx).as_str(), "hello");
         });
     }
 
