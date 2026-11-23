@@ -1,7 +1,8 @@
 # Layout and style
 
-Styles are the axioms which define the appearance of an element, and the place the element will lie.
-The act of taking those requests or constraints and resolving them is layouting.
+Styles are the axioms which define the appearance of an element, and the place
+the element will lie. The act of taking those requests or constraints and
+resolving them is layouting.
 
 * [`Style`] holds the resolved defaults for an element. Text properties live in
   its [`TextStyle`], which descendants can inherit.
@@ -16,14 +17,16 @@ The act of taking those requests or constraints and resolving them is layouting.
   resulting bounds in logical pixels (screen-space coordinates) to prepaint and
   paint.
 
-You'll want to head to the [`Styled`] trait documentation for individual method definitions.
-This page is focused on the model itself, and how things fit/work together.
+You'll want to head to the [`Styled`] trait documentation for individual method
+definitions. This page is focused on the model itself, and how things fit/work
+together.
 
 ## Styles are method calls
 
 Every type that implements [`Styled`] exposes builder methods named after
-[Tailwind CSS](https://tailwindcss.com) utilities. NOTABLY: GPUI does not run a CSS
-engine; it's syntax sugar over field writes on the element's [`StyleRefinement`]:
+[Tailwind CSS](https://tailwindcss.com) utilities. NOTABLY: GPUI does not run
+a CSS engine; it's syntax sugar over field writes on the element's
+[`StyleRefinement`]:
 
 ```rust
 # use gpui::{IntoElement, div, prelude::*, rgb};
@@ -39,13 +42,16 @@ div()
 # }
 ```
 
-As in most builder systems, if you write the same property twice, the first action will be discarded.
-Additive methods are rare, and are clearly labeled in their documentation. An example is [`Styled::blur`], which appends to the filter list, whereas a later [`Styled::filter`] replaces the list wholesale.
+As in most builder systems, if you write the same property twice, the first
+action will be discarded. Additive methods are rare, and are clearly labeled in
+their documentation. An example is [`Styled::blur`], which appends to the
+filter list, whereas a later [`Styled::filter`] replaces the list wholesale.
 
-This system is extended to interaction states. [`hover_style`](InteractiveElement::hover_style)
-and [`active_style`](StatefulInteractiveElement::active_style) take a closure that receives a fresh
-`StyleRefinement` and returns the overrides to apply while the pointer hovers or
-presses the element:
+This system is extended to interaction states.
+[`hover_style`](InteractiveElement::hover_style) and
+[`active_style`](StatefulInteractiveElement::active_style) take a closure that
+receives a fresh `StyleRefinement` and returns the overrides to apply while the
+pointer hovers or presses the element:
 
 ```rust
 # use gpui::{IntoElement, div, prelude::*, rgb};
@@ -70,14 +76,16 @@ independent groups coexist in one subtree.
 
 ## Inheritance and scope
 
-The properties on text exist within a hierarchy; setting color, font, size, weight, line height,
-or [`rtl`](Styled::rtl) on a container will cascade to every descendant that leaves
-that property unset. In contrast, box properties, such as padding, margins, dimensions, backgrounds,
-and borders, are only self-scoped.
+The properties on text exist within a hierarchy; setting color, font, size,
+weight, line height, or [`rtl`](Styled::rtl) on a container will cascade to
+every descendant that leaves that property unset. In contrast, box properties,
+such as padding, margins, dimensions, backgrounds, and borders, are only
+self-scoped.
 
-Again, the setter documentation will state clearly the scope if the distinction isn't clear. When
-you know a CSS property is inherited, look for the method on [`TextStyle`] (or
-the matching `Styled` method) rather than on [`Style`] directly.
+Again, the setter documentation will state clearly the scope if the distinction
+isn't clear. When you know a CSS property is inherited, look for the method on
+[`TextStyle`] (or the matching `Styled` method) rather than on [`Style`]
+directly.
 
 ## Lengths
 
@@ -92,9 +100,9 @@ parameter type restricts which units make sense there. They all convert into
 | [`relative`] | Fraction of the parent's size on that axis (`relative(0.5)` is `50%`). |
 | [`auto`](crate::auto) | Deferred to the layout algorithm. |
 
-Numbered spacing and sizing follow the quarter-rem scale. `p_4()`
-is `1rem`, `gap_2()` is `0.5rem`, and `0p5` steps represent `0.125rem`. Direct yourself to
-the [`Styled`] trait, as you'll find there the full naming scale!
+Numbered spacing and sizing follow the quarter-rem scale. `p_4()` is `1rem`,
+`gap_2()` is `0.5rem`, and `0p5` steps represent `0.125rem`. Direct yourself
+to the [`Styled`] trait, as you'll find there the full naming scale!
 
 ```rust
 use gpui::{px, rems};
@@ -104,11 +112,13 @@ assert_eq!(rems(1.).to_pixels(root_font_size), px(16.));
 assert_eq!(rems(0.25).to_pixels(root_font_size), px(4.));
 ```
 
-In the same CSS fashion, [`rems`] is best reserved for typography, spacing, and padding that you need to scale with a font size preference. Use [`px`] for fixed chrome dimensions such as a `220px`
-sidebar or a `1px` border, and [`relative`] when an element should take a
-proportion of its parent. [`Window::set_rem_size`] updates the root scale for
-the whole window on the next layout pass; custom elements (types that implement
-[`Element`]) can temporarily override it during prepaint or paint with
+In the same CSS fashion, [`rems`] is best reserved for typography, spacing, and
+padding that you need to scale with a font size preference. Use [`px`] for
+fixed chrome dimensions such as a `220px` sidebar or a `1px` border, and
+[`relative`] when an element should take a proportion of its parent.
+[`Window::set_rem_size`] updates the root scale for the whole window on the
+next layout pass; custom elements (types that implement [`Element`]) can
+temporarily override it during prepaint or paint with
 [`Window::with_rem_size`].
 
 ## Flexbox and grid
