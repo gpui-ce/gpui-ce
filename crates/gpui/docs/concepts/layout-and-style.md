@@ -17,9 +17,8 @@ pass can describe a tree cheaply and resolve geometry once:
   resulting bounds in logical pixels (screen-space coordinates) to prepaint and
   paint.
 
-The [layout and style API reference](https://docs.rs/gpui/latest/gpui/trait.Styled.html)
-is the source of truth for individual methods; this page explains the model they
-share.
+The [`Styled`] trait documentation is the source of truth for individual
+methods; this page explains the model they share.
 
 ## Styles are method calls
 
