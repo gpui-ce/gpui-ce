@@ -127,20 +127,7 @@ impl LinuxCommon {
         let (main_sender, main_receiver) = PriorityQueueCalloopReceiver::new();
         let (wake_sender, wake_receiver) = calloop::channel::channel();
 
-        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
-            ParleyTextSystem::new(SwashGlyphRasterizer::default())
-                .with_system_fallback_family("IBM Plex Sans")
-                .with_fallback_families([
-                    "IBM Plex Sans",
-                    "Lilex",
-                    "Ubuntu",
-                    "Cantarell",
-                    "Noto Sans",
-                    "DejaVu Sans",
-                    "Arial",
-                ])
-                .with_system_fonts(),
-        );
+        let text_system = new_text_system();
 
         let callbacks = PlatformHandlers::default();
 
@@ -192,6 +179,23 @@ impl LinuxCommon {
             self.callbacks.system_wake = Some(callback);
         }
     }
+}
+
+fn new_text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(
+        ParleyTextSystem::new(SwashGlyphRasterizer::default())
+            .with_system_fallback_family("IBM Plex Sans")
+            .with_fallback_families([
+                "IBM Plex Sans",
+                "Lilex",
+                "Ubuntu",
+                "Cantarell",
+                "Noto Sans",
+                "DejaVu Sans",
+                "Arial",
+            ])
+            .with_system_fonts(),
+    )
 }
 
 #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
