@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use gpui::{
     AnyElement, App, ClickEvent, DispatchPhase, Div, ElementId, Entity, FocusHandle,
     InteractiveElement, Interactivity, IntoElement, MouseButton, MouseMoveEvent, ParentElement,
     Pixels, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement,
     Styled, Toggled, Window, canvas, div, prelude::FluentBuilder, px,
 };
+use std::rc::Rc;
 
 pub type OnChange = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
@@ -370,16 +369,14 @@ fn use_focus_handle(
 #[cfg(test)]
 mod tests {
     use super::{BaseSwitch, BaseSwitchThumb};
-
-    use std::sync::{Arc, Mutex};
-
     use gpui::{
-        AppContext, Bounds, Context, Div, Element as _, Entity, InteractiveElement,
-        InteractivityPrepaint, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-        MouseButton, ParentElement, Pixels, Render, RenderOnce, StatefulInteractiveElement, Styled,
-        TestAppContext, VisualTestContext, Window, accesskit, canvas, div, point,
-        prelude::FluentBuilder, px,
+        Bounds, Context, Div, Element as _, Entity, InteractiveElement, InteractivityPrepaint,
+        IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, ParentElement,
+        Pixels, Render, RenderOnce, StatefulInteractiveElement, Styled, TestAppContext,
+        VisualTestContext, Window, accesskit, canvas, div, point, prelude::FluentBuilder,
+        prelude::*, px,
     };
+    use std::sync::{Arc, Mutex};
 
     struct SwitchHarness {
         checked: bool,
