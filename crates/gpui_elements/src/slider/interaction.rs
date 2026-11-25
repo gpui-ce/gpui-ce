@@ -292,6 +292,32 @@ impl BaseSliderInteraction {
         self.emit(change.as_ref(), change.as_ref(), window, cx);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn propose_discrete(
+        &self,
+        values: &BaseSliderValue,
+        thumb_idx: usize,
+        target: f32,
+        reason: BaseSliderChangeReason,
+        model: BaseSliderModel,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let target = target.clamp(model.minimum, model.maximum);
+        let target = if matches!(target, value if value == model.minimum || value == model.maximum)
+        {
+            target
+        } else {
+            model.snap(target)
+        };
+
+        let (value, active_thumb_index) =
+            BaseSliderThumbCollisionBehavior::Clamp.resolve(values, thumb_idx, target, model);
+        let change = BaseSliderChange::between(values, value, active_thumb_index, reason);
+
+        self.emit(change.as_ref(), change.as_ref(), window, cx);
+    }
+
     fn emit(
         &self,
         live: Option<&BaseSliderChange>,
@@ -473,6 +499,10 @@ pub enum BaseSliderChangeReason {
     TrackPress,
     /// A mouse drag while a slider gesture is active.
     Drag,
+    /// A keyboard adjustment.
+    Keyboard,
+    /// An increment, decrement, or set-value action from assistive technology.
+    Accessibility,
 }
 
 #[cfg(test)]

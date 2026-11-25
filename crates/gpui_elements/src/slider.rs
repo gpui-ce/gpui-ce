@@ -34,6 +34,7 @@ pub struct BaseSlider {
     minimum: f32,
     maximum: f32,
     step: f32,
+    large_step: f32,
     min_steps_between_values: usize,
     collision_behavior: BaseSliderThumbCollisionBehavior,
     thumb_alignment: BaseSliderThumbAlignment,
@@ -63,6 +64,8 @@ impl BaseSlider {
     pub const DEFAULT_MAXIMUM: f32 = 100.;
     /// Initial step size and fallback for non-finite step sizes.
     pub const DEFAULT_STEP: f32 = 1.;
+    /// Initial large step size and fallback for non-finite large step sizes.
+    pub const DEFAULT_LARGE_STEP: f32 = 10.;
     /// Initial minimum gap between adjacent values, measured in steps.
     pub const DEFAULT_MIN_STEPS_BETWEEN_VALUES: usize = 0;
 
@@ -81,6 +84,7 @@ impl BaseSlider {
             minimum: Self::DEFAULT_MINIMUM,
             maximum: Self::DEFAULT_MAXIMUM,
             step: Self::DEFAULT_STEP,
+            large_step: Self::DEFAULT_LARGE_STEP,
             min_steps_between_values: Self::DEFAULT_MIN_STEPS_BETWEEN_VALUES,
             collision_behavior: BaseSliderThumbCollisionBehavior::Push,
             thumb_alignment: BaseSliderThumbAlignment::Edge,
@@ -141,7 +145,7 @@ impl BaseSlider {
         self
     }
 
-    /// Sets the positive, finite step used for snapping.
+    /// Sets the positive, finite step used for snapping and arrow-key changes.
     /// With debug assertions disabled, non-finite inputs use [`Self::DEFAULT_STEP`]
     /// and nonpositive inputs clamp to the smallest positive float.
     pub fn step(mut self, step: f32) -> Self {
@@ -159,6 +163,24 @@ impl BaseSlider {
         self
     }
 
+    /// Sets the positive, finite increment for Page Up, Page Down, and Shift+Arrow.
+    /// With debug assertions disabled, non-finite inputs use [`Self::DEFAULT_LARGE_STEP`]
+    /// and nonpositive inputs clamp to the smallest positive float.
+    pub fn large_step(mut self, large_step: f32) -> Self {
+        debug_assert!(
+            large_step.is_finite() && large_step > 0.,
+            "the slider large step must be finite and positive"
+        );
+
+        self.large_step = if large_step.is_finite() {
+            large_step.max(Self::MINIMUM_STEP)
+        } else {
+            Self::DEFAULT_LARGE_STEP
+        };
+
+        self
+    }
+
     /// Sets the minimum gap between adjacent values, measured in steps.
     /// The gap is limited to the available range.
     pub fn min_steps_between_values(mut self, steps: usize) -> Self {
@@ -168,6 +190,7 @@ impl BaseSlider {
     }
 
     /// Selects how pointer interactions handle collisions between thumbs.
+    /// Keyboard and accessibility changes always clamp to neighboring values.
     pub fn thumb_collision_behavior(mut self, behavior: BaseSliderThumbCollisionBehavior) -> Self {
         self.collision_behavior = behavior;
 
@@ -243,7 +266,7 @@ impl BaseSlider {
     }
 
     /// Registers a handler for completed changes.
-    /// Runs after a changed pointer gesture ends or a touch tap changes a value.
+    /// Runs after a changed pointer gesture ends or a discrete input changes a value.
     pub fn on_commit(
         mut self,
         handler: impl Fn(&BaseSliderChange, &mut Window, &mut App) + 'static,

@@ -1,12 +1,13 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Axis, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
-    IntoElement, ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window, accesskit, div, prelude::FluentBuilder,
+    AccessibleAction, AnyElement, App, Axis, Div, ElementId, FocusHandle, InteractiveElement,
+    Interactivity, IntoElement, ParentElement, Role, SharedString, Stateful,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, accesskit, div,
+    prelude::FluentBuilder,
 };
 
-use super::{BaseSliderRenderContext, ValueTextFormatter};
+use super::{BaseSliderChangeReason, BaseSliderRenderContext, ValueTextFormatter};
 
 /// A focusable thumb that controls one slider value.
 #[derive(Styled, ParentElement, StatefulInteractiveElement)]
@@ -79,6 +80,16 @@ impl BaseSliderThumb {
         let (effective_minimum, effective_maximum) = model.effective_bounds(values, thumb_idx);
         let focus_handle = use_focus_handle(self.element_id.clone(), window, cx, None);
 
+        let keyboard_values = values.clone();
+        let keyboard_interaction = interaction.clone();
+
+        let accessibility_values = values.clone();
+        let increment_interaction = interaction.clone();
+        let decrement_values = values.clone();
+        let decrement_interaction = interaction.clone();
+        let set_value_values = values.clone();
+        let set_value_interaction = interaction.clone();
+
         let aria_label = self.aria_label.or_else(|| context.label.clone());
         let value_text_formatter = self
             .value_text_formatter
@@ -106,7 +117,73 @@ impl BaseSliderThumb {
             .refine_style(&self.style)
             .children(self.children)
             .child(interaction.measure_bounds(Some(thumb_idx)))
-            .when(context.interactive, |this| this.track_focus(&focus_handle));
+            .when(context.interactive, |this| {
+                this.track_focus(&focus_handle)
+                    .on_key_down(move |event, window, cx| {
+                        let Some(target) = model.keyboard_target(
+                            event,
+                            keyboard_values.0[thumb_idx],
+                            effective_minimum,
+                            effective_maximum,
+                        ) else {
+                            return;
+                        };
+
+                        cx.stop_propagation();
+                        keyboard_interaction.propose_discrete(
+                            &keyboard_values,
+                            thumb_idx,
+                            target,
+                            BaseSliderChangeReason::Keyboard,
+                            model,
+                            window,
+                            cx,
+                        );
+                    })
+                    .on_a11y_action(AccessibleAction::Increment, move |_data, window, cx| {
+                        increment_interaction.propose_discrete(
+                            &accessibility_values,
+                            thumb_idx,
+                            accessibility_values.0[thumb_idx] + model.step,
+                            BaseSliderChangeReason::Accessibility,
+                            model,
+                            window,
+                            cx,
+                        );
+                    })
+                    .on_a11y_action(AccessibleAction::Decrement, move |_data, window, cx| {
+                        decrement_interaction.propose_discrete(
+                            &decrement_values,
+                            thumb_idx,
+                            decrement_values.0[thumb_idx] - model.step,
+                            BaseSliderChangeReason::Accessibility,
+                            model,
+                            window,
+                            cx,
+                        );
+                    })
+                    .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
+                        let Some(accesskit::ActionData::NumericValue(target)) = data else {
+                            return;
+                        };
+
+                        let target = *target as f32;
+
+                        if !target.is_finite() {
+                            return;
+                        }
+
+                        set_value_interaction.propose_discrete(
+                            &set_value_values,
+                            thumb_idx,
+                            target,
+                            BaseSliderChangeReason::Accessibility,
+                            model,
+                            window,
+                            cx,
+                        );
+                    })
+            });
 
         (thumb.into_any_element(), focus_handle)
     }

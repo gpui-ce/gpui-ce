@@ -1,4 +1,4 @@
-use gpui::{Axis, Bounds, Length, Pixels, Point, Size, px, relative};
+use gpui::{Axis, Bounds, KeyDownEvent, Length, Pixels, Point, Size, px, relative};
 use smallvec::SmallVec;
 
 use super::BaseSlider;
@@ -78,6 +78,7 @@ pub(super) struct BaseSliderModel {
     pub(super) minimum: f32,
     pub(super) maximum: f32,
     pub(super) step: f32,
+    large_step: f32,
     minimum_spacing: f32,
     pub(super) orientation: Axis,
     pub(super) alignment: BaseSliderThumbAlignment,
@@ -171,6 +172,30 @@ impl BaseSliderModel {
         (minimum.min(maximum), maximum.max(minimum))
     }
 
+    pub(super) fn keyboard_target(
+        self,
+        event: &KeyDownEvent,
+        value: f32,
+        minimum: f32,
+        maximum: f32,
+    ) -> Option<f32> {
+        let increment = if event.keystroke.modifiers.shift {
+            self.large_step
+        } else {
+            self.step
+        };
+
+        match event.keystroke.key.as_str() {
+            "right" | "up" => Some((value + increment).min(maximum)),
+            "left" | "down" => Some((value - increment).max(minimum)),
+            "pageup" => Some((value + self.large_step).min(maximum)),
+            "pagedown" => Some((value - self.large_step).max(minimum)),
+            "home" => Some(minimum),
+            "end" => Some(maximum),
+            _ => None,
+        }
+    }
+
     pub(super) fn thumb_position(
         self,
         control_size: Size<Pixels>,
@@ -262,6 +287,7 @@ impl BaseSlider {
             minimum,
             maximum,
             step: self.step,
+            large_step: self.large_step,
             minimum_spacing: BaseSliderModel::minimum_spacing(
                 minimum,
                 maximum,
@@ -350,11 +376,11 @@ impl FromIterator<f32> for BaseSliderValue {
 #[cfg(test)]
 mod tests {
     use super::{
-        BaseSliderModel, BaseSliderThumbAlignment, BaseSliderThumbCollisionBehavior,
+        BaseSlider, BaseSliderModel, BaseSliderThumbAlignment, BaseSliderThumbCollisionBehavior,
         BaseSliderValue,
     };
 
-    use gpui::Axis;
+    use gpui::{Axis, Bounds, Size, point, px, relative, size};
 
     fn model(
         orientation: Axis,
@@ -365,10 +391,136 @@ mod tests {
             minimum: 0.,
             maximum: 100.,
             step: 5.,
+            large_step: 20.,
             minimum_spacing,
             orientation,
             alignment: BaseSliderThumbAlignment::Center,
             collision_behavior: behavior,
+        }
+    }
+
+    #[test]
+    fn numeric_configuration_normalizes_bounds_steps_and_values() {
+        let snap_cases = [
+            (-10., 10., 20., 2.5, 10.),
+            (21., 10., 20., 2.5, 20.),
+            (13.7, 10., 20., 0.5, 13.5),
+            (0.29, 0.1, 0.5, 0.1, 0.3),
+        ];
+
+        for (value, minimum, maximum, step, expected) in snap_cases {
+            let model = BaseSliderModel {
+                minimum,
+                maximum,
+                step,
+                ..model(
+                    Axis::Horizontal,
+                    BaseSliderThumbCollisionBehavior::Clamp,
+                    0.,
+                )
+            };
+
+            assert_eq!(model.snap(value), expected);
+        }
+
+        let tiny_step_model = BaseSlider::new("tiny-step")
+            .max(1e-39)
+            .step(0.0_f32.next_up())
+            .model(1);
+
+        assert_eq!(tiny_step_model.snap(1e-40), 1e-40);
+
+        let fraction_model = BaseSliderModel {
+            minimum: 10.,
+            maximum: 20.,
+            ..model(
+                Axis::Horizontal,
+                BaseSliderThumbCollisionBehavior::Clamp,
+                0.,
+            )
+        };
+
+        assert_eq!(fraction_model.fraction(-5.), 0.);
+        assert_eq!(fraction_model.fraction(15.), 0.5);
+        assert_eq!(fraction_model.fraction(25.), 1.);
+
+        for (minimum, maximum, values, expected) in [
+            (10., 20., [120., -5.], [10., 20.]),
+            (0., 100., [78., 22.], [22., 78.]),
+        ] {
+            let model = BaseSliderModel {
+                minimum,
+                maximum,
+                ..model(Axis::Horizontal, BaseSliderThumbCollisionBehavior::Push, 0.)
+            };
+
+            assert_eq!(
+                model
+                    .normalized_values(&BaseSliderValue::from(values))
+                    .as_slice(),
+                &expected
+            );
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            let defaults = BaseSlider::new("default-inputs");
+
+            for value in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+                let slider = BaseSlider::new("finite-inputs")
+                    .min(10.)
+                    .max(20.)
+                    .step(2.)
+                    .large_step(5.)
+                    .min(value)
+                    .max(value)
+                    .step(value)
+                    .large_step(value);
+
+                assert_eq!(
+                    (slider.minimum, slider.maximum),
+                    (defaults.minimum, defaults.maximum)
+                );
+                assert_eq!(
+                    (slider.step, slider.large_step),
+                    (defaults.step, defaults.large_step)
+                );
+            }
+
+            for value in [0., -1., -f32::MAX] {
+                let slider = BaseSlider::new("positive-steps")
+                    .step(value)
+                    .large_step(value);
+                let model = slider.model(1);
+
+                assert!(model.step.is_finite() && model.step > 0.);
+                assert!(model.large_step.is_finite() && model.large_step > 0.);
+                assert!(model.snap(25.).is_finite());
+            }
+
+            for (minimum, maximum) in [
+                (100., 0.),
+                (10., 10.),
+                (0., 0.),
+                (f32::MIN, f32::MIN),
+                (f32::MAX, f32::MAX),
+            ] {
+                let model = BaseSlider::new("ordered-bounds")
+                    .min(minimum)
+                    .max(maximum)
+                    .model(1);
+
+                assert!(model.minimum.is_finite());
+                assert!(model.maximum.is_finite());
+                assert!(model.minimum < model.maximum);
+                assert_eq!(model.fraction(model.minimum), 0.);
+                assert_eq!(model.fraction(model.maximum), 1.);
+            }
+
+            let values = BaseSliderValue::new([f32::NAN, f32::NEG_INFINITY, f32::INFINITY, 25.]);
+
+            assert_eq!(values.as_slice(), &[0., 0., 0., 25.]);
+            assert_eq!(BaseSliderValue::new([]).as_slice(), &[0.]);
         }
     }
 
@@ -441,5 +593,63 @@ mod tests {
 
         assert_eq!(pushed, BaseSliderValue::from([70., 80., 90.]));
         assert_eq!(restored, BaseSliderValue::from([20., 80., 90.]));
+    }
+
+    #[test]
+    fn pointer_values_follow_orientation() {
+        let control = Bounds {
+            origin: point(px(10.), px(20.)),
+            size: size(px(100.), px(100.)),
+        };
+        let thumb_size = size(px(20.), px(20.));
+
+        for (orientation, pointer, expected) in [
+            (Axis::Horizontal, point(px(60.), px(70.)), 50.),
+            (Axis::Vertical, point(px(60.), px(45.)), 75.),
+        ] {
+            let model = model(orientation, BaseSliderThumbCollisionBehavior::Clamp, 0.);
+
+            assert_eq!(
+                model.value_at_pointer(pointer, control, px(0.), thumb_size),
+                expected,
+                "{orientation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn thumb_positions_follow_orientation_and_alignment() {
+        let control_size = size(px(100.), px(100.));
+        let thumb_size = size(px(20.), px(20.));
+
+        assert_eq!(
+            BaseSliderModel::aligned_offset(
+                px(100.),
+                px(20.),
+                0.,
+                BaseSliderThumbAlignment::Center,
+            ),
+            px(-10.)
+        );
+        assert_eq!(
+            BaseSliderModel::aligned_offset(px(100.), px(20.), 1., BaseSliderThumbAlignment::Edge,),
+            px(80.)
+        );
+
+        for (orientation, x, y) in [(Axis::Horizontal, 0.25, 0.5), (Axis::Vertical, 0.5, 0.75)] {
+            let model = model(orientation, BaseSliderThumbCollisionBehavior::Clamp, 0.);
+            let expected = point(relative(x).into(), relative(y).into());
+
+            for (control_size, thumb_size) in [
+                (Size::default(), thumb_size),
+                (control_size, Size::default()),
+            ] {
+                assert_eq!(
+                    model.thumb_position(control_size, thumb_size, 25.),
+                    expected,
+                    "{orientation:?}"
+                );
+            }
+        }
     }
 }
