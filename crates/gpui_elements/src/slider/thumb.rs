@@ -1,16 +1,17 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Axis, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement,
-    Styled, accesskit, div, prelude::FluentBuilder,
+    AnyElement, App, Axis, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
+    IntoElement, ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, accesskit, div, prelude::FluentBuilder,
 };
 
 use super::{BaseSliderRenderContext, ValueTextFormatter};
 
-/// A thumb that displays one slider value.
+/// A focusable thumb that controls one slider value.
 #[derive(Styled, ParentElement, StatefulInteractiveElement)]
 pub struct BaseSliderThumb {
+    element_id: ElementId,
     base: Stateful<Div>,
     #[style]
     style: StyleRefinement,
@@ -27,9 +28,12 @@ impl InteractiveElement for BaseSliderThumb {
 }
 
 impl BaseSliderThumb {
-    /// Creates a thumb with the supplied element ID.
+    /// Creates a thumb whose element ID identifies its persistent focus state.
     pub fn new(element_id: impl Into<ElementId>) -> Self {
+        let element_id = element_id.into();
+
         Self {
+            element_id: element_id.clone(),
             base: div().id(element_id),
             style: StyleRefinement::default(),
             children: Vec::new(),
@@ -60,8 +64,9 @@ impl BaseSliderThumb {
         self,
         context: &BaseSliderRenderContext,
         thumb_idx: usize,
+        window: &mut Window,
         cx: &mut App,
-    ) -> AnyElement {
+    ) -> (AnyElement, FocusHandle) {
         let values = &context.values;
         let model = context.model;
         let interaction = &context.interaction;
@@ -72,12 +77,15 @@ impl BaseSliderThumb {
         let position = model.thumb_position(control_size, thumb_size, value);
 
         let (effective_minimum, effective_maximum) = model.effective_bounds(values, thumb_idx);
+        let focus_handle = use_focus_handle(self.element_id.clone(), window, cx, None);
+
         let aria_label = self.aria_label.or_else(|| context.label.clone());
         let value_text_formatter = self
             .value_text_formatter
             .or_else(|| context.value_text_formatter.clone());
 
-        self.base
+        let thumb = self
+            .base
             .absolute()
             .role(Role::Slider)
             .when(context.disabled, |this| this.disabled(true))
@@ -98,6 +106,24 @@ impl BaseSliderThumb {
             .refine_style(&self.style)
             .children(self.children)
             .child(interaction.measure_bounds(Some(thumb_idx)))
-            .into_any_element()
+            .when(context.interactive, |this| this.track_focus(&focus_handle));
+
+        (thumb.into_any_element(), focus_handle)
     }
+}
+
+fn use_focus_handle(
+    base_id: impl Into<ElementId>,
+    window: &mut Window,
+    cx: &mut App,
+    focus_handle: Option<FocusHandle>,
+) -> FocusHandle {
+    focus_handle.unwrap_or_else(|| {
+        window
+            .use_keyed_state((base_id.into(), "state:focus_handle"), cx, |_window, cx| {
+                cx.focus_handle().tab_stop(true)
+            })
+            .read(cx)
+            .clone()
+    })
 }

@@ -13,7 +13,8 @@ mod model;
 mod parts;
 mod thumb;
 
-pub use model::{BaseSliderThumbAlignment, BaseSliderValue};
+pub use interaction::{BaseSliderChange, BaseSliderChangeReason, OnChange, OnCommit};
+pub use model::{BaseSliderThumbAlignment, BaseSliderThumbCollisionBehavior, BaseSliderValue};
 pub use parts::{BaseSliderControl, BaseSliderIndicator, BaseSliderLabel, BaseSliderTrack};
 pub use thumb::BaseSliderThumb;
 
@@ -34,6 +35,7 @@ pub struct BaseSlider {
     maximum: f32,
     step: f32,
     min_steps_between_values: usize,
+    collision_behavior: BaseSliderThumbCollisionBehavior,
     thumb_alignment: BaseSliderThumbAlignment,
     orientation: Axis,
     disabled: bool,
@@ -41,6 +43,8 @@ pub struct BaseSlider {
     control: Option<BaseSliderControl>,
     #[children]
     children: Vec<AnyElement>,
+    on_change: Option<OnChange>,
+    on_commit: Option<OnCommit>,
     value_text_formatter: Option<ValueTextFormatter>,
 }
 
@@ -65,7 +69,7 @@ impl BaseSlider {
     const MINIMUM_STEP: f32 = 0.0_f32.next_up();
 
     /// Creates a horizontal slider with the default numeric settings.
-    /// Attach a control before rendering.
+    /// Attach a control before rendering and a change handler to enable input.
     pub fn new(element_id: impl Into<ElementId>) -> Self {
         let element_id = element_id.into();
 
@@ -78,12 +82,15 @@ impl BaseSlider {
             maximum: Self::DEFAULT_MAXIMUM,
             step: Self::DEFAULT_STEP,
             min_steps_between_values: Self::DEFAULT_MIN_STEPS_BETWEEN_VALUES,
+            collision_behavior: BaseSliderThumbCollisionBehavior::Push,
             thumb_alignment: BaseSliderThumbAlignment::Edge,
             orientation: Axis::Horizontal,
             disabled: false,
             label: None,
             control: None,
             children: Vec::new(),
+            on_change: None,
+            on_commit: None,
             value_text_formatter: None,
         }
     }
@@ -134,7 +141,7 @@ impl BaseSlider {
         self
     }
 
-    /// Sets the positive, finite step used to describe the slider's increments.
+    /// Sets the positive, finite step used for snapping.
     /// With debug assertions disabled, non-finite inputs use [`Self::DEFAULT_STEP`]
     /// and nonpositive inputs clamp to the smallest positive float.
     pub fn step(mut self, step: f32) -> Self {
@@ -156,6 +163,13 @@ impl BaseSlider {
     /// The gap is limited to the available range.
     pub fn min_steps_between_values(mut self, steps: usize) -> Self {
         self.min_steps_between_values = steps;
+
+        self
+    }
+
+    /// Selects how pointer interactions handle collisions between thumbs.
+    pub fn thumb_collision_behavior(mut self, behavior: BaseSliderThumbCollisionBehavior) -> Self {
+        self.collision_behavior = behavior;
 
         self
     }
@@ -186,7 +200,7 @@ impl BaseSlider {
         self.orientation(Axis::Vertical)
     }
 
-    /// Applies disabled styles to the slider's parts.
+    /// Disables value changes and applies disabled styles to the slider's parts.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
 
@@ -200,7 +214,7 @@ impl BaseSlider {
         self
     }
 
-    /// Adds the control and its track.
+    /// Adds the clickable control and its track.
     pub fn control(mut self, control: BaseSliderControl) -> Self {
         self.control = Some(control);
 
@@ -216,18 +230,53 @@ impl BaseSlider {
 
         self
     }
+
+    /// Registers a handler for proposed value changes.
+    /// Update the application's stored values and render again to accept a change.
+    pub fn on_change(
+        mut self,
+        handler: impl Fn(&BaseSliderChange, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_change = Some(Rc::new(handler));
+
+        self
+    }
+
+    /// Registers a handler for completed changes.
+    /// Runs after a changed pointer gesture ends or a touch tap changes a value.
+    pub fn on_commit(
+        mut self,
+        handler: impl Fn(&BaseSliderChange, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_commit = Some(Rc::new(handler));
+
+        self
+    }
 }
 
 impl RenderOnce for BaseSlider {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let model = self.model(self.values.len());
         let values = model.normalized_values(&self.values);
-        let interaction = BaseSliderInteraction::new(&self.element_id, window, cx);
+        let interactive = !self.disabled && self.on_change.is_some();
+
+        let interaction = BaseSliderInteraction::new(
+            &self.element_id,
+            values.clone(),
+            interactive,
+            self.on_change.clone(),
+            self.on_commit.clone(),
+            window,
+            cx,
+        );
+
+        let rendered_values = interaction.rendered_values(&values, cx);
 
         let context = BaseSliderRenderContext {
-            values,
+            values: rendered_values,
             model,
             interaction,
+            interactive,
             disabled: self.disabled,
             label: self
                 .label
@@ -240,7 +289,7 @@ impl RenderOnce for BaseSlider {
             .control
             .take()
             .expect("a slider requires a control")
-            .render(&context, cx);
+            .render(&context, window, cx);
 
         self.base
             .relative()
@@ -257,6 +306,7 @@ struct BaseSliderRenderContext {
     values: BaseSliderValue,
     model: BaseSliderModel,
     interaction: BaseSliderInteraction,
+    interactive: bool,
     disabled: bool,
     label: Option<SharedString>,
     value_text_formatter: Option<ValueTextFormatter>,

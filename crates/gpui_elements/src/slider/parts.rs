@@ -1,8 +1,10 @@
 use gpui::{
-    AnyElement, App, Axis, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    MouseButton, ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px, relative,
+    AnyElement, App, Axis, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
+    IntoElement, MouseButton, ParentElement, Role, SharedString, Stateful,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
+    relative,
 };
+use smallvec::SmallVec;
 
 use super::{BaseSliderRenderContext, BaseSliderThumb};
 
@@ -101,7 +103,12 @@ impl BaseSliderTrack {
         self
     }
 
-    fn render(self, context: &BaseSliderRenderContext, cx: &mut App) -> AnyElement {
+    fn render(
+        self,
+        context: &BaseSliderRenderContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> RenderedBaseSliderTrack {
         debug_assert_eq!(
             self.thumbs.len(),
             context.values.len(),
@@ -118,6 +125,7 @@ impl BaseSliderTrack {
                 this.child(indicator.render(context))
             })
             .children(self.children);
+        let mut focus_handles = SmallVec::new();
 
         for (thumb_idx, thumb) in self
             .thumbs
@@ -125,13 +133,22 @@ impl BaseSliderTrack {
             .take(context.values.len())
             .enumerate()
         {
-            let thumb = thumb.render(context, thumb_idx, cx);
+            let (thumb, focus_handle) = thumb.render(context, thumb_idx, window, cx);
 
             element = element.child(thumb);
+            focus_handles.push(focus_handle);
         }
 
-        element.into_any_element()
+        RenderedBaseSliderTrack {
+            element: element.into_any_element(),
+            focus_handles,
+        }
     }
+}
+
+struct RenderedBaseSliderTrack {
+    element: AnyElement,
+    focus_handles: SmallVec<[FocusHandle; 2]>,
 }
 
 /// Shows the selected portion of the slider track.
@@ -193,7 +210,7 @@ impl BaseSliderIndicator {
     }
 }
 
-/// Contains the slider track and any additional control elements.
+/// The clickable area of a slider.
 #[derive(Styled, ParentElement, StatefulInteractiveElement)]
 pub struct BaseSliderControl {
     base: Stateful<Div>,
@@ -228,20 +245,37 @@ impl BaseSliderControl {
         self
     }
 
-    pub(super) fn render(self, context: &BaseSliderRenderContext, cx: &mut App) -> AnyElement {
+    pub(super) fn render(
+        self,
+        context: &BaseSliderRenderContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let track = self
             .track
             .expect("a slider control requires a track")
-            .render(context, cx);
+            .render(context, window, cx);
         let base = self
             .base
             .relative()
             .size_full()
             .when(context.disabled, |this| this.disabled(true))
             .refine_style(&self.style)
-            .child(track)
+            .child(track.element)
             .children(self.children)
             .child(context.interaction.measure_bounds(None));
+
+        if context.interactive {
+            return context
+                .interaction
+                .install_pointer(
+                    base,
+                    context.values.clone(),
+                    context.model,
+                    track.focus_handles,
+                )
+                .into_any_element();
+        }
 
         base.child(div().absolute().inset_0().on_mouse_down(
             MouseButton::Left,
