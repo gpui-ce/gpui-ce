@@ -131,6 +131,10 @@ pub trait AppContextGlobal {
 
     /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
     /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_by_id`](Self::remove_global_by_id).
+    fn insert_global(&mut self, id: impl AnyHash, entity: AnyEntity);
+
+    /// Stores an entity in the app such that it wont be dropped if no other entities are referencing it.
+    /// Entities stored this way are dropped when the app is dropped, unless otherwise removed by [`remove_global_by_id`](Self::remove_global_by_id).
     fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl AnyHash,
@@ -186,6 +190,28 @@ pub trait AppContextGlobal {
         let entity = self.new(|_| T::default());
         self.insert_global_by_id(id, entity.clone());
         entity
+    }
+
+    /// Drains globals of stored by the old key, and inserts them under the new key.
+    fn remap_global_ids(
+        &mut self,
+        old_key: impl gpui::AnyHash,
+        new_key: impl gpui::AnyHash + Clone,
+    ) {
+        let entities = self.drain_globals(old_key).collect::<Vec<_>>();
+        for entity in entities {
+            self.insert_global(new_key.clone(), entity);
+        }
+    }
+
+    /// Iterates the provided tuple list, draining all globals stored by the first tuple value and inserting each under the second tuple value.
+    fn remap_global_ids_iter(
+        &mut self,
+        iter: impl IntoIterator<Item = (impl gpui::AnyHash, impl gpui::AnyHash + Clone)>,
+    ) {
+        for (old_key, new_key) in iter.into_iter() {
+            self.remap_global_ids(old_key, new_key);
+        }
     }
 
     /// Inserts a global stored by the type id of `T`.
@@ -471,6 +497,11 @@ where
     #[allow(deprecated)]
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
         into_owned_iter(self.upgrade().borrow().global_entities())
+    }
+
+    fn insert_global(&mut self, id: impl AnyHash, entity: AnyEntity) {
+        let mut app = self.upgrade_mut();
+        app.borrow_mut().insert_global(id, entity);
     }
 
     fn insert_global_by_id<T: 'static>(

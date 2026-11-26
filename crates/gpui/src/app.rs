@@ -3555,15 +3555,19 @@ impl AppContextGlobal for App {
         self.iter_globals(TypeId::of::<T>())
     }
 
+    fn insert_global(&mut self, id: impl AnyHash, entity: AnyEntity) {
+        self.global_entry_mut(GenericId::new(id))
+            .or_default()
+            .push(entity);
+    }
+
     fn insert_global_by_id<T: 'static>(
         &mut self,
         id: impl AnyHash,
         entity: impl Into<EntityBuilder<T>>,
     ) -> Entity<T> {
         let entity = entity.into().build(self);
-        self.global_entry_mut(GenericId::new(id))
-            .or_default()
-            .push(entity.clone().into_any());
+        self.insert_global(id, entity.clone().into_any());
         entity
     }
 
