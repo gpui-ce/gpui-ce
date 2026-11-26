@@ -1,14 +1,13 @@
+use crate::{
+    AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Motion,
+    ParentElement, SpringAnimation, SpringConfig, SpringDescription, SpringPlayback, SpringState,
+    SpringTarget, Window, context::*,
+};
 use scheduler::Instant;
+use smallvec::SmallVec;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-use crate::{
-    AnyElement, App, AppContext, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, Motion, ParentElement, SpringAnimation, SpringConfig, SpringDescription,
-    SpringPlayback, SpringState, SpringTarget, Window,
-};
-
 pub use easing::*;
-use smallvec::SmallVec;
 
 /// An animation that can be applied to an element.
 #[derive(Clone)]

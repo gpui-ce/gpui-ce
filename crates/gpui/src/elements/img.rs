@@ -1,12 +1,11 @@
 use crate::{
-    AnyElement, AnyImageCache, App, AppContext, Asset, AssetLogger, Bounds, DefiniteLength,
-    Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
-    RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task, Window,
+    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, Element, ElementId,
+    Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
+    Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
+    SharedString, SharedUri, StyleRefinement, Styled, Task, Window, context::AppContextEntity,
     decode_static_image, decode_static_image_from_decoder, px,
 };
 use anyhow::Result;
-
 use futures::Future;
 use gpui_util::ResultExt;
 use image::{
@@ -629,11 +628,25 @@ impl Asset for ImageAssetLoader {
         // TODO: Can we make SVGs always rescale?
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
-        let asset_registry = cx.assets().clone();
+
+        enum ResolvedLocation {
+            Path(Arc<Path>),
+            Uri(SharedUri),
+            Embedded(SharedString, Option<crate::AssetEntry>),
+        }
+        let location = match &source {
+            Resource::Path(path) => ResolvedLocation::Path(path.clone()),
+            Resource::Uri(uri) => ResolvedLocation::Uri(uri.clone()),
+            Resource::Embedded(path) => {
+                let entry = cx.get_asset(path.clone()).cloned();
+                ResolvedLocation::Embedded(path.clone(), entry)
+            }
+        };
+
         async move {
-            let bytes = match source.clone() {
-                Resource::Path(uri) => fs::read(uri.as_ref())?,
-                Resource::Uri(uri) => {
+            let bytes = match location {
+                ResolvedLocation::Path(uri) => fs::read(uri.as_ref())?,
+                ResolvedLocation::Uri(uri) => {
                     use anyhow::Context as _;
 
                     let response = client
@@ -652,15 +665,15 @@ impl Asset for ImageAssetLoader {
                     }
                     response.body
                 }
-                Resource::Embedded(path) => {
-                    let data = asset_registry.load(&path);
-                    if let Some(data) = data {
-                        data.to_vec()
-                    } else {
-                        return Err(ImageCacheError::Asset(
+                ResolvedLocation::Embedded(path, asset_entry) => {
+                    let make_err = || {
+                        ImageCacheError::Asset(
                             format!("Embedded resource not found: {}", path).into(),
-                        ));
-                    }
+                        )
+                    };
+                    let entry = asset_entry.ok_or_else(make_err)?;
+                    let data = entry.load().ok_or_else(make_err)?;
+                    data.to_vec()
                 }
             };
 
