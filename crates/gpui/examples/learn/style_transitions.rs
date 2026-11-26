@@ -1,14 +1,15 @@
-//! Transition Example
-//!
-//! This example demonstrates declarative style transitions in GPUI.
+
+ //! Transition Example
+ //!
+ //! This example demonstrates declarative style transitions in GPUI.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba, Window,
-    WindowBounds, WindowOptions, actions, div, ease_in_out, millis, prelude::*, px, rgb, size,
-    spring,
+    actions, div, ease_in_out, millis, prelude::*, px, rgb, size, spring, AnyElement, App,
+    AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba, Window,
+    WindowBounds, WindowOptions,
 };
 use smallvec::SmallVec;
 
@@ -41,8 +42,8 @@ impl RenderOnce for Button {
         const ACTIVE_STRENGTH: f32 = 0.3;
 
         let base_color: Rgba = rgb(0x663399);
-        let hover_color = base_color.lerp(&rgb(0x000), HOVER_STRENGTH);
-        let active_color = base_color.lerp(&rgb(0x000), ACTIVE_STRENGTH);
+        let hover_color = base_color.lerp(&rgb(0x000000), HOVER_STRENGTH);
+        let active_color = base_color.lerp(&rgb(0x000000), ACTIVE_STRENGTH);
 
         div()
             .id(self.id)
@@ -53,15 +54,26 @@ impl RenderOnce for Button {
             .pt(px(10.))
             .pb(px(10.))
             .bg(base_color)
+            .scale(1.0)
             .text_color(rgb(0x110F15))
             .children(self.children)
             .transitions(|transitions| {
                 transitions
                     .bg(millis(200).with_easing(ease_in_out))
                     .p(spring(600.0, 22.0, 1.0))
+                    .scale(millis(200).with_easing(ease_in_out))
             })
-            .hover_style(|refinement| refinement.bg(hover_color).p(px(50.)))
-            .active_style(|refinement| refinement.bg(active_color))
+            .hover_style(|refinement| {
+                refinement
+                    .bg(hover_color)
+                    .p(px(50.))
+                    .scale(0.97)
+            })
+            .active_style(|refinement| {
+                refinement
+                    .bg(active_color)
+                    .scale(0.94)
+            })
     }
 }
 
@@ -85,6 +97,7 @@ impl Render for StyleTransitionsExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(650.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| StyleTransitionsExample),
