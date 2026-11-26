@@ -521,3 +521,16 @@ fn into_owned_iter<'a, T>(
 ) -> <Vec<T> as IntoIterator>::IntoIter {
     iter.collect::<Vec<_>>().into_iter()
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::TestAppContext;
+
+    #[gpui::test]
+    fn test_insert_global(cx: &mut TestAppContext) {
+        let entity = cx.insert_global_by_id("key", EntityBuilder::<&'static str>::new(|_| "value"));
+        let found = cx.get_global_by_id::<&'static str>("key");
+        assert_eq!(found, Some(entity));
+    }
+}
