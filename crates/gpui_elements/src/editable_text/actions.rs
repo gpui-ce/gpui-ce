@@ -1,76 +1,97 @@
-//! Module containing user-input actions that are bound by EditableText elements
+//! Editing actions and their default keyboard bindings.
+//!
+//! The actions are command structs; their shortcuts are defined separately by [`default_bindings`].
+//! Register that collection in the app's key bindings at startup. The supplied fields forward
+//! dispatched commands to [`EditableTextActionHandler`] on
+//! [`EditableTextState`](crate::editable_text::EditableTextState). Implementing the trait alone does
+//! not register key bindings.
+//!
+//! The standard [`EditableTextState`](crate::editable_text::EditableTextState) applies the operation
+//! named by each action:
+//!
+//! * Deletion removes the selection. Without a selection, it removes the requested cluster, word, or
+//!   hard-line range. Hard lines end at newlines, not soft wraps.
+//! * With a current layout, cluster, word, and visual-line navigation follows the laid-out text.
+//!   Without one, it falls back to storage boundaries. Document-start and document-end commands
+//!   always use storage bounds.
+//! * Deletion uses logical ranges, so in bidirectional text `DeleteLeft` need not remove the cluster
+//!   that `NavLeft` would cross. Directional selection extends from the existing anchor.
+//! * In a single-line field, [`Enter`] does nothing and [`Tab`] inserts a tab. A multi-line
+//!   field inserts either character.
+//! * With input disabled, navigation, selection, and copying a non-empty selection remain
+//!   available; insertion, deletion, cut, and paste do nothing.
 use gpui::{InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
-/// The key context used for EditableText element keybindings.
+/// The key context that editable text elements set for their default bindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "EditableText";
 
 gpui::actions!(
     actions,
     [
-        /// Blur focus from the input.
+        /// Clears the selection, moves the caret to the start, and removes focus from the field.
         Escape,
-        /// Insert a newline at the cursor position.
+        /// Inserts a newline at the caret position. Does nothing in a single-line field.
         Enter,
-        /// Insert a tab character at the cursor position.
+        /// Inserts a tab character at the caret position.
         Tab,
-        /// Delete the character before the cursor.
+        /// Deletes the selection, or the preceding text cluster when nothing is selected.
         DeleteLeft,
-        /// Delete the character after the cursor.
+        /// Deletes the selection, or the following text cluster when nothing is selected.
         DeleteRight,
-        /// Delete the word before the cursor.
+        /// Deletes the selection, or back to the preceding word boundary.
         DeleteWordLeft,
-        /// Delete the word after the cursor.
+        /// Deletes the selection, or forward to the following word boundary.
         DeleteWordRight,
-        /// Delete from the cursor to the beginning of the line.
+        /// Deletes the selection, or from the caret to the hard-line start.
         DeleteToLineStart,
-        /// Delete from the cursor to the end of the line.
+        /// Deletes the selection, or from the caret to the hard-line end.
         DeleteToLineEnd,
-        /// Move the cursor one character to the left.
+        /// Moves the caret one text cluster to the left.
         NavLeft,
-        /// Move the cursor one character to the right.
+        /// Moves the caret one text cluster to the right.
         NavRight,
-        /// Move the cursor up one visual line.
+        /// Moves up one visual line. A single-line field moves to its only visual line's start.
         NavUp,
-        /// Move the cursor down one visual line.
+        /// Moves down one visual line. A single-line field moves to its only visual line's end.
         NavDown,
-        /// Move cursor to the start of the current line.
+        /// Moves to the start of the current hard line, ignoring soft wraps.
         NavLineStart,
-        /// Move cursor to the end of the current line.
+        /// Moves to the end of the current hard line, ignoring soft wraps.
         NavLineEnd,
-        /// Move cursor to the beginning of the content.
+        /// Moves the caret to the beginning of the content.
         NavDocumentStart,
-        /// Move cursor to the end of the content.
+        /// Moves the caret to the end of the content.
         NavDocumentEnd,
-        /// Move cursor one word to the left.
+        /// Moves the caret one word to the left.
         NavWordLeft,
-        /// Move cursor one word to the right.
+        /// Moves the caret one word to the right.
         NavWordRight,
-        /// Select all text content.
+        /// Selects all text content.
         SelectAll,
-        /// Extend selection one character to the left.
+        /// Extends the selection one text cluster to the left.
         SelectLeft,
-        /// Extend selection one character to the right.
+        /// Extends the selection one text cluster to the right.
         SelectRight,
-        /// Extend selection up one visual line.
+        /// Extends the selection up one visual line. In a single-line field, extends to the document start.
         SelectUp,
-        /// Extend selection down one visual line.
+        /// Extends the selection down one visual line. In a single-line field, extends to the document end.
         SelectDown,
-        /// Extend selection to the beginning of the content.
+        /// Extends the selection to the beginning of the content.
         SelectDocumentStart,
-        /// Extend selection to the end of the content.
+        /// Extends the selection to the end of the content.
         SelectDocumentEnd,
-        /// Extend selection one word to the left.
+        /// Extends the selection one word to the left.
         SelectWordLeft,
-        /// Extend selection one word to the right.
+        /// Extends the selection one word to the right.
         SelectWordRight,
-        /// Cut selected text to clipboard.
+        /// Cuts the selection, or the current hard line and an adjacent line break.
         Cut,
-        /// Copy selected text to clipboard.
+        /// Copies selected text. With no selection, leaves the clipboard unchanged.
         Copy,
-        /// Paste from clipboard at the cursor position.
+        /// Replaces marked text or the selection with clipboard text, or inserts at the caret.
         Paste,
-        /// Undo the last edit.
+        /// Undo the last edit. Edits made in quick succession undo together as one step.
         Undo,
         /// Redo the last undone edit.
         Redo,
@@ -79,11 +100,16 @@ gpui::actions!(
     ]
 );
 
-/// Creates a collection of default keystroke bindings for EditableText actions.
-/// See [`ActionBindingCollection`](gpui::ActionBindingCollection) docs on how to override these bindings.
+/// Creates the default binding collection for editable-text actions.
+/// See [`ActionBindingCollection`](gpui::ActionBindingCollection) for how bindings are built.
 ///
-/// Apple keyboards dont have Home or End keys, so there are common bindings that replace those keys.
-/// | Action                | All         | Linux & Windows           | MacOS           |
+/// On macOS, Command-arrow bindings handle line and document navigation. On other targets,
+/// Home and End handle line navigation, while Ctrl+Home and Ctrl+End handle document navigation.
+/// Enter and Tab are bound on every platform; single-line fields ignore Enter.
+/// In the bindings below, `secondary` means Command on macOS and Control on
+/// other platforms.
+///
+/// | Action                | All         | Other targets             | macOS           |
 /// | --------------------- | ----------- | ------------------------- | --------------- |
 /// | Escape                | escape      |                           |                 |
 /// | Enter                 | enter       |                           |                 |
@@ -120,6 +146,10 @@ gpui::actions!(
 /// | Redo                  |             | ctrl + shift + z          | cmd + shift + z  |
 /// | ShowCharacterPalette  |             | ctrl + space              | cmd + space      |
 ///
+/// The collection cannot remove a default keystroke yet; callers can add additional
+/// keystrokes with [`ActionBindingCollection::with`](gpui::ActionBindingCollection::with)
+/// before converting the collection to key bindings.
+///
 /// TODO: Collection does not supply a way to unbind a default keystroke
 pub fn default_bindings() -> gpui::ActionBindingCollection {
     let mut bindings = gpui::ActionBindingCollection::default()
@@ -155,7 +185,8 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
             .with::<DeleteWordRight>("alt-delete")
             .with::<DeleteToLineStart>("cmd-backspace")
             .with::<DeleteToLineEnd>("ctrl-k")
-            // Mac keyboards don't have Home/End keys, so cmd-left/right are standard
+            // Mac keyboards have no Home/End keys, so Command-arrows are the standard for line
+            // and document navigation.
             .with::<NavLineStart>("cmd-left")
             .with::<NavLineEnd>("cmd-right")
             .with::<NavDocumentStart>("cmd-up")
@@ -192,82 +223,86 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
     bindings
 }
 
-/// Declares stubs for all editable-text actions that an element's state entity can implement.
+/// The editing operations an editable-text element dispatches actions to.
+///
+/// The element installs listeners that forward dispatched actions through its state entity to
+/// these methods. Editing and pointer methods do nothing by default; override the operations your
+/// state supports. [`Self::show_character_palette`] instead opens the platform palette by default.
 pub trait EditableTextActionHandler<Context>: Sized {
-    /// Blur focus from the input.
+    /// Clears the selection, moves the caret to the start, and removes focus from the field.
     fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Insert a newline at the cursor position.
+    /// Inserts a newline at the caret. Single-line fields ignore it.
     fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Context) {}
-    /// Insert a tab character at the cursor position.
+    /// Inserts a tab at the caret.
     fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Delete the character before the cursor.
+    /// Deletes the selection, or the preceding text cluster when nothing is selected.
     fn delete_left(&mut self, _: &DeleteLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Delete the character after the cursor.
+    /// Deletes the selection, or the following text cluster when nothing is selected.
     fn delete_right(&mut self, _: &DeleteRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Delete the word before the cursor.
+    /// Deletes the selection, or the text back to the preceding word boundary.
     fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Delete the word after the cursor.
+    /// Deletes the selection, or the text forward to the following word boundary.
     fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Delete from the cursor to the beginning of the line.
+    /// Deletes the selection, or the text from the caret to the hard-line start.
     fn delete_to_line_start(&mut self, _: &DeleteToLineStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Delete from the cursor to the end of the line.
+    /// Deletes the selection, or the text from the caret to the hard-line end.
     fn delete_to_line_end(&mut self, _: &DeleteToLineEnd, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Move the cursor one character to the left.
+    /// Moves the caret one visual text cluster left.
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Move the cursor one character to the right.
+    /// Moves the caret one visual text cluster right.
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Move the cursor up one visual line.
+    /// Moves up one visual line. A single-line field moves to the start of its only line.
     fn nav_up(&mut self, _: &NavUp, _w: &mut Window, _cx: &mut Context) {}
-    /// Move the cursor down one visual line.
+    /// Moves down one visual line. A single-line field moves to the end of its only line.
     fn nav_down(&mut self, _: &NavDown, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor to the start of the current line.
+    /// Moves to the start of the current hard line, ignoring soft wraps.
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor to the end of the current line.
+    /// Moves to the end of the current hard line, ignoring soft wraps.
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor to the start of the document.
+    /// Moves to the start of the document.
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor to the end of the document.
+    /// Moves to the end of the document.
     fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor one word to the left.
+    /// Moves one word visually left.
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Move cursor one word to the right.
+    /// Moves one word visually right.
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Select the entire document.
+    /// Selects the entire document.
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection one character to the left.
+    /// Extends the selection one visual text cluster left.
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection one character to the right.
+    /// Extends the selection one visual text cluster right.
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection up one visual line.
+    /// Extends the selection up one visual line. A single-line field extends to the document start.
     fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection down one visual line.
+    /// Extends the selection down one visual line. A single-line field extends to the document end.
     fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection to the beginning of the document.
+    /// Extends the selection to the start of the document.
     fn select_start(&mut self, _: &SelectDocumentStart, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection to the end of the document.
+    /// Extends the selection to the end of the document.
     fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection one word to the left.
+    /// Extends the selection one word visually left.
     fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
-    /// Extend selection one word to the right.
+    /// Extends the selection one word visually right.
     fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Cut selected text to clipboard.
+    /// Cuts the selection, or the current hard line and an adjacent line break when nothing is selected.
     fn cut(&mut self, _: &Cut, _w: &mut Window, _cx: &mut Context) {}
-    /// Copy selected text to clipboard.
+    /// Copies the selection, leaving the clipboard unchanged when the selection is empty.
     fn copy(&mut self, _: &Copy, _w: &mut Window, _cx: &mut Context) {}
-    /// Paste from clipboard at the cursor position.
+    /// Replaces an IME marked range or the selection with clipboard text, or inserts it at the caret.
     fn paste(&mut self, _: &Paste, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Undo the last edit.
+    /// Undoes the last edit, grouping quick successive edits.
     fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context) {}
-    /// Redo the last undone edit.
+    /// Redoes the last undone edit.
     fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context) {}
 
-    /// Show the platform character palette.
+    /// Shows the platform character palette.
     fn show_character_palette(
         &mut self,
         _: &ShowCharacterPalette,
@@ -277,6 +312,8 @@ pub trait EditableTextActionHandler<Context>: Sized {
         window.show_character_palette();
     }
 
+    /// Called when the left mouse button is pressed inside the field. `text_position`
+    /// is the pointer position relative to the top-left of the text.
     fn on_mouse_down(
         &mut self,
         _event: &gpui::MouseDownEvent,
@@ -285,7 +322,10 @@ pub trait EditableTextActionHandler<Context>: Sized {
         _cx: &mut Context,
     ) {
     }
+    /// Called when the left mouse button is released in the window, even outside the field.
     fn on_mouse_up(&mut self, _event: &gpui::MouseUpEvent, _w: &mut Window, _cx: &mut Context) {}
+    /// Called when the pointer moves in the window, including beyond the field while dragging
+    /// a selection. `text_position` is relative to the top-left of the text.
     fn on_mouse_move(
         &mut self,
         _event: &gpui::MouseMoveEvent,
@@ -296,8 +336,8 @@ pub trait EditableTextActionHandler<Context>: Sized {
     }
 }
 
-/// Registers an handler function of [`EditableTextActionHandler`]
-/// which is processed via the return value of [`EditableTextActionElement::state_entity_rc`].
+/// Registers an action listener that upgrades the element's state entity and forwards each
+/// action to the corresponding [`EditableTextActionHandler`] method.
 macro_rules! register_action {
     ($action_element:expr, $func:ident) => {{
         let entity_rc = $action_element.state_entity_rc().clone();
@@ -314,7 +354,8 @@ macro_rules! register_action {
     }};
 }
 
-/// Generic trait to support an element backed by an internal state entity to bind to all editable-text input actions.
+/// Connects an interactive element to its state entity and registers listeners for all
+/// editable-text actions.
 pub(super) trait EditableTextActionElement<State> {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<State>>>;
 

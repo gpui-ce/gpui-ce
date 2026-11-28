@@ -1,4 +1,4 @@
-//! Element library written alongside gpui to be as unopinionated as possible while still providing fundamental components.
+//! Fundamental GPUI elements maintained alongside GPUI.
 
 pub mod editable_text;
 pub mod switch;

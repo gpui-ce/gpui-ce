@@ -122,8 +122,8 @@ impl BenchReport {
 
     /// Creates a report that counts frame budget overruns against `frame_budget_nanos`.
     ///
-    /// Don't pass `0`. [`BenchReport::foreground_work`] and [`BenchReport::print`] divide by
-    /// this value when they have samples to report, so they panic with `0`.
+    /// Use a nonzero budget. [`BenchReport::foreground_work`] and [`BenchReport::print`]
+    /// can panic with a zero budget when they report positive foreground timings.
     pub fn with_frame_budget_nanos(frame_budget_nanos: u128) -> Self {
         Self {
             frame_snapshot: Rc::new(RefCell::new(WindowFrameSnapshot::new())),
@@ -506,7 +506,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
     ///
     /// # Panics
     ///
-    /// Panics if the platform isn't built with [`bench_platform`].
+    /// Panics if the platform's background executor lacks a [`ThreadedDispatcher`].
     pub fn new(
         platform: Rc<dyn Platform>,
         benchmark_name: Option<&'static str>,
@@ -522,7 +522,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
     ///
     /// # Panics
     ///
-    /// Panics if the platform isn't built with [`bench_platform`].
+    /// Panics if the platform's background executor lacks a [`ThreadedDispatcher`].
     #[doc(hidden)]
     pub fn new_with_platform_and_report(
         platform: Rc<dyn Platform>,
@@ -666,9 +666,9 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
     /// Measures a GPUI task to completion using Criterion's iteration loop.
     ///
-    /// Each iteration calls `benchmark`, which returns the task to time. The task runs
-    /// to completion on the foreground thread inside the timed interval, and its output
-    /// is dropped after the interval ends. The task may depend on foreground work,
+    /// Each iteration calls `benchmark`, which returns the task to time. The benchmark
+    /// waits for it on the foreground thread inside the timed interval, and drops its
+    /// output after the interval ends. The task may depend on foreground work,
     /// background work, timers, or external workers that wake GPUI tasks.
     ///
     /// Any window draws triggered by the task are recorded into the benchmark's frame
@@ -752,9 +752,9 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
     /// Measures how long one update of `view` takes to produce a presented frame.
     ///
     /// Each iteration runs `update` on `view` inside the window that holds it. Flushing
-    /// the update's effects draws the window, and the frame is then presented, which
-    /// includes submitting it to the GPU when a renderer is configured. The entity must
-    /// be in the window's render tree, such as the root view or one of its children.
+    /// the update's effects draws the window if the update invalidates it. The benchmark
+    /// presents the frame if needed, submitting it to the GPU when a renderer is configured.
+    /// The entity must be in the window's render tree.
     ///
     /// Frame events come from the GPUI frame profiler
     /// ([`crate::profiler::record_frame_event`]), which is enabled for the duration of the measurement.
@@ -817,7 +817,8 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
 
     /// Opens a window with an empty root view, runs queued work, and returns a [`BenchWindowContext`] for it.
     ///
-    /// The window is sized to the test display, like [`TestAppContext::add_window`](crate::TestAppContext::add_window).
+    /// The window opens in windowed mode with the bounds of the primary display, or the
+    /// fallback bounds from [`Bounds::maximized`] when no display is available.
     ///
     /// # Panics
     ///

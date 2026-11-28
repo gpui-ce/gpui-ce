@@ -27,8 +27,8 @@ use collections::HashMap;
 slotmap::new_key_type! {
     /// Identifies an entity within the app.
     ///
-    /// Two entities never share an id, even after one has been released and its slot is reused. Get the
-    /// id of a handle with [`Entity::entity_id`] or [`AnyEntity::entity_id`].
+    /// The id includes a slot and its generation, so reusing a slot normally gives the new entity a
+    /// different id. Get the id of a handle with [`Entity::entity_id`] or [`AnyEntity::entity_id`].
     pub struct EntityId;
 }
 
@@ -41,10 +41,8 @@ impl From<u64> for EntityId {
 impl EntityId {
     /// Returns the id as a [`NonZeroU64`](std::num::NonZeroU64).
     ///
-    /// # Panics
-    ///
-    /// Panics if the id's value is zero. GPUI never assigns that value, but an id built from `0` with
-    /// `From<u64>` does have it.
+    /// The encoded slot-map key has a nonzero generation, even when the id was constructed with
+    /// `From<u64>`.
     pub fn as_non_zero_u64(self) -> NonZeroU64 {
         NonZeroU64::new(self.0.as_ffi()).unwrap()
     }
@@ -442,10 +440,10 @@ impl std::fmt::Debug for AnyEntity {
 /// [`Entity::read`], change it with [`Entity::update`], and call [`Entity::downgrade`] for a
 /// [`WeakEntity`] that doesn't keep it alive.
 ///
-/// Cloning is cheap. The clone is another handle to the same value, and two handles compare equal
-/// when they refer to the same entity.
+/// Cloning creates another handle to the same value. Within an app, handles compare equal when
+/// they refer to the same entity. Equality compares only entity IDs, which can collide across apps.
 ///
-/// When the last strong handle is dropped, GPUI releases the value at the end of the current update.
+/// When the last strong handle is dropped, GPUI releases the value during the next effect flush.
 /// See [ownership and data flow](crate::_documentation::concepts::ownership) for the model.
 ///
 /// # Examples
@@ -495,7 +493,7 @@ impl<T: 'static> Entity<T> {
 
     /// Returns the id of the entity.
     ///
-    /// Two handles have the same id exactly when they refer to the same entity.
+    /// Compare ids within the same app. Different apps can assign the same id.
     #[inline]
     pub fn entity_id(&self) -> EntityId {
         self.any_entity.entity_id
@@ -608,6 +606,11 @@ impl<T: 'static> Entity<T> {
     /// The guard borrows `cx` for as long as it lives. When the guard is dropped, the entity is notified,
     /// as if you had called [`Context::notify`]. Use [`Entity::update`] when the change needs a
     /// [`Context`].
+    ///
+    /// # Panics
+    ///
+    /// An async or test context can reject direct mutable borrows. Use [`Entity::update`] in those
+    /// contexts.
     #[inline]
     pub fn as_mut<'a, C: AppContext>(&self, cx: &'a mut C) -> GpuiBorrow<'a, T> {
         cx.as_mut(self)
@@ -768,8 +771,8 @@ impl AnyWeakEntity {
     /// a strong handle makes the check fail. The check needs the leak detector, which is enabled in tests
     /// and with the `leak-detection` feature.
     ///
-    /// GPUI releases an entity when the update that dropped its last handle finishes. Run an update before
-    /// you call this, as the example does.
+    /// GPUI releases the value during an effect flush. Run an update after dropping the last handle
+    /// before calling this, as the example does.
     ///
     /// # Examples
     ///
@@ -798,8 +801,7 @@ impl AnyWeakEntity {
     /// # Panics
     ///
     /// - Panics if any strong handles to the entity are still alive.
-    /// - Panics if the entity was dropped in the current update. Its resources are kept until that update
-    ///   finishes.
+    /// - Panics if the entity is still waiting for an effect flush to release its value.
     #[cfg(any(test, feature = "leak-detection"))]
     pub fn assert_released(&self) {
         self.entity_ref_counts

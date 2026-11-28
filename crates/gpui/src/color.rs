@@ -6,7 +6,18 @@ use std::fmt::{self, Display, Formatter};
 // Re-exported for api maintenance
 pub use palette::{Hsla, rgb::Rgba};
 
-/// Convert an RGB hex color code number to a color type
+/// Creates an opaque [`Rgba`] color from a `0xRRGGBB` hex number.
+///
+/// The highest byte of `hex` is ignored, and the alpha is `1.0`. Use [`rgba`] for a color
+/// with alpha.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::rgb;
+///
+/// assert_eq!(rgb(0xffffff).alpha, 1.0);
+/// ```
 pub fn rgb(hex: u32) -> Rgba {
     let [_, r, g, b] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
     Rgba {
@@ -15,21 +26,27 @@ pub fn rgb(hex: u32) -> Rgba {
     }
 }
 
-/// Convert an RGBA hex color code number to [`Rgba`]
+/// Creates an [`Rgba`] color from a `0xRRGGBBAA` hex number.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::rgba;
+///
+/// let half_red = rgba(0xff000080);
+/// assert!((half_red.alpha - 128.0 / 255.0).abs() < 1e-6);
+/// ```
 pub fn rgba(hex: u32) -> Rgba {
     let [r, g, b, a] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
     Rgba::new(r, g, b, a)
 }
 
-/// Convert an sRGB color to GPUI's HSL-with-alpha representation.
-///
-/// This is the explicit conversion boundary for APIs that store [`Hsla`]. It
-/// avoids exposing Palette's conversion traits to applications and examples.
+/// Converts an sRGB [`Rgba`] color to [`Hsla`], preserving alpha.
 pub fn rgb_to_hsla(color: Rgba) -> Hsla {
     color.into_color()
 }
 
-/// Convert GPUI's HSL-with-alpha representation to sRGB.
+/// Converts an [`Hsla`] color to sRGB [`Rgba`], keeping the alpha.
 pub fn hsla_to_rgba(color: Hsla) -> Rgba {
     color.into_color()
 }
@@ -60,7 +77,14 @@ pub fn apply_pixel_opacity(pixel: &mut [u8], opacity: u8) {
     }
 }
 
-/// Swap from RGBA with premultiplied alpha to BGRA
+/// Converts one premultiplied RGBA pixel to straight-alpha BGRA, in place.
+///
+/// The function reads and writes only the first four bytes of `color`. Bytes after the
+/// first pixel are left unchanged.
+///
+/// # Panics
+///
+/// Panics if `color` has fewer than four bytes.
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);
     if color[3] > 0 {
@@ -71,7 +95,19 @@ pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     }
 }
 
-/// Construct an [`Hsla`] object from plain values
+/// Creates an [`Hsla`] color from hue, saturation, lightness and alpha.
+///
+/// Every argument is a fraction from `0.0` to `1.0`; values outside that range are clamped.
+/// The hue is a fraction of one turn, not degrees: `0.0` is red and `1.0 / 3.0` is green.
+/// If you have a hue in degrees, use [`oklcha`] or convert it before calling this function.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{hsla, red};
+///
+/// assert_eq!(hsla(0.0, 1.0, 0.5, 1.0), red());
+/// ```
 pub const fn hsla(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     Hsla {
         color: palette::Hsl::new_const(
@@ -85,52 +121,58 @@ pub const fn hsla(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     }
 }
 
-/// Constructs a ['Oklcha'](palette::Oklcha) object from plain values.
+/// Creates an [`Oklcha`](palette::Oklcha) color from lightness, chroma, hue and alpha.
+///
+/// Unlike [`hsla`], the arguments are not clamped. The hue is in degrees. Use this for
+/// perceptually even colors, such as palettes that keep the same lightness across hues.
 pub fn oklcha<T>(lightness: T, chroma: T, hue: impl Into<OklabHue<T>>, alpha: T) -> Oklcha<T> {
     Oklcha::new(lightness, chroma, hue, alpha)
 }
 
-/// Pure black in [`Hsla`]
+/// Opaque black in [`Hsla`].
 pub const fn black() -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 0., 0., 1.)
 }
 
-/// Transparent black in [`Hsla`]
+/// Black with zero alpha in [`Hsla`].
 pub const fn transparent_black() -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 0., 0., 0.)
 }
 
-/// Transparent white in [`Hsla`]
+/// White with zero alpha in [`Hsla`].
 pub const fn transparent_white() -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 0., 1., 0.)
 }
 
-/// Opaque grey in [`Hsla`], values must be provided in the range [0, 1]
+/// A grey in [`Hsla`] with the given lightness and opacity.
+///
+/// Both arguments are fractions from `0.0` to `1.0`. This constructor does not clamp them, so
+/// callers must keep them in range.
 pub const fn opaque_grey(lightness: f32, opacity: f32) -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 0., lightness, opacity)
 }
 
-/// Pure white in [`Hsla`]
+/// Opaque white in [`Hsla`].
 pub const fn white() -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 0., 1., 1.)
 }
 
-/// The color red in [`Hsla`]
+/// Opaque red in [`Hsla`], at hue `0.0`.
 pub const fn red() -> Hsla {
     Hsla::new_const(RgbHue::new(0.), 1., 0.5, 1.)
 }
 
-/// The color blue in [`Hsla`]
+/// Opaque blue in [`Hsla`], at hue 240 degrees.
 pub const fn blue() -> Hsla {
     Hsla::new_const(RgbHue::new(240.), 1., 0.5, 1.)
 }
 
-/// The color green in [`Hsla`]
+/// A dark, opaque green in [`Hsla`], at hue 120 degrees and lightness 0.25.
 pub const fn green() -> Hsla {
     Hsla::new_const(RgbHue::new(120.), 1., 0.25, 1.)
 }
 
-/// The color yellow in [`Hsla`]
+/// Opaque yellow in [`Hsla`], at hue 60 degrees.
 pub const fn yellow() -> Hsla {
     Hsla::new_const(RgbHue::new(60.), 1., 0.5, 1.)
 }
@@ -189,7 +231,10 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
     })
 }
 
-/// Wrapper methods to make alpha operations more convenient
+/// Helpers for changing the alpha of a color.
+///
+/// Implemented for [`Rgba`] and [`Hsla`]. The factors in these methods are clamped to
+/// `0.0..=1.0`.
 pub trait ColorExt {
     /// Performs a `(1 - DstAlpha) + DstAlpha` blend, with custom considerations for DstAlpha <=0 and >=1.
     ///
@@ -197,39 +242,35 @@ pub trait ColorExt {
     fn blend(&self, other: &Self) -> Self
     where
         Self: Sized;
-
-    /// Fade out the color by a given factor. This factor should be between 0.0 and 1.0.
-    /// Where 0.0 will leave the color unchanged, and 1.0 will completely fade out the color.
+    /// Reduces the alpha of this color in place by `factor`.
+    ///
+    /// A factor of `0.0` leaves the color unchanged, and `1.0` makes it fully transparent.
+    /// Values outside `0.0..=1.0` are clamped.
     fn fade_out(&mut self, factor: f32);
-
-    /// Multiplies the alpha value of the color by a given factor and returns a new color.
-    /// If the color was previously opaque, then this is equivalent to
-    /// [`with_alpha`](palette::WithAlpha::with_alpha).
+    /// Returns a copy of this color with its alpha multiplied by `factor`.
     ///
-    /// Useful for transforming colors with dynamic opacity,
-    /// like a color from an external source.
+    /// If the color is opaque, the result has alpha `factor`. Use this for colors whose
+    /// opacity comes from data, such as a color chosen at runtime. Values outside
+    /// `0.0..=1.0` are clamped.
     ///
-    /// Example:
+    /// # Examples
+    ///
     /// ```
     /// use gpui::ColorExt;
-    /// let color = gpui::red();
-    /// let faded_color = color.opacity(0.5);
-    /// assert_eq!(faded_color.alpha, 0.5);
+    ///
+    /// let faded = gpui::red().opacity(0.5);
+    /// assert_eq!(faded.alpha, 0.5);
     /// ```
     ///
-    /// This will return a red color with half the opacity.
+    /// Multiplying a color that already has alpha gives a result that is less opaque:
     ///
-    /// Example:
     /// ```
-    /// use gpui::{hsla, ColorExt};
-    /// let color = hsla(0.7, 1.0, 0.5, 0.7); // A saturated blue
-    /// let faded_color = color.opacity(0.16);
-    /// assert!((faded_color.alpha - 0.112).abs() < 1e-6);
+    /// use gpui::{ColorExt, hsla};
+    ///
+    /// let color = hsla(0.7, 1.0, 0.5, 0.7);
+    /// let faded = color.opacity(0.16);
+    /// assert!((faded.alpha - 0.112).abs() < 1e-6);
     /// ```
-    ///
-    /// This will return a blue color with around ~10% opacity,
-    /// suitable for an element's hover or selected state.
-    ///
     fn opacity(&self, factor: f32) -> Self
     where
         Self: Sized;
@@ -344,7 +385,27 @@ impl Display for ColorSpace {
     }
 }
 
-/// A background color, which can be either a solid color or a linear gradient.
+/// A fill for a shape: a solid color, a linear gradient, or a pattern.
+///
+/// Build a background with [`solid_background`], [`linear_gradient`], [`pattern_slash`] or
+/// [`checkerboard`], or convert a color with `.into()`. Elements take a background through
+/// [`Styled::bg`](crate::Styled::bg). Use [`Background::kind`] to inspect one.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{Background, blue, linear_color_stop, linear_gradient, red};
+///
+/// let solid: Background = red().into();
+/// assert!(solid.as_solid().is_some());
+///
+/// let gradient = linear_gradient(
+///     90.,
+///     linear_color_stop(red(), 0.),
+///     linear_color_stop(blue(), 1.),
+/// );
+/// assert!(gradient.as_solid().is_none());
+/// ```
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct Background {
@@ -382,6 +443,7 @@ impl std::fmt::Debug for Background {
 
 impl Eq for Background {}
 impl Default for Background {
+    /// Returns a solid background with zero alpha, which paints nothing.
     fn default() -> Self {
         Self {
             tag: BackgroundTag::Solid,
@@ -394,7 +456,12 @@ impl Default for Background {
     }
 }
 
-/// Creates a hash pattern background
+/// Creates a background of diagonal stripes in `color`, over transparency.
+///
+/// `width` is the width of each stripe and `interval` is the gap between stripes, both in
+/// logical pixels. Both are stored in steps of 1/255 pixel and packed into one `f32`. The
+/// packing is exact only for widths up to about 1px and intervals up to 257px. Larger
+/// values lose precision or overflow into the width.
 pub fn pattern_slash(color: impl IntoColor<Hsla>, width: f32, interval: f32) -> Background {
     const PATTERN_COMPONENT_SCALE: f32 = u8::MAX as f32;
     const PATTERN_PACKING_RADIX: u32 = u16::MAX as u32;
@@ -411,7 +478,9 @@ pub fn pattern_slash(color: impl IntoColor<Hsla>, width: f32, interval: f32) -> 
     }
 }
 
-/// Creates a checkerboard pattern background
+/// Creates a checkerboard of squares in `color`, alternating with transparency.
+///
+/// `size` is the width and height of each square in logical pixels.
 pub fn checkerboard(color: impl IntoColor<Hsla>, size: f32) -> Background {
     Background {
         tag: BackgroundTag::Checkerboard,
@@ -421,7 +490,9 @@ pub fn checkerboard(color: impl IntoColor<Hsla>, size: f32) -> Background {
     }
 }
 
-/// Creates a solid background color.
+/// Creates a solid background of `color`.
+///
+/// This is the same as converting `color` with `.into()`.
 pub fn solid_background(color: impl IntoColor<Hsla>) -> Background {
     Background {
         solid: color.into_color().into(),
@@ -429,11 +500,24 @@ pub fn solid_background(color: impl IntoColor<Hsla>) -> Background {
     }
 }
 
-/// Creates a LinearGradient background color.
+/// Creates a linear gradient between two color stops.
 ///
-/// The gradient line's angle of direction. A value of `0.` is equivalent to top; increasing values rotate clockwise from there.
+/// `angle` is the direction of the gradient line in degrees, from `0.` (up) increasing
+/// clockwise. The colors are interpolated in [`ColorSpace::Oklab`]. Call
+/// [`Background::color_space`] to interpolate in sRGB instead.
 ///
-/// The `angle` is in degrees value in the range 0.0 to 360.0.
+/// # Examples
+///
+/// ```
+/// use gpui::{ColorSpace, blue, linear_color_stop, linear_gradient, red};
+///
+/// let gradient = linear_gradient(
+///     180.,
+///     linear_color_stop(red(), 0.),
+///     linear_color_stop(blue(), 1.),
+/// );
+/// assert_eq!(gradient.interpolation_space(), ColorSpace::Oklab);
+/// ```
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient>
 pub fn linear_gradient(
@@ -462,9 +546,9 @@ pub struct LinearColorStop {
     pub percentage: f32,
 }
 
-/// Creates a new linear color stop.
+/// Creates a color stop of `color` at `percentage` along a gradient line.
 ///
-/// The percentage of the gradient, in the range 0.0 to 1.0.
+/// `percentage` is in the range `0.0` (the start of the gradient) to `1.0` (the end).
 pub fn linear_color_stop(color: impl IntoColor<Hsla>, percentage: f32) -> LinearColorStop {
     LinearColorStop {
         color: color.into_color().into(),
@@ -473,7 +557,9 @@ pub fn linear_color_stop(color: impl IntoColor<Hsla>, percentage: f32) -> Linear
 }
 
 impl LinearColorStop {
-    /// Returns a new color stop with the same color, but with a modified alpha value.
+    /// Returns a copy of this stop with its alpha multiplied by `factor`.
+    ///
+    /// The factor is clamped to `0.0..=1.0`, as with [`ColorExt::opacity`].
     pub fn opacity(&self, factor: f32) -> Self {
         let color: Hsla = self.color.into();
         Self {
@@ -514,7 +600,7 @@ pub enum BackgroundKind {
 }
 
 impl Background {
-    /// Returns the solid color if this is a solid background, None otherwise.
+    /// Returns the color if this is a solid background, and `None` otherwise.
     pub fn as_solid(&self) -> Option<Hsla> {
         if self.tag == BackgroundTag::Solid {
             Some(self.solid.into())
@@ -551,7 +637,10 @@ impl Background {
         }
     }
 
-    /// Use specified color space for color interpolation.
+    /// Sets the color space that a gradient's colors are interpolated in.
+    ///
+    /// The default for [`linear_gradient`] is [`ColorSpace::Oklab`]. Solid colors and patterns
+    /// don't interpolate, so this has no effect on them.
     ///
     /// <https://developer.mozilla.org/en-US/docs/Web/CSS/color-interpolation-method>
     pub fn color_space(mut self, color_space: ColorSpace) -> Self {
@@ -564,7 +653,9 @@ impl Background {
         self.color_space
     }
 
-    /// Returns a new background color with the same hue, saturation, and lightness, but with a modified alpha value.
+    /// Returns a copy of this background with the alpha of every color multiplied by `factor`.
+    ///
+    /// The factor is clamped to `0.0..=1.0`. Gradient stops are scaled too.
     pub fn opacity(&self, factor: f32) -> Self {
         let mut background = *self;
         let solid: Hsla = background.solid.into();
@@ -576,7 +667,10 @@ impl Background {
         background
     }
 
-    /// Returns whether the background color is transparent.
+    /// Returns whether this background paints nothing.
+    ///
+    /// A solid, pattern or checkerboard background is transparent when its color has zero
+    /// alpha. A gradient is transparent only when both of its stops have zero alpha.
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.a == 0.,
@@ -588,6 +682,7 @@ impl Background {
 }
 
 impl<T: IntoColor<Hsla>> From<T> for Background {
+    /// Converts a color into a solid [`Background`].
     fn from(value: T) -> Self {
         Self {
             tag: BackgroundTag::Solid,
@@ -644,6 +739,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn color_blend_interpolates_rgb_by_overlay_alpha() {
+        let assert_close = |actual: Rgba, expected: Rgba| {
+            for (actual, expected) in [
+                (actual.red, expected.red),
+                (actual.green, expected.green),
+                (actual.blue, expected.blue),
+                (actual.alpha, expected.alpha),
+            ] {
+                assert!(
+                    (actual - expected).abs() < 1e-6,
+                    "{actual:?} != {expected:?}"
+                );
+            }
+        };
+
+        let base = Rgba::new(1.0, 0.0, 0.0, 1.0);
+        assert_close(base.blend(&Rgba::new(0.0, 0.0, 1.0, 0.0)), base);
+        assert_close(
+            base.blend(&Rgba::new(0.0, 0.0, 1.0, 1.0)),
+            Rgba::new(0.0, 0.0, 1.0, 1.0),
+        );
+        assert_close(
+            base.blend(&Rgba::new(0.0, 0.0, 1.0, 0.25)),
+            Rgba::new(0.75, 0.0, 0.25, 1.0),
+        );
+    }
+
+    #[test]
+    fn highlight_keeps_the_base_color_under_a_transparent_overlay() {
+        let base = crate::TextStyle {
+            color: red(),
+            ..Default::default()
+        };
+        let transparent_blue = Hsla::new_const(RgbHue::new(240.), 1., 0.5, 0.);
+        let highlighted = base
+            .clone()
+            .highlight(crate::HighlightStyle::color(transparent_blue));
+        assert_eq!(highlighted.color, base.color);
     }
 
     #[test]

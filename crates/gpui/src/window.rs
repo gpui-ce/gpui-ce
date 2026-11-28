@@ -109,6 +109,12 @@ pub const DEFAULT_ADDITIONAL_WINDOW_SIZE: Size<Pixels> = Size {
     height: Pixels(750.),
 };
 
+/// The root font size a window starts with, in logical pixels.
+///
+/// [`rems`](crate::rems) lengths and the `Styled` spacing scale multiply this
+/// value. Change it per window with [`Window::set_rem_size`].
+pub const DEFAULT_REM_SIZE: Pixels = px(16.);
+
 /// Represents the two different phases when dispatching events.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DispatchPhase {
@@ -2063,7 +2069,7 @@ impl Window {
             sprite_atlas,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
-            rem_size: px(16.),
+            rem_size: DEFAULT_REM_SIZE,
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
@@ -7964,7 +7970,24 @@ impl From<[u8; 20]> for ElementId {
 }
 
 /// A rectangle to be rendered in the window at the given position and size.
-/// Passed as an argument [`Window::paint_quad`].
+///
+/// Pass it to [`Window::paint_quad`]. Build one with [`PaintQuad::new`], then
+/// chain the setters for the parts you need. A quad starts transparent, with no
+/// borders and square corners.
+///
+/// ```
+/// # use gpui::{Bounds, PaintQuad, Window, point, px, rgb, size};
+/// # fn paint(window: &mut Window) {
+/// let bounds = Bounds::new(point(px(8.), px(8.)), size(px(120.), px(48.)));
+/// window.paint_quad(
+///     PaintQuad::new(bounds)
+///         .background(rgb(0xf9fafb))
+///         .corner_radii(px(8.))
+///         .border_widths(px(1.))
+///         .border_color(rgb(0xd1d5db)),
+/// );
+/// # }
+/// ```
 #[derive(Clone, derive_setters::Setters)]
 #[setters(into, generate = false)]
 pub struct PaintQuad {
@@ -7995,6 +8018,10 @@ pub struct PaintQuad {
 
 impl PaintQuad {
     /// Creates a transparent quad with no border or rounded corners.
+    ///
+    /// Chain setters such as [`PaintQuad::background`],
+    /// [`PaintQuad::corner_radii`], and [`PaintQuad::border_widths`] to describe
+    /// the rectangle.
     pub fn new(bounds: impl Into<Bounds<Pixels>>) -> Self {
         Self {
             bounds: bounds.into(),
@@ -8035,6 +8062,9 @@ impl PaintQuad {
 }
 
 /// Creates a quad with the given parameters.
+///
+/// Deprecated: build a [`PaintQuad`] with [`PaintQuad::new`] and its setters
+/// instead.
 #[deprecated(note = "replaced with builder syntax for PaintQuad")]
 pub fn quad(
     bounds: Bounds<Pixels>,
@@ -8053,12 +8083,17 @@ pub fn quad(
 }
 
 /// Creates a filled quad with the given bounds and background color.
+///
+/// Deprecated: use [`PaintQuad::new`] with [`PaintQuad::background`] instead.
 #[deprecated(note = "replaced with builder syntax for PaintQuad")]
 pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>) -> PaintQuad {
     PaintQuad::new(bounds).background(background)
 }
 
 /// Creates a rectangle outline with the given bounds, border color, and a 1px border width
+///
+/// Deprecated: use [`PaintQuad::new`] with [`PaintQuad::border_widths`],
+/// [`PaintQuad::border_color`], and [`PaintQuad::border_style`] instead.
 #[deprecated(note = "replaced with builder syntax for PaintQuad")]
 pub fn outline(
     bounds: impl Into<Bounds<Pixels>>,

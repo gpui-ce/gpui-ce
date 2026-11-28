@@ -5,22 +5,49 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-/// A styled run of text, for use in [`crate::TextLayout`].
+/// A stretch of text that shares one font and style.
+///
+/// Text layout takes a slice of runs whose `len` values add up to the length of
+/// the text. Each run styles the bytes that follow the runs before it. Runs
+/// control how text is shaped and painted, so changing a run's `color`,
+/// `background_color`, `underline`, or `strikethrough` does not reshape the text.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{TextRun, font, hsla};
+/// let text = "Hello world";
+/// let runs = [
+///     TextRun {
+///         len: 6,
+///         font: font("Lilex"),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     },
+///     TextRun {
+///         len: 5,
+///         font: font("Lilex").bold(),
+///         color: hsla(0., 0., 0., 1.),
+///         ..Default::default()
+///     },
+/// ];
+/// assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+/// ```
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TextRun {
-    /// A number of utf8 bytes
+    /// The number of UTF-8 bytes this run covers.
     pub len: usize,
     /// The font to use for this run.
     pub font: Font,
-    /// The color
+    /// The color of the glyphs.
     pub color: Hsla,
-    /// The background color (if any)
+    /// The background color behind the glyphs, or `None` for no background.
     pub background_color: Option<Hsla>,
-    /// The underline style (if any)
+    /// The underline drawn under the glyphs, or `None` for no underline.
     pub underline: Option<UnderlineStyle>,
-    /// The strikethrough style (if any)
+    /// The strikethrough drawn through the glyphs, or `None` for none.
     pub strikethrough: Option<StrikethroughStyle>,
-    /// Letter spacing applied between glyphs, in pixels.
+    /// The extra space added between glyphs, in logical pixels, or `None` for no extra space.
     pub letter_spacing: Option<Pixels>,
 }
 

@@ -6,15 +6,17 @@ use std::{
     hash::Hash,
 };
 
-/// Allows italic or oblique faces to be selected.
+/// Selects an italic or oblique face when the font family has one.
+///
+/// Use [`crate::Font::italic`] to set [`FontStyle::Italic`].
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash, Default, Serialize, Deserialize, JsonSchema)]
 pub enum FontStyle {
-    /// A face that is neither italic not obliqued.
+    /// The upright face of the family.
     #[default]
     Normal,
-    /// A form that is generally cursive in nature.
+    /// The italic face, which is usually a cursive design.
     Italic,
-    /// A typically-sloped version of the regular face.
+    /// A sloped version of the upright face.
     Oblique,
 }
 

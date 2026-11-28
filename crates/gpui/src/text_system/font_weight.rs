@@ -5,8 +5,21 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-/// The degree of blackness or stroke thickness of a font. This value ranges from 100.0 to 900.0,
-/// with 400.0 as normal.
+/// The weight of a font, from [`FontWeight::THIN`] (100) to [`FontWeight::BLACK`] (900).
+///
+/// Weight selects how thick the strokes of a face are. [`FontWeight::NORMAL`]
+/// (400) is the default, and [`FontWeight::BOLD`] (700) is what [`crate::Font::bold`]
+/// sets. The value is a plain `f32`, so you can use values between the named
+/// constants when the font has faces for them.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{FontWeight, font};
+/// let heading = font("Lilex").bold();
+/// assert_eq!(heading.weight, FontWeight::BOLD);
+/// assert_eq!(FontWeight::default(), FontWeight::NORMAL);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize, Add, Sub, FromStr)]
 #[serde(transparent)]
 pub struct FontWeight(pub f32);

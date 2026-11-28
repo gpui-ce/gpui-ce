@@ -5,7 +5,17 @@ use crate::{
 use derive_more::Deref;
 use std::{ops::Range, sync::Arc};
 
-/// The GPUI text layout subsystem.
+/// The text layout subsystem for one window, with a cache of shaped lines.
+///
+/// Get it with [`Window::text_system`](crate::Window::text_system). It derefs to the shared [`TextSystem`],
+/// so you can call font methods on it directly.
+///
+/// Layout methods such as [`WindowTextSystem::shape_line`] and
+/// [`WindowTextSystem::shape_text`] cache their results. A layout is reused when
+/// the same text, font size, and shaping settings are requested again. The cache
+/// keeps a layout only while the next frame uses it, so a layout that a frame
+/// doesn't request is dropped at the end of that frame. Changing only colors or
+/// decorations reuses the glyphs and repaints them.
 #[derive(Deref)]
 pub struct WindowTextSystem {
     line_layout_cache: LineLayoutCache,
@@ -14,7 +24,9 @@ pub struct WindowTextSystem {
 }
 
 impl WindowTextSystem {
-    /// Create a new WindowTextSystem with the given TextSystem.
+    /// Creates a window text system with an empty layout cache on top of `text_system`.
+    ///
+    /// GPUI creates one for each window. You don't need to call this yourself.
     pub fn new(text_system: Arc<TextSystem>) -> Self {
         Self {
             line_layout_cache: LineLayoutCache::new(text_system.platform_text_system.clone()),
@@ -34,12 +46,38 @@ impl WindowTextSystem {
         self.line_layout_cache.truncate_layouts(index)
     }
 
-    /// Shape the given line, at the given font_size, for painting to the screen.
-    /// Subsets of the line can be styled independently with the `runs` parameter.
+    /// Shapes one line of text, ready to paint.
     ///
-    /// Note that this method can only shape a single line of text. It will panic
-    /// if the text contains newlines. If you need to shape multiple lines of text,
-    /// use [`Self::shape_text`] instead.
+    /// Use this for a single line of text that you paint with [`ShapedLine::paint`].
+    /// For text that can wrap or has several paragraphs, use [`Self::shape_text`].
+    /// `runs` styles the text, and the run lengths must add up to `text.len()`.
+    /// Each run's [`TextRun::font`] selects the face used for its bytes.
+    ///
+    /// The result is cached for the frame, as described on [`WindowTextSystem`].
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `text` contains a `\n`. Release builds don't
+    /// check this, and the result for such text is not meaningful. Use
+    /// [`Self::shape_text`] for multiple lines.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+    /// # let mut app = TestApp::new();
+    /// # let mut window = app.open_window(|_window, _cx| EmptyView);
+    /// window.update(|_view, window, _cx| {
+    ///     let run = TextRun {
+    ///         len: "Hello".len(),
+    ///         font: font("Lilex"),
+    ///         color: hsla(0., 0., 0., 1.),
+    ///         ..Default::default()
+    ///     };
+    ///     let line = window.text_system().shape_line("Hello".into(), px(16.), &[run]);
+    ///     assert_eq!(line.len(), 5);
+    /// });
+    /// ```
     pub fn shape_line(
         &self,
         text: SharedString,
@@ -56,15 +94,60 @@ impl WindowTextSystem {
         ShapedLine { layout, text }
     }
 
-    /// Shape a multi line string of text, at the given font_size, for painting to the screen.
-    /// Subsets of the text can be styled independently with the `runs` parameter,
-    /// where each run gives the number of UTF-8 bytes that it styles. Runs must cover the
-    /// complete string and end on UTF-8 character boundaries.
+    /// Shapes text that may span several lines, ready to paint.
     ///
-    /// If `wrap_width` is provided, the line breaks will be adjusted to fit within the given width.
+    /// This is the function to use for paragraphs. Each `\n` starts a new line.
+    /// When `wrap_width` is `Some`, lines wrap at word boundaries to fit within
+    /// that many logical pixels. A word wider than that is not split, so it
+    /// overflows. `None` disables soft wrapping, and only `\n` breaks lines.
+    /// With a wrap width, `line_clamp = Some(n)` limits soft wrapping: once the
+    /// budget is exhausted, the rest of each paragraph occupies an unwrapped line.
+    /// Hard paragraph breaks are preserved, so the total can exceed `n`.
+    /// `Some(0)` behaves like `Some(1)` and disables soft wrapping; it does not hide text.
     ///
-    /// The backend receives the complete string. Hard breaks, trailing empty lines, bidi
-    /// paragraphs, wrapping, and `line_clamp` therefore share one layout model.
+    /// `runs` styles the text. Each run gives the number of UTF-8 bytes it covers,
+    /// and the runs must cover the whole string and end on character boundaries.
+    /// The `Result` is currently always `Ok`.
+    ///
+    /// Shaping is cached as described on [`WindowTextSystem`]. To lay out text
+    /// inside an element, use [`StyledText`](crate::StyledText) instead. See
+    /// [text](crate::_documentation::guides::text) for an overview.
+    ///
+    /// # Examples
+    ///
+    /// This example supplies the platform's real text system. [`TestApp::new`](crate::TestApp::new)
+    /// uses a simplified test shaper, which does not reproduce paragraph layout.
+    ///
+    /// ```standalone_crate
+    /// # use gpui::{EmptyView, TestApp, TextRun, font, hsla, px};
+    /// let text_system = gpui_platform::current_platform(true).text_system();
+    /// let mut app = TestApp::with_text_system(text_system);
+    /// # let mut window = app.open_window(|_window, _cx| EmptyView);
+    /// window.update(|_view, window, _cx| {
+    ///     let text = "first line\nsecond line";
+    ///     let run = TextRun {
+    ///         len: text.len(),
+    ///         font: font(".SystemUIFont"),
+    ///         color: hsla(0., 0., 0., 1.),
+    ///         ..Default::default()
+    ///     };
+    ///     let shaped = window
+    ///         .text_system()
+    ///         .shape_text(text, px(16.), &[run.clone()], Some(px(200.)), None)
+    ///         .unwrap();
+    ///     assert_eq!(shaped.len(), text.len());
+    ///
+    ///     // A clamp cannot remove the hard break between these paragraphs.
+    ///     let zero = window.text_system()
+    ///         .shape_text(text, px(16.), &[run.clone()], Some(px(20.)), Some(0))
+    ///         .unwrap();
+    ///     let one = window.text_system()
+    ///         .shape_text(text, px(16.), &[run], Some(px(20.)), Some(1))
+    ///         .unwrap();
+    ///     assert_eq!(zero.line_count(), 2);
+    ///     assert_eq!(one.line_count(), 2);
+    /// });
+    /// ```
     pub fn shape_text<S: AsRef<str> + Into<SharedString>>(
         &self,
         text: S,
@@ -85,7 +168,11 @@ impl WindowTextSystem {
         )
     }
 
-    /// Shapes a complete text document with explicit direction and alignment options.
+    /// Shapes a text document with explicit paragraph direction, alignment, and bidi options.
+    ///
+    /// This is the lower-level form of [`Self::shape_text`]. Use it when text
+    /// must align within a width different from its wrap width, or must follow
+    /// a specific paragraph direction. The `Result` is currently always `Ok`.
     #[doc(hidden)]
     pub fn shape_text_with_options<S: AsRef<str> + Into<SharedString>>(
         &self,
@@ -102,15 +189,20 @@ impl WindowTextSystem {
         Ok(ShapedText { layout, text })
     }
 
-    /// Layout text and atomic element boxes in one inline formatting context.
+    /// Lays out text and atomic boxes together, the way an inline element flows in a paragraph.
+    ///
+    /// Each box is an element that sits between characters, such as an icon or
+    /// a badge. Text wraps around the boxes. The result is cached like other
+    /// layouts.
     pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
         self.line_layout_cache.layout_inline(request)
     }
 
-    /// Layout the given line of text, at the given font_size.
-    /// Subsets of the line can be styled independently with the `runs` parameter.
-    /// Generally, you should prefer to use [`Self::shape_line`] instead, which
-    /// can be painted directly.
+    /// Lays out one line of text and returns the backend's [`LineLayout`].
+    ///
+    /// Most code should call [`Self::shape_line`] instead, which returns a
+    /// [`ShapedLine`] that you can paint. Use this only when you need the raw
+    /// layout. `text` must not contain newlines, and nothing checks this here.
     pub fn layout_line(&self, text: &str, font_size: Pixels, runs: &[TextRun]) -> Arc<LineLayout> {
         self.line_layout_cache
             .layout_line(&SharedString::new(text), font_size, runs)

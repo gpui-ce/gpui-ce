@@ -237,9 +237,8 @@ pub trait View: 'static + Sized {
     /// Returns the entity that identifies this view, or `None` for a stateless view.
     ///
     /// A view that holds its entity as a field returns the entity's id here. The id becomes the
-    /// view's [`ElementId`]. Two views backed by the same entity must not be siblings under one
-    /// parent, because their element state would collide. Nesting is fine, since the parent's
-    /// path keeps the ids apart.
+    /// view's [`ElementId`]. Place views backed by the same entity under distinct element ID
+    /// paths to keep their state separate. Unkeyed parents do not create a separate ID scope.
     fn entity_id(&self) -> Option<EntityId>;
 
     /// Renders this view into elements. Takes `self` by value, so the view is used up.

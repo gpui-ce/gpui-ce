@@ -104,7 +104,14 @@ impl PathBuilder {
 
     /// Sets the dash array of the [`PathBuilder`].
     ///
-    /// [MDN](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Attribute/stroke-dasharray)
+    /// Values alternate between dash length and gap length, in logical pixels.
+    /// An odd number of values is repeated to form an even cycle, so `[5, 3, 2]`
+    /// behaves like `[5, 3, 2, 5, 3, 2]`. On a stroked path with at least one
+    /// segment, the slice must not be empty, or [`PathBuilder::build`] panics. Filled
+    /// paths ignore the dash array.
+    ///
+    /// See [MDN](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Attribute/stroke-dasharray)
+    /// for the pattern these values describe.
     pub fn dash_array(mut self, dash_array: &[Pixels]) -> Self {
         // If an odd number of values is provided, then the list of values is repeated to yield an even number of values.
         // Thus, 5,3,2 is equivalent to 5,3,2,5,3,2.
@@ -240,6 +247,12 @@ impl PathBuilder {
     }
 
     /// Builds into a [`Path`].
+    ///
+    /// Tessellation happens here, in the current prepaint or paint call, and
+    /// can fail. `build` returns an error when the geometry or tessellation
+    /// options are invalid, such as non-finite coordinates or an invalid stroke
+    /// width. Cache and clone the resulting [`Path`] when the geometry does not
+    /// change between frames instead of rebuilding it every frame.
     #[inline]
     pub fn build(self) -> Result<Path<Pixels>, Error> {
         let path = if let Some(transform) = self.transform {

@@ -60,24 +60,24 @@ pub struct InlineLayoutRequest<'a> {
     pub bidi_scopes: &'a [InlineBidiScope],
 }
 
-/// Font metrics used to construct the vertical extents of an inline line.
+/// Font metrics that set the vertical extent of an inline line.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct InlineTextMetrics {
-    /// Distance above the text baseline.
+    /// The distance from the baseline up to the top of the tallest glyphs.
     pub ascent: Pixels,
-    /// Distance below the text baseline.
+    /// The distance from the baseline down to the bottom of the lowest glyphs.
     pub descent: Pixels,
-    /// Height of a lowercase x in the inline container's font.
+    /// The height of a lowercase `x` in the container's font.
     pub x_height: Pixels,
 }
 
-/// A row in an inline layout.
+/// One row of an inline layout, positioned relative to the layout's origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InlineVisualLine {
-    /// The row origin relative to the inline layout.
+    /// The top-left corner of the row, relative to the inline layout.
     pub origin: Point<Pixels>,
     /// The row size before it is placed in its containing element.
     pub size: Size<Pixels>,
-    /// The baseline relative to `origin.y`.
+    /// The baseline of the row, measured down from `origin.y`.
     pub baseline: Pixels,
 }

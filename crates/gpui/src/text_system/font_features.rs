@@ -3,25 +3,55 @@ use std::sync::Arc;
 
 use schemars::{JsonSchema, json_schema};
 
-/// The OpenType features that can be configured for a given font.
+/// OpenType feature settings applied while shaping a [`Font`](crate::Font).
+///
+/// Each entry is a four-character feature tag, such as `"liga"` or `"tnum"`, and
+/// a value. A boolean feature is `1` when enabled and `0` when disabled. Some
+/// features take other numbers, such as a stylistic set number. The default is
+/// empty, which leaves every feature at the font's own setting.
+///
+/// Set features with [`Font::features`](crate::Font::features). In JSON
+/// configuration, write a map from tag to `true`, `false`, or a number. When you
+/// deserialize, tags that are not four ASCII alphanumeric characters, and
+/// numbers that are not unsigned integers, are logged and skipped.
+///
+/// # Examples
+///
+/// ```
+/// # use gpui::{FontFeatures, font};
+/// let mut code = font("Lilex");
+/// code.features = FontFeatures::disable_ligatures();
+/// assert_eq!(code.features.is_calt_enabled(), Some(false));
+///
+/// let json = r#"{ "tnum": true, "calt": false }"#;
+/// let features: FontFeatures = serde_json::from_str(json).unwrap();
+/// assert_eq!(
+///     features.tag_value_list(),
+///     [("tnum".to_string(), 1), ("calt".to_string(), 0)]
+/// );
+/// ```
 #[derive(Default, Clone, Eq, PartialEq, Hash)]
 pub struct FontFeatures(pub Arc<Vec<(String, u32)>>);
 
 impl FontFeatures {
-    /// Disables `calt`.
+    /// Returns features that turn off `calt`, which many fonts use for programming ligatures.
+    ///
+    /// Other features, such as `liga`, keep the font's default.
     pub fn disable_ligatures() -> Self {
         Self(Arc::new(vec![("calt".into(), 0)]))
     }
 
-    /// Get the tag name list of the font OpenType features
-    /// only enabled or disabled features are returned
+    /// Returns the feature tags and values, in the order they were set.
+    ///
+    /// Only features that were set are listed. A feature that isn't listed
+    /// keeps the font's default.
     pub fn tag_value_list(&self) -> &[(String, u32)] {
         self.0.as_slice()
     }
 
-    /// Returns whether the `calt` feature is enabled.
+    /// Returns whether `calt` is enabled, or `None` if this set doesn't mention `calt`.
     ///
-    /// Returns `None` if the feature is not present.
+    /// Only the value `1` counts as enabled. Any other value, including `2`, returns `Some(false)`.
     pub fn is_calt_enabled(&self) -> Option<bool> {
         self.0
             .iter()
